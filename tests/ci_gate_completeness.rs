@@ -208,6 +208,47 @@ fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
     names
 }
 
+/// Does `line` declare the YAML key `key` at a job's direct-child level
+/// (exactly 4-space indent, not 8+)?
+///
+/// PR #671 review round 10, IMPORTANT 2: recognizes `key`, `"key"`, and
+/// `'key'` before the `:` (with any amount of whitespace between the key
+/// token and the colon) — PyYAML-confirmed all four spellings
+/// (`outputs:`, `"outputs":`, `'outputs':`, `outputs :`) parse to the
+/// identical key. The original round-9 outputs-content guard matched only
+/// the first, bare spelling — a real job-level `outputs:` block written
+/// in any of the other three left that guard silently blind (the `{}`
+/// premise it protects no longer held, but nothing said so). This
+/// function's job is narrow enough (one literal key name at a time, one
+/// fixed indent depth) that enumerating the recognized forms is tractable
+/// and auditable, unlike `extract_and_normalize_if_expr`'s arbitrary
+/// expression text, which is why that function rejects instead of trying
+/// to enumerate.
+///
+/// The indent check is written as "starts with 4 spaces AND the 5th
+/// character is not a space" rather than the round-9 original's `&&
+/// !l.starts_with("        ")` (8 spaces) — that second clause could never
+/// be false once the first clause (4-space prefix) matched a job-level
+/// key, since no line can simultaneously start with exactly 4 spaces AND
+/// 8 spaces. It read as protection against a deeper indent that it did
+/// not actually provide; this version's clause does.
+fn line_declares_job_level_key(line: &str, key: &str) -> bool {
+    let Some(after_indent) = line.strip_prefix("    ") else {
+        return false;
+    };
+    if after_indent.starts_with(' ') {
+        return false; // 5+ leading spaces: a step-level or deeper key.
+    }
+    for quoted in [format!("\"{key}\""), format!("'{key}'"), key.to_string()] {
+        if let Some(after_key) = after_indent.strip_prefix(quoted.as_str()) {
+            if after_key.trim_start().starts_with(':') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
 // AC-001 — `ci-gate` job exists with correct structural properties
 // ---------------------------------------------------------------------------
@@ -828,6 +869,74 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
          does not invoke `scripts/check-ci-gate.sh` fed `toJSON(needs)`.\n\
          Current ci-gate block:\n{gate_block}"
     );
+
+    // -----------------------------------------------------------------------
+    // Assertion 4 (M2-i, PR #671 review round 10, CRITICAL): M2-g/h above
+    // only check that a `run:` step exists and mentions `check-ci-gate.sh`
+    // + `toJSON(needs)` as SUBSTRINGS — an allowlist of known-good
+    // substrings, with nothing verifying the script's exit code actually
+    // reaches the job's conclusion. `echo "${NEEDS_JSON}" | bash
+    // scripts/check-ci-gate.sh || true`, or the same line piped through
+    // `| cat`, still contains both substrings and leaves the full suite
+    // green while making the gate tolerate EVERY upstream failure, not
+    // just an illegitimate skip. Pin the run line byte-for-byte instead
+    // (after the same narrow, reject-don't-parse normalization used for
+    // `if:` — see `extract_and_normalize_sole_run_line`'s doc comment for
+    // why it is a separate function): any suffix or pipe stage changes the
+    // normalized string and fails here.
+    // -----------------------------------------------------------------------
+    let actual_run_line =
+        extract_and_normalize_sole_run_line(gate_block).unwrap_or_else(|reason| {
+            panic!(
+                "FAIL (M2-i, PR #671 review round 10, CRITICAL): the `ci-gate` \
+             job's gate-decision `run:` line {reason}\n\
+             This `run:` form is UNSUPPORTED for pinning and MUST be \
+             rewritten as a single-line plain scalar before it can be \
+             evaluated against PINNED_GATE_RUN_LINE at all.\n\
+             Current ci-gate block:\n{gate_block}"
+            )
+        });
+
+    assert_eq!(
+        actual_run_line, PINNED_GATE_RUN_LINE,
+        "FAIL (M2-i, PR #671 review round 10, CRITICAL): the `ci-gate` \
+         job's `run:` line (\"{actual_run_line}\") does not byte-match the \
+         pinned, human-reviewed literal (\"{PINNED_GATE_RUN_LINE}\"). \
+         `scripts/check-ci-gate.sh`'s own exit code is the ONLY pass/fail \
+         signal (see this test's M2-g rationale above) — ANY suffix or \
+         pipe stage appended after it (`|| true`, `| cat`, `; exit 0`, \
+         redirection, etc.) can swallow that signal while leaving every \
+         substring-based check (M2-g, M2-h) satisfied. If this is a \
+         deliberate, reviewed change to the run line, update \
+         PINNED_GATE_RUN_LINE in the SAME change.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Assertion 5 (M2-j, PR #671 review round 10, CRITICAL): `continue-on-
+    // error: true`, at either step level or job level, defeats the pinned
+    // run line just as effectively as a shell-level `|| true` — and unlike
+    // a shell suffix, it is invisible to a byte-for-byte comparison of the
+    // run line's own text (the run line is untouched; the tolerance is
+    // declared on a SIBLING key). Aggravating: `continue-on-error: true`
+    // is already an established idiom in this same file (`ci.yml ::
+    // mutants`, the `Run mutation tests on PR diff` step) — on `ci-gate`
+    // specifically it reads as unremarkable in a diff. Reject the literal
+    // substring anywhere in the job block (step-level OR job-level) rather
+    // than trying to parse which key it attaches to — no legitimate use
+    // of `continue-on-error` exists anywhere in `ci-gate`, so there is no
+    // narrower rule to get subtly wrong.
+    // -----------------------------------------------------------------------
+    assert!(
+        !gate_block.contains("continue-on-error"),
+        "FAIL (M2-j, PR #671 review round 10, CRITICAL): the `ci-gate` job \
+         block contains `continue-on-error`. This tolerates every upstream \
+         failure regardless of the pinned run line's own text (M2-i) — the \
+         tolerance is declared on a sibling key, not the run line itself. \
+         `continue-on-error` has no legitimate use anywhere in `ci-gate`; \
+         remove it.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1385,6 +1494,140 @@ fn extract_and_normalize_if_expr(job_block: &str) -> Result<Option<String>, Stri
     }
 }
 
+/// PINNED, human-reviewed exact text of the `ci-gate` job's gate-decision
+/// `run:` line (PR #671 review round 10, CRITICAL).
+///
+/// Every prior round's CRITICAL made the gate tolerate an illegitimate
+/// SKIP. This one is a different shape entirely: nothing in this suite (or
+/// in `test_ci_gate_pass_fail_semantics_are_structurally_placed`'s M2-g/h
+/// assertions, which check only that a `run:` step exists and mentions
+/// `check-ci-gate.sh` + `toJSON(needs)` as SUBSTRINGS) verifies that the
+/// script's exit code actually reaches the JOB's conclusion. Reproduced,
+/// each independently leaving the full suite at 14/14 green: appending
+/// `|| true` to the run line, `continue-on-error: true` on the step,
+/// `continue-on-error: true` on the job, and piping through `| cat`. Every
+/// one of these makes the gate tolerate EVERY upstream failure, not just
+/// an illegitimate skip — the retired inline condition (an allowlist of
+/// known-bad `contains()` values) and this gap are the same shape one
+/// layer up: an allowlist of known-good SUBSTRINGS with no default-deny on
+/// the run line itself.
+///
+/// Verified by direct read of `.github/workflows/ci.yml :: ci-gate` for
+/// this revision (do not trust a transcription — re-verify at the time of
+/// any change): the step-level `run:` is exactly `echo "${NEEDS_JSON}" |
+/// bash scripts/check-ci-gate.sh`, with NO trailing `|| true`, `| cat`,
+/// `; exit 0`, or similar, and NO `continue-on-error` anywhere in the job
+/// block.
+const PINNED_GATE_RUN_LINE: &str = "echo \"${NEEDS_JSON}\" | bash scripts/check-ci-gate.sh";
+
+/// Extract and normalize the SOLE step-level `run:` line in a job block,
+/// for pinned-literal comparison against `PINNED_GATE_RUN_LINE`.
+///
+/// Deliberately a SEPARATE function from `extract_and_normalize_if_expr`
+/// rather than a generalization of it: that function has been the site of
+/// every bypass in rounds 1-9 of this story's review, and refactoring it
+/// under this round's time pressure to serve a second caller is exactly
+/// the kind of change that reopens a closed class of bug in the one place
+/// most likely to hide it. The normalization RULES are intentionally the
+/// same (reject-don't-parse: block-scalar headers, line continuations, and
+/// ambiguous embedded `#` are all hard errors; a legitimate trailing
+/// comment is stripped; internal whitespace runs collapse to one space) —
+/// only the indent depth (8, for a step-level key, vs. 4 for a job-level
+/// `if:`) and the key name differ.
+///
+/// Returns `Ok(String)` only for a single, unambiguous, single-line
+/// `run:` value. Every other case — no `run:` line at all, more than one
+/// step-level `run:` line (this checker refuses to guess which one is the
+/// gate decision), a block-scalar form, a folded continuation, or an
+/// unresolvable embedded `#` — is `Err(reason)`, which the caller must
+/// treat as an immediate, unconditional test failure, never as "no pin"
+/// (there is only one pinned line here, not a per-job map).
+fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String> {
+    let lines: Vec<&str> = job_block.lines().collect();
+    let is_step_level_run_line =
+        |l: &&str| l.starts_with("        run:") && !l.starts_with("          ");
+
+    let run_line_indices: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_step_level_run_line(l))
+        .map(|(i, _)| i)
+        .collect();
+
+    if run_line_indices.is_empty() {
+        return Err(
+            "has no step-level `run:` line at all — the gate must execute \
+             something that can fail; without one, the job trivially \
+             succeeds for every upstream result."
+                .to_string(),
+        );
+    }
+    if run_line_indices.len() > 1 {
+        return Err(format!(
+            "has {} step-level `run:` lines — this checker requires exactly \
+             one so a single pinned literal unambiguously covers the gate \
+             decision. Disambiguate (or, if a second `run:` step is a \
+             deliberate, reviewed addition, update this checker to identify \
+             the gate-decision step specifically).",
+            run_line_indices.len()
+        ));
+    }
+    let run_line_idx = run_line_indices[0];
+
+    let run_line = lines[run_line_idx];
+    let raw = run_line.trim_start().strip_prefix("run:").unwrap_or("");
+    let raw_value_leading_trimmed = raw.trim_start();
+
+    if raw_value_leading_trimmed.starts_with('>') || raw_value_leading_trimmed.starts_with('|') {
+        return Err(format!(
+            "uses a YAML block-scalar form (\"{}\") for its `run:` value — \
+             the real command(s) live on continuation lines this checker \
+             does not read, so it cannot be safely represented as a single \
+             pinned literal. Rewrite as a single-line plain scalar to make \
+             it pinnable.",
+            raw_value_leading_trimmed.trim()
+        ));
+    }
+
+    if let Some(next_line) = lines[run_line_idx + 1..].iter().find(|l| {
+        let trimmed = l.trim_start();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    }) {
+        let indent = next_line.len() - next_line.trim_start().len();
+        if indent > 8 {
+            return Err(format!(
+                "has a `run:` value that appears to continue onto a \
+                 following line (\"{}\", indented {indent} spaces) — this \
+                 cannot be safely represented as a single pinned literal. \
+                 Rewrite as a single-line plain scalar to make it pinnable.",
+                next_line.trim()
+            ));
+        }
+    }
+
+    let value = match find_comment_start(raw) {
+        Some(idx) => &raw[..idx],
+        None => raw,
+    };
+    if value.contains('#') {
+        return Err(format!(
+            "has a `run:` value containing a `#` that is not a clearly \
+             whitespace-delimited trailing comment (\"{}\") — this cannot \
+             be safely normalized. Rewrite without an embedded `#` to make \
+             it pinnable.",
+            raw.trim()
+        ));
+    }
+
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if collapsed.is_empty() {
+        return Err("has an empty `run:` value.".to_string());
+    }
+
+    Ok(collapsed)
+}
+
 /// Build a `toJSON(needs)`-shaped JSON payload matching PRODUCTION shape:
 /// every job in `all_jobs` carries `result` and `outputs` (an empty
 /// object) — not `result` alone. Every job named in `skipped_jobs` reports
@@ -1721,13 +1964,27 @@ fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
     // generically), fail closed: assert the premise that makes `{}`
     // faithful still holds, so a job gaining real outputs turns this into
     // a loud, named failure instead of a silent model/reality gap.
+    //
+    // IMPORTANT 2 (PR #671 review round 10): the original round-9 check —
+    // `l.starts_with("    outputs:")` — matches exactly ONE of four
+    // equivalent YAML spellings for a job-level `outputs:` key.
+    // PyYAML-confirmed `outputs:`, `"outputs":`, `'outputs':`, and
+    // `outputs :` all parse to the identical key; a real job-level
+    // `outputs:` block spelled any of the latter three left this guard
+    // silently blind (14/14 green) while the `{}` premise it exists to
+    // protect no longer held. `line_declares_job_level_key` below
+    // recognizes all four. This guard's job is narrow enough (one literal
+    // key name, one fixed indent depth) that enumerating the recognized
+    // forms is tractable and auditable — unlike `if:`'s arbitrary
+    // expression text, which is why THAT function rejects rather than
+    // tries to enumerate.
     for job in &all_jobs {
         let job_block = extract_job_block(&ci, job).unwrap_or_else(|| {
             panic!("FAIL: `ci-gate.needs` names `{job}`, but no `{job}:` job exists in ci.yml.")
         });
         let declares_outputs = job_block
             .lines()
-            .any(|l| l.starts_with("    outputs:") && !l.starts_with("        "));
+            .any(|l| line_declares_job_level_key(l, "outputs"));
         assert!(
             !declares_outputs,
             "FAIL (PR #671 review round 9, outputs-content addendum): \

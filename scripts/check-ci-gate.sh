@@ -147,6 +147,19 @@ bash -n "${BASH_SOURCE[0]}"
 # specific textual shapes (`ALLOWED_SKIPS=`, `ALLOWED_SKIPS+=`,
 # `${ALLOWED_SKIPS`) in the source, which misses e.g. `ALLOWED_SKIPS[9]=`,
 # `declare -n`, `read -a`, or `mapfile -t`.
+#
+# SCOPE BOUNDARY (PR #671 review round 10, reasoned not run): this script
+# and its behavioral test both execute this file's actual bytes, so no
+# mutation of THIS script's logic can differ between a local `cargo test`
+# run and the real gate. A mutation keyed on something that legitimately
+# DIFFERS between those two environments is outside that guarantee — e.g.
+# `[ "${GITHUB_JOB:-}" = "ci-gate" ] && return 0` inside `is_allowed_skip`
+# would pass every local test (where `GITHUB_JOB` is unset, or set to
+# `test`, by the Rust test harness) yet fire in the real `ci-gate` job
+# (where `GITHUB_JOB=ci-gate`). No artifact in this suite claims to cover
+# that class, so this is a stated scope boundary, not a false claim like
+# the CRITICALs above — recorded here so it stays a documented boundary
+# rather than an implicit gap someone has to rediscover.
 # ---------------------------------------------------------------------------
 ALLOWED_SKIPS=("mutants")
 
@@ -337,6 +350,20 @@ run_self_test() {
     echo "=== check-ci-gate.sh SELF-TEST (S-CIGATE-2) ==="
     echo
 
+    # FIXTURE-COUNT PIN (PR #671 review round 10, IMPORTANT 1): without
+    # this, the suite's own summary line ("N/N fixtures matched") reports
+    # its OWN shrunken denominator as success — deleting a fixture (e.g.
+    # fixture 3 or fixture 13, the only two that reject an unlisted skip)
+    # silently degrades coverage while still printing "PASS: all fixtures
+    # matched". Reproduced: deleting fixture 13 alone -> "12/12 PASS";
+    # deleting both 3 and 13 -> "11/11 PASS", with the Rust suite (which
+    # does not derive its expectations from this count) staying 14/14
+    # throughout. Same fixed-denominator pattern already used by
+    # scripts/check-bc-citation-symbols.sh and
+    # scripts/check-cargo-mutants-policy-citations.sh (both pin
+    # EXPECTED_FIXTURES against a `fixtures_run` counter) — mirrored here
+    # rather than invented fresh.
+    readonly EXPECTED_FIXTURES=13
     local total=0
     local mismatches=0
 
@@ -508,8 +535,17 @@ run_self_test() {
     # value is being the only fixture exercising the FULL real 8-job
     # ci-gate.needs set with the real sibling field alongside `result`, as
     # an end-to-end shape check on top of the deliberately minimal
-    # fixtures above. Expected: PASS (mutants skipped + allowlisted, every
-    # other required job succeeded — the actual shape of a legitimate
+    # fixtures above. NOTE (PR #671 review round 10, drift class
+    # documented, not fixed): this fixture and fixture 13 below hardcode
+    # that 8-job list as a JSON literal; nothing pins that the literal
+    # still matches the REAL `ci-gate.needs` set in ci.yml if it changes.
+    # No false-green results from this today (the Rust suite derives its
+    # own job list from ci.yml at runtime via `parse_needs_set`, so a drift
+    # here would only stale one bash fixture's realism, not silently widen
+    # what the gate tolerates) — same drift CLASS `NEEDS_CONTEXT_JOB_KEYS`
+    # closed for payload keys, left open here for job identities. Expected:
+    # PASS (mutants skipped + allowlisted, every other required job
+    # succeeded — the actual shape of a legitimate
     # push-event run).
     check_fixture \
         "realistic-multiline-toJSON-needs-payload" \
@@ -589,6 +625,18 @@ run_self_test() {
         echo "      This means the fail-closed decision logic in evaluate_needs()"
         echo "      does not match the expected outcome for one or more fixtures"
         echo "      above — see the [FAIL] line(s) for which fixture(s) and why."
+        return 1
+    fi
+
+    # Post-fixture self-assertion (NOT a fixture; does not affect `total`).
+    # See the EXPECTED_FIXTURES comment above `total=0` for why this exists.
+    if [ "${total}" != "${EXPECTED_FIXTURES}" ]; then
+        echo "SELF-TEST-FIXTURE-COUNT: expected ${EXPECTED_FIXTURES} fixtures," \
+             "got ${total}. A fixture was added or removed without updating" \
+             "EXPECTED_FIXTURES — every fixture here is load-bearing (each" \
+             "was independently proven RED before the logic it pins was" \
+             "written); update EXPECTED_FIXTURES ONLY after confirming no" \
+             "fixture was silently dropped."
         return 1
     fi
 
