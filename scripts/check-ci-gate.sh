@@ -188,16 +188,22 @@ print_allowed_skips() {
 #     job so a gate failure is diagnosable from the ci-gate job's own log
 #   - returns 0 only if every job passed
 #
-# LOAD-BEARING LOG FORMAT (PR #671 review, round 6): the exact strings
-# `OK  <job> = <result>` and `FAIL  <job> = <result>` — two spaces after
-# `OK`, one after `FAIL`, ` = ` around the result — are asserted verbatim
-# (as a substring match against this function's stdout) by
+# LOAD-BEARING LOG FORMAT (PR #671 review, round 6; byte-count corrected
+# round 7 — verify actual bytes before rewriting this comment again): the
+# exact strings `OK  <job> = <result>` and `FAIL  <job> = <result>` — TWO
+# spaces after `OK`, TWO spaces after `FAIL` (not one — grep the `echo`
+# lines below yourself if this claim is ever in doubt), ` = ` around the
+# result — are asserted verbatim (as a substring match against this
+# function's stdout) by
 # `tests/ci_gate_completeness.rs::test_ci_gate_decision_matches_job_level_if_for_every_needs_member`,
 # which checks for `OK  <job> = skipped` / `FAIL  <job> = skipped` to
 # confirm the gate's per-job decision, not merely its exit code. Changing
-# this format's spacing/wording without updating that test would silently
-# break its assertions in a way `--self-test` (which only checks exit
-# codes via `check_fixture`'s rc comparison) would NOT catch.
+# this format's spacing/wording without updating that test would break
+# its assertions LOUDLY (the test fails) — but `--self-test` (which only
+# checks exit codes via `check_fixture`'s rc comparison, not message
+# content — except fixture 9's dedicated substring check) would NOT catch
+# it, so the failure would only surface in `cargo test`, not in this
+# script's own `--self-test` run.
 # ---------------------------------------------------------------------------
 evaluate_needs() {
     local json="$1"
@@ -540,6 +546,40 @@ run_self_test() {
   }
 }' \
         "pass"
+
+    # Fixture 13 — an UNLISTED job (fmt) skipped, in the SAME
+    # production-shaped payload as fixture 12 (every job carries
+    # `outputs` and `outcome` siblings, not just `result`) -> FAIL closed
+    # (rc=1). CRITICAL-3, PR #671 review round 7: fixture 12 exercises the
+    # production shape only for a PASS case (mutants, legitimately
+    # allowlisted) — a mutation keying tolerance on the mere PRESENCE of
+    # an `outcome` sibling field (e.g. `is_allowed_skip "${job}" || ...
+    # has("outcome")`) rather than on `is_allowed_skip` alone would pass
+    # every other fixture here, since none of them combine an UNLISTED
+    # skipped job with production-shaped sibling fields. Reproduced:
+    # without this fixture, that exact mutation left --self-test at
+    # 12/12 while the real gate accepted any skipped job carrying an
+    # `outcome` key.
+    check_fixture \
+        "unlisted-job-skipped-full-production-shape" \
+        '{
+  "fmt": {
+    "result": "skipped",
+    "outputs": {},
+    "outcome": "skipped"
+  },
+  "clippy": {
+    "result": "success",
+    "outputs": {},
+    "outcome": "success"
+  },
+  "mutants": {
+    "result": "success",
+    "outputs": {},
+    "outcome": "success"
+  }
+}' \
+        "fail:1"
 
     echo
     echo "Self-test summary: $((total - mismatches))/${total} fixtures matched their expected outcome."
