@@ -2242,6 +2242,20 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
 /// here — a follow-up story to replace line-based extraction with a real
 /// YAML parser is tracked separately and is NOT opened by this round):
 ///
+///   SCOPE SUMMARY (read this before the detail below):
+///   Enforced: decision semantics (behavioral subprocess tests) · assertion
+///   shapes (set-equality, default-deny given faithful extraction) · value
+///   substitution (byte pins that fail loud via `Err`) · non-LF line
+///   breaks (complete for that one class). NOT enforced: the lexer layer
+///   generally — YAML node properties (`&anchor`, `!tag`/`!!tag`) defeat
+///   every set-equality pin with one line of plain ASCII; `uses:` values
+///   on the decision path; human judgment on pin updates. Control for the
+///   unenforced: code review of the `ci.yml` diff — no automated check
+///   here catches it, acceptable because the residual requires
+///   hand-crafted YAML visible in a diff, unlike the original defect,
+///   which was silent. Durable fix: a real YAML parser over the parsed
+///   tree (follow-up story, not opened here).
+///
 ///   ENFORCED (verified by attack against this file's own tests, not by
 ///   reading an assertion and trusting its shape):
 ///   - `scripts/check-ci-gate.sh`'s DECISION semantics are tested
@@ -2333,13 +2347,19 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
 ///     unenforced for the reasons already recorded above (rounds 12-13) —
 ///     unchanged by this round.
 ///
-///   THE CONTROL IS CODE REVIEW, not a scanner in this repository. A
-///   hostile or careless one-line YAML edit using node properties (or a
-///   future, still-undiscovered member of this same lexer-disagreement
-///   class) is UNGUARDED by any automated check here — it requires a
-///   human to notice hand-crafted YAML syntax (an anchor or a tag on a key
-///   that has no ordinary reason to carry one) in a diff. That is not a
-///   mitigation this file provides; it is the ambient control this
+///   NO AUTOMATED CHECK IN THIS REPOSITORY CATCHES A NODE-PROPERTY BYPASS.
+///   CODE REVIEW IS THE CONTROL — not "mitigated," UNGUARDED, with review
+///   as the control. A hostile or careless one-line YAML edit using node
+///   properties (or a future, still-undiscovered member of this same
+///   lexer-disagreement class) requires a human to notice hand-crafted
+///   YAML syntax (an anchor or a tag on a key that has no ordinary reason
+///   to carry one) in a diff. That is acceptable for a specific reason,
+///   not merely tolerated: this residual requires HAND-CRAFTED YAML
+///   visible in a diff (`&x shell: cat {0}` / `!!str shell: cat {0}` is
+///   not a construction a careless edit, `sed`, or auto-formatter
+///   produces) — unlike the pre-S-CIGATE-2 defect this whole story exists
+///   to fix, which was silent and already live in production on every
+///   push before anyone noticed. This is the ambient control this
 ///   repository already relies on for everything this file does not pin
 ///   (see "NOT PINNED" above), stated plainly rather than implied.
 ///
