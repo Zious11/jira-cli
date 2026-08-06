@@ -1312,17 +1312,38 @@ fn test_ci_yml_workflow_level_env_key_set_is_pinned() {
 ///      green throughout, because every extractor's line splitting hid
 ///      the smuggled key from view.
 ///
-/// MITIGATION, NOT THE DURABLE FIX: this test asserts the raw bytes of
-/// `ci.yml` contain none of the four characters above, closing the whole
-/// class in ONE place rather than teaching every line-based extractor in
-/// this file another line-break spelling. It does not make line-based
-/// extraction correct in general — the durable fix is parsing `ci.yml`
-/// ONCE with a real YAML parser and asserting over the parsed tree for
-/// every structural check in this suite, keeping today's byte-for-byte
-/// scalar pins (the run line, `if:` expressions, `NEEDS_JSON:`) as a
-/// second assertion layered on top of parsed VALUES rather than raw
-/// text. That rewrite is out of scope for this round and is tracked as a
-/// follow-up story — it is not implied closed by this test.
+/// THIS CLOSES THE CLASS BY CONSTRUCTION, NOT BY ENUMERATION (PR #671
+/// review round 14, reviewer-confirmed framing): this test asserts the
+/// raw bytes of `ci.yml` contain none of the four characters above.
+/// Unlike most checks in this file, it needs no position assumption (it
+/// scans the WHOLE file, not a line at an expected indent), no presence
+/// assumption (it does not first have to LOCATE a target key before
+/// checking it), and its extractor is trivial (`char_indices()` over the
+/// raw bytes has nothing to silently under-report) — the same shape as
+/// M2-j (`!contains("continue-on-error")`), the one check the round-13
+/// corrected rule certifies as safe by construction rather than as an
+/// accident of what happened to get tested. It is NOT, however, a
+/// general fix for line-based extraction, and it does not make
+/// `str::lines()`-based checks correct for cases beyond these four
+/// specific characters — that remains a real limitation of this file's
+/// design. The durable fix is parsing `ci.yml` ONCE with a real,
+/// off-the-shelf YAML parser (the same category of tool `actionlint` and
+/// GitHub's own `actions/runner` already use) and asserting over the
+/// PARSED TREE for every structural check in this suite, keeping today's
+/// byte-for-byte scalar pins (the run line, `if:` expressions,
+/// `NEEDS_JSON:`) as a second assertion layered on parsed VALUES rather
+/// than raw text. NAMING THE OPTION PRECISELY (round 14 correction of a
+/// round-11 mischaracterization): round 11's design note rejected
+/// "re-deriving YAML block-mapping semantics" as impractical, which is
+/// correct — hand-rolling a general block-mapping parser was, and
+/// remains, the wrong call — but the conclusion it drew from that was
+/// "hand-roll a narrower slice" (the job/step key-set pins, the `if:`/
+/// run-line reject-don't-parse normalizers, and now this byte scan).
+/// USING A REAL PARSER was always the third option, distinct from both
+/// "hand-roll a full parser" (rejected, correctly) and "hand-roll a
+/// narrower slice" (what this file actually does). That rewrite is out
+/// of scope for this round and is tracked as a follow-up story in that
+/// specific direction — it is not implied closed by this test.
 #[test]
 fn test_ci_yml_contains_no_non_lf_yaml_line_breaks() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/ci.yml");
@@ -1996,14 +2017,25 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
              8-space indent — the gate must execute something that can \
              fail; without one, the job trivially succeeds for every \
              upstream result. NOTE (PR #671 review round 13, benign-false- \
-             red message fix, same class as M2-g's above): if a `run:` \
-             line genuinely exists but at an unexpected POSITION (e.g. a \
-             legal re-indent of the whole step's child block), this check \
-             cannot tell \"missing\" apart from \"moved\" — `run:` is not \
-             necessarily missing, it may simply be in an unrecognized \
-             POSITION. See M2-l (step key SETS, order- and indent-\
-             independent) for the check that still confirms the step \
-             itself is intact in that case."
+             red message fix, same class as M2-g's above; CORRECTED round \
+             14 — the round-13 wording pointed to a check that does not \
+             actually help, see below): if a `run:` line genuinely exists \
+             but at an unexpected POSITION (e.g. a legal re-indent of the \
+             whole step's child block), this check cannot tell \"missing\" \
+             apart from \"moved\" — `run:` is not necessarily missing, it \
+             may simply be in an unrecognized POSITION. This step's \
+             structure CANNOT be independently confirmed by another check \
+             in this suite in that case: every assertion here, including \
+             M2-l's step key SETS, shares this same exact-indent \
+             assumption (M2-l hardcodes 6-space step markers and 6/8-space \
+             child keys) — verified empirically: under the exact \
+             re-indent this note describes, `extract_gate_step_key_sets` \
+             returns an empty Vec (not the pinned three-step shape), and \
+             M2-i's own panic ends the test function before M2-l's \
+             assertion is ever reached, so M2-l reports nothing either \
+             way. The correct maintainer action under this diagnosis is \
+             to RESTORE the file's 6/8/10-space indent convention, not to \
+             loosen this or any other pin."
                 .to_string(),
         );
     }
