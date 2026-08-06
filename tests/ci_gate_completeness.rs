@@ -1150,10 +1150,13 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
         "FAIL (M2-o, PR #671 review round 13): `extract_gate_env_key_set` \
          returned an EMPTY key set for the gate step's `env:` block — \
          either the block is genuinely missing (in which case M2-n above \
-         should already have failed on a missing `NEEDS_JSON:` line) or \
-         this function's anchoring logic failed to find it. An empty \
-         result here must never be silently treated as \"no env vars to \
-         worry about\".\n\
+         should already have failed on a missing `NEEDS_JSON:` line), this \
+         function's anchoring logic failed to find it, or (PR #671 review \
+         round 14 SUGGESTION) `env:` was legally reordered to AFTER \
+         `run:` on this step — this function only scans BACKWARD from \
+         `run:`, so a legal-but-reordered `env:` looks identical to a \
+         missing one from here. An empty result here must never be \
+         silently treated as \"no env vars to worry about\".\n\
          Current ci-gate block:\n{gate_block}"
     );
     assert_eq!(
@@ -1272,6 +1275,92 @@ fn test_ci_yml_workflow_level_env_key_set_is_pinned() {
          `--norc`/`--noprofile`. If this is a deliberate, reviewed \
          change, update PINNED_WORKFLOW_ENV_KEYS in the SAME change."
     );
+}
+
+/// PR #671 review round 14, CRITICAL: `read_ci_yml()` normalizes `\r\n` to
+/// `\n`, but every extractor in this file (`extract_key_name_at_indent`,
+/// `extract_job_level_key_set`, `extract_gate_step_key_sets`,
+/// `collect_mapping_key_set`, and both workflow-level env-key-set tests)
+/// then operates on `str::lines()`, which splits ONLY on `\n`. YAML's own
+/// line-break character set (YAML 1.1 `b-char`, which PyYAML implements)
+/// is larger: CR (U+000D) alone, NEL (U+0085), LINE SEPARATOR (U+2028),
+/// and PARAGRAPH SEPARATOR (U+2029) are all valid YAML line breaks that
+/// end a LOGICAL line for a real parser but do NOT split a `str::lines()`
+/// iteration on their own. A key placed after one of these, on the same
+/// PHYSICAL text line as a preceding key, is therefore invisible to EVERY
+/// line-based check in this file simultaneously — not one extractor's
+/// bug, a property of the whole file-reading strategy.
+///
+/// Reproduced, each a genuine one-line diff, PyYAML- AND Ruby-Psych/
+/// libyaml-confirmed legal (independent implementations agreeing rules
+/// out a single-parser quirk), actionlint-clean, and — since
+/// `.gitattributes`' `text eol=lf` normalizes CRLF pairs but does NOT
+/// strip a lone CR or the three multi-byte Unicode line breaks —
+/// confirmed to survive a real `git add`/commit:
+///   1. `CARGO_TERM_COLOR: always<CR>  BASH_ENV: /tmp/shim.sh` reopens
+///      round 12's workflow-env CRITICAL, for every job in the file.
+///   2. `name: CI<CR>defaults: {{run: {{shell: "cat {{0}}"}}}}` reopens
+///      round 11's workflow-level `defaults:` CRITICAL.
+///   3. Appending `<CR>        shell: cat {{0}}` to the gate step's
+///      `name:` line defeats `PINNED_GATE_STEP_KEY_SETS` — the step-key-
+///      set pin confirmed default-deny against fourteen constructions in
+///      round 12, but only over the lines `str::lines()` actually
+///      produced; PyYAML sees this step's keys as `["env", "name", "run",
+///      "shell"]` with `shell: "cat {{0}}"`, the real GitHub runner would
+///      accept that override, and the gate would `cat` its own decision
+///      script instead of running it — while this suite stayed 16/16
+///      green throughout, because every extractor's line splitting hid
+///      the smuggled key from view.
+///
+/// MITIGATION, NOT THE DURABLE FIX: this test asserts the raw bytes of
+/// `ci.yml` contain none of the four characters above, closing the whole
+/// class in ONE place rather than teaching every line-based extractor in
+/// this file another line-break spelling. It does not make line-based
+/// extraction correct in general — the durable fix is parsing `ci.yml`
+/// ONCE with a real YAML parser and asserting over the parsed tree for
+/// every structural check in this suite, keeping today's byte-for-byte
+/// scalar pins (the run line, `if:` expressions, `NEEDS_JSON:`) as a
+/// second assertion layered on top of parsed VALUES rather than raw
+/// text. That rewrite is out of scope for this round and is tracked as a
+/// follow-up story — it is not implied closed by this test.
+#[test]
+fn test_ci_yml_contains_no_non_lf_yaml_line_breaks() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/ci.yml");
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
+
+    const FORBIDDEN: &[(char, &str)] = &[
+        ('\r', "CR (U+000D)"),
+        ('\u{0085}', "NEL (U+0085)"),
+        ('\u{2028}', "LINE SEPARATOR (U+2028)"),
+        ('\u{2029}', "PARAGRAPH SEPARATOR (U+2029)"),
+    ];
+
+    for (byte_offset, ch) in raw.char_indices() {
+        if let Some((_, label)) = FORBIDDEN.iter().find(|(forbidden, _)| *forbidden == ch) {
+            panic!(
+                "FAIL (PR #671 review round 14, CRITICAL): \
+                 `.github/workflows/ci.yml` contains a {label} character \
+                 at byte offset {byte_offset}. Every extractor in this \
+                 suite splits on `str::lines()`, which recognizes ONLY \
+                 `\\n` as a line break — but this character is a valid \
+                 YAML line break in its own right (YAML 1.1 `b-char`; \
+                 PyYAML and Ruby Psych/libyaml both honor it) that a real \
+                 YAML parser treats as ending the logical line. A key \
+                 placed after this character, on the same physical text \
+                 line as a preceding key, is INVISIBLE to every line- \
+                 based check in this file simultaneously while a real \
+                 parser sees a normal, separate key — see this test's \
+                 doc comment for three reproduced one-line exploits \
+                 (workflow-env, workflow `defaults:`, and gate-step \
+                 `shell:` smuggling). This is a byte-level tripwire, not \
+                 a general fix for line-based extraction — see the doc \
+                 comment for why a real YAML-parse rewrite is the \
+                 durable fix, tracked as a follow-up story, not this \
+                 test."
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2267,13 +2356,18 @@ fn extract_gate_env_key_set(job_block: &str) -> Vec<String> {
         return Vec::new();
     };
 
-    // The gate step's `env:` line, if any, is BEFORE its `run:` line
-    // (ci.yml's convention, and YAML mapping keys have no required
-    // order, so scan the whole step rather than assume this) — scan
-    // backward from `run:` to the most recent indent-8 key, which is
-    // this step's own `env:` only if one exists at all; if the nearest
-    // indent-8 key going backward is something else (or we hit the
-    // step's own `- ` marker first), this step has no `env:`.
+    // PR #671 review round 14, SUGGESTION (doc/code mismatch fixed): this
+    // scans BACKWARD from `run:` only, on the assumption (ci.yml's current
+    // convention, not a YAML requirement) that the step's `env:` line
+    // precedes its `run:` line. A prior version of this comment claimed
+    // "YAML mapping keys have no required order, so scan the whole step
+    // rather than assume this" — the code never did that; it only ever
+    // scanned backward. Reordering `env:` to AFTER `run:` on the gate step
+    // is a legal, semantically identical edit (YAML mapping keys are
+    // genuinely unordered) that this function cannot see — verified
+    // fail-CLOSED, not open: it fires M2-o's non-empty assertion below,
+    // since the backward scan then finds no indent-8 `env:` before hitting
+    // the step's own `- ` marker.
     let Some(env_line_idx) = lines[..run_line_idx]
         .iter()
         .enumerate()
