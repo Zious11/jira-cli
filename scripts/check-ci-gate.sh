@@ -491,92 +491,92 @@ run_self_test() {
     # Fixture 12 — a realistic multi-line toJSON(needs) payload, modeled on
     # the actual shape of live CI run 30465686049 (the run that first
     # exposed this story's defect): pretty-printed, multi-line, and each
-    # job carries additional fields (`outputs`, `outcome`) beyond `result`
-    # — not the single-line minimal `{"job":{"result":"..."}}` shape every
-    # other fixture above uses. jq itself is whitespace-insensitive, so
-    # this fixture is not needed to catch a single-line-only jq bug (that
-    # bug class does not exist here) — its value is being the only fixture
-    # exercising the FULL real 8-job ci-gate.needs set with realistic
-    # sibling fields alongside `result`, as an end-to-end shape check on
-    # top of the deliberately minimal fixtures above. Expected: PASS
-    # (mutants skipped + allowlisted, every other required job succeeded —
-    # the actual shape of a legitimate push-event run).
+    # job carries an `outputs` sibling beyond `result` — not the
+    # single-line minimal `{"job":{"result":"..."}}` shape every other
+    # fixture above uses. Per GitHub's contexts reference
+    # (https://docs.github.com/en/actions/learn-github-actions/contexts
+    # -> "needs context"), `needs.<job_id>` has exactly two properties,
+    # `result` and `outputs` — there is no `outcome`. `outcome` belongs to
+    # the STEPS context (`steps.<id>.outcome`, "result before
+    # continue-on-error is applied") and is never present on a `needs`
+    # entry; an earlier round of this fixture modeled `outcome` here by
+    # mistake (unverified assumption, corrected PR #671 review round 8 —
+    # see tests/ci_gate_completeness.rs for the reproduction of the
+    # phantom-field blind spot this caused). jq itself is
+    # whitespace-insensitive, so this fixture is not needed to catch a
+    # single-line-only jq bug (that bug class does not exist here) — its
+    # value is being the only fixture exercising the FULL real 8-job
+    # ci-gate.needs set with the real sibling field alongside `result`, as
+    # an end-to-end shape check on top of the deliberately minimal
+    # fixtures above. Expected: PASS (mutants skipped + allowlisted, every
+    # other required job succeeded — the actual shape of a legitimate
+    # push-event run).
     check_fixture \
         "realistic-multiline-toJSON-needs-payload" \
         '{
   "fmt": {
     "result": "success",
-    "outputs": {},
-    "outcome": "success"
+    "outputs": {}
   },
   "clippy": {
     "result": "success",
-    "outputs": {},
-    "outcome": "success"
+    "outputs": {}
   },
   "test": {
     "result": "success",
-    "outputs": {},
-    "outcome": "success"
+    "outputs": {}
   },
   "msrv": {
     "result": "success",
-    "outputs": {},
-    "outcome": "success"
+    "outputs": {}
   },
   "deny": {
     "result": "success",
-    "outputs": {},
-    "outcome": "success"
+    "outputs": {}
   },
   "spec-guard": {
     "result": "success",
-    "outputs": {},
-    "outcome": "success"
+    "outputs": {}
   },
   "check-signing-workflow-injection": {
     "result": "success",
-    "outputs": {},
-    "outcome": "success"
+    "outputs": {}
   },
   "mutants": {
     "result": "skipped",
-    "outputs": {},
-    "outcome": "skipped"
+    "outputs": {}
   }
 }' \
         "pass"
 
     # Fixture 13 — an UNLISTED job (fmt) skipped, in the SAME
-    # production-shaped payload as fixture 12 (every job carries
-    # `outputs` and `outcome` siblings, not just `result`) -> FAIL closed
-    # (rc=1). CRITICAL-3, PR #671 review round 7: fixture 12 exercises the
-    # production shape only for a PASS case (mutants, legitimately
-    # allowlisted) — a mutation keying tolerance on the mere PRESENCE of
-    # an `outcome` sibling field (e.g. `is_allowed_skip "${job}" || ...
-    # has("outcome")`) rather than on `is_allowed_skip` alone would pass
-    # every other fixture here, since none of them combine an UNLISTED
-    # skipped job with production-shaped sibling fields. Reproduced:
-    # without this fixture, that exact mutation left --self-test at
-    # 12/12 while the real gate accepted any skipped job carrying an
-    # `outcome` key.
+    # production-shaped payload as fixture 12 (every job carries an
+    # `outputs` sibling, not just `result` — see fixture 12's comment for
+    # why `outcome` is NOT modeled) -> FAIL closed (rc=1). CRITICAL-3, PR
+    # #671 review round 7: fixture 12 exercises the production shape only
+    # for a PASS case (mutants, legitimately allowlisted) — a mutation
+    # keying tolerance on the mere PRESENCE of an `outputs` sibling field
+    # (e.g. `is_allowed_skip "${job}" || ... has("outputs")`) rather than
+    # on `is_allowed_skip` alone would pass every other fixture here,
+    # since none of them combine an UNLISTED skipped job with
+    # production-shaped sibling fields. Reproduced: without this fixture,
+    # that exact mutation left --self-test at 12/12 while the real gate
+    # accepted any skipped job carrying an `outputs` key (i.e. every real
+    # job, since `outputs` is always present).
     check_fixture \
         "unlisted-job-skipped-full-production-shape" \
         '{
   "fmt": {
     "result": "skipped",
-    "outputs": {},
-    "outcome": "skipped"
+    "outputs": {}
   },
   "clippy": {
     "result": "success",
-    "outputs": {},
-    "outcome": "success"
+    "outputs": {}
   },
   "mutants": {
     "result": "success",
-    "outputs": {},
-    "outcome": "success"
+    "outputs": {}
   }
 }' \
         "fail:1"

@@ -1097,13 +1097,21 @@ fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
 // preceded `#` as if it were a real comment (CRITICAL-2) — both now hard
 // `Err` rejections instead of silent mis-parses. Separately, every
 // synthesized payload in this test used to carry only a `result` field;
-// a mutation keying tolerance on an unrelated sibling field
-// (`has("outcome")`) or on skip-count passed unnoticed because no payload
-// had that field or that shape (CRITICAL-3) — payloads are now
-// production-shaped (`result`+`outputs`+`outcome`) and each job is
+// a mutation keying tolerance on an unrelated sibling field or on
+// skip-count passed unnoticed because no payload had that field or that
+// shape (CRITICAL-3) — payloads are now production-shaped and each job is
 // checked in both a single-skip and a `job`+`mutants`-both-skipped
 // variant. See `extract_and_normalize_if_expr`'s and
 // `build_multi_skip_payload`'s doc comments for the full detail.
+//
+// ROUND 8 ADDENDUM: round 7's production shape was itself wrong in one
+// respect — it modeled a phantom `outcome` field that the real `needs`
+// context does not have (`outcome` is a `steps`-context-only property;
+// verified against GitHub's contexts reference). `build_multi_skip_payload`
+// now models exactly `result`+`outputs`, the two documented `needs.
+// <job_id>` properties, nothing more. See that function's doc comment for
+// the full correction and the reproduced inverted-mutation blind spot this
+// phantom field created.
 // ---------------------------------------------------------------------------
 
 /// PINNED, human-reviewed `if:` expressions for every job legitimately
@@ -1294,21 +1302,40 @@ fn extract_and_normalize_if_expr(job_block: &str) -> Result<Option<String>, Stri
 }
 
 /// Build a `toJSON(needs)`-shaped JSON payload matching PRODUCTION shape:
-/// every job in `all_jobs` carries `result`, `outputs` (an empty object),
-/// and `outcome` — not `result` alone. Every job named in `skipped_jobs`
-/// reports `skipped` for both `result` and `outcome`; every other job
-/// reports `success` for both.
+/// every job in `all_jobs` carries `result` and `outputs` (an empty
+/// object) — not `result` alone. Every job named in `skipped_jobs` reports
+/// `skipped` for `result`; every other job reports `success`.
 ///
-/// CRITICAL-3 (PR #671 review round 7): the prior single-field
-/// `{"job":{"result":"..."}}` shape, used everywhere in this test, never
-/// exercised any codepath keying on a sibling field. A mutation
-/// (`is_allowed_skip "${job}" || echo "${json}" | jq -e ... 'has("outcome")'`)
-/// that tolerated ANY skipped job carrying an `outcome` key passed EVERY
-/// payload this test ever built, because none of them had an `outcome`
-/// key at all — and real `toJSON(needs)` always does. Reproduced
-/// end-to-end: with that mutation, `--self-test` stayed 12/12, `cargo
-/// test` stayed 13/13, and a production-shaped payload with an unlisted
-/// job skipped got gate rc=0.
+/// SOURCE (PR #671 review round 8 — corrects a round-7 error): per
+/// GitHub's contexts reference
+/// (<https://docs.github.com/en/actions/learn-github-actions/contexts>,
+/// "needs context"), `needs.<job_id>` has EXACTLY two properties:
+/// `result` and `outputs`. There is no `outcome` on `needs` — `outcome`
+/// belongs solely to the STEPS context (`steps.<step_id>.outcome`,
+/// "result of a completed step before `continue-on-error` is applied"),
+/// a per-step concept with no job-level analog. Round 7 modeled this
+/// payload as `result`+`outputs`+`outcome`, sourced from an earlier
+/// fixture's unverified "realistic shape" comment that nobody checked
+/// against the docs before three more rounds cited and built on it. That
+/// phantom field was worse than merely redundant: because every fixture
+/// and payload had `outcome` while production payloads never do, a
+/// mutation keyed on `outcome`'s ABSENCE (or exact field-set matching)
+/// would pass every test here — because the test always supplied the
+/// field — while tolerating everything in production, where the field
+/// never appears. Reproduced end-to-end (round 8): the inverted mutation
+/// `! echo "${json}" | jq -e ... 'has("outcome")'` passed `--self-test`
+/// (13/13) and `cargo test` (all green) under the round-7 shape, while
+/// accepting any skip in a live gate run (which never has `outcome`).
+///
+/// CRITICAL-3 (PR #671 review round 7, still valid after the `outcome`
+/// correction): the ORIGINAL prior-round single-field
+/// `{"job":{"result":"..."}}` shape, used everywhere in this test before
+/// round 7, never exercised any codepath keying on a sibling field at
+/// all — a mutation tolerating any skipped job carrying an `outputs` key
+/// (i.e. every real job, since `outputs` is always present) passed every
+/// payload this test built before round 7. `outputs` is genuinely part of
+/// the real shape (see SOURCE above) and stays modeled here; `outcome`
+/// does not exist on `needs` and has been removed.
 ///
 /// Also used to cover the realistic PRODUCTION case that every actual push
 /// already has: `mutants` is essentially always `skipped` alongside
@@ -1329,7 +1356,6 @@ fn build_multi_skip_payload(all_jobs: &[String], skipped_jobs: &[&str]) -> Strin
             serde_json::json!({
                 "result": result,
                 "outputs": {},
-                "outcome": result,
             }),
         );
     }
@@ -1408,8 +1434,10 @@ fn run_check_ci_gate_sh(json_payload: &str) -> std::process::Output {
 ///     (legitimate-skip) case. For EACH of `all_skip_variants_for(job)`
 ///     (single-skip, and the production-realistic job+`mutants` both
 ///     skipped — CRITICAL-3, PR #671 review round 7), synthesize a
-///     PRODUCTION-SHAPED payload (`result`+`outputs`+`outcome` per job,
-///     not `result` alone — `build_multi_skip_payload`), run
+///     PRODUCTION-SHAPED payload (`result`+`outputs` per job, not
+///     `result` alone — `build_multi_skip_payload`; round 8 corrected
+///     this to drop a phantom `outcome` field the real `needs` context
+///     does not have — see that function's doc comment), run
 ///     `scripts/check-ci-gate.sh` against it in a real subprocess, and
 ///     assert: exit code is EXACTLY 0 AND stdout contains an `OK  <job> =
 ///     skipped` line naming this job.
@@ -1452,19 +1480,37 @@ fn run_check_ci_gate_sh(json_payload: &str) -> std::process::Output {
 /// gap on the platform that matters).
 ///
 /// Proven RED (round 7, with sha256-verified byte-identical restores)
-/// against all three CRITICALs from this round's review: CRITICAL-1
+/// against all three CRITICALs from that round's review: CRITICAL-1
 /// (`if: >-` block-scalar laundering, including the continuation-swap
 /// variant — pinning `("deny", ">-")` then swapping the continuation line
 /// with zero pin change), CRITICAL-2 (glued `#`:
 /// `${{ vars.RUN_DENY == 'true' }}#${{ always() }}` normalizing to the
-/// legitimate-looking prefix before the round-7 fix), and both CRITICAL-3
-/// instances (`has("outcome")` sibling-field mutation; skip-count-≥2
-/// mutation). Also re-confirmed RED (unchanged from rounds 3/5/6):
-/// mutations A and B, all four round-2 `+=`-form bypasses, and the four
-/// round-5/6 bypasses (trailing-comment no-op, bare `always()`,
-/// permanently-false `github.ref`, `always() || github.ref`). The
-/// legitimate `mutants` case still passes (positive branch, exit 0, both
-/// payload variants).
+/// legitimate-looking prefix before the round-7 fix), and the CRITICAL-3
+/// skip-count-≥2 mutation (still valid under the round-8 `outputs`-only
+/// shape). Round 7's OTHER claimed CRITICAL-3 instance
+/// (`has("outcome")`) was itself built on a false premise — see
+/// `build_multi_skip_payload`'s doc comment — and is superseded by round
+/// 8's finding below.
+///
+/// Proven RED (round 8, sha256-verified byte-identical restores): the
+/// INVERTED mutation this false premise actually opened,
+/// `is_allowed_skip "${job}" || ! echo "${json}" | jq -e --arg j "${job}"
+/// '.[$j] | has("outcome")'` — under the round-7 shape (every payload
+/// carries a phantom `outcome`) this passed `--self-test` (13/13) and
+/// `cargo test` (all green) while tolerating every skip in a live gate
+/// run, since real `needs` entries never carry `outcome`. Under the
+/// round-8 corrected shape (`outputs` only, no `outcome`), this same
+/// mutated line is inert — `has("outcome")` is always `false` for both
+/// test payloads and production, so the mutation can no longer
+/// distinguish anything and every fixture/test still catches it via the
+/// unchanged `is_allowed_skip` half. Also re-verified RED: `has("outputs")`
+/// (tolerates any skipped job, since `outputs` IS always present —
+/// CRITICAL-3 original, still exploitable and still caught). Also
+/// re-confirmed RED (unchanged from rounds 3/5/6): mutations A and B, all
+/// four round-2 `+=`-form bypasses, and the four round-5/6 bypasses
+/// (trailing-comment no-op, bare `always()`, permanently-false
+/// `github.ref`, `always() || github.ref`). The legitimate `mutants` case
+/// still passes (positive branch, exit 0, both payload variants).
 #[cfg(unix)]
 #[test]
 fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
