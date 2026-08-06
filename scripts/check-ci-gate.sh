@@ -536,15 +536,18 @@ run_self_test() {
     # ci-gate.needs set with the real sibling field alongside `result`, as
     # an end-to-end shape check on top of the deliberately minimal
     # fixtures above. NOTE (PR #671 review round 10, drift class
-    # documented, not fixed): this fixture and fixture 13 below hardcode
-    # that 8-job list as a JSON literal; nothing pins that the literal
-    # still matches the REAL `ci-gate.needs` set in ci.yml if it changes.
-    # No false-green results from this today (the Rust suite derives its
-    # own job list from ci.yml at runtime via `parse_needs_set`, so a drift
-    # here would only stale one bash fixture's realism, not silently widen
-    # what the gate tolerates) — same drift CLASS `NEEDS_CONTEXT_JOB_KEYS`
-    # closed for payload keys, left open here for job identities. Expected:
-    # PASS (mutants skipped + allowlisted, every other required job
+    # documented, not fixed; round 11 corrected an inaccurate cross-
+    # reference here — fixture 13 below hardcodes only THREE jobs (`fmt`,
+    # `clippy`, `mutants`), not this fixture's full eight): this fixture
+    # hardcodes the 8-job list as a JSON literal; nothing pins that the
+    # literal still matches the REAL `ci-gate.needs` set in ci.yml if it
+    # changes. No false-green results from this today (the Rust suite
+    # derives its own job list from ci.yml at runtime via
+    # `parse_needs_set`, so a drift here would only stale this bash
+    # fixture's realism, not silently widen what the gate tolerates) —
+    # same drift CLASS `NEEDS_CONTEXT_JOB_KEYS` closed for payload keys,
+    # left open here for job identities. Expected: PASS (mutants skipped
+    # + allowlisted, every other required job
     # succeeded — the actual shape of a legitimate
     # push-event run).
     check_fixture \

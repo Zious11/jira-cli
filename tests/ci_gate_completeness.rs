@@ -232,6 +232,24 @@ fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
 /// key, since no line can simultaneously start with exactly 4 spaces AND
 /// 8 spaces. It read as protection against a deeper indent that it did
 /// not actually provide; this version's clause does.
+///
+/// ACKNOWLEDGED LIMITATION (PR #671 review round 11, small correction 3,
+/// verified independently via PyYAML — a job's own child keys need only
+/// be indented CONSISTENTLY WITH EACH OTHER, not with any other job's
+/// indent choice, so a job written with 6-space (or any other) indent for
+/// ALL its own direct children is valid, `actionlint`-clean YAML): this
+/// function's "exactly 4 spaces" assumption is the SAME file-wide
+/// indentation-depth assumption every other 4/8/10-space-hardcoded check
+/// in this file already makes (`extract_and_normalize_if_expr`'s
+/// job-level `if:` detection, the M2 job/step-level checks, etc.) — this
+/// function does not introduce a new weakness, it inherits an existing,
+/// broader one. Solving it in general (indent-independent job-block
+/// parsing) would touch every such function in this file under a single
+/// unifying re-derivation of "what indent does THIS job actually use,"
+/// which is a larger, dedicated change, not a one-line fix to this
+/// function alone — scoped out of this round for that reason, matching
+/// how review round 11 itself scoped it ("low stakes given the file-wide
+/// 4-space assumption").
 fn line_declares_job_level_key(line: &str, key: &str) -> bool {
     let Some(after_indent) = line.strip_prefix("    ") else {
         return false;
@@ -937,6 +955,182 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
          remove it.\n\
          Current ci-gate block:\n{gate_block}"
     );
+
+    // -----------------------------------------------------------------------
+    // Assertion 6 (M2-k, PR #671 review round 11, CRITICAL 3 / structural):
+    // M2-i/j pinned the run line's VALUE and rejected one specific key
+    // (`continue-on-error`) — still an enumeration of known-bad members,
+    // one layer up from the retired inline condition. Pin the job's
+    // COMPLETE key set instead: an added job-level key of ANY name (a
+    // second `if:`, a future `outputs:`, anything not yet imagined)
+    // changes this set and fails here, closing the class rather than
+    // adding another named exception.
+    // -----------------------------------------------------------------------
+    let actual_job_keys = extract_job_level_key_set(gate_block);
+    assert_eq!(
+        actual_job_keys, PINNED_GATE_JOB_KEYS,
+        "FAIL (M2-k, PR #671 review round 11, CRITICAL): the `ci-gate` \
+         job's complete key set ({actual_job_keys:?}) does not match the \
+         pinned, human-reviewed set ({PINNED_GATE_JOB_KEYS:?}). Any added, \
+         removed, or renamed job-level key changes this set — that is the \
+         point: enumerating individually-forbidden keys (as M2-j does for \
+         `continue-on-error`) only ever closes the ONE member enumerated. \
+         If this is a deliberate, reviewed change, update \
+         PINNED_GATE_JOB_KEYS in the SAME change.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Assertion 7 (M2-l, PR #671 review round 11, CRITICAL 3): same
+    // principle, one level deeper — pin every STEP's complete key set, in
+    // order. Reproduced: adding `shell: cat {{0}}` to the gate step (GitHub
+    // accepts a custom shell TEMPLATE `command [options] {{0}}`, so the
+    // runner runs `cat <tempfile>` instead of executing the run line's
+    // script — the run body never executes, and the step still exits 0)
+    // left M2-i/M2-j/M2-k all satisfied (the run line's text, the absence
+    // of `continue-on-error`, and the job's own key set are all
+    // untouched) while producing a 14/14-green suite.
+    // -----------------------------------------------------------------------
+    let actual_step_keys = extract_gate_step_key_sets(gate_block);
+    assert_eq!(
+        actual_step_keys, PINNED_GATE_STEP_KEY_SETS,
+        "FAIL (M2-l, PR #671 review round 11, CRITICAL): the `ci-gate` \
+         job's per-step key sets ({actual_step_keys:?}) do not match the \
+         pinned, human-reviewed sets ({PINNED_GATE_STEP_KEY_SETS:?}). Any \
+         added, removed, or renamed key on ANY step (most importantly \
+         `shell:`, which can silently replace the run line's script body \
+         with `cat`'s output of it — see this assertion's doc comment),\
+         or any added/removed/reordered step, changes this. If this is a \
+         deliberate, reviewed change, update PINNED_GATE_STEP_KEY_SETS in \
+         the SAME change.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Assertion 8 (M2-m, PR #671 review round 11, CRITICAL 2): M2-a/b/c
+    // above require only that a job-level `if:` exists, contains
+    // `always()`, and lacks the literal substring `contains(needs` — none
+    // of which excludes `if: ${{ always() && false }}` or `if: ${{
+    // always() && github.ref == 'refs/heads/nonexistent' }}` (the latter
+    // is VERBATIM the always-FALSE bypass construction
+    // `scripts/check-ci-gate.sh`'s own `ALLOWED_SKIPS` comment cites from
+    // round 5 — applied there to a `ci-gate.needs` member's `if:`, never
+    // to `ci-gate`'s OWN `if:`). Either form means the job never runs at
+    // all; GitHub Actions reports the required check as `skipped`, and
+    // branch protection treats a skipped required check as passing — this
+    // is S-CIGATE-2's entire founding premise, reopened at the one job
+    // whose `if:` this suite had never pinned. Reuses the EXISTING
+    // `extract_and_normalize_if_expr` (previously applied only to
+    // `ci-gate.needs` members for the `ALLOWED_SKIPS` pin) against a new,
+    // separate pin — `ci-gate`'s own `if:` has nothing to do with
+    // `ALLOWED_SKIPS` membership, so it gets its own constant rather than
+    // an entry in `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`.
+    // -----------------------------------------------------------------------
+    let actual_gate_if_expr = extract_and_normalize_if_expr(gate_block).unwrap_or_else(|reason| {
+        panic!(
+            "FAIL (M2-m, PR #671 review round 11, CRITICAL): `ci-gate`'s \
+             own job-level `if:` {reason}\n\
+             Current ci-gate block:\n{gate_block}"
+        )
+    });
+
+    assert_eq!(
+        actual_gate_if_expr.as_deref(),
+        Some(PINNED_GATE_IF_EXPR),
+        "FAIL (M2-m, PR #671 review round 11, CRITICAL): `ci-gate`'s own \
+         `if:` ({actual_gate_if_expr:?}) does not byte-match the pinned, \
+         human-reviewed literal (\"{PINNED_GATE_IF_EXPR}\"). \
+         `if: ${{{{ always() && false }}}}` and `if: ${{{{ always() && \
+         github.ref == 'refs/heads/nonexistent' }}}}` both contain \
+         `always()` and lack `contains(needs`, satisfying M2-a/b/c while \
+         permanently skipping the job — a skipped required check passes \
+         branch protection. If this is a deliberate, reviewed change to \
+         `ci-gate`'s own `if:`, update PINNED_GATE_IF_EXPR in the SAME \
+         change.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Assertion 9 (M2-n, PR #671 review round 11, CRITICAL 1): M2-i pins
+    // the run line's VALUE; M2-l (above) confirms `env:` exists as a KEY
+    // on the gate step — neither says anything about what value `env:`'s
+    // `NEEDS_JSON` child carries. Reproduced: replacing `${{
+    // toJSON(needs) }}` with a hand-written, permanently-`success`
+    // literal (e.g. `'{{"fmt":{{"result":"success","outputs":{{}}}}, ...}}'`)
+    // left the run line, every step's key set, the job's key set, and
+    // `ci-gate`'s own `if:` ALL untouched — 14/14 green — and piping that
+    // fabricated literal into the real script yields exit 0
+    // unconditionally, worse than round 10's `|| true`: the script's own
+    // log then reads as a legitimate all-green run instead of a
+    // suppressed real failure.
+    // -----------------------------------------------------------------------
+    let actual_needs_json_line = extract_and_normalize_sole_needs_json_line(gate_block)
+        .unwrap_or_else(|reason| {
+            panic!(
+                "FAIL (M2-n, PR #671 review round 11, CRITICAL): the \
+                 `ci-gate` job's `NEEDS_JSON:` env-child line {reason}\n\
+                 Current ci-gate block:\n{gate_block}"
+            )
+        });
+
+    assert_eq!(
+        actual_needs_json_line, PINNED_GATE_NEEDS_JSON_LINE,
+        "FAIL (M2-n, PR #671 review round 11, CRITICAL): the `ci-gate` \
+         job's `NEEDS_JSON:` value (\"{actual_needs_json_line}\") does not \
+         byte-match the pinned, human-reviewed literal \
+         (\"{PINNED_GATE_NEEDS_JSON_LINE}\"). `NEEDS_JSON` is the ENTIRE \
+         input `scripts/check-ci-gate.sh` ever sees — a fabricated literal \
+         here defeats every other pin in this test (the run line, the key \
+         sets, and `ci-gate`'s own `if:` all stay byte-identical). If this \
+         is a deliberate, reviewed change, update \
+         PINNED_GATE_NEEDS_JSON_LINE in the SAME change.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+}
+
+/// PR #671 review round 11, CRITICAL 3 (workflow-level half):
+/// `defaults: run: shell: cat {{0}}` at the WORKFLOW level (a top-level
+/// key, a sibling of `name:`/`on:`/`env:`/`jobs:` — NOT inside any job
+/// block) overrides the default shell for EVERY step in EVERY job in the
+/// file that doesn't set its own `shell:`, including `ci-gate`'s gate
+/// step. GitHub accepts a custom shell TEMPLATE `command [options] {{0}}`
+/// for `shell:`; `cat {{0}}` makes the runner `cat` the run line's script
+/// body (a temp file) instead of executing it — the pinned run line's
+/// text is completely irrelevant once this fires, and it still exits 0.
+/// Reproduced: 14/14 green.
+///
+/// This construct lives OUTSIDE every job block by construction, so NO
+/// `extract_job_block`-anchored assertion — every other check in this
+/// file, including all of M2-k/l/m/n above — can ever see it; `ci.yml`'s
+/// top-level `defaults:` key is invisible to a function that only ever
+/// receives the text between one job's name and the next. This is
+/// therefore the ONLY test in this file that reads `ci.yml` at the
+/// WORKFLOW level rather than scoping to a specific job's block — see
+/// `common::yaml::extract_job_block`'s doc comment for why that function
+/// itself cannot be asked to cover this case.
+#[test]
+fn test_ci_yml_has_no_workflow_level_shell_override() {
+    let ci = read_ci_yml();
+    let has_top_level_defaults = ci.lines().any(|l| l == "defaults:");
+
+    assert!(
+        !has_top_level_defaults,
+        "FAIL (PR #671 review round 11, CRITICAL 3): \
+         `.github/workflows/ci.yml` declares a top-level `defaults:` key. \
+         A `defaults:\\n  run:\\n    shell: cat {{0}}` override at the \
+         WORKFLOW level defeats every job's pinned run line in this file, \
+         including `ci-gate`'s (see \
+         `tests/ci_gate_completeness.rs::extract_and_normalize_sole_run_line`'s \
+         pin) — GitHub accepts a custom shell TEMPLATE `command [options] \
+         {{0}}`, so the runner would `cat` the run line's script body \
+         instead of executing it, exiting 0 regardless of what the pinned \
+         run line says. This construct lives OUTSIDE every job block, so \
+         no job-block-anchored assertion in this suite can ever see it — \
+         this test exists specifically because of that gap. `defaults:` \
+         has no legitimate use in this file today; if one is ever needed, \
+         this test must be updated deliberately in the SAME change, not \
+         silently bypassed."
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1544,8 +1738,20 @@ const PINNED_GATE_RUN_LINE: &str = "echo \"${NEEDS_JSON}\" | bash scripts/check-
 /// (there is only one pinned line here, not a per-job map).
 fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String> {
     let lines: Vec<&str> = job_block.lines().collect();
-    let is_step_level_run_line =
-        |l: &&str| l.starts_with("        run:") && !l.starts_with("          ");
+    // PR #671 review round 11, small correction 1: the previous form here
+    // (`l.starts_with("        run:") && !l.starts_with("          ")`) had
+    // the same dead conjunct just removed from `line_declares_job_level_key`
+    // — a line starting with 8 spaces then "run:" can never ALSO start with
+    // 10 spaces (character 9 is 'r', not a space), so the second clause was
+    // unreachable-false protection that provided nothing. This version's
+    // "is the 9th character a space" check actually rejects a 9+-space
+    // indent.
+    let is_step_level_run_line = |l: &&str| {
+        let Some(after_indent) = l.strip_prefix("        ") else {
+            return false;
+        };
+        !after_indent.starts_with(' ') && after_indent.starts_with("run:")
+    };
 
     let run_line_indices: Vec<usize> = lines
         .iter()
@@ -1626,6 +1832,257 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
     }
 
     Ok(collapsed)
+}
+
+/// PR #671 review round 11 — CRITICALs 1-3. Round 10's M2-i pinned the
+/// gate's `run:` line's own VALUE, but nothing pinned the surrounding
+/// KEYS: the payload SOURCE (`env: NEEDS_JSON: ...`), the job's own
+/// `if:`, or the complete key set of the job and its steps (which is
+/// where an unguarded `shell:` or a future `continue-on-error` spelling
+/// would land). Review 9's diagnosis: this was the same failure mode as
+/// the retired inline `contains()` condition, one layer up — enumerating
+/// members of an open set one round at a time. This section closes the
+/// class via the "minimum equivalent" to a full-block pin (a full
+/// byte-for-byte multi-line block pin was assessed and rejected as
+/// impractical: the existing reject-don't-parse machinery is built for
+/// ONE scalar value per call, and generalizing it to an entire nested
+/// block would mean re-deriving YAML block-mapping semantics, which is
+/// exactly the parser this design has twice now avoided writing):
+///   1. the job's COMPLETE key set (`PINNED_GATE_JOB_KEYS`) — an added
+///      job-level key (a second `if:`, `continue-on-error`, a future
+///      `outputs:`, anything not yet imagined) changes this set.
+///   2. EVERY step's COMPLETE key set, in order (`PINNED_GATE_STEP_KEY_SETS`)
+///      — an added step-level key (`shell:`, `continue-on-error:`,
+///      `working-directory:`) on ANY step changes its entry; an added,
+///      removed, or reordered step changes the list's length or content.
+///   3. the job's `if:` expression, via the EXISTING
+///      `extract_and_normalize_if_expr` (previously applied only to
+///      `ci-gate.needs` members' `if:` lines for the `ALLOWED_SKIPS` pin —
+///      never to `ci-gate`'s OWN `if:`) against a new `PINNED_GATE_IF_EXPR`.
+///   4. the gate step's `env:` child line that supplies
+///      `check-ci-gate.sh`'s entire input, byte-for-byte
+///      (`PINNED_GATE_NEEDS_JSON_LINE`) — reproduced end-to-end (round 11):
+///      replacing `${{ toJSON(needs) }}` with a fabricated
+///      all-`success` literal left the run line, the step's key set, and
+///      the job's key set ALL untouched, and piping that literal into the
+///      real script yields exit 0 unconditionally — worse than round 10's
+///      `|| true`, because the script's own log then reads as a
+///      legitimate all-green run instead of a suppressed real failure.
+const PINNED_GATE_IF_EXPR: &str = "${{ always() }}";
+const PINNED_GATE_NEEDS_JSON_LINE: &str = "${{ toJSON(needs) }}";
+const PINNED_GATE_JOB_KEYS: &[&str] = &["if", "name", "needs", "runs-on", "steps"];
+const PINNED_GATE_STEP_KEY_SETS: &[&[&str]] = &[
+    &["name", "uses", "with"],
+    &["uses"],
+    &["env", "name", "run"],
+];
+
+/// Extract and normalize the SOLE `NEEDS_JSON:` env-child line (10-space
+/// indent, inside the gate step's `env:` block) for pinned-literal
+/// comparison against `PINNED_GATE_NEEDS_JSON_LINE`.
+///
+/// This is CRITICAL 1's fix (PR #671 review round 11): `NEEDS_JSON` is
+/// the ENTIRE input `scripts/check-ci-gate.sh` ever sees. A step-key-set
+/// pin (below) confirms `env:` exists as a key but says nothing about
+/// what value its child carries — replacing `${{ toJSON(needs) }}` with
+/// a hand-written, permanently-successful JSON literal is invisible to
+/// every check that existed before this one. Same reject-don't-parse
+/// normalization rules as `extract_and_normalize_sole_run_line` (a
+/// deliberately separate function for the same reason that one is
+/// separate from `extract_and_normalize_if_expr` — see that function's
+/// doc comment), parameterized for the 10-space indent depth and the
+/// `NEEDS_JSON:` key instead of `run:`.
+fn extract_and_normalize_sole_needs_json_line(job_block: &str) -> Result<String, String> {
+    let lines: Vec<&str> = job_block.lines().collect();
+    let is_needs_json_line = |l: &&str| {
+        let Some(after_indent) = l.strip_prefix("          ") else {
+            return false;
+        };
+        !after_indent.starts_with(' ') && after_indent.starts_with("NEEDS_JSON:")
+    };
+
+    let indices: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_needs_json_line(l))
+        .map(|(i, _)| i)
+        .collect();
+
+    if indices.is_empty() {
+        return Err(
+            "has no `NEEDS_JSON:` env-child line at all — the gate script \
+             would run with no `NEEDS_JSON` env var set, which fails \
+             closed (empty input) rather than silently, but is not the \
+             pinned, reviewed input path."
+                .to_string(),
+        );
+    }
+    if indices.len() > 1 {
+        return Err(format!(
+            "has {} `NEEDS_JSON:` env-child lines — this checker requires \
+             exactly one so a single pinned literal unambiguously covers \
+             the gate's input source.",
+            indices.len()
+        ));
+    }
+    let idx = indices[0];
+
+    let line = lines[idx];
+    let raw = line.trim_start().strip_prefix("NEEDS_JSON:").unwrap_or("");
+    let raw_value_leading_trimmed = raw.trim_start();
+
+    if raw_value_leading_trimmed.starts_with('>') || raw_value_leading_trimmed.starts_with('|') {
+        return Err(format!(
+            "uses a YAML block-scalar form (\"{}\") for its `NEEDS_JSON:` \
+             value — the real value lives on continuation lines this \
+             checker does not read, so it cannot be safely represented as \
+             a single pinned literal.",
+            raw_value_leading_trimmed.trim()
+        ));
+    }
+
+    if let Some(next_line) = lines[idx + 1..].iter().find(|l| {
+        let trimmed = l.trim_start();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    }) {
+        let indent = next_line.len() - next_line.trim_start().len();
+        if indent > 10 {
+            return Err(format!(
+                "has a `NEEDS_JSON:` value that appears to continue onto a \
+                 following line (\"{}\", indented {indent} spaces) — this \
+                 cannot be safely represented as a single pinned literal.",
+                next_line.trim()
+            ));
+        }
+    }
+
+    let value = match find_comment_start(raw) {
+        Some(i) => &raw[..i],
+        None => raw,
+    };
+    if value.contains('#') {
+        return Err(format!(
+            "has a `NEEDS_JSON:` value containing a `#` that is not a \
+             clearly whitespace-delimited trailing comment (\"{}\") — this \
+             cannot be safely normalized.",
+            raw.trim()
+        ));
+    }
+
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return Err("has an empty `NEEDS_JSON:` value.".to_string());
+    }
+
+    Ok(collapsed)
+}
+
+/// Extract the YAML key name `line` declares, if `line` declares a key at
+/// EXACTLY `indent` spaces of indentation.
+///
+/// PR #671 review round 11: a generalization of
+/// `line_declares_job_level_key` (round 10, IMPORTANT 2) from "does this
+/// line declare THIS SPECIFIC key" to "what key, if any, does this line
+/// declare" — needed here to build a COMPLETE key set rather than test
+/// membership of one known name. Carries over the same quoting awareness
+/// (bare, double-quoted, single-quoted, arbitrary whitespace before the
+/// colon) for the same reason: a key-set pin that only recognized bare
+/// spellings would be exactly as blind to a quoted key as round 9's
+/// original outputs guard was.
+///
+/// Additionally strips a leading YAML sequence marker (`- `) if present,
+/// so this same function extracts BOTH a step's own first key (e.g. the
+/// `name` in `      - name: Harden the runner`, at 6-space indent) and an
+/// ordinary mapping key (everything else, at whatever indent the caller
+/// requests) — a list item's first key is textually preceded by the `- `
+/// marker but is otherwise a normal key at that nesting level.
+fn extract_key_name_at_indent(line: &str, indent: usize) -> Option<String> {
+    let padding = " ".repeat(indent);
+    let after_indent = line.strip_prefix(padding.as_str())?;
+    if after_indent.starts_with(' ') {
+        return None; // Deeper than `indent`: not a key at this level.
+    }
+    let after_marker = after_indent.strip_prefix("- ").unwrap_or(after_indent);
+
+    for quote in ['"', '\''] {
+        if let Some(rest) = after_marker.strip_prefix(quote) {
+            if let Some(end) = rest.find(quote) {
+                if rest[end + 1..].trim_start().starts_with(':') {
+                    return Some(rest[..end].to_string());
+                }
+            }
+        }
+    }
+
+    let key_end = after_marker.find(|c: char| c == ':' || c.is_whitespace())?;
+    if after_marker[key_end..].trim_start().starts_with(':') {
+        Some(after_marker[..key_end].to_string())
+    } else {
+        None
+    }
+}
+
+/// Extract the sorted, complete list of job-level key NAMES in
+/// `job_block` (4-space indent — job-level, not step-level or deeper).
+/// Not deduplicated: a duplicate key is preserved so it shows up as an
+/// extra entry against `PINNED_GATE_JOB_KEYS`, which is itself sorted
+/// and duplicate-free — a real duplicate key correctly fails the
+/// comparison rather than silently collapsing.
+fn extract_job_level_key_set(job_block: &str) -> Vec<String> {
+    let mut keys: Vec<String> = job_block
+        .lines()
+        .filter_map(|l| extract_key_name_at_indent(l, 4))
+        .collect();
+    keys.sort();
+    keys
+}
+
+/// Extract the sorted, complete key set of EVERY step in the `ci-gate`
+/// job's `steps:` list, in step order, as a `Vec` of per-step sorted key
+/// lists.
+///
+/// Scoped to AFTER the job-level `steps:` line specifically (rather than
+/// scanning the whole `job_block` for 6-space-indent-plus-dash lines) so
+/// this does not misidentify a block-list-style `needs:` item as a step
+/// if `needs:` is ever converted from its current inline-array form
+/// (`needs: [a, b, c]`) to block-list form — inline-array `needs:` has no
+/// items at any indent today, so this distinction is not exercised by
+/// the current file, but scoping to `steps:` is correct regardless of
+/// that fact, not because of it.
+fn extract_gate_step_key_sets(job_block: &str) -> Vec<Vec<String>> {
+    let lines: Vec<&str> = job_block.lines().collect();
+    let Some(steps_line_idx) = lines
+        .iter()
+        .position(|l| extract_key_name_at_indent(l, 4).as_deref() == Some("steps"))
+    else {
+        return Vec::new();
+    };
+
+    let step_start_indices: Vec<usize> = lines[steps_line_idx + 1..]
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.starts_with("      -"))
+        .map(|(i, _)| i + steps_line_idx + 1)
+        .collect();
+
+    step_start_indices
+        .iter()
+        .enumerate()
+        .map(|(idx, &start)| {
+            let end = step_start_indices
+                .get(idx + 1)
+                .copied()
+                .unwrap_or(lines.len());
+            let mut keys: Vec<String> = lines[start..end]
+                .iter()
+                .filter_map(|l| {
+                    extract_key_name_at_indent(l, 6).or_else(|| extract_key_name_at_indent(l, 8))
+                })
+                .collect();
+            keys.sort();
+            keys
+        })
+        .collect()
 }
 
 /// Build a `toJSON(needs)`-shaped JSON payload matching PRODUCTION shape:
