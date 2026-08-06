@@ -20,6 +20,8 @@ Existing tests are NOT renamed. Two pre-existing styles coexist in the corpus (p
 
 A big-bang rename was rejected: too high churn, no behavioral benefit. New tests written from S-2.07 v2.0.0 onward use the canonical convention. Over time, the canonical convention will be the dominant style by attrition.
 
+**Exception:** a test name that asserts a guarantee its body does not check is a defect, not a style deviation, and may be corrected independently of this policy. Update all live references (docstrings, coverage maps, other tests) in the same change; do not edit historical delivery records (e.g. frozen PR descriptions or run logs).
+
 ## Rationale
 
 The `test_` prefix improves grep-ability across the mixed-convention corpus: `rg '^\s*fn test_' --type rust` reliably enumerates all canonical-convention tests across hundreds of test files. Without the prefix, distinguishing test functions from helper functions requires more elaborate filtering (e.g., walking attributes for `#[test]`).
