@@ -33,7 +33,23 @@ pub fn extract_job_block<'a>(yaml: &'a str, job_name: &str) -> Option<&'a str> {
                     && candidate
                         .lines()
                         .next()
-                        .map(|l| l.trim_end().ends_with(':'))
+                        .map(|l| {
+                            // Strip a trailing YAML comment (e.g.
+                            // `  security:  # gitleaks secret scan (PR-only)`)
+                            // before checking for the job-key `:` terminator.
+                            // Without this, a comment on the same line as a
+                            // job key defeats detection entirely: the raw
+                            // line ends in the comment text, not `:`, so
+                            // this candidate is skipped and the CURRENT
+                            // job's block silently swallows the next job
+                            // (and everything in it, including its `if:`)
+                            // instead of ending here. Job-key lines never
+                            // legitimately contain a literal `#` before the
+                            // comment marker, so splitting on the first `#`
+                            // is safe for this specific line shape.
+                            let without_comment = l.split('#').next().unwrap_or(l);
+                            without_comment.trim_end().ends_with(':')
+                        })
                         .unwrap_or(false)
                 {
                     return Some(search_start);
