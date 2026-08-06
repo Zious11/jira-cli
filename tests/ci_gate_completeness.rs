@@ -2237,6 +2237,130 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
 ///   confirm the round-trip end-to-end, so it is recorded as a known,
 ///   reasoned risk, not a proven exploit.
 ///
+/// RESIDUAL RISK — LEXER CLASS, DOCUMENTED NOT FIXED (PR #671 review round
+/// 16; human decision: merge with this risk documented rather than fixed
+/// here — a follow-up story to replace line-based extraction with a real
+/// YAML parser is tracked separately and is NOT opened by this round):
+///
+///   ENFORCED (verified by attack against this file's own tests, not by
+///   reading an assertion and trusting its shape):
+///   - `scripts/check-ci-gate.sh`'s DECISION semantics are tested
+///     BEHAVIORALLY, as a real subprocess consuming a real JSON payload —
+///     there is no line-based extraction layer in that path to under-
+///     report anything, which is why the entire class of findings from
+///     rounds 1-9 (illegitimate skips, `if:` expression bypasses) stopped
+///     recurring once that redesign landed.
+///   - This file's SET-EQUALITY / default-deny assertion SHAPES (job/step
+///     key sets, `if:` value pins, env key sets) are sound GIVEN faithful
+///     extraction — every fabricated bypass found so far (rounds 10-15)
+///     was a bug in what fed the assertion, not in the assertion's own
+///     logic.
+///   - VALUE-substitution pins (the run line, `NEEDS_JSON:`, `if:`
+///     expressions) use a reject-don't-parse design that returns an `Err`
+///     — a LOUD, visible test failure — on anything it cannot confidently
+///     normalize, rather than silently passing an under-reported value.
+///   - The LINE-BREAK class specifically (round 14) is CLOSED, exhaustively:
+///     the four-character guard
+///     (`test_ci_yml_contains_no_non_lf_yaml_line_breaks`) covers every
+///     character YAML 1.1 §4.1.4's `b-char` production recognizes as a
+///     line break (`\n`, CR, NEL, LINE SEPARATOR, PARAGRAPH SEPARATOR),
+///     cross-checked against both PyYAML's and Ruby Psych's independent
+///     implementations. Spot-checked directly (round 16, not merely taken
+///     on report): VT (U+000B), FF (U+000C), NBSP (U+00A0), and ZWSP
+///     (U+200B) are each confirmed NOT to act as a YAML line break in
+///     PyYAML (each raises `ReaderError`/`ScannerError` rather than being
+///     treated as a break). This claim is about LINE BREAKS specifically,
+///     not about every way YAML can disagree with `str::lines()` — see
+///     the next item.
+///
+///   NOT ENFORCED — say this plainly, not "mitigated":
+///   - This file's line-based LEXER layer (`extract_key_name_at_indent`
+///     and everything built on it) under-reports on YAML that a real
+///     parser reads differently than a naive line-by-line scan. The
+///     line-break class (round 14) was ONE member; a SECOND, DISTINCT
+///     member exists and is NOT fixed by the line-break guard: YAML NODE
+///     PROPERTIES (anchors `&name`, tags `!tag`/`!!tag`) prefixing a
+///     mapping key on the SAME physical line, with ZERO line breaks
+///     involved (orthogonal to round 14's fix). Both `&x shell: cat {0}`
+///     and `!!str shell: cat {0}`, inserted as a new line in the gate
+///     step, are read by BOTH PyYAML and Ruby Psych as adding a real
+///     `shell:` key to that step (`['env','name','run','shell']`,
+///     `shell: 'cat {0}'` — a real GitHub Actions custom-shell-template
+///     override, the exact mechanism rounds 11/14 already showed defeats
+///     the pinned run line) while `extract_key_name_at_indent`'s bare-key
+///     branch — which takes `key_end` at the first colon-or-whitespace —
+///     stops at the space after `&x`/`!!str`, sees text not starting with
+///     `:`, and returns `None`: the key is invisible to EVERY pin built on
+///     that one function, `PINNED_GATE_STEP_KEY_SETS` included. Reproduced
+///     and verified independently (round 16, not merely reported): a
+///     one-line insertion, full 17/17 suite green with the malicious line
+///     present. `!!str shell: cat {0}` is `actionlint`-clean (exit 0); the
+///     `&x shell: cat {0}` form makes `actionlint` warn (unused-anchor,
+///     exit 1) but is accepted identically by both YAML loaders, so
+///     `actionlint` is not a backstop for that spelling either.
+///   - The underlying MECHANISM (YAML anchors/aliases in GitHub Actions
+///     workflows) is not speculative or merely "requested" — independently
+///     verified (round 16) that GitHub shipped it in production on
+///     2025-09-18 ("Actions: YAML anchors and non-public workflow
+///     templates", the official github.blog changelog), after four years
+///     tracked as `actions/runner#1182` (1,650+ reactions), switching the
+///     runner to a YAML-1.2.2-conformant parser specifically for "better
+///     conformance with the YAML specification"; `github/community`
+///     discussion #185877 is the follow-on request for merge-key (`<<:`)
+///     support, which GitHub has NOT shipped — confirming anchors
+///     specifically (not merge keys) are the shipped, live mechanism. This
+///     is CONFIRMED SHIPPED, not a documented-but-hypothetical request.
+///     What remains UNVERIFIED is the exact end-to-end behavior of this
+///     repo's specific `&x shell:` / `!!str shell:` payloads against a
+///     live GitHub Actions runner — that has not been executed against
+///     real GitHub Actions infrastructure by anyone on this story, only
+///     against PyYAML/Ruby Psych locally.
+///   - This is the THIRD consecutive round to find a new member of the
+///     "lexer disagrees with a real YAML parser" class after the previous
+///     member was patched: round 13 found comment-indentation truncation,
+///     a UTF-8 BOM, and explicit-key (`? key`) syntax; round 14 found lone
+///     CR and the three multi-byte Unicode line breaks; this round found
+///     node properties. The finding RATE across these three rounds is
+///     FLAT, not decreasing — each fix closed exactly the member it
+///     targeted and no more. The line-break guard's "closed by
+///     construction" property (no position/presence assumption, and an
+///     exhaustively-verified character set) is true, and true ONLY, of
+///     that one member — it does not extend to, and must not be read as
+///     covering, the lexer layer generally. Nothing in this file currently
+///     closes the lexer layer generally.
+///   - `uses:` VALUES on the decision path, and human judgment on
+///     `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`/other pin updates, remain
+///     unenforced for the reasons already recorded above (rounds 12-13) —
+///     unchanged by this round.
+///
+///   THE CONTROL IS CODE REVIEW, not a scanner in this repository. A
+///   hostile or careless one-line YAML edit using node properties (or a
+///   future, still-undiscovered member of this same lexer-disagreement
+///   class) is UNGUARDED by any automated check here — it requires a
+///   human to notice hand-crafted YAML syntax (an anchor or a tag on a key
+///   that has no ordinary reason to carry one) in a diff. That is not a
+///   mitigation this file provides; it is the ambient control this
+///   repository already relies on for everything this file does not pin
+///   (see "NOT PINNED" above), stated plainly rather than implied.
+///
+///   THE DURABLE FIX (tracked as a follow-up story, NOT opened by this
+///   round): parse `ci.yml` ONCE with a real YAML parser — an off-the-
+///   shelf Rust crate (`saphyr`/`yaml-rust2`) or a PyYAML shell-out
+///   matching `scripts/check-ci-gate.sh`'s own precedent — and assert over
+///   the PARSED TREE for every structural check in this suite, keeping
+///   today's byte-for-byte scalar pins as a SECOND assertion layered on
+///   parsed VALUES rather than raw text. Round 11's design note correctly
+///   rejected hand-rolling a general block-mapping parser as impractical,
+///   but its own conclusion ("hand-roll a narrower slice" — the job/step
+///   key-set pins, the `if:`/run-line reject-don't-parse normalizers, and
+///   the round-14 byte scan) conflated that correct rejection with a
+///   DIFFERENT, un-rejected option: using an OFF-THE-SHELF parser, the
+///   same category of tool `actionlint` and GitHub's own `actions/runner`
+///   already use (and, as of 2025-09-18, GitHub's own parser now also
+///   understands the anchors that defeat this file's lexer). Record this
+///   as the follow-up's specific direction so a future reader does not
+///   re-litigate the same two choices rounds 11-16 already worked through.
+///
 /// CORRECTED (PR #671 review round 12; RULE ITSELF CORRECTED round 13 —
 /// see below): an earlier limitation note here speculated that every
 /// hardcoded-indent check (including all of the above) is vulnerable to
