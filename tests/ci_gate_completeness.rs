@@ -1045,88 +1045,106 @@ fn read_check_ci_gate_sh() -> String {
     raw.replace("\r\n", "\n")
 }
 
-/// Parse the `ALLOWED_SKIPS=(...)` bash array from `scripts/check-ci-gate.sh`,
-/// returning the quoted job names it lists (in file order, quotes stripped).
+/// Count non-comment-line occurrences of an actual bash reference to the
+/// `ALLOWED_SKIPS` array (an assignment/append, or a `${ALLOWED_SKIPS...}`
+/// expansion) in `scripts/check-ci-gate.sh`'s source text.
 ///
-/// Deliberately minimal: this is a test-only parser for one specific,
-/// single-line bash array declaration (`ALLOWED_SKIPS=("a" "b" ...)`), not a
-/// general bash-array parser. It looks for a line starting with
-/// `ALLOWED_SKIPS=(`, then extracts every double-quoted token up to the
-/// closing `)`.
-fn parse_allowed_skips_from_script(script: &str) -> Vec<String> {
-    for line in script.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("ALLOWED_SKIPS=(") {
-            let inner = rest.strip_suffix(')').unwrap_or(rest);
-            let mut names = Vec::new();
-            let mut chars = inner.chars();
-            while let Some(c) = chars.next() {
-                if c == '"' {
-                    let mut s = String::new();
-                    for c2 in chars.by_ref() {
-                        if c2 == '"' {
-                            break;
-                        }
-                        s.push(c2);
-                    }
-                    names.push(s);
-                }
-            }
-            return names;
-        }
-    }
-    Vec::new()
+/// Deliberately narrower than "any line containing the substring
+/// `ALLOWED_SKIPS`": a `#`-prefixed comment line is excluded (the file's
+/// doc comments mention "ALLOWED_SKIPS" in prose many times — counting
+/// those would dwarf the real count and defeat the purpose), AND a
+/// non-comment `echo "... ALLOWED_SKIPS ..."` human-readable message line
+/// is also excluded — it mentions the array's name but neither assigns to
+/// nor reads it. Only two shapes count as a real reference: an
+/// assignment/append (`ALLOWED_SKIPS=` or `ALLOWED_SKIPS+=`, which is how
+/// bash would ever WIDEN the array) and an expansion (`${ALLOWED_SKIPS`,
+/// which is how bash READS it, e.g. `"${ALLOWED_SKIPS[@]}"`).
+fn count_allowed_skips_code_occurrences(script: &str) -> usize {
+    script
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .map(|l| {
+            let assign_or_append =
+                l.matches("ALLOWED_SKIPS=").count() + l.matches("ALLOWED_SKIPS+=").count();
+            let expansion = l.matches("${ALLOWED_SKIPS").count();
+            assign_or_append + expansion
+        })
+        .sum()
 }
 
-/// CRITICAL-1 (PR #671 review, S-CIGATE-2 post-review fix round):
-/// `scripts/check-ci-gate.sh`'s `ALLOWED_SKIPS` array is the gate's trust
-/// boundary — every job named there is granted permission to report
-/// `skipped` and still pass the sole required branch-protection check.
-/// Nothing previously pinned WHY a job may legitimately be there, only that a
-/// specific fixture set happened to be satisfied by whatever was currently
-/// listed.
+/// CRITICAL (PR #671 review, round 2): the round-1 fix
+/// (`parse_allowed_skips_from_script`, retired below) was ITSELF a
+/// form-specific text parser — it recognized exactly one bash
+/// array-declaration shape (`ALLOWED_SKIPS=("a" "b")` on a single line,
+/// double-quoted tokens) and silently returned only what that one shape
+/// matched. Bash honors far more. Reproduced independently: appending
+/// `ALLOWED_SKIPS+=("test" "deny" "clippy")` on the line immediately after
+/// the declaration desynced completely from that parser — `--self-test`
+/// stayed 11/11, the OLD version of this test stayed green (it only ever
+/// saw the first line), and a `needs` payload with `test`/`deny`/`clippy`
+/// all `skipped` yielded gate rc=0. The same class of defect this story
+/// fixes (a decision maker's authority silently exceeding what a static
+/// check verifies), one layer down, inside the fix for the first layer.
 ///
-/// Reproduced independently: widening `ALLOWED_SKIPS` to
-/// `("mutants" "test" "deny" "clippy" "msrv" "spec-guard"
-/// "check-signing-workflow-injection")` left `--self-test` at 8/8 and this
-/// entire test file green, while a `needs` payload with 7 of the 8 required
-/// jobs reporting `skipped` yielded gate rc=0 — the gate became STRICTLY
-/// WEAKER than the retired inline condition it replaced (the mirror image of
-/// the false-green defect this story fixes: instead of an unknown result
-/// value slipping through, an allowlist entry with no legitimate basis lets a
-/// job that never ran slip through). `fmt` was avoided in that reproduction
-/// specifically because fixture 3 (`unlisted-job-skipped`) already uses
-/// `fmt`, which would have made that ONE fixture (out of eight) catch the
-/// widening — incidental coverage of one of the newly-widened jobs, not a
-/// structural guarantee about the other six.
+/// FIX: eliminate the second parser rather than patch it for one more
+/// form. `scripts/check-ci-gate.sh` gained a `--print-allowed-skips` mode
+/// (`print_allowed_skips()`: `printf '%s\n' "${ALLOWED_SKIPS[@]}"`) that
+/// asks BASH ITSELF what it considers `ALLOWED_SKIPS` to be — the exact
+/// same in-memory array `evaluate_needs()` consults, evaluated after every
+/// declaration/append that ran before that point. No array-construction
+/// form can desync from this, because there is no second parser to
+/// disagree with bash: this test shells out to the script instead of
+/// reading its source text.
 ///
-/// This test pins the SEMANTIC invariant instead of the literal contents of
-/// `ALLOWED_SKIPS`: every job named there MUST carry a job-level `if:` in its
-/// own `ci.yml` job block — the same structural fact that makes `mutants`'s
-/// `skipped` result on push legitimate (`if: github.event_name ==
-/// 'pull_request'`). `test`, `deny`, `clippy`, `msrv`, `spec-guard`, and
-/// `check-signing-workflow-injection` carry no job-level `if:` today
-/// (confirmed by direct grep of `.github/workflows/ci.yml`), so widening
-/// `ALLOWED_SKIPS` to include any of them fails this test automatically — a
-/// maintainer cannot silently grant an always-run job permission to skip.
+/// Proven RED against all four independently-reproduced bypass forms
+/// before this fix, and confirmed still-passing after a byte-identical
+/// restore (sha256-verified) between each: `+=` append, single-quoted
+/// entries, bare words, and `"${OTHER[@]}"` expansion — see this round's
+/// fix-report for per-form output of `--print-allowed-skips` proving each
+/// is correctly reflected.
 ///
-/// Proven RED (2026-08-06, post-review fix round): temporarily widening
-/// `ALLOWED_SKIPS` to the seven-job set above made this test fail with a
-/// diagnostic naming each of the six illegitimately-added jobs; restoring
-/// `ALLOWED_SKIPS=("mutants")` (byte-identical, verified via `git diff`)
-/// made it pass again.
+/// `#[cfg(unix)]`: `scripts/check-ci-gate.sh` is a bash script that only
+/// ever runs on `ubuntu-latest` in this repo's actual CI (`ci-gate` and
+/// `spec-guard` are both `runs-on: ubuntu-latest`) — gating this
+/// bash-shell-out test to unix platforms avoids depending on Windows CI
+/// runners' bash/PATH availability for a script that never executes there
+/// in production, without reducing coverage of the thing actually being
+/// protected (this test still runs on both `ubuntu-latest` and
+/// `macos-latest` in the `test` job's matrix).
+#[cfg(unix)]
 #[test]
 fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
-    let script = read_check_ci_gate_sh();
-    let allowed_skips = parse_allowed_skips_from_script(&script);
+    use std::process::Command;
+
+    let script_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/check-ci-gate.sh");
+    let output = Command::new("bash")
+        .arg(&script_path)
+        .arg("--print-allowed-skips")
+        .output()
+        .unwrap_or_else(|e| panic!("Could not run {}: {e}", script_path.display()));
+
+    assert!(
+        output.status.success(),
+        "FAIL: `scripts/check-ci-gate.sh --print-allowed-skips` exited \
+         non-zero (status: {:?}).\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let allowed_skips: Vec<String> = stdout
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
 
     assert!(
         !allowed_skips.is_empty(),
-        "FAIL: could not parse ALLOWED_SKIPS=(...) out of \
-         scripts/check-ci-gate.sh — either the array is unexpectedly empty \
-         (it should contain at least `mutants`) or this test's minimal \
-         parser (`parse_allowed_skips_from_script`) needs updating to match \
-         the script's current syntax."
+        "FAIL: `scripts/check-ci-gate.sh --print-allowed-skips` printed no \
+         job names — either ALLOWED_SKIPS is unexpectedly empty (it should \
+         contain at least `mutants`) or the `--print-allowed-skips` mode is \
+         broken.\nstdout: {stdout}"
     );
 
     let ci = read_ci_yml();
@@ -1134,9 +1152,10 @@ fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
     for job in &allowed_skips {
         let job_block = extract_job_block(&ci, job).unwrap_or_else(|| {
             panic!(
-                "FAIL: scripts/check-ci-gate.sh's ALLOWED_SKIPS names `{job}`, \
-                 but no `{job}:` job exists in `.github/workflows/ci.yml`. A \
-                 job named in ALLOWED_SKIPS must be a real job."
+                "FAIL: scripts/check-ci-gate.sh's ALLOWED_SKIPS (per \
+                 --print-allowed-skips) names `{job}`, but no `{job}:` job \
+                 exists in `.github/workflows/ci.yml`. A job named in \
+                 ALLOWED_SKIPS must be a real job."
             )
         });
 
@@ -1146,10 +1165,11 @@ fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
 
         assert!(
             has_job_level_if,
-            "FAIL (CRITICAL-1, PR #671 review): `{job}` is listed in \
-             scripts/check-ci-gate.sh's ALLOWED_SKIPS, but its ci.yml job \
-             block has no job-level `if:` condition — meaning `{job}` always \
-             runs and can never legitimately report `skipped`.\n\
+            "FAIL (CRITICAL, PR #671 review): `{job}` is listed in \
+             scripts/check-ci-gate.sh's ALLOWED_SKIPS (per \
+             --print-allowed-skips), but its ci.yml job block has no \
+             job-level `if:` condition — meaning `{job}` always runs and \
+             can never legitimately report `skipped`.\n\
              \n\
              Allowlisting an always-run job makes the gate STRICTLY WEAKER \
              than the retired inline condition it replaced: a future \
@@ -1165,4 +1185,60 @@ fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
              Current `{job}` block:\n{job_block}"
         );
     }
+}
+
+/// Belt-and-braces occurrence check (PR #671 review, round 2): independent
+/// of `--print-allowed-skips` entirely — this test does not shell out to
+/// anything and does not try to interpret bash syntax. It counts
+/// non-comment-line occurrences of an actual bash reference to
+/// `ALLOWED_SKIPS` (an assignment/append via `ALLOWED_SKIPS=` /
+/// `ALLOWED_SKIPS+=`, or a `${ALLOWED_SKIPS...}` expansion — see
+/// `count_allowed_skips_code_occurrences`'s doc comment for why plain
+/// substring-of-any-non-comment-line is too broad: several `echo` messages
+/// mention "ALLOWED_SKIPS" in human-readable text without referencing the
+/// array at all) in `scripts/check-ci-gate.sh`'s source text, and asserts
+/// the count equals exactly the known set of legitimate code-level sites:
+/// the declaration (`ALLOWED_SKIPS=("mutants")`), the read in
+/// `is_allowed_skip` (`for allowed in "${ALLOWED_SKIPS[@]}"`), and the read
+/// in `print_allowed_skips` (`printf '%s\n' "${ALLOWED_SKIPS[@]}"`) — 3
+/// total.
+///
+/// Why this matters even with `--print-allowed-skips` in place: that mode
+/// asks bash for whatever `ALLOWED_SKIPS` evaluates to AT THE POINT
+/// `print_allowed_skips` runs. A pathological future edit could place a
+/// widening line (e.g. an `ALLOWED_SKIPS+=(...)` append) AFTER
+/// `print_allowed_skips` is defined but reachable only via some other code
+/// path, or otherwise structure the file so the widening is real (honored
+/// by `evaluate_needs()`) without necessarily being visible to
+/// `--print-allowed-skips`'s own read. This test does not depend on
+/// execution order or reachability at all — it is a pure count over the
+/// file's text, so a NEW code-level reference to `ALLOWED_SKIPS` anywhere
+/// in the file fails it, unconditionally.
+///
+/// Runs on all platforms (no bash shell-out) — no `#[cfg(unix)]` needed.
+#[test]
+fn test_allowed_skips_has_exactly_three_code_level_references() {
+    let script = read_check_ci_gate_sh();
+    let count = count_allowed_skips_code_occurrences(&script);
+
+    assert_eq!(
+        count, 3,
+        "FAIL (CRITICAL, PR #671 review round 2): expected exactly 3 \
+         non-comment-line occurrences of `ALLOWED_SKIPS` in \
+         scripts/check-ci-gate.sh (the declaration, the read in \
+         is_allowed_skip, and the read in print_allowed_skips); found \
+         {count}.\n\
+         \n\
+         A NEW code-level reference (e.g. an `ALLOWED_SKIPS+=(...)` append \
+         line added anywhere in the file) would silently widen the \
+         allowlist. This check does not care where such a line sits \
+         relative to `--print-allowed-skips`'s own read or whether it is \
+         reachable — it fails on the mere presence of an unexpected \
+         reference.\n\
+         \n\
+         If this count legitimately needs to change (e.g. a future \
+         refactor adds another consumer of ALLOWED_SKIPS), update the \
+         expected constant here ONLY after confirming every occurrence is a \
+         read, never a widening write."
+    );
 }

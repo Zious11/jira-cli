@@ -53,9 +53,21 @@
 # DEC-148/DEC-150 pattern). Wired into `spec-guard` (NOT `ci-gate` — a gate
 # cannot depend on a job that depends on it).
 #
+# --print-allowed-skips: emits one job name per line from the ALLOWED_SKIPS
+# array, exactly as bash itself evaluates it (declaration, any `+=`
+# appends, quoting style — whatever bash actually honors), and nothing
+# else. `tests/ci_gate_completeness.rs` shells out to this instead of
+# re-parsing this file's source text with a bespoke parser, because a
+# form-specific text parser (regex/line-matcher for one declaration shape)
+# can desync from what bash actually does with a DIFFERENT valid
+# declaration form (`+=` append, multi-line, `${OTHER[@]}` expansion, etc.)
+# — there is no second parser to disagree with bash if bash is the one
+# asked.
+#
 # USAGE:
 #   echo "$NEEDS_JSON" | scripts/check-ci-gate.sh   # canonical CI invocation
 #   scripts/check-ci-gate.sh --self-test            # offline fixture suite
+#   scripts/check-ci-gate.sh --print-allowed-skips  # emit ALLOWED_SKIPS, one per line
 
 set -euo pipefail
 
@@ -91,13 +103,25 @@ bash -n "${BASH_SOURCE[0]}"
 # required branch-protection check. Widening it to a job with no legitimate
 # reason to skip (e.g. `test`, `deny`, `clippy`) would make this gate
 # STRICTLY WEAKER than the retired inline condition it replaced — the
-# mirror image of the false-green defect this script exists to fix.
+# mirror image of the false-green defect this script exists to fix. This
+# holds regardless of HOW the array is widened: a second `ALLOWED_SKIPS=(...)`
+# declaration, an `ALLOWED_SKIPS+=(...)` append, or any other valid bash
+# array-construction form bash accepts — all are equally a widening.
+#
 # `tests/ci_gate_completeness.rs::test_allowed_skips_members_require_job_level_conditional_in_ci_yml`
-# enforces the semantic reason a job may be here: it parses this array and
-# asserts every member's `ci.yml` job block carries a job-level `if:`
-# condition (the same structural fact that makes `mutants`'s `skipped`
-# result on push legitimate). A job with no job-level `if:` cannot be added
-# here without that test failing.
+# enforces the semantic reason a job may be here: it shells out to THIS
+# SCRIPT's `--print-allowed-skips` mode (not a source-text parser) to ask
+# bash itself what it considers ALLOWED_SKIPS to be, then asserts every
+# named job's `ci.yml` block carries a job-level `if:` condition (the same
+# structural fact that makes `mutants`'s `skipped` result on push
+# legitimate). A second, syntax-independent guard
+# (`test_allowed_skips_has_exactly_three_code_level_references`) counts the
+# non-comment-line occurrences of the `ALLOWED_SKIPS` identifier in this
+# file and asserts exactly 3 (the declaration below, the read in
+# `is_allowed_skip`, and the read in `print_allowed_skips`) — belt-and-
+# braces protection against a new code-level reference (e.g. an `+=`
+# append line) appearing anywhere in this file, independent of whether
+# `--print-allowed-skips` itself would reflect it.
 # ---------------------------------------------------------------------------
 ALLOWED_SKIPS=("mutants")
 
@@ -112,6 +136,16 @@ is_allowed_skip() {
         fi
     done
     return 1
+}
+
+# print_allowed_skips — emits one job name per line from ALLOWED_SKIPS, as
+# bash itself evaluates it at the point this function runs (i.e. after
+# every declaration/append that executed before this call). Lets an
+# external caller (the Rust test suite) ask bash directly, instead of
+# re-parsing this file's source text with a form-specific parser that can
+# desync from what bash actually honors.
+print_allowed_skips() {
+    printf '%s\n' "${ALLOWED_SKIPS[@]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -137,6 +171,20 @@ evaluate_needs() {
         return 2
     fi
 
+    # Dedicated empty/whitespace-only-input check, ahead of the JSON
+    # validity check below. Without this, empty/whitespace stdin would
+    # still correctly fail closed (rc=2) via the JSON-validity check (an
+    # empty string is not valid JSON), but with a message ("input is not
+    # valid JSON") that points a debugger at the wrong problem — the input
+    # wasn't malformed JSON, there was no input at all (e.g. `ci-gate`'s
+    # `toJSON(needs)` env var somehow came through empty). Give that case
+    # its own message instead.
+    if [ -z "${json//[[:space:]]/}" ]; then
+        echo "ERROR: input is empty (or whitespace-only) — expected a" >&2
+        echo "       toJSON(needs)-shaped JSON object on stdin." >&2
+        return 2
+    fi
+
     if ! echo "${json}" | jq empty >/dev/null 2>&1; then
         echo "ERROR: input is not valid JSON." >&2
         return 2
@@ -157,6 +205,15 @@ evaluate_needs() {
         return 2
     fi
 
+    # jq_status branch below: not currently reachable by any known input.
+    # By this point the input has already passed the empty/whitespace,
+    # JSON-validity, and object-shape checks above, so `jq -r 'keys[]'` on
+    # a confirmed-valid JSON object has no known way to fail. Kept as a
+    # defensive distinct-error branch (rather than folding a hypothetical
+    # jq failure into the empty-needs case below) so a future reader who
+    # DOES find a triggering input gets a diagnosis pointing at jq, not at
+    # "needs was empty" — not because a specific input is known to reach
+    # it today.
     local jobs
     local jq_status=0
     jobs=$(echo "${json}" | jq -r 'keys[]' 2>/dev/null) || jq_status=$?
@@ -329,14 +386,22 @@ run_self_test() {
         '{}' \
         "fail:1"
 
-    # Fixture 9 — syntactically invalid JSON -> FAIL closed with rc=2 (input
-    # rejected before any per-job decision is made).
+    # Fixture 9 — empty/whitespace-only input -> FAIL closed with rc=2, via
+    # its own dedicated check (not the generic "not valid JSON" message —
+    # empty input isn't malformed JSON, it's no input at all).
+    check_fixture \
+        "empty-or-whitespace-input" \
+        '   ' \
+        "fail:2"
+
+    # Fixture 10 — syntactically invalid JSON -> FAIL closed with rc=2
+    # (input rejected before any per-job decision is made).
     check_fixture \
         "malformed-json" \
         'not json' \
         "fail:2"
 
-    # Fixture 10 — syntactically VALID JSON that is not an object (a bare
+    # Fixture 11 — syntactically VALID JSON that is not an object (a bare
     # array) -> FAIL closed with rc=2. `jq empty` alone is not sufficient
     # here: it validates JSON *syntax*, not *shape*, and `[1,2,3]` passes
     # it. Without the dedicated object-shape check this fixture pins, this
@@ -348,14 +413,17 @@ run_self_test() {
         '[1,2,3]' \
         "fail:2"
 
-    # Fixture 11 — a realistic multi-line toJSON(needs) payload, modeled on
+    # Fixture 12 — a realistic multi-line toJSON(needs) payload, modeled on
     # the actual shape of live CI run 30465686049 (the run that first
     # exposed this story's defect): pretty-printed, multi-line, and each
     # job carries additional fields (`outputs`, `outcome`) beyond `result`
     # — not the single-line minimal `{"job":{"result":"..."}}` shape every
-    # other fixture above uses. A jq expression that only worked on compact
-    # single-line input would pass every fixture above and still break in
-    # production; this fixture catches that class of bug. Expected: PASS
+    # other fixture above uses. jq itself is whitespace-insensitive, so
+    # this fixture is not needed to catch a single-line-only jq bug (that
+    # bug class does not exist here) — its value is being the only fixture
+    # exercising the FULL real 8-job ci-gate.needs set with realistic
+    # sibling fields alongside `result`, as an end-to-end shape check on
+    # top of the deliberately minimal fixtures above. Expected: PASS
     # (mutants skipped + allowlisted, every other required job succeeded —
     # the actual shape of a legitimate push-event run).
     check_fixture \
@@ -422,6 +490,11 @@ run_self_test() {
 main() {
     if [ "${1:-}" = "--self-test" ]; then
         run_self_test
+        exit $?
+    fi
+
+    if [ "${1:-}" = "--print-allowed-skips" ]; then
+        print_allowed_skips
         exit $?
     fi
 
