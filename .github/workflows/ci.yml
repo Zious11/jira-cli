@@ -167,7 +167,12 @@ jobs:
           # this one binary. Strengthen: locate this binary's own
           # "test result:" summary line (the first one after its "Running"
           # line) and require a non-zero passed count specifically from it.
-          _canary_running_line=$(grep -n "Running tests/ci_gate_completeness.rs" \
+          # Path-separator-agnostic: cargo prints "Running tests/ci_gate_completeness.rs"
+          # on Unix runners but "Running tests\ci_gate_completeness.rs" (backslash) on
+          # windows-latest. A forward-slash-only grep here silently finds no match on
+          # Windows, so this pattern must match either separator (round 20 Windows
+          # regression: CI run 31182605820 on 424d64de).
+          _canary_running_line=$(grep -nE "Running tests[/\\\\]ci_gate_completeness\.rs" \
             "$RUNNER_TEMP/cargo_test_out.txt" | head -1 | cut -d: -f1)
           if [ -z "${_canary_running_line}" ]; then
             _canary_result_line=""
