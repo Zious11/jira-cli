@@ -59,6 +59,25 @@
 //!   test_verify_test_job_has_zero_test_floor                 → AC-10 / BC-X.13.007
 //!   test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env → AC-3
 //!
+//! ## ADV-P51 (adversarial pass 51) — guard-strength gaps in the `test`
+//! ## job's POL-11 guard step, and one class-wide sweep
+//!
+//! Every anti-neutering control built for `ci-gate` over 20 review rounds
+//! (a step-level `if:` ban, a `continue-on-error` ban, byte-for-byte
+//! value pins, `env:` key-set pins, ordered per-step key sets) was never
+//! propagated to the OTHER jobs in this file — above all `test`, the
+//! `ci-gate.needs` member that carries the entire regression suite. New
+//! test coverage (→ ADV-P51 finding ID):
+//!   test_test_job_guard_step_key_set_and_env_are_pinned → HIGH-001/HIGH-002/MED-002
+//!   test_test_job_pipefail_bracket_ordering_is_position_constrained → HIGH-003
+//!   test_always_run_jobs_have_no_continue_on_error (class sweep, 7 jobs) → HIGH-002
+//!   test_verify_test_job_has_zero_test_floor (per-branch `exit 1`, in place) → MED-001
+//! LOW-001 (a dead-branch rationale in `ci.yml`'s POL-11 guard step,
+//! fail-closed so not a false-green) was fixed as a `ci.yml` comment
+//! correction — no new test, since there is nothing behavioral to pin (see
+//! the corrected comment in `ci.yml :: test` immediately above the
+//! `_canary_running_line=$(...)` assignment).
+//!
 //! ## S-CIGATE-2 (2026-08-06) — skipped-status false-green fix
 //!
 //! Before S-CIGATE-2, `ci-gate`'s pass condition checked only
@@ -1379,10 +1398,13 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// ...` despite the simulated failure) — both reproduced in a scratchpad
 /// copy before the fix. The assertions below are graded by how hard they
 /// are to defeat without also breaking the enforcement logic itself.
-/// Fifteen assertions total (twelve added through round 17: `shell: bash`
+/// Eighteen assertions total (twelve added through round 17: `shell: bash`
 /// and the full `cargo test` capture invocation were added in a later pass;
 /// three more added in round 20 — see gate (2b) above — for the
-/// named-canary passed-count gate and its path-separator-agnostic lookup):
+/// named-canary passed-count gate and its path-separator-agnostic lookup;
+/// net three more added by ADV-P51-MED-001, which replaced the single
+/// generic `exit 1` presence check with four PER-BRANCH pins — see the
+/// updated "exit 1" bullet below):
 ///   - **Variable/command-bound** (hardest to defeat: a rename or rewrite
 ///     that neuters the check also breaks the literal text this assertion
 ///     requires): `"${binaries}" -lt 90`, `"${total}" -eq 0`,
@@ -1424,10 +1446,19 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///     bash` occurs exactly once in the whole of `ci.yml` (verified) today,
 ///     but nothing prevents a future comment from reproducing the string.
 ///   - **Weakest** (also appears inside this guard's own `echo`
-///     diagnostics, or — for `exit 1` — is a generic command with no
-///     natural variable-binding; a rewrite that preserves the diagnostic
-///     strings while gutting the enforcement logic underneath would not be
-///     caught by these alone): `FAIL (POL-11)`, `Check passed:`, `exit 1`.
+///     diagnostics; a rewrite that preserves the diagnostic strings while
+///     gutting the enforcement logic underneath would not be caught by
+///     these alone): `FAIL (POL-11)`, `Check passed:`.
+///   - **Per-branch, scoped** (ADV-P51-MED-001): `exit 1` moved OUT of the
+///     "weakest" tier above — a bare `exit 1` presence check is satisfied
+///     by ANY ONE of the four gate branches retaining it, so mutating a
+///     single branch's `exit 1` to `exit 0` (that branch prints its FAIL
+///     diagnostic, then exits the STEP successfully, skipping the
+///     remaining three gates) went undetected by the old generic check.
+///     `extract_if_block` locates each branch's own `if ... then ... fi`
+///     block by its unique condition line and asserts `exit 1` appears
+///     INSIDE that block specifically, so each of the four gates is now
+///     independently pinned.
 ///   - **NOT PINNED — no assertion covers these today:** the `total=`/
 ///     `binaries=` computation pipelines (the `grep`/`grep -Eo`/`awk` and
 ///     `grep`/`wc -l`/`tr` chains) that produce the values the gates above
@@ -1456,7 +1487,24 @@ fn test_verify_test_job_has_zero_test_floor() {
 
     // --- Instrument 0: error sentinel ---
     // The floor guard emits "FAIL (POL-11)" in all failure branches.
-    // Asserting on it means that removing the guard entirely fails this test.
+    // Asserting on its PRESENCE means DELETING the guard's diagnostic text
+    // entirely fails this test.
+    //
+    // ADV-P51-HIGH-001 (correction): a prior version of this comment
+    // claimed "removing the guard entirely fails this test" without
+    // qualification — that reads as though this one instrument covers
+    // every way the guard can stop being enforced. It does not: `if:
+    // false` (HIGH-1) or `continue-on-error: true` (HIGH-2) on the step
+    // SKIPS it (or neutralizes its exit code) without touching a single
+    // byte of this diagnostic text, so Instrument 0 alone stays green
+    // under either attack — verified directly (RED proof, S-626-1
+    // ADV-P51 fix commit). Those two attacks are closed by a SEPARATE,
+    // dedicated test, `test_test_job_guard_step_key_set_and_env_are_pinned`
+    // below, which pins this step's COMPLETE key set (no `if:`, no
+    // `continue-on-error:` beyond the reviewed `env`/`name`/`run`/`shell`
+    // set) the same way `PINNED_GATE_STEP_KEY_SETS` already does for
+    // `ci-gate`'s own steps. Instrument 0 here narrowly proves what its
+    // assertion actually checks: the diagnostic TEXT survives.
     assert!(
         test_block.contains("FAIL (POL-11)"),
         "FAIL (POL-11): The `test` job step does not contain the zero-test \
@@ -1636,13 +1684,56 @@ fn test_verify_test_job_has_zero_test_floor() {
          Current test job block:\n{test_block}"
     );
 
-    // --- exit 1 is present ---
-    // The floor branches must actually fail the step, not merely warn.
+    // --- exit 1 is present, PER BRANCH (ADV-P51-MED-001) ---
+    // A single unqualified `contains("exit 1")` check (the pre-ADV-P51 form
+    // of this instrument) is satisfied by ANY ONE of the four gate
+    // branches below having its own `exit 1` — changing exactly one
+    // branch's `exit 1` to `exit 0` (e.g. the binary-count floor's) makes
+    // that branch print its `FAIL (POL-11)` diagnostic and then exit the
+    // STEP successfully, skipping the three remaining gates entirely,
+    // while every other assertion in this test (including the old generic
+    // `exit 1` check) stayed green — verified directly (RED proof,
+    // S-626-1 ADV-P51 fix commit). Each branch is now pinned
+    // independently via `extract_if_block` (defined below, near the
+    // other line-based extraction helpers), which locates that branch's
+    // own `if ... then ... fi` block and asserts `exit 1` appears INSIDE
+    // it specifically — a mutation to any one branch's exit code fails
+    // exactly that branch's assertion, not a generic shared one.
+    let binary_floor_block = extract_if_block(test_block, "if [ \"${binaries}\" -lt 90 ]; then\n");
     assert!(
-        test_block.contains("exit 1"),
-        "FAIL (POL-11): The `test` job step does not contain `exit 1`.\n\
-         The floor/canary guards must fail the step on violation.\n\
-         Current test job block:\n{test_block}"
+        binary_floor_block.contains("\n            exit 1\n"),
+        "FAIL (POL-11 / ADV-P51-MED-001): the binary-count floor branch \
+         does not contain its own `exit 1` inside its `if` block.\n\
+         Current branch block:\n{binary_floor_block}"
+    );
+
+    let canary_presence_block = extract_if_block(
+        test_block,
+        "if ! grep -q \"ci_gate_completeness\" \"$RUNNER_TEMP/cargo_test_out.txt\"; then\n",
+    );
+    assert!(
+        canary_presence_block.contains("\n            exit 1\n"),
+        "FAIL (POL-11 / ADV-P51-MED-001): the named-canary presence-gate \
+         branch does not contain its own `exit 1` inside its `if` block.\n\
+         Current branch block:\n{canary_presence_block}"
+    );
+
+    let canary_passed_block =
+        extract_if_block(test_block, "if [ \"${_canary_passed}\" -eq 0 ]; then\n");
+    assert!(
+        canary_passed_block.contains("\n            exit 1\n"),
+        "FAIL (POL-11 / ADV-P51-MED-001): the named-canary passed-count- \
+         gate branch does not contain its own `exit 1` inside its `if` \
+         block.\n\
+         Current branch block:\n{canary_passed_block}"
+    );
+
+    let zero_test_floor_block = extract_if_block(test_block, "if [ \"${total}\" -eq 0 ]; then\n");
+    assert!(
+        zero_test_floor_block.contains("\n            exit 1\n"),
+        "FAIL (POL-11 / ADV-P51-MED-001): the zero-test floor branch does \
+         not contain its own `exit 1` inside its `if` block.\n\
+         Current branch block:\n{zero_test_floor_block}"
     );
 
     // --- Positive-coverage line is present ---
@@ -1820,6 +1911,407 @@ fn test_verify_test_job_has_zero_test_floor() {
          operative effect on the gate checks that follow today.\n\
          Current test job block:\n{test_block}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// ADV-P51 — guard-strength gaps in the `test` job's POL-11 guard step
+// ---------------------------------------------------------------------------
+//
+// Adversarial pass 51 identified that every anti-neutering control built for
+// `ci-gate` over 20 review rounds (a step-level `if:` ban, a
+// `continue-on-error` ban, a byte-for-byte `run:` line pin, an `env:`
+// key-set pin, ordered per-step key sets) was never propagated to the OTHER
+// jobs in `ci.yml` — above all `test`, the `ci-gate.needs` member that
+// carries the entire regression suite. This section closes that gap for the
+// `test` job's own multi-instrument guard step, reusing the SAME idiom
+// (`PINNED_GATE_STEP_KEY_SETS`/`extract_gate_step_key_sets`,
+// `PINNED_GATE_ENV_KEYS`/`extract_gate_env_key_set`) already proven against
+// `ci-gate` in rounds 11-13, scoped to this one step rather than the whole
+// `test` job.
+//
+// SCOPE (deliberate, documented per the governing mandate — "where you
+// deliberately exclude a job or step from a control, say so in an in-code
+// comment"):
+//   - The step-KEY-SET pin below (`PINNED_TEST_GUARD_STEP_KEYS`) is scoped
+//     to the ONE step carrying the POL-11 guard (`name: Run tests
+//     (zero-test floor, POL-11)`), NOT the whole `test` job. `test` runs a
+//     3-OS matrix and may legitimately need an OS-conditional step in the
+//     future (e.g. a Windows-only setup step) — a blanket step-level `if:`
+//     ban across every step in this job would foreclose that. The reported
+//     attack (ADV-P51-HIGH-001/HIGH-002) targets this ONE step
+//     specifically; closing it there does not require closing the whole
+//     job, and closing the whole job would risk a real false-positive
+//     against a future, legitimate matrix-conditional step.
+//   - `continue-on-error` is separately banned across ALL SEVEN always-run
+//     jobs (`fmt`, `clippy`, `test`, `msrv`, `deny`, `spec-guard`,
+//     `check-signing-workflow-injection` — the same list
+//     `test_ci_gate_needs_jobs_have_no_job_level_if` already uses) by
+//     `test_always_run_jobs_have_no_continue_on_error` below, since
+//     ADV-P51-HIGH-002 named this gap on `msrv`, `spec-guard`, `deny`,
+//     `fmt`, and `clippy` explicitly, in addition to `test`. `mutants` is
+//     deliberately EXCLUDED — it legitimately uses `continue-on-error:
+//     true` (see that job's own in-YAML comment: the "Check kill rate"
+//     step is the sole pass/fail arbiter and must run regardless of
+//     whether "Run mutation tests" exits non-zero) — and `ci-gate` is
+//     deliberately EXCLUDED — already covered by its own dedicated,
+//     narrower M2-j presence-ban in
+//     `test_ci_gate_pass_fail_semantics_are_structurally_placed`.
+//     `security` and `coverage` are not `ci-gate.needs` members (advisory
+//     by design) and are out of scope for the same reason
+//     `test_ci_gate_needs_jobs_have_no_job_level_if` already excludes
+//     them.
+//   - The pipefail-bracket ORDERING constraint (ADV-P51-HIGH-003) and the
+//     per-branch `exit 1` pins (ADV-P51-MED-001, added in place above) are
+//     specific to the `test` job's own POL-11 script shape — no other job
+//     in `ci.yml` has this count-computation/floor-gate pattern — so they
+//     are not generalized to other jobs.
+
+/// ADV-P51-HIGH-001/HIGH-002: the `test` job's POL-11 guard step's
+/// COMPLETE key set, mirroring `PINNED_GATE_STEP_KEY_SETS`'s idiom for
+/// `ci-gate`. Adding `if:` (HIGH-1: makes the step conditionally
+/// skippable — e.g. `if: false` — the job concludes `success`, `ci-gate`
+/// goes green with zero tests run) or `continue-on-error:` (HIGH-2:
+/// neutralizes all four `exit 1` gates AND a genuine `cargo test` failure
+/// — step outcome `failure`, conclusion `success`, job `success`) changes
+/// this set and fails `test_test_job_guard_step_key_set_and_env_are_pinned`
+/// below.
+const PINNED_TEST_GUARD_STEP_KEYS: &[&str] = &["env", "name", "run", "shell"];
+
+/// ADV-P51-MED-002: the `env:` block's COMPLETE key set on the `test`
+/// job's POL-11 guard step, mirroring `PINNED_GATE_ENV_KEYS`'s idiom for
+/// `ci-gate`. A sibling key alongside `CARGO_TERM_COLOR` (e.g. `BASH_ENV`,
+/// sourced by non-interactive bash before the pinned script body runs —
+/// the same mechanism PR #671 review round 12 CRITICAL 2 demonstrated
+/// against `ci-gate`) changes this set and fails the same test.
+const PINNED_TEST_GUARD_ENV_KEYS: &[&str] = &["CARGO_TERM_COLOR"];
+
+/// Locate the `test` job's POL-11 guard step (`name: Run tests (zero-test
+/// floor, POL-11)`, 6-space `- ` marker) within `job_block` and return
+/// `(all lines, start index, end index)` bounding just that step — from
+/// its own `- ` marker up to (but not including) the next 6-space `- `
+/// step marker, or the end of the job block if it is the last step.
+///
+/// Scoped narrowly (unlike `extract_gate_step_key_sets`, which collects
+/// EVERY step in `ci-gate`) because the `test` job's other three steps
+/// (harden-runner, checkout, rust-cache) are not part of ADV-P51's
+/// reported attack surface and are deliberately out of scope for this pin
+/// — see the module-level ADV-P51 scope note above.
+fn extract_test_guard_step_lines(job_block: &str) -> Option<(Vec<&str>, usize, usize)> {
+    let lines: Vec<&str> = job_block.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| *l == "      - name: Run tests (zero-test floor, POL-11)")?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| l.starts_with("      -"))
+        .map(|i| i + start + 1)
+        .unwrap_or(lines.len());
+    Some((lines, start, end))
+}
+
+/// Extract the sorted, complete key set of the `test` job's POL-11 guard
+/// step (see `extract_test_guard_step_lines`), for comparison against
+/// `PINNED_TEST_GUARD_STEP_KEYS`.
+fn extract_test_guard_step_keys(job_block: &str) -> Vec<String> {
+    let Some((lines, start, end)) = extract_test_guard_step_lines(job_block) else {
+        return Vec::new();
+    };
+    let mut keys: Vec<String> = lines[start..end]
+        .iter()
+        .filter_map(|l| {
+            extract_key_name_at_indent(l, 6).or_else(|| extract_key_name_at_indent(l, 8))
+        })
+        .collect();
+    keys.sort();
+    keys
+}
+
+/// Extract the sorted, complete key set of the `env:` block belonging to
+/// the `test` job's POL-11 guard step (10-space indent — one level deeper
+/// than the step's own 8-space keys), for comparison against
+/// `PINNED_TEST_GUARD_ENV_KEYS`.
+///
+/// Anchored to the `env:` line found WITHIN this one step's own line
+/// range (`start..run_idx`, not the whole job block) — narrower, and
+/// therefore safer against the round-13 IMPORTANT-2 mis-anchoring class,
+/// than `extract_gate_env_key_set`'s whole-job-block backward scan, since
+/// this function cannot see any OTHER step's `env:` block even
+/// transiently.
+fn extract_test_guard_env_key_set(job_block: &str) -> Vec<String> {
+    let Some((lines, start, end)) = extract_test_guard_step_lines(job_block) else {
+        return Vec::new();
+    };
+    let Some(run_rel_idx) = lines[start..end]
+        .iter()
+        .position(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("run"))
+    else {
+        return Vec::new();
+    };
+    let run_idx = start + run_rel_idx;
+    let Some(env_rel_idx) = lines[start..run_idx]
+        .iter()
+        .position(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("env"))
+    else {
+        return Vec::new();
+    };
+    let env_idx = start + env_rel_idx;
+    collect_mapping_key_set(&lines, env_idx + 1, 10)
+}
+
+/// ADV-P51-HIGH-001/HIGH-002/MED-002. RED proof (S-626-1 ADV-P51 fix
+/// commit): adding `if: false` to the guard step, separately adding
+/// `continue-on-error: true` to the guard step, and separately adding a
+/// `BASH_ENV: /tmp/shim.sh` sibling under the guard step's `env:`, were
+/// each verified to fail this test before the pin existed to catch them —
+/// then verified to pass again once `git checkout HEAD --
+/// .github/workflows/ci.yml` restored the unmodified file.
+#[test]
+fn test_test_job_guard_step_key_set_and_env_are_pinned() {
+    let ci = read_ci_yml();
+    let test_block = extract_job_block(&ci, "test").unwrap_or_else(|| {
+        panic!("FAIL: `.github/workflows/ci.yml` does not contain a `test:` job.")
+    });
+
+    let mut expected_step_keys: Vec<String> = PINNED_TEST_GUARD_STEP_KEYS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    expected_step_keys.sort();
+    let actual_step_keys = extract_test_guard_step_keys(test_block);
+    assert!(
+        !actual_step_keys.is_empty(),
+        "FAIL (ADV-P51-HIGH-001/HIGH-002): could not locate the `test` \
+         job's POL-11 guard step at all (expected to find its `- name: \
+         Run tests (zero-test floor, POL-11)` marker at 6-space indent). \
+         Either the step's `name:` value changed, or its structure was \
+         otherwise rewritten — update `extract_test_guard_step_lines` if \
+         this is a deliberate rename.\n\
+         Current test job block:\n{test_block}"
+    );
+    assert_eq!(
+        actual_step_keys, expected_step_keys,
+        "FAIL (ADV-P51-HIGH-001/HIGH-002): the `test` job's POL-11 guard \
+         step's key set does not match the pinned, human-reviewed set \
+         ({PINNED_TEST_GUARD_STEP_KEYS:?}).\n\
+         Any added key (`if:`, `continue-on-error:`, `working-directory:`, \
+         anything not yet imagined) — or a removed one — changes this \
+         set. `if: false` makes the step SKIP silently (job concludes \
+         `success`, `ci-gate` goes green with zero tests run — HIGH-1); \
+         `continue-on-error: true` neutralizes all four `exit 1` gates AND \
+         a genuine `cargo test` failure (HIGH-2). If this is a \
+         deliberate, reviewed change, update `PINNED_TEST_GUARD_STEP_KEYS` \
+         in the same commit.\n\
+         Actual: {actual_step_keys:?}\n\
+         Current test job block:\n{test_block}"
+    );
+
+    let mut expected_env_keys: Vec<String> = PINNED_TEST_GUARD_ENV_KEYS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    expected_env_keys.sort();
+    let actual_env_keys = extract_test_guard_env_key_set(test_block);
+    assert!(
+        !actual_env_keys.is_empty(),
+        "FAIL (ADV-P51-MED-002): could not locate the `env:` block on the \
+         `test` job's POL-11 guard step at all (expected at least \
+         `CARGO_TERM_COLOR`). Either the step was renamed/restructured, or \
+         `env:` was reordered to after `run:` (legal YAML, but this \
+         extractor scans only `env:` lines preceding `run:` within this \
+         step) — update `extract_test_guard_env_key_set` if so.\n\
+         Current test job block:\n{test_block}"
+    );
+    assert_eq!(
+        actual_env_keys, expected_env_keys,
+        "FAIL (ADV-P51-MED-002): the `test` job's POL-11 guard step's \
+         `env:` key set does not match the pinned set \
+         ({PINNED_TEST_GUARD_ENV_KEYS:?}).\n\
+         A sibling key alongside `CARGO_TERM_COLOR` (e.g. `BASH_ENV`, \
+         sourced by non-interactive bash before the pinned script body \
+         runs) is independently exploitable even though the step's own \
+         key set (`env`/`name`/`run`/`shell`) stays unchanged. If this is \
+         a deliberate, reviewed change, update `PINNED_TEST_GUARD_ENV_KEYS` \
+         in the same commit.\n\
+         Actual: {actual_env_keys:?}\n\
+         Current test job block:\n{test_block}"
+    );
+}
+
+/// ADV-P51-HIGH-003 — the highest-impact finding in this pass (fires on
+/// ORDINARY test breakage, not a deliberate bypass). The three `set
+/// [-+]o pipefail` lines pinned by `test_verify_test_job_has_zero_test_floor`
+/// are presence checks only — none of them constrain RELATIVE POSITION.
+/// Moving the existing `set +o pipefail` line up ~13 lines, so it
+/// precedes `cargo test --all-features 2>&1 | tee ...`, makes the `tee`
+/// pipeline's exit status always 0 (`tee`'s own exit code, since pipefail
+/// is already disabled by the time the pipe runs) — `set -e` therefore
+/// never fires on a genuinely failing `cargo test`, and the step falls
+/// through to the count computations, satisfies every floor/canary gate
+/// on whatever partial output cargo printed before failing, and prints
+/// `Check passed:` even though tests failed. Net line count is unchanged
+/// (reads as "consolidated the pipefail bracket" in a diff) and all three
+/// presence checks (`set -euo pipefail\n`, `set +o pipefail\n`, `set -o
+/// pipefail\n`) stay satisfied regardless of WHERE each line sits.
+///
+/// This test closes that gap with a POSITION constraint: the byte offset
+/// of each marker (within the `test` job block) must be strictly
+/// increasing in the required order — `set -euo pipefail` (open) → the
+/// `cargo test` capture line → `set +o pipefail` (disable) → `set -o
+/// pipefail` (restore). `.find()` locates the FIRST occurrence of each
+/// marker, so inserting an EARLIER duplicate of `set +o pipefail` (rather
+/// than moving the original) is caught identically — the earliest
+/// occurrence is what gets compared against the capture line's position.
+///
+/// RED proof (S-626-1 ADV-P51 fix commit): moving `set +o pipefail\n` to
+/// immediately after `set -euo pipefail\n` (before the `cargo test`
+/// capture line) was verified to fail this test before the pin existed,
+/// then verified to pass again once `git checkout HEAD --
+/// .github/workflows/ci.yml` restored the unmodified file.
+#[test]
+fn test_test_job_pipefail_bracket_ordering_is_position_constrained() {
+    let ci = read_ci_yml();
+    let test_block = extract_job_block(&ci, "test").unwrap_or_else(|| {
+        panic!("FAIL: `.github/workflows/ci.yml` does not contain a `test:` job.")
+    });
+
+    let markers: &[(&str, &str)] = &[
+        ("set -euo pipefail (open)", "set -euo pipefail\n"),
+        (
+            "cargo test capture line",
+            "cargo test --all-features 2>&1 | tee \"$RUNNER_TEMP/cargo_test_out.txt\"\n",
+        ),
+        (
+            "set +o pipefail (disable, before count computations)",
+            "set +o pipefail\n",
+        ),
+        ("set -o pipefail (restore)", "set -o pipefail\n"),
+    ];
+
+    let mut offsets: Vec<(&str, usize)> = Vec::with_capacity(markers.len());
+    for (label, marker) in markers {
+        let idx = test_block.find(marker).unwrap_or_else(|| {
+            panic!(
+                "FAIL (ADV-P51-HIGH-003): required marker for '{label}' \
+                 ({marker:?}) was not found in the `test` job's guard \
+                 step.\n\
+                 Current test job block:\n{test_block}"
+            )
+        });
+        offsets.push((label, idx));
+    }
+
+    for pair in offsets.windows(2) {
+        let (prev_label, prev_idx) = pair[0];
+        let (label, idx) = pair[1];
+        assert!(
+            prev_idx < idx,
+            "FAIL (ADV-P51-HIGH-003): pipefail bracket ordering violated \
+             — '{prev_label}' (byte offset {prev_idx}) must appear BEFORE \
+             '{label}' (byte offset {idx}) in the `test` job's guard step, \
+             but it does not.\n\
+             Required order: `set -euo pipefail` → the `cargo test` \
+             capture line → `set +o pipefail` → `set -o pipefail` (the \
+             restore). Moving `set +o pipefail` to precede the `cargo \
+             test` capture line makes the `tee` pipeline's exit status \
+             always 0 (`tee`'s own exit code), so `set -e` never fires on \
+             a genuinely failing test suite — the step falls through to \
+             the count computations, satisfies every floor/canary gate on \
+             whatever partial output cargo printed, and prints `Check \
+             passed:` even though tests failed. This is ADV-P51's \
+             highest-impact finding: it fires on ORDINARY test breakage, \
+             not a deliberate bypass.\n\
+             Current test job block:\n{test_block}"
+        );
+    }
+}
+
+/// ADV-P51-HIGH-002 (class sweep, per the governing mandate — "sweep to
+/// class, do not fix only the reported instances"): `continue-on-error`
+/// has no legitimate use on any of the seven always-run jobs required to
+/// pass unconditionally on every push and PR (the same list
+/// `test_ci_gate_needs_jobs_have_no_job_level_if` uses) — unlike
+/// `mutants`, which legitimately relies on it, and unlike `ci-gate`,
+/// which already has its own dedicated presence-ban
+/// (`test_ci_gate_pass_fail_semantics_are_structurally_placed`'s M2-j).
+/// See the module-level ADV-P51 scope note above for why `mutants` and
+/// `ci-gate` are excluded from this loop.
+///
+/// `continue-on-error: true` on any step in these seven jobs would make a
+/// genuinely failing step (step outcome `failure`) report job conclusion
+/// `success` — silently satisfying `ci-gate.needs` for that job while the
+/// underlying check (format, lint, test, MSRV compile, spec-guard, or the
+/// signing-injection guard) never actually gated anything.
+///
+/// RED proof (S-626-1 ADV-P51 fix commit): adding `continue-on-error:
+/// true` to the `fmt` job's sole step was verified to fail this test
+/// before it existed, then verified to pass again once `git checkout
+/// HEAD -- .github/workflows/ci.yml` restored the unmodified file.
+#[test]
+fn test_always_run_jobs_have_no_continue_on_error() {
+    let ci = read_ci_yml();
+
+    let required_jobs = [
+        "fmt",
+        "clippy",
+        "test",
+        "msrv",
+        "deny",
+        "spec-guard",
+        "check-signing-workflow-injection",
+    ];
+
+    for job_name in &required_jobs {
+        let job_block = extract_job_block(&ci, job_name).unwrap_or_else(|| {
+            panic!(
+                "FAIL: job `{job_name}` (listed in ci-gate.needs) was not \
+                 found in ci.yml. Either the job was renamed or removed — \
+                 update ci-gate.needs and this test together."
+            )
+        });
+        assert!(
+            !job_block.contains("continue-on-error"),
+            "FAIL (ADV-P51-HIGH-002): job `{job_name}` contains \
+             `continue-on-error`, which has no legitimate use on any of \
+             the seven always-run jobs required to pass unconditionally \
+             on every push and PR. `continue-on-error: true` on a failing \
+             step reports job conclusion `success` regardless of that \
+             step's own outcome, silently satisfying `ci-gate.needs` for \
+             this job while the underlying check never actually gated \
+             anything.\n\
+             Current `{job_name}` block:\n{job_block}"
+        );
+    }
+}
+
+/// ADV-P51-MED-001: extract the `if ... then ... fi` block belonging to
+/// `condition_line` (searched as an exact substring, expected to include
+/// its own trailing `\n`) within `job_block`, up to and including its
+/// closing `fi` (10-space indent, matching this guard step's
+/// convention). Panics loudly (not a silent empty return) if either the
+/// condition line or its closing `fi` cannot be found — an extractor
+/// that can silently under-report here would reproduce the exact class
+/// of bug PR #671 review round 13 fixed in `collect_mapping_key_set`
+/// (see that function's doc comment).
+fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
+    let start = job_block.find(condition_line).unwrap_or_else(|| {
+        panic!(
+            "FAIL (POL-11 / ADV-P51-MED-001): required condition line \
+             {condition_line:?} was not found in the `test` job's guard \
+             step.\n\
+             Current test job block:\n{job_block}"
+        )
+    });
+    let after = &job_block[start..];
+    let fi_marker = "\n          fi\n";
+    let end = after.find(fi_marker).unwrap_or_else(|| {
+        panic!(
+            "FAIL (POL-11 / ADV-P51-MED-001): no closing `fi` (10-space \
+             indent) found for condition line {condition_line:?} in the \
+             `test` job's guard step.\n\
+             Current test job block:\n{job_block}"
+        )
+    });
+    &after[..end + fi_marker.len()]
 }
 
 // ---------------------------------------------------------------------------
