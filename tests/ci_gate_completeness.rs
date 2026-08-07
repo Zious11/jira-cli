@@ -465,8 +465,14 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
         "check-signing-workflow-injection",
         // MUTATION-CI-TIMEOUT (2026-06-28): promoted to hard-required.
         // Carries `if: github.event_name == 'pull_request'`; emits `skipped`
-        // on push events — safe because ci-gate checks `failure`/`cancelled`
-        // only.  See delta-analysis §5 and cargo-mutants-policy.md §CI Gate.
+        // on push events — safe ONLY because `mutants` is named in
+        // `scripts/check-ci-gate.sh`'s restrictive `ALLOWED_SKIPS` allowlist
+        // (with a matching `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` entry in
+        // this file).  Since S-CIGATE-2 an unlisted job's `skipped` result
+        // fails the gate by default (fail-closed) — `ALLOWED_SKIPS`
+        // membership is the mechanism, not "ci-gate checks failure/cancelled
+        // only" (that inline condition was retired).  See delta-analysis §5
+        // and cargo-mutants-policy.md §CI Gate.
         "mutants",
     ]
     .iter()
@@ -491,9 +497,15 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
         sorted.sort();
         failures.push(format!(
             "Unexpected in ci-gate.needs ({}): {}\n\
-             If a new mandatory CI job was added here, verify it has no \
-             `if: github.event_name == 'pull_request'` guard (PR-only jobs \
-             emit `skipped` on push and would poison the gate), then update \
+             If a new mandatory CI job was added here, verify it either runs \
+             unconditionally (no job-level `if:` that can produce `skipped`) \
+             or, if it legitimately can be skipped (e.g. PR-only), is added \
+             to `scripts/check-ci-gate.sh`'s `ALLOWED_SKIPS` allowlist with \
+             a matching `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` entry in this \
+             file.  Since S-CIGATE-2, an unlisted job's `skipped` result \
+             fails the gate by default (fail-closed) rather than silently \
+             passing it — so an unreviewed PR-only job here now surfaces as \
+             a newly-red gate on every push, not a false-green.  Then update \
              the expected set in this test.",
             sorted.len(),
             sorted.join(", ")
@@ -523,8 +535,12 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
 /// `ci-gate.needs`.
 ///
 /// `security` carries `if: github.event_name == 'pull_request'` AND is
-/// further gated by `vars.GITLEAKS_DISABLED`.  Including it would poison
-/// push-triggered `ci-gate` runs (the job emits `skipped` on push).
+/// further gated by `vars.GITLEAKS_DISABLED`.  Including it would FAIL every
+/// push-triggered `ci-gate` run: `security`'s designed-in `skipped` result on
+/// push is not in `scripts/check-ci-gate.sh`'s `ALLOWED_SKIPS` allowlist, and
+/// since S-CIGATE-2 an unlisted `skipped` fails the gate by default
+/// (fail-closed) — not the pre-S-CIGATE-2 silent pass this docstring
+/// previously implied.
 ///
 /// `coverage` uses `fail_ci_if_error: false` on the codecov upload and is
 /// advisory by design.  Including it would let a flaky coverage upload block
@@ -569,8 +585,14 @@ fn test_ci_gate_excludes_advisory_and_secret_scan_jobs() {
         !needs.contains("security"),
         "FAIL: `security` must NOT be in `ci-gate.needs`.\n\
          The `security` job carries `if: github.event_name == 'pull_request'` \
-         and emits `skipped` on push events.  Including it poisons every \
-         push-triggered `ci-gate` run.\n\
+         and emits `skipped` on push events.  Including it would FAIL every \
+         push-triggered `ci-gate` run: `security`'s `skipped` result is not \
+         in `scripts/check-ci-gate.sh`'s `ALLOWED_SKIPS` allowlist, and an \
+         unlisted `skipped` fails the gate by default (fail-closed, since \
+         S-CIGATE-2).  If `security` legitimately needed to gate merges, the \
+         remedy would be adding it to `ALLOWED_SKIPS` with a matching \
+         `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` entry — but it is advisory by \
+         design and should stay out of `needs` entirely.\n\
          Current needs: {:?}",
         {
             let mut v: Vec<_> = needs.iter().collect();
@@ -745,9 +767,10 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 /// F-03 (round 19): the prior version of this test matched only single-line
 /// `    if:` lines containing the literal substring `github.event_name`. Two
 /// escapes survived that: (a) a folded/block scalar (`if: >-` with the
-/// expression on continuation lines — a shape `ci.yml :: ci-gate` itself
-/// uses for its step-level `if:`) moves the `github.event_name` substring (or
-/// any other condition) off the `if:` line itself; (b) any non-event
+/// expression on continuation lines — a shape YAML permits on any job-level
+/// or step-level `if:`; `ci-gate` itself has no step-level `if:` at all —
+/// see M2-d below, which asserts exactly that) moves the `github.event_name`
+/// substring (or any other condition) off the `if:` line itself; (b) any non-event
 /// conditional (`if: false`, `github.ref == 'refs/heads/main'`,
 /// `vars.X != 'true'`) never contains `github.event_name` in the first place.
 /// Both produce a `skipped` result exactly as hazardous as the
@@ -828,14 +851,22 @@ fn test_ci_gate_needs_jobs_have_no_job_level_if() {
                      \n\
                      Any job-level `if:` on this job is hazardous regardless \
                      of the condition's shape or content: a false condition \
-                     makes `{job_name}` report `skipped` (not `failure`), \
-                     which silently satisfies `ci-gate.needs` and allows \
-                     broken code to merge.\n\
+                     makes `{job_name}` report `skipped` (not `failure`). \
+                     Since `{job_name}` is not in `scripts/check-ci-gate.sh`'s \
+                     `ALLOWED_SKIPS` allowlist, its fail-closed `evaluate_needs()` \
+                     will correctly FAIL the gate on that skip — this is no \
+                     longer a false-green — but only at CI time, surprising a \
+                     maintainer at review time who did not expect this job to \
+                     ever report anything but `success`/`failure`.\n\
                      \n\
                      Fix: either remove the job-level `if:` guard from \
-                     `{job_name}` and use a step-level `if:` instead, or \
-                     remove `{job_name}` from `ci-gate.needs` and update this \
-                     test accordingly."
+                     `{job_name}` and use a step-level `if:` instead, or, if \
+                     the skip is legitimate, add `{job_name}` to \
+                     `ALLOWED_SKIPS` in `scripts/check-ci-gate.sh` with a \
+                     matching entry in this file's \
+                     `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`, or remove \
+                     `{job_name}` from `ci-gate.needs` and update this test \
+                     accordingly."
                 );
             }
         }
@@ -944,12 +975,21 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     assert!(
         !job_if_line.contains("contains(needs"),
         "FAIL (M2-c): The job-level `if:` in `ci-gate` contains \
-         `contains(needs` — the failure condition is at the WRONG level.\n\
+         `contains(needs` — this is the retired inline condition \
+         S-CIGATE-2 replaced, not merely a misplaced one.\n\
          Found:    {job_if_line}\n\
-         The `contains(needs.*.result, …)` expression must be on a STEP-level \
-         `if:` (inside `steps:`), not the job-level `if:`.  At job level, \
-         only `always()` should appear — placing `contains(needs…)` there \
-         would prevent the job from running when all needs succeed.\n\
+         Under the shipped fail-closed design, the pass/fail decision does \
+         NOT live in any `if:` expression at all — not job-level, and \
+         (per M2-d below) not step-level either. It lives entirely inside \
+         `scripts/check-ci-gate.sh`'s `evaluate_needs()`, invoked from an \
+         UNCONDITIONAL `run:` step whose own exit code is the sole \
+         pass/fail signal (see M2-i/M2-h below). The job-level `if:` must \
+         be exactly `always()` and nothing else — its only job is to make \
+         `ci-gate` run even when upstream jobs fail, not to evaluate \
+         `needs.*.result` itself. Do NOT move `contains(needs…)` to a \
+         step-level `if:` — M2-d fails the suite if any step-level `if:` \
+         exists at all, precisely to prevent reopening the `skipped` \
+         false-green this whole story closed.\n\
          Current ci-gate block:\n{gate_block}"
     );
 
@@ -1344,15 +1384,17 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// also runs the inline `#[cfg(test)]` modules in `src/` (~1,100 tests at
 /// head), so orphaning every file in `tests/` via `autotests = false` or a
 /// `[[test]]` rename still produces a non-zero total — the `> 0` predicate is
-/// inert against the defect class it claims to catch.  Three gates are
-/// therefore required:
+/// inert against the defect class it claims to catch.  Four gates are
+/// therefore required (promoted from an earlier three-gate framing that kept
+/// the canary's passed-count check nested as "2b" — `ci.yml`'s own POL-11
+/// comment header and this docstring now agree at four top-level gates):
 ///   (1) Binary-count floor (`< 90`): catches mass orphaning of tests/ files.
 ///       At head ~103 binaries run; orphaning all integration targets drops
 ///       this below 90.  The threshold tolerates ~13 legitimate reductions.
 ///   (2) Named canary: asserts `tests/ci_gate_completeness` ran, catching the
 ///       self-orphaning case where the guard binary itself stops running —
 ///       even when the binary count stays above 90.
-///   (2b) Named-canary passed-count gate (round 20, ADV-P50-LOW-002): gate
+///   (3) Named-canary passed-count gate (round 20, ADV-P50-LOW-002): gate
 ///       (2) alone proves only that the binary was INVOKED — cargo prints
 ///       its "Running ..." line before running anything inside it, so the
 ///       substring is present even if every test is `#[ignore]`d or an
@@ -1360,7 +1402,7 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///       locates the canary's own "test result:" line (scoped forward from
 ///       its "Running" line) and requires a non-zero passed count
 ///       specifically from it — closing the same fail-open shape as gate
-///       (3) below, but scoped to the one binary carrying every CI-gate
+///       (4) below, but scoped to the one binary carrying every CI-gate
 ///       regression pin.  The "Running" lookup is path-separator-agnostic
 ///       (`[/\\]` character class) because cargo prints a forward slash on
 ///       Unix runners but a backslash on `windows-latest`; a forward-slash-
@@ -1368,14 +1410,14 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///       gate's passed count to 0 and failing every Windows run
 ///       unconditionally regardless of whether the canary ran (CI run
 ///       31182605820 on `424d64de`, fixed in `177b3727`).
-///   (3) Zero-test floor (`"${total}" -eq 0`): catches the case where ≥90
+///   (4) Zero-test floor (`"${total}" -eq 0`): catches the case where ≥90
 ///       binaries (including the canary) report results but zero tests
 ///       passed within them — e.g. a global test filter matching nothing.
-///       Neither (1) nor (2) detects this scenario: the binary count and the
-///       named binary's presence are both satisfied; only the passed-count
-///       check catches it.
+///       Neither (1) nor (2) nor (3) detects this scenario: the binary
+///       count and the named binary's presence and passed-count are all
+///       satisfied; only the whole-suite passed-count check catches it.
 ///
-/// A fourth mechanism, orthogonal to all three gates above, has to hold for
+/// A fifth mechanism, orthogonal to all four gates above, has to hold for
 /// any of them to run against a genuine result at all: `set -euo pipefail`
 /// at the top of the step is the SOLE mechanism propagating a real `cargo
 /// test` failure through `cargo test --all-features 2>&1 | tee ...` into a
@@ -2744,13 +2786,15 @@ fn test_ci_yml_contains_no_non_lf_yaml_line_breaks() {
 /// fails closed by default and tolerates `skipped` only for jobs named in
 /// its restrictive `ALLOWED_SKIPS` allowlist.
 ///
-/// RED GATE (S-CIGATE-2, 2026-08-06): as of this commit, `ci-gate`'s step
-/// still uses the retired inline `contains(needs.*.result, ...)` condition
-/// and does not invoke `check-ci-gate.sh` anywhere — this test FAILS until
-/// the Green phase implements AC-001. Proven RED locally: `cargo test
-/// --test ci_gate_completeness
-/// test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json` fails
-/// with the diagnostic below, naming exactly what's missing.
+/// HISTORICAL RED GATE NOTE (S-CIGATE-2, 2026-08-06): at the commit that
+/// introduced this test, `ci-gate`'s step still used the retired inline
+/// `contains(needs.*.result, ...)` condition and did not invoke
+/// `check-ci-gate.sh` anywhere, so this test FAILED until the Green phase
+/// implemented AC-001 in the same story. As of head, the Green phase has
+/// long since landed: `ci-gate`'s step invokes `scripts/check-ci-gate.sh`
+/// fed `toJSON(needs)`, and this test is expected to PASS on every run —
+/// the RED description above documents the TDD history of this test, not
+/// its current expected result.
 ///
 /// Anchoring: assertion is made only within the `ci-gate` job block.
 #[test]

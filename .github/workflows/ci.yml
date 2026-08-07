@@ -112,7 +112,7 @@ jobs:
           # which is strictly more permissive and can never cause an abort.
           set -o pipefail
 
-          # POL-11 zero-test floor — TWO instruments required.
+          # POL-11 zero-test floor — FOUR instruments required.
           #
           # A passed-count "> 0" cannot detect integration-test orphaning:
           # cargo test --all-features also runs the inline #[cfg(test)] modules
@@ -141,6 +141,17 @@ jobs:
           #     and all CI-gate Rust regression pins stops running — even when
           #     the binary count stays above 90.  The binary floor alone cannot
           #     detect this case.
+          #
+          # (3) Named-canary passed-count gate: gate (2) alone proves only
+          #     that tests/ci_gate_completeness was INVOKED, not that any
+          #     assertion inside it actually ran — see the ADV-P50-LOW-002
+          #     comment below, where this gate is implemented.
+          #
+          # (4) Zero-test floor ("${total}" -eq 0): catches the case where
+          #     >=90 binaries (including the canary) report results but zero
+          #     tests passed within them overall — e.g. a global test filter
+          #     matching nothing.  Neither (1) nor (2) nor (3) detects this
+          #     scenario.
           if [ "${binaries}" -lt 90 ]; then
             echo "FAIL (POL-11): only ${binaries} test binaries reported results (floor: 90)."
             echo "Possible causes: autotests=false in Cargo.toml, a [[test]] rename,"
@@ -156,7 +167,7 @@ jobs:
             exit 1
           fi
 
-          # ADV-P50-LOW-002 (round 20): the grep -q check above proves only
+          # Gate (3), ADV-P50-LOW-002 (round 20): the grep -q check above proves only
           # that the ci_gate_completeness binary was INVOKED — cargo test
           # prints "Running tests/ci_gate_completeness.rs (...)" before
           # running anything inside it, so the substring is present even if
@@ -221,6 +232,7 @@ jobs:
             exit 1
           fi
 
+          # Gate (4): the whole-suite zero-test floor.
           if [ "${total}" -eq 0 ]; then
             echo "FAIL (POL-11): zero tests executed across ${binaries} test binaries."
             echo "Possible causes: autotests=false in Cargo.toml, a [[test]] rename,"
@@ -660,6 +672,13 @@ jobs:
     # jobs in this file (fmt, spec-guard, check-signing-workflow-injection).
     timeout-minutes: 5
     needs: [fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants]
+    # S-CIGATE-1 AC-002: `if: ${{ always() }}` is LOAD-BEARING. Without a
+    # job-level `always()` here, a failed upstream job SKIPS `ci-gate`
+    # entirely (GitHub Actions' default `needs` behavior), and GitHub branch
+    # protection evaluates a skipped required check as SUCCESS — silently
+    # permitting a broken PR to merge. `always()` makes `ci-gate` run
+    # regardless of upstream results so its own `run:` step (see below) can
+    # make the real pass/fail decision via `scripts/check-ci-gate.sh`.
     if: ${{ always() }}
     steps:
       - name: Harden the runner (Audit all outbound calls)

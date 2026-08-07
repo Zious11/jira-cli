@@ -199,22 +199,29 @@ capped at 240s.
 | SEC-001 scale (adf.rs recursion guards) | ~36 | ~21 min |
 | Typical adf.rs PR | ~80 | ~47 min |
 | Large adf.rs + bulk.rs PR | ~120 | ~70 min |
-| Very large / multiple scoped files | ~200 | ~117 min — exceeds the 90-min ceiling; job cancelled → split the PR |
+| Very large / multiple scoped files | ~200 | ~117 min — well within the 240-min ceiling |
+| Extreme scale (rare) | ~400+ | ~235+ min — approaches/exceeds the 240-min ceiling; job cancelled → split the PR |
 
 Formula: `mutants / 4 jobs × ~140s avg` — the 140s average is the measured median
 baseline (133–145s range from 5 green develop runs, 2026-06-28); hanging mutants add up
 to 240s each (capped), so a PR with many async hangs will skew toward the upper bound.
 Most mutants in the adf.rs + cache.rs scope do not produce async hangs.
 
-The CI job `timeout-minutes` is set to **90 minutes**. A PR generating 200+ mutants that
+The CI job `timeout-minutes` is set to **240 minutes** (raised from 90 in a later
+hardening pass — see `ci.yml :: mutants`). A PR generating ~400+ mutants that
 approaches or exceeds this budget is a signal to split the PR. See **Oversized-Diff
 Signal** below.
 
 ### F-2: Cancelled Job Semantics on a Required Gate
 
-A PR that generates 200+ mutants and causes the 90-minute job to be cancelled by GitHub
-Actions produces a `cancelled` job status. The `ci-gate` condition checks for `failure`
-OR `cancelled` — **both block merge**.
+A PR that generates ~400+ mutants and causes the 240-minute job to be cancelled by GitHub
+Actions produces a `cancelled` job status. `ci-gate`'s pass/fail decision is fail-closed
+(`scripts/check-ci-gate.sh`, S-CIGATE-2): every job in `needs` must report `success`
+except jobs named in the script's `ALLOWED_SKIPS` allowlist (which may additionally
+report `skipped`) — any other result, including `cancelled` and `failure`, fails the
+gate by default. `mutants` is in `ALLOWED_SKIPS` only for its designed-in `skipped`
+result on push events (see **Push-Event Safety** below); a `cancelled` result is not
+covered by that allowlist entry and **blocks merge**.
 
 This is **intentional and correct** for a REQUIRED gate. A `cancelled` outcome means:
 - The mutation run was incomplete.
@@ -227,7 +234,7 @@ The correct response to a `cancelled` mutants job is:
    over the ci-gate with the GitHub "Require approvals" bypass, acknowledging the
    incomplete mutation run explicitly in the PR description.
 
-Do NOT increase `timeout-minutes` beyond 90 to accommodate oversized diffs. Do NOT
+Do NOT increase `timeout-minutes` beyond 240 to accommodate oversized diffs. Do NOT
 treat a budget-exceeded cancellation as a flaky check.
 
 ### `--baseline=skip` and Path B
@@ -263,16 +270,24 @@ needs: [fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-inject
 ### Push-Event Safety
 
 The `mutants` job has `if: github.event_name == 'pull_request'`. On a push event to
-`develop` or `main`, the job does not run and its result is `skipped`. The ci-gate
-condition checks for `failure` or `cancelled` only — `skipped` is neither, so ci-gate
-passes on push events. Push-to-develop behavior is unchanged.
+`develop` or `main`, the job does not run and its result is `skipped`. Since S-CIGATE-2,
+`scripts/check-ci-gate.sh`'s `evaluate_needs()` is fail-closed by default — an unlisted
+job's `skipped` result FAILS the gate. `mutants`' push-event `skipped` result passes
+ci-gate ONLY because `mutants` is named in that script's restrictive `ALLOWED_SKIPS`
+allowlist, with a matching human-reviewed entry in
+`tests/ci_gate_completeness.rs::PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` pinning its `if:`
+expression (`github.event_name == 'pull_request'`) so a future change to that condition
+is caught rather than silently trusted. This is a deliberate, reviewed opt-in — not the
+retired "checks for `failure`/`cancelled` only" mechanism this section previously
+described, which was the exact false-green S-CIGATE-2 closed. Push-to-develop behavior
+is unchanged.
 
 ### Oversized-Diff Signal
 
-A PR that generates 200+ mutants and times out the 90-minute job **is not a flakiness
+A PR that generates ~400+ mutants and times out the 240-minute job **is not a flakiness
 event** — it is a forcing function to keep PR diffs focused, consistent with the
 `--in-diff` philosophy. The correct response is to split the PR into smaller, more
-targeted changes. Do not increase `timeout-minutes` beyond 90 to accommodate oversized
+targeted changes. Do not increase `timeout-minutes` beyond 240 to accommodate oversized
 diffs; do not treat a budget-exceeded cancellation as a flaky check.
 
 ### Timeout Semantics: Timeouts Count as Survived
@@ -470,8 +485,9 @@ Only mutants in code **changed by the PR** AND **in the scoped files** are teste
 changed lines within those files). PRs that do not touch the scoped files generate zero
 mutants; the kill-rate check exits 0 provided the positive-coverage assertion also passes.
 
-The job `timeout-minutes` is set to **90** (increased from 60 in MUTATION-CI-TIMEOUT,
-2026-06-28). See **CI Budget Model** above.
+The job `timeout-minutes` is set to **240** (increased from 60 in MUTATION-CI-TIMEOUT,
+2026-06-28, then raised again from 90 to 240 in a later hardening pass — see `ci.yml ::
+mutants`). See **CI Budget Model** above.
 
 The live workflow `.github/workflows/ci.yml` is the source of truth for the current job
 specification. The reference to `.factory/cicd-setup.md §1.1a` is historical — that
@@ -675,7 +691,7 @@ Path B, informed by research (`.factory/research/mutation-ci-perf-2026-06-28.md`
    run. The guard FAILs only when the overall diff is empty; a non-empty diff with
    0 mutants passes (comment-only, docs-only, or non-scoped-file PRs).
 
-Path B is deferred until Path A's 90-minute budget proves insufficient in practice.
+Path B is deferred until Path A's 240-minute budget proves insufficient in practice.
 
 ## Changelog
 
