@@ -1333,6 +1333,22 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///   (2) Named canary: asserts `tests/ci_gate_completeness` ran, catching the
 ///       self-orphaning case where the guard binary itself stops running —
 ///       even when the binary count stays above 90.
+///   (2b) Named-canary passed-count gate (round 20, ADV-P50-LOW-002): gate
+///       (2) alone proves only that the binary was INVOKED — cargo prints
+///       its "Running ..." line before running anything inside it, so the
+///       substring is present even if every test is `#[ignore]`d or an
+///       env-gate skips the whole suite before any assertion runs.  Round 20
+///       locates the canary's own "test result:" line (scoped forward from
+///       its "Running" line) and requires a non-zero passed count
+///       specifically from it — closing the same fail-open shape as gate
+///       (3) below, but scoped to the one binary carrying every CI-gate
+///       regression pin.  The "Running" lookup is path-separator-agnostic
+///       (`[/\\]` character class) because cargo prints a forward slash on
+///       Unix runners but a backslash on `windows-latest`; a forward-slash-
+///       only pattern silently fails to match on Windows, hardcoding this
+///       gate's passed count to 0 and failing every Windows run
+///       unconditionally regardless of whether the canary ran (CI run
+///       31182605820 on `424d64de`, fixed in `177b3727`).
 ///   (3) Zero-test floor (`"${total}" -eq 0`): catches the case where ≥90
 ///       binaries (including the canary) report results but zero tests
 ///       passed within them — e.g. a global test filter matching nothing.
@@ -1362,18 +1378,27 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// result:" lines (which made the step exit 0 and print `Check passed:
 /// ...` despite the simulated failure) — both reproduced in a scratchpad
 /// copy before the fix. The assertions below are graded by how hard they
-/// are to defeat without also breaking the enforcement logic itself. Twelve
-/// assertions total (added in a later pass: `shell: bash` and the full
-/// `cargo test` capture invocation, both below):
+/// are to defeat without also breaking the enforcement logic itself.
+/// Fifteen assertions total (twelve added through round 17: `shell: bash`
+/// and the full `cargo test` capture invocation were added in a later pass;
+/// three more added in round 20 — see gate (2b) above — for the
+/// named-canary passed-count gate and its path-separator-agnostic lookup):
 ///   - **Variable/command-bound** (hardest to defeat: a rename or rewrite
 ///     that neuters the check also breaks the literal text this assertion
 ///     requires): `"${binaries}" -lt 90`, `"${total}" -eq 0`,
-///     `grep -q "ci_gate_completeness"`.  None of these three forms
-///     currently appears anywhere else in `ci.yml` (verified) — a bare
+///     `grep -q "ci_gate_completeness"`, `tail -n +"${_canary_running_line}"`,
+///     `"${_canary_passed}" -eq 0`.  None of these five forms currently
+///     appears anywhere else in `ci.yml` (verified) — a bare
 ///     `-lt 90` / `-eq 0` / `ci_gate_completeness` substring, by contrast,
 ///     also appears in this guard's own comments and echo diagnostics and
 ///     would be satisfied even after the check was neutered by a variable
 ///     rename.
+///   - **Exact quoted-literal, appears once** (comment-satisfiable only by a
+///     future comment reproducing the identical quoted form — no such
+///     comment exists today): the path-separator-agnostic regex
+///     `Running tests[/\\]ci_gate_completeness\.rs` (gate (2b)'s Windows
+///     fix; pinned via a Rust raw string literal so the source reproduces
+///     the exact backslash bytes from `ci.yml` without additional escaping).
 ///   - **Exact standalone line** (comment-satisfiable only by a future
 ///     comment reproducing the identical trailing form — no such comment
 ///     exists today): `set -euo pipefail\n`, `set +o pipefail\n`,
@@ -1485,6 +1510,103 @@ fn test_verify_test_job_has_zero_test_floor() {
          Required: grep the captured output for the ci_gate_completeness binary \
          to detect the self-orphaning case (guard binary renamed, autotests=false,\
          or [[test]] override).\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- Instrument 2b: named-canary passed-count gate (round 20 strengthening) ---
+    // ADV-P50-LOW-002 (round 20): `grep -q "ci_gate_completeness"` above
+    // proves only that the binary was INVOKED — cargo prints its
+    // "Running tests/ci_gate_completeness.rs (...)" line before running
+    // anything inside it, so the substring is present even if every test in
+    // the file is `#[ignore]`d or an env-gate skips the whole suite before
+    // any assertion runs.  That leaves Instrument 2 "satisfied" at 0 passed —
+    // the exact fail-open shape POL-11 exists to close for the whole-suite
+    // floor, just scoped to this one binary.  Round 20 strengthens this by
+    // locating the canary binary's own "test result:" summary line (scoping
+    // forward from its "Running" line, not the first "test result:" line in
+    // the whole capture — a global grep here would find some *other*
+    // binary's result line and could pass even if the canary itself reported
+    // 0) and requiring a non-zero passed count specifically from it.
+    //
+    // Two sub-assertions, mirroring why Instrument 1/3 pin the
+    // variable-bound form rather than a bare `-eq 0`/`-lt 90`: a rename or a
+    // rewrite that neuters the check also breaks the literal text these
+    // assertions require.
+    //
+    // (a) `tail -n +"${_canary_running_line}"` proves the result line is
+    //     scoped to the located binary's own output, not merely "the first
+    //     test result: line anywhere in the file" (which is what the
+    //     pre-round-20 `grep -q` presence check was blind to).  This exact
+    //     form appears once in `ci.yml` today (verified).
+    assert!(
+        test_block.contains("tail -n +\"${_canary_running_line}\""),
+        "FAIL (POL-11): The `test` job step does not scope the canary's \
+         `test result:` line lookup to `tail -n +\"${{_canary_running_line}}\"`.\n\
+         Required: round 20 strengthened the named-canary check (ADV-P50-LOW-002) \
+         to read the RESULT LINE THAT BELONGS TO THE CANARY BINARY ITSELF, not \
+         just the first `test result:` line anywhere in the capture — without \
+         this scoping a global grep could pass on some other binary's result \
+         while the canary itself reported 0 passed.\n\
+         Current test job block:\n{test_block}"
+    );
+    // (b) `"${_canary_passed}" -eq 0` is the gate itself: it fails the step
+    //     when the canary's own scoped result line shows 0 passed — the
+    //     property that closes ADV-P50-LOW-002 (a canary that was invoked
+    //     but never actually ran an assertion, e.g. every test `#[ignore]`d
+    //     or an env-gate early-return).  Reverting this whole Instrument 2b
+    //     block to the pre-round-20 form (a bare `grep -q
+    //     "ci_gate_completeness"` presence check with no passed-count gate)
+    //     removes this string entirely — proven below (RED proof).  This
+    //     exact form appears once in `ci.yml` today (verified).
+    assert!(
+        test_block.contains("\"${_canary_passed}\" -eq 0"),
+        "FAIL (POL-11): The `test` job step does not gate on \
+         `\"${{_canary_passed}}\" -eq 0`.\n\
+         Required: round 20 (ADV-P50-LOW-002) strengthened the named-canary \
+         check from proving the binary was merely INVOKED to proving it \
+         actually EXECUTED at least one passing assertion — reverting to a \
+         bare `grep -q \"ci_gate_completeness\"` presence check reopens the \
+         exact fail-open shape POL-11 exists to close, scoped to the one \
+         binary carrying every CI-gate regression pin.\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- Instrument 2c: path-separator-agnostic canary lookup (round 20 Windows fix) ---
+    // `cargo test` prints "Running tests/ci_gate_completeness.rs" on Unix
+    // runners but "Running tests\ci_gate_completeness.rs" (backslash) on
+    // `windows-latest` — the `test` job is a 3-OS matrix.  A forward-slash-only
+    // regex here silently finds no match on Windows, so `_canary_running_line`
+    // is always empty there and `_canary_passed` is hardcoded to `0` by the
+    // `if [ -z "${_canary_running_line}" ]` branch — every Windows run of the
+    // `test` job would fail this gate unconditionally, regardless of whether
+    // the canary actually ran.  This is exactly what broke in CI run
+    // 31182605820 on commit `424d64de` and was fixed in `177b3727` by
+    // widening the regex to a `[/\\\\]` character class matching either
+    // separator.  Reproduced directly (RED proof below): hardcoding the
+    // regex back to a bare forward slash reintroduces the Windows false-red
+    // while leaving Instrument 2b's assertions untouched (they pin the
+    // `_canary_passed`/`tail` machinery around the regex, not the regex
+    // pattern itself) — demonstrating this assertion is independent of, not
+    // a duplicate of, Instrument 2b above.
+    //
+    // Pinned via a raw string literal so the Rust source reproduces the
+    // exact byte sequence from `ci.yml` (four literal backslashes inside the
+    // character class, one literal backslash before the escaped dot)
+    // without the extra escaping a normal string literal would require —
+    // this exact quoted regex appears once in `ci.yml` today (verified).
+    assert!(
+        test_block.contains(r#"Running tests[/\\\\]ci_gate_completeness\.rs"#),
+        "FAIL (POL-11): The `test` job step does not use the path-separator- \
+         agnostic regex `Running tests[/\\\\]ci_gate_completeness\\.rs` to \
+         locate the canary binary's \"Running\" line.\n\
+         Required: cargo prints `Running tests/ci_gate_completeness.rs` on \
+         Unix runners but `Running tests\\ci_gate_completeness.rs` (backslash) \
+         on windows-latest. A forward-slash-only pattern here silently finds \
+         no match on Windows, hardcoding `_canary_passed` to 0 and failing \
+         every Windows run of the `test` job unconditionally (CI run \
+         31182605820 on 424d64de) — this is the \
+         LOCAL-VERIFICATION-MISSES-PLATFORM-MATRIX class documented in \
+         CLAUDE.md.\n\
          Current test job block:\n{test_block}"
     );
 
