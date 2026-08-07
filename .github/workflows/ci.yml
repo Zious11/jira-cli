@@ -156,6 +156,38 @@ jobs:
             exit 1
           fi
 
+          # ADV-P50-LOW-002 (round 20): the grep -q check above proves only
+          # that the ci_gate_completeness binary was INVOKED — cargo test
+          # prints "Running tests/ci_gate_completeness.rs (...)" before
+          # running anything inside it, so the substring is present even if
+          # every test in the file is #[ignore]d or an env-gate skips the
+          # whole suite before any assertion runs. That leaves the canary
+          # "satisfied" at 0 passed — the exact same fail-open shape POL-11
+          # exists to close for the whole-suite floor above, just scoped to
+          # this one binary. Strengthen: locate this binary's own
+          # "test result:" summary line (the first one after its "Running"
+          # line) and require a non-zero passed count specifically from it.
+          _canary_running_line=$(grep -n "Running tests/ci_gate_completeness.rs" \
+            "$RUNNER_TEMP/cargo_test_out.txt" | head -1 | cut -d: -f1)
+          if [ -z "${_canary_running_line}" ]; then
+            _canary_result_line=""
+            _canary_passed=0
+          else
+            _canary_result_line=$(tail -n +"${_canary_running_line}" \
+              "$RUNNER_TEMP/cargo_test_out.txt" | grep -m1 -E "^test result: " || true)
+            _canary_passed=$(echo "${_canary_result_line}" | grep -Eo "[0-9]+ passed" \
+              | grep -Eo "[0-9]+" || true)
+            _canary_passed=${_canary_passed:-0}
+          fi
+          if [ "${_canary_passed}" -eq 0 ]; then
+            echo "FAIL (POL-11): tests/ci_gate_completeness ran but reported 0 passed assertions."
+            echo "Result line found: '${_canary_result_line:-<none>}'."
+            echo "Possible causes: every test in the file is #[ignore]d, an"
+            echo "env-gate early-returns before any assertion runs, or a test"
+            echo "filter matched the binary but excluded every test inside it."
+            exit 1
+          fi
+
           if [ "${total}" -eq 0 ]; then
             echo "FAIL (POL-11): zero tests executed across ${binaries} test binaries."
             echo "Possible causes: autotests=false in Cargo.toml, a [[test]] rename,"
@@ -469,15 +501,34 @@ jobs:
             # Evidence basis: v27 top-level schema confirmed in S-346 Pass 5 F1 refutation
             # (red-gate-log.md §"Pass 5 F1 empirical refutation"); drift guard activates
             # only when the confirmed schema no longer matches.
+            #
+            # ADV-P50-MED-001 (round 20): originally this guard only fired on FULL
+            # drift (_outcomes_len>0 AND total_mutants==0 — every summary key,
+            # including total_mutants, renamed/moved). PARTIAL drift was fail-OPEN:
+            # if a future cargo-mutants version nested caught/missed/timeout/unviable
+            # under a new key while LEAVING total_mutants at the top level non-zero,
+            # _sum_check stayed 0 but total_mutants != 0 — this condition's third
+            # clause (`total_mutants -eq 0`) was false, so the guard did not fire;
+            # control fell through to the non-fatal `::warning::` below (which does
+            # not exit non-zero) and then to `total_outcomes -eq 0` → "OK" → exit 0.
+            # The job went green with real mutants recorded in total_mutants but the
+            # 90% kill-rate gate never evaluated. Fixed by dropping the
+            # `total_mutants -eq 0` requirement: the guard now fires whenever the
+            # reconciled sum is 0 AND there is ANY other evidence mutants existed
+            # (a non-empty .outcomes array, OR a non-zero total_mutants) — covering
+            # both the original full-drift shape and this partial-drift shape, fail-
+            # closed either way.
             _outcomes_len=$(jq '(.outcomes // []) | length' mutants.out/outcomes.json 2>/dev/null || echo 0)
             [[ "${_outcomes_len}" =~ ^[0-9]+$ ]] || _outcomes_len=0
             _sum_check=$((caught + missed + timeout + unviable))
-            if [ "${_outcomes_len}" -gt 0 ] && [ "${_sum_check}" -eq 0 ] && [ "${total_mutants}" -eq 0 ]; then
+            if [ "${_sum_check}" -eq 0 ] && { [ "${_outcomes_len}" -gt 0 ] || [ "${total_mutants}" -ne 0 ]; }; then
               echo "FAIL: outcomes.json schema drift detected."
-              echo "      outcomes.json has ${_outcomes_len} outcome(s) in .outcomes array but all"
-              echo "      top-level summary keys (caught/missed/timeout/unviable/total_mutants) are 0."
+              echo "      outcomes.json has ${_outcomes_len} outcome(s) in .outcomes array and"
+              echo "      total_mutants=${total_mutants}, but all top-level summary keys"
+              echo "      (caught/missed/timeout/unviable) sum to 0."
               echo "      The cargo-mutants output format may have changed (e.g. summary keys"
-              echo "      moved to a nested object). Pin update or schema investigation required."
+              echo "      moved to a nested object) — whether or not total_mutants itself moved."
+              echo "      Pin update or schema investigation required."
               echo "      Pin: .github/workflows/ci.yml cargo-mutants@27"
               exit 1
             fi
@@ -564,6 +615,17 @@ jobs:
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
+    # ADV-P50-LOW-003 (round 20): every other job in this file sets an
+    # explicit timeout-minutes; ci-gate previously did not, silently
+    # inheriting GitHub Actions' 360-minute default. This cannot cause a
+    # false-green (a required check that never completes blocks merge
+    # rather than passing it), so it was imprecision rather than a
+    # security gap — but a hung `check-ci-gate.sh` invocation (e.g. `jq`
+    # or bash hanging on malformed input) would otherwise tie up this
+    # required check for up to 6 hours before GitHub's default kicks in.
+    # 5 minutes matches the other lightweight, no-build aggregator/gate
+    # jobs in this file (fmt, spec-guard, check-signing-workflow-injection).
+    timeout-minutes: 5
     needs: [fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants]
     if: ${{ always() }}
     steps:

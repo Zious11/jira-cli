@@ -35,14 +35,27 @@
 //!   - `spec-guard` has no `if:` guard and must be promoted to a blocking
 //!     check (DEC-101).
 //!
-//! Test coverage map (→ S-CIGATE-1 AC):
+//! Test coverage map (→ S-CIGATE-1 AC — this story's ACs are zero-padded,
+//! e.g. `AC-001`/`AC-002`/`AC-003`; see the SEPARATE S-626-1 table below,
+//! which uses a different story's different, unpadded AC numbering):
 //!   test_ci_gate_job_exists_with_required_metadata           → AC-001
 //!   test_ci_gate_needs_exactly_the_required_jobs             → AC-003
 //!   test_ci_gate_excludes_advisory_and_secret_scan_jobs      → AC-003
 //!   test_mutants_is_in_ci_gate_needs                         → MUTATION-CI-TIMEOUT / AC-003
 //!   test_ci_gate_fails_on_failed_or_cancelled_need           → AC-002 (retargeted, S-CIGATE-2)
-//!   test_ci_gate_needs_jobs_have_no_event_conditional_if     → EC-002 (M1)
+//!   test_ci_gate_needs_jobs_have_no_job_level_if             → EC-002 (M1)
 //!   test_ci_gate_pass_fail_semantics_are_structurally_placed → AC-001/AC-002 (M2, retargeted, S-CIGATE-2)
+//!
+//! Test coverage map (→ S-626-1 AC — ADV-P48-LOW-002, round 20: split out
+//! into its own section. S-626-1 is a SEPARATE story from S-CIGATE-1/2
+//! with its OWN AC numbering; round 19 added the two rows below directly
+//! under the "S-CIGATE-1 AC" header above, which read as though `AC-10`
+//! and `AC-3` belonged to S-CIGATE-1's AC list — they do not, and the two
+//! schemes use different padding conventions by their own source stories
+//! (`.factory/stories/S-CIGATE-1*.md` zero-pads to 3 digits; `AC-1`
+//! .. `AC-10` in `.factory/stories/S-626-1.md` do not pad at all) — so
+//! rows below are NOT renumbered/padded to match the table above; doing so
+//! would misrepresent which story defines the AC):
 //!   test_verify_test_job_has_zero_test_floor                 → AC-10 / BC-X.13.007
 //!   test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env → AC-3
 //!
@@ -740,8 +753,18 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 /// Anchoring: each job's block is extracted via `extract_job_block` before
 /// the assertion is made, so a match in an unrelated job cannot produce a
 /// false positive.
+///
+/// ADV-P48-LOW-001 (round 20): renamed from
+/// `test_ci_gate_needs_jobs_have_no_event_conditional_if`. Round 19's F-03
+/// fix broadened the predicate from "no job-level `if:` referencing
+/// `github.event_name`" to "no job-level `if:` key at all" (see the F-03
+/// docstring above), but the function name was left unchanged — a
+/// maintainer reading only the name could reasonably judge the check
+/// over-reaching for its documented purpose and re-narrow it back to an
+/// event-conditional-only match, silently reopening the two escapes F-03
+/// closed. The name now states the actual predicate.
 #[test]
-fn test_ci_gate_needs_jobs_have_no_event_conditional_if() {
+fn test_ci_gate_needs_jobs_have_no_job_level_if() {
     let ci = read_ci_yml();
 
     // The seven jobs that must run unconditionally on every push and PR.
@@ -1236,8 +1259,26 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     );
 
     // -----------------------------------------------------------------------
-    // Assertion 4 (F-01, round 19) — SUPERSEDED by S-CIGATE-2, not
-    // reinstated (reconciliation note, PR #667 x #671 merge):
+    // ADV-P48-LOW-003 (round 20): re-reviewed this note on its merits per
+    // the round-20 fix-round instructions. Content verdict: ACCURATE — it
+    // correctly states M2-i's `PINNED_GATE_RUN_LINE` byte-for-byte pin
+    // strictly subsumes F-01's narrower `run: exit 1` literal pin (both
+    // are exact-match checks; M2-i additionally catches `|| true`/`| cat`
+    // suffix-tolerance mutants F-01 could not), and it does not leave a
+    // reader thinking coverage was dropped. One framing gap WAS found and
+    // is fixed by this heading: the note previously called itself
+    // "Assertion 4 (F-01, round 19)", the exact same ordinal already used
+    // by the REAL, code-bearing Assertion 4 (M2-i) above at this
+    // function's start — a documentation-only block with no `assert!` of
+    // its own reusing a live assertion's number reads as though a second,
+    // separate numbered check exists here. It doesn't; this block adds no
+    // assertion. Retitled below to make that unambiguous.
+    //
+    // Historical note — F-01 (round 19), SUPERSEDED by S-CIGATE-2, not
+    // reinstated (reconciliation note, PR #667 x #671 merge). NOT a
+    // numbered assertion — no `assert!` follows this comment block; it
+    // exists purely so a future reader doesn't mistake F-01's absence for
+    // a dropped regression guard.
     //
     // F-01 originally pinned the `ci-gate` job's `run:` step body to the
     // exact literal `run: exit 1`, guarding against the same class of
@@ -1786,18 +1827,53 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
     // uses to separate job-level from step-level `if:` keys. Then assert
     // the env override lives INSIDE that slice, not merely inside the
     // whole `msrv` block.
+    //
+    // ADV-P48-MED-001 (round 20): the anchor previously used here was the
+    // BARE command substring `cargo check --all-features --locked`, found
+    // via `str::find` (first occurrence in file order). The `msrv` job
+    // carries a ~10-line scope-rationale comment ABOVE the real `run:`
+    // step discussing `--all-targets`/`--all-features` (see this
+    // function's docstring); that comment does not currently reproduce
+    // the full concatenated command string, but nothing structurally
+    // prevents a future edit from quoting it verbatim there for
+    // explanatory purposes. If it did, `find` would anchor on the
+    // COMMENT occurrence (earlier in the file than the real step) instead
+    // of the real `run:` line, and the step-slice sliced from that wrong
+    // anchor would not contain the real step's `env:` block — this test
+    // would then fail RED on a genuinely correct config. That is a
+    // robustness bug, not a false-green: the failure mode is fail-loud on
+    // a false-positive substring match, never fail-silent.
+    //
+    // Fixed by anchoring on the actual YAML STEP SYNTAX rather than just
+    // the command text: `\n      - run: <cmd>` — the exact newline +
+    // 6-space list-item indent + `- run: ` prefix that appears only once
+    // in this file, on the real step line. Every scope comment in this
+    // job is `      #`-prefixed prose (see the comment immediately above
+    // the real step); defeating this anchor would require reproducing the
+    // literal step-declaration syntax `- run: ` character for character —
+    // no longer an accidental substring collision but hand-authored YAML
+    // forgery, the same "code review is the control for hand-crafted
+    // YAML" boundary already documented for the node-property residual in
+    // CLAUDE.md's CI Gate history (round 16). `rfind` (last occurrence)
+    // was considered and rejected: it is still a bare substring match
+    // with no syntactic anchoring, so a comment added AFTER the real step
+    // (nothing prevents that ordering) would defeat it identically —
+    // `rfind` narrows the reachable window without closing the
+    // underlying gap the way anchoring on real step syntax does.
     // -----------------------------------------------------------------------
-    let cargo_check_anchor = "cargo check --all-features --locked";
+    let cargo_check_anchor = "\n      - run: cargo check --all-features --locked";
     let anchor_pos = msrv_block.find(cargo_check_anchor).unwrap_or_else(|| {
         panic!(
-            "FAIL (S-626-1 AC-3 / F-02): could not re-locate the anchor \
-             `{cargo_check_anchor}` in the `msrv` job block to check \
-             `RUSTUP_TOOLCHAIN` placement — the assertion immediately above \
-             this one should already have failed.\n\
+            "FAIL (S-626-1 AC-3 / F-02): could not re-locate the step-line \
+             anchor `{cargo_check_anchor:?}` in the `msrv` job block to \
+             check `RUSTUP_TOOLCHAIN` placement — the assertion immediately \
+             above this one should already have failed.\n\
              Current msrv job block:\n{msrv_block}"
         )
     });
-    let after_anchor = &msrv_block[anchor_pos..];
+    // Skip the leading `\n` captured by the anchor so the slice starts on
+    // the `      - run: …` step line itself.
+    let after_anchor = &msrv_block[anchor_pos + 1..];
     // The next step begins at a line with the `      - ` (6-space + dash)
     // list-item indent used for every step in this file. Skip past the
     // anchor's own leading byte before searching so the anchor line itself
@@ -3080,7 +3156,14 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
 /// deeper-structure-only constructions are now verified closed.
 const PINNED_GATE_IF_EXPR: &str = "${{ always() }}";
 const PINNED_GATE_NEEDS_JSON_LINE: &str = "${{ toJSON(needs) }}";
-const PINNED_GATE_JOB_KEYS: &[&str] = &["if", "name", "needs", "runs-on", "steps"];
+// ADV-P50-LOW-003 (round 20): `timeout-minutes` added to `ci-gate` (see
+// ci.yml comment on that job) to match every sibling job's explicit
+// timeout instead of silently inheriting GitHub Actions' 360-minute
+// default. `PINNED_GATE_JOB_KEYS` is a COMPLETE key-set pin (M2-k) —
+// adding a real job-level key without updating this constant in the same
+// change would make the pin fail on genuinely correct config.
+const PINNED_GATE_JOB_KEYS: &[&str] =
+    &["if", "name", "needs", "runs-on", "steps", "timeout-minutes"];
 const PINNED_GATE_STEP_KEY_SETS: &[&[&str]] = &[
     &["name", "uses", "with"],
     &["uses"],
