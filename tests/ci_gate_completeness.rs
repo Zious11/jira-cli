@@ -1236,45 +1236,31 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     );
 
     // -----------------------------------------------------------------------
-    // Assertion 4 (F-01, round 19): the `run:` step's body is literally
-    // `exit 1` — not merely "a `run:` step exists".
+    // Assertion 4 (F-01, round 19) — SUPERSEDED by S-CIGATE-2, not
+    // reinstated (reconciliation note, PR #667 x #671 merge):
     //
-    // Assertion 3 above (M2-g) only checks that *some* `run:` line is
-    // present. `ci-gate` is THE single required branch-protection status
-    // check (CLAUDE.md § "CI Gate"); replacing the body with e.g.
-    // `run: echo "gate disabled"` keeps every other assertion in this file
-    // green (name/runs-on/always()/needs-set/needs.*.result/'failure'/
-    // 'cancelled' are all still textually present) while making the gate
-    // incapable of ever failing, regardless of upstream results — the
-    // single required check goes permanently green. The only other
-    // `exit 1` assertion in this file (`test_verify_test_job_has_zero_test_floor`
-    // § "--- exit 1 is present ---") is scoped to the `test` job block and
-    // is itself the "weakest" tier by that test's own docstring grading (a
-    // bare substring, satisfiable by a comment) — it provides no coverage
-    // of `ci-gate`'s own enforcement body at all.
+    // F-01 originally pinned the `ci-gate` job's `run:` step body to the
+    // exact literal `run: exit 1`, guarding against the same class of
+    // regression M2-g's substring check missed: a body that can never fail
+    // (e.g. `run: echo "gate disabled"`) would make the single required
+    // branch-protection check permanently green regardless of upstream
+    // results, even with every other structural assertion above still
+    // passing.
     //
-    // The assertion targets the exact trimmed line `run: exit 1` (not a bare
-    // `contains("exit 1")` substring): a body of `run: exit 100` or
-    // `run: exit 10` would satisfy a bare-substring check on `"exit 1"`
-    // (`"exit 100"` and `"exit 10"` both contain `"exit 1"` as a prefix) while
-    // being a materially different (or accidentally-truncated) command.
-    // Matching the whole trimmed line closes that gap.
-    let has_exit_1_run_step = gate_block.lines().any(|l| l.trim() == "run: exit 1");
-
-    assert!(
-        has_exit_1_run_step,
-        "FAIL (F-01): The `ci-gate` job's `run:` step body is not exactly \
-         `exit 1`.\n\
-         `ci-gate` is the single required branch-protection status check — a \
-         body that can never fail (e.g. `run: echo \"...\"`) makes the \
-         required check permanently green regardless of upstream job \
-         results, even though every other structural assertion in this test \
-         (name, runs-on, always(), needs.*.result, 'failure', 'cancelled') \
-         would still pass.\n\
-         Required: a step in the `ci-gate` job block with the line \
-         `run: exit 1` (leading/trailing whitespace aside).\n\
-         Current ci-gate block:\n{gate_block}"
-    );
+    // Under Option C (S-CIGATE-2), the gate's `run:` step is no longer a
+    // bare `exit 1` — it is the `scripts/check-ci-gate.sh` invocation
+    // (`echo "${{NEEDS_JSON}}" | bash scripts/check-ci-gate.sh`, see the M2
+    // module doc comment's "correct shape" block above), so F-01's literal
+    // `run: exit 1` pin is no longer true of the shipped, authoritative
+    // ci.yml and reinstating it verbatim would make this test permanently
+    // RED against correct code. F-01's actual goal — prevent an
+    // unenforceable/no-op gate body — is already met, and more strongly:
+    // Assertion 4 above (M2-i) pins the run line BYTE-FOR-BYTE against
+    // `PINNED_GATE_RUN_LINE`, which rejects `run: echo "gate disabled"` (or
+    // any other body that isn't the exact pinned invocation) exactly as
+    // F-01 intended, while also catching the narrower `|| true` / `| cat`
+    // suffix-tolerance mutants F-01 itself could not have caught. No
+    // separate `exit 1`-literal assertion is reinstated here.
 }
 
 // ---------------------------------------------------------------------------
