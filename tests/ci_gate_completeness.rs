@@ -234,18 +234,25 @@ fn parse_needs_set(job_block: &str) -> Option<HashSet<String>> {
 /// in that order), so scanning to EOF is correct today; the 0-indent
 /// early-return guards against silently mis-scanning if that ever changes.
 ///
-/// `#[cfg(unix)]` (PR #671 review round 15, CI-caught): this helper's only
-/// caller is `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`,
-/// which is itself `#[cfg(unix)]`-gated (the bash shell-outs it performs
-/// don't run on Windows). Gating a TEST to unix does not remove the
-/// HELPERS it alone uses from a Windows build — they still compile there,
-/// now genuinely unused, and `-D warnings` promotes that to a hard clippy
-/// error. `cargo clippy` run 31128902318 caught exactly this on
-/// `windows-latest` (six items, this one included) after thirteen rounds
-/// of macOS-only local review missed it entirely — local verification,
-/// however rigorous, does not cover the platform matrix. Gate the helper
-/// the same way as its only caller, every time.
-#[cfg(unix)]
+/// Portable (NOT `#[cfg(unix)]`-gated): pure string parsing, no subprocess.
+/// Originally gated to unix (PR #671 review round 15, CI-caught) because
+/// its only caller at the time,
+/// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`, was
+/// itself `#[cfg(unix)]`-gated (the bash shell-outs IT performs don't run
+/// on Windows) — gating a TEST to unix does not remove the HELPERS it
+/// alone uses from a Windows build, so this function stayed compiled-but-
+/// unused there and `-D warnings` promoted that to a hard clippy error
+/// (`cargo clippy` run 31128902318 caught exactly this on
+/// `windows-latest`, six items including this one, after thirteen rounds
+/// of macOS-only local review missed it). S-626-1 (U1) added a second,
+/// portable caller — `test_ci_gate_needs_partitions_all_ci_yml_jobs` —
+/// which does no subprocess work and runs on every platform, so the
+/// `#[cfg(unix)]` gate no longer applies to this function itself (it is no
+/// longer "only used by a unix-gated test"); the unix-only callers below
+/// keep their own gate unchanged. NOTE for future readers: gating a test
+/// still orphans whatever helpers ONLY it uses — always check for other
+/// callers (like this one gained) before assuming a helper's gate should
+/// simply mirror its original caller's.
 fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
     let Some(jobs_start) = ci.find("\njobs:\n") else {
         panic!("FAIL: `.github/workflows/ci.yml` has no top-level `jobs:` key.");
@@ -271,6 +278,66 @@ fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
         break;
     }
     names
+}
+
+/// Cross-platform-safe (NOT `#[cfg(unix)]`-gated) list of `ci-gate.needs`
+/// member job names that are legitimately permitted to report `skipped`.
+///
+/// This is a narrower, portable duplicate of the job-name half of
+/// `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` (which additionally pins each
+/// job's exact `if:` expression text, byte-for-byte, and is
+/// `#[cfg(unix)]`-gated because every one of its readers shells out to
+/// bash). This constant exists so `always_run_needs_members` below — used
+/// by tests that do NOT need bash and must run on every platform — has a
+/// skip-tolerance list to filter against without depending on a
+/// unix-only pin. Kept in sync manually; today both contain exactly
+/// `["mutants"]`. Drift is caught by
+/// `test_skip_tolerant_needs_members_matches_pinned_if_expressions`
+/// (unix-only, since it reads the unix-gated constant) — see that test's
+/// doc comment for what "drift" means here and why it can't be closed
+/// portably.
+const SKIP_TOLERANT_NEEDS_MEMBERS: &[&str] = &["mutants"];
+
+/// Every `ci-gate.needs` member EXCEPT those in `SKIP_TOLERANT_NEEDS_MEMBERS`
+/// — i.e. every job required to run unconditionally (no job-level `if:`
+/// that could produce anything other than `success`/`failure`/`cancelled`)
+/// on every push and PR.
+///
+/// S-626-1 sweep-to-class fix: `test_ci_gate_needs_jobs_have_no_job_level_if`
+/// and `test_always_run_jobs_have_no_continue_on_error` each used to
+/// hand-maintain their own literal 7-name `required_jobs` array — a sibling
+/// instance of the same "allowlist not tied to the real universe" shape as
+/// the S-626-1 U1 finding, one level down (within `ci-gate.needs`, rather
+/// than across all of `ci.yml`): a job added to `ci-gate.needs` without
+/// also being added to both hardcoded literals would silently escape both
+/// checks. Deriving `required_jobs` from the LIVE `needs:` set here instead
+/// means a newly-added always-run job is automatically covered by both
+/// checks the moment it lands in `ci-gate.needs` — no second edit to
+/// remember. Functionally identical to the two prior hardcoded lists for
+/// today's real `ci.yml` (both were `{fmt, clippy, test, msrv, deny,
+/// spec-guard, check-signing-workflow-injection}`, i.e. `ci-gate.needs`
+/// minus `mutants`) — this is a strict widening of future coverage, never a
+/// narrowing of today's.
+fn always_run_needs_members(ci: &str) -> Vec<String> {
+    let gate_block = extract_job_block(ci, "ci-gate").unwrap_or_else(|| {
+        panic!(
+            "FAIL (RED GATE): `.github/workflows/ci.yml` does not contain a \
+             `ci-gate:` job."
+        )
+    });
+    let needs = parse_needs_set(gate_block).unwrap_or_else(|| {
+        panic!(
+            "FAIL (RED GATE): The `ci-gate` job block does not contain a \
+             `needs:` key.\n\
+             Current ci-gate block:\n{gate_block}"
+        )
+    });
+    let mut always_run: Vec<String> = needs
+        .into_iter()
+        .filter(|j| !SKIP_TOLERANT_NEEDS_MEMBERS.contains(&j.as_str()))
+        .collect();
+    always_run.sort();
+    always_run
 }
 
 /// Does `line` declare the YAML key `key` at a job's direct-child level
@@ -618,6 +685,161 @@ fn test_ci_gate_excludes_advisory_and_secret_scan_jobs() {
 }
 
 // ---------------------------------------------------------------------------
+// S-626-1 U1 — `ci-gate.needs` must PARTITION every job in ci.yml
+// ---------------------------------------------------------------------------
+
+/// PINNED, human-reviewed set of `ci.yml` jobs that must NEVER gate merges —
+/// the exclusion half of the S-626-1 U1 partition (see
+/// `test_ci_gate_needs_partitions_all_ci_yml_jobs` immediately below).
+///
+/// Adding a job here is a deliberate, reviewed act (mirroring
+/// `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`'s convention for the opposite
+/// carve-out): it is a claim that this job must NEVER be required to pass,
+/// under any circumstances, for any future reason — not merely "it isn't
+/// required today." Today's two members and their rationale (carried over
+/// verbatim from `test_ci_gate_excludes_advisory_and_secret_scan_jobs`,
+/// which predates this partition check and remains as a narrower,
+/// faster-to-read diagnostic):
+///   - `security`: PR-only (`if: github.event_name == 'pull_request'`) AND
+///     further gated by `vars.GITLEAKS_DISABLED` — a secret scan that is
+///     advisory by policy, not a merge blocker.
+///   - `coverage`: uses `fail_ci_if_error: false` on the codecov upload —
+///     advisory by design; a flaky coverage upload must not block merges.
+const PINNED_GATE_EXCLUDED_JOBS: &[&str] = &["security", "coverage"];
+
+/// S-626-1 U1 (external research finding): closes the "allowlist with no
+/// default-deny over its universe" gap one level up from the fixes already
+/// applied to `scripts/check-ci-gate.sh`'s per-job RESULT decision
+/// (`ALLOWED_SKIPS` + a default-fail `case` arm — see that script's own
+/// doc comment) and to this file's `if:`/step/env-key pins (`PINNED_GATE_*`,
+/// all set-equality, default-deny). Until this test, NOTHING asserted the
+/// partition at the NEEDS-SET level: `test_ci_gate_needs_exactly_the_required_jobs`
+/// pins `ci-gate.needs` against a hardcoded 8-name literal, and
+/// `test_ci_gate_excludes_advisory_and_secret_scan_jobs` denies exactly two
+/// names (`security`, `coverage`) — between them, a NINTH job added to
+/// `ci.yml` and left out of both `ci-gate.needs` and the exclusion check
+/// was invisible to every existing assertion: both tests stayed green, the
+/// new job was entirely unenforced by the sole required branch-protection
+/// check, and nothing noticed. Same shape as the pre-S-CIGATE-2 defect this
+/// story's sibling tests already fixed at the result-value layer, one
+/// layer up: an allowlist of known-good members with no default-deny over
+/// the universe it's drawn from.
+///
+/// THE FIX: every job actually defined in `ci.yml` (via
+/// `list_all_ci_yml_job_names` — the same candidate-universe source
+/// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
+/// already trusts for its own pin-coverage check) must be EITHER a member
+/// of `ci-gate.needs` OR named in the pinned, human-reviewed
+/// `PINNED_GATE_EXCLUDED_JOBS` literal above — a job satisfying neither is
+/// a maintainer's un-reviewed silent gap and fails this test by name,
+/// forcing an explicit choice (add to `needs`, or add to
+/// `PINNED_GATE_EXCLUDED_JOBS` with a rationale) rather than an implicit
+/// one made by omission.
+///
+/// `ci-gate` itself is excluded from the partition explicitly (a job
+/// cannot depend on itself; GitHub Actions would reject a self-referencing
+/// `needs:` at workflow-parse time regardless) — handled by name, not by
+/// falling through the "neither in needs nor excluded" branch by accident.
+///
+/// A job present in BOTH `ci-gate.needs` and `PINNED_GATE_EXCLUDED_JOBS`
+/// simultaneously is also a failure: those two are meant to partition the
+/// universe (every job is in exactly one), and a job claimed by both is a
+/// contradiction a human must resolve, not something this test should
+/// silently prefer one interpretation of.
+///
+/// `list_all_ci_yml_job_names` was previously `#[cfg(unix)]`-gated because
+/// its only caller shelled out to bash on a unix-only test. This test adds
+/// a second, portable caller (no subprocess, pure string parsing), so the
+/// `#[cfg(unix)]` gate was removed from the helper — see its doc comment.
+///
+/// RED PROOF (S-626-1): a dummy job added to `ci.yml` in neither
+/// `ci-gate.needs` nor `PINNED_GATE_EXCLUDED_JOBS` makes this test FAIL,
+/// naming the offending job (verified manually during implementation and
+/// reverted via `git checkout HEAD -- .github/workflows/ci.yml` — not
+/// left as a fixture, since a real edit to the tracked file is the only
+/// way to prove this without a second, out-of-sync copy of ci.yml).
+#[test]
+fn test_ci_gate_needs_partitions_all_ci_yml_jobs() {
+    let ci = read_ci_yml();
+    let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_else(|| {
+        panic!(
+            "FAIL (RED GATE): `.github/workflows/ci.yml` does not contain a \
+             `ci-gate:` job.\n\
+             Required: append the `ci-gate` aggregator job to ci.yml per \
+             S-CIGATE-1 AC-001 / AC-003."
+        )
+    });
+    let needs = parse_needs_set(gate_block).unwrap_or_else(|| {
+        panic!(
+            "FAIL (RED GATE): The `ci-gate` job block does not contain a \
+             `needs:` key.\n\
+             Current ci-gate block:\n{gate_block}"
+        )
+    });
+
+    let all_jobs = list_all_ci_yml_job_names(&ci);
+    assert!(
+        !all_jobs.is_empty(),
+        "FAIL: `list_all_ci_yml_job_names` returned no jobs at all — the \
+         `jobs:` key scan is broken (or ci.yml itself is malformed), which \
+         would make this test vacuously pass every job it never saw. \
+         Current ci.yml jobs section could not be parsed."
+    );
+
+    let mut both: Vec<&str> = Vec::new();
+    let mut unaccounted: Vec<&str> = Vec::new();
+    for job in &all_jobs {
+        if job == "ci-gate" {
+            // `ci-gate` cannot depend on itself — explicitly excluded from
+            // the partition rather than falling through either branch below
+            // by accident (S-626-1 mandate: "handle that explicitly rather
+            // than by accident").
+            continue;
+        }
+        let in_needs = needs.contains(job);
+        let in_excluded = PINNED_GATE_EXCLUDED_JOBS.contains(&job.as_str());
+        match (in_needs, in_excluded) {
+            (true, true) => both.push(job.as_str()),
+            (false, false) => unaccounted.push(job.as_str()),
+            _ => {}
+        }
+    }
+    both.sort_unstable();
+    unaccounted.sort_unstable();
+
+    assert!(
+        both.is_empty(),
+        "FAIL: the following ci.yml job(s) are claimed by BOTH \
+         `ci-gate.needs` AND `PINNED_GATE_EXCLUDED_JOBS` at once — these \
+         two are meant to partition every job in ci.yml (each job in \
+         exactly one), so a job in both is a contradiction: {both:?}\n\
+         Fix: remove it from whichever side is wrong."
+    );
+
+    assert!(
+        unaccounted.is_empty(),
+        "FAIL (S-626-1 U1): the following ci.yml job(s) are neither in \
+         `ci-gate.needs` NOR in the pinned exclusion list \
+         `PINNED_GATE_EXCLUDED_JOBS` ({PINNED_GATE_EXCLUDED_JOBS:?}): \
+         {unaccounted:?}\n\
+         Every job defined in ci.yml must be a deliberate, reviewed \
+         choice: either\n\
+         \n\
+         1. add it to `ci-gate.needs` (and, if it can legitimately report \
+            `skipped`, to `scripts/check-ci-gate.sh`'s `ALLOWED_SKIPS` \
+            allowlist with a matching `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` \
+            entry in this file — see `test_ci_gate_needs_exactly_the_required_jobs` \
+            for the exact-set pin to update in the same change), or\n\
+         2. add it to `PINNED_GATE_EXCLUDED_JOBS` above with an in-code \
+            rationale for why it must never gate merges.\n\
+         \n\
+         Leaving a new job out of both silently drops it from enforcement \
+         by the sole required branch-protection check — this test exists \
+         so that omission fails loudly instead."
+    );
+}
+
+// ---------------------------------------------------------------------------
 // MUTATION-CI-TIMEOUT — `mutants` is in `ci-gate.needs`
 // ---------------------------------------------------------------------------
 
@@ -809,18 +1031,13 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 fn test_ci_gate_needs_jobs_have_no_job_level_if() {
     let ci = read_ci_yml();
 
-    // The seven jobs that must run unconditionally on every push and PR.
-    // `mutants` is intentionally excluded — it is PR-only by design and
-    // emits `skipped` on push events (ci-gate-safe; see test docstring above).
-    let required_jobs = [
-        "fmt",
-        "clippy",
-        "test",
-        "msrv",
-        "deny",
-        "spec-guard",
-        "check-signing-workflow-injection",
-    ];
+    // Every `ci-gate.needs` member that must run unconditionally on every
+    // push and PR — derived from the live `needs:` set (S-626-1 sweep-to-
+    // class fix; see `always_run_needs_members`'s doc comment), not a
+    // hand-maintained literal. `mutants` is excluded — it is PR-only by
+    // design and emits `skipped` on push events (ci-gate-safe; see test
+    // docstring above).
+    let required_jobs = always_run_needs_members(&ci);
 
     for job_name in &required_jobs {
         let job_block = extract_job_block(&ci, job_name).unwrap_or_else(|| {
@@ -2292,15 +2509,11 @@ fn test_test_job_pipefail_bracket_ordering_is_position_constrained() {
 fn test_always_run_jobs_have_no_continue_on_error() {
     let ci = read_ci_yml();
 
-    let required_jobs = [
-        "fmt",
-        "clippy",
-        "test",
-        "msrv",
-        "deny",
-        "spec-guard",
-        "check-signing-workflow-injection",
-    ];
+    // Derived from the live `needs:` set (S-626-1 sweep-to-class fix; see
+    // `always_run_needs_members`'s doc comment) rather than a hand-
+    // maintained literal — see the module-level ADV-P51 scope note above
+    // for why `mutants` and `ci-gate` are excluded from this loop.
+    let required_jobs = always_run_needs_members(&ci);
 
     for job_name in &required_jobs {
         let job_block = extract_job_block(&ci, job_name).unwrap_or_else(|| {
@@ -3124,6 +3337,44 @@ fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
 #[cfg(unix)]
 const PINNED_ALLOWED_SKIP_IF_EXPRESSIONS: &[(&str, &str)] =
     &[("mutants", "github.event_name == 'pull_request'")];
+
+/// S-626-1 sweep-to-class fix: `SKIP_TOLERANT_NEEDS_MEMBERS` (portable) is a
+/// hand-maintained duplicate of `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`'s
+/// (`#[cfg(unix)]`-only) job-name set — kept separate rather than derived
+/// from one another because `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` is
+/// `#[cfg(unix)]`-gated and `SKIP_TOLERANT_NEEDS_MEMBERS` must not be (its
+/// callers run on every platform). Two independent pins for the same
+/// underlying fact can drift silently unless something checks them against
+/// each other — this test is that check. It is itself `#[cfg(unix)]`-gated
+/// (it reads the unix-gated constant), so it cannot close the drift window
+/// on Windows; a divergence would only be caught there indirectly, the
+/// next time someone runs the full suite on a unix runner (which CI does,
+/// via `ubuntu-latest`).
+#[cfg(unix)]
+#[test]
+fn test_skip_tolerant_needs_members_matches_pinned_if_expressions() {
+    let mut from_expressions: Vec<&str> = PINNED_ALLOWED_SKIP_IF_EXPRESSIONS
+        .iter()
+        .map(|(job, _)| *job)
+        .collect();
+    from_expressions.sort_unstable();
+
+    let mut from_portable: Vec<&str> = SKIP_TOLERANT_NEEDS_MEMBERS.to_vec();
+    from_portable.sort_unstable();
+
+    assert_eq!(
+        from_portable, from_expressions,
+        "FAIL: `SKIP_TOLERANT_NEEDS_MEMBERS` ({SKIP_TOLERANT_NEEDS_MEMBERS:?}) \
+         has drifted from the job-name set in \
+         `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` ({from_expressions:?}). These \
+         two pins name the same set of jobs (those legitimately permitted \
+         to report `skipped` in `ci-gate.needs`) for two different \
+         audiences — a portable one used by cross-platform tests, and a \
+         unix-only one that additionally pins each job's exact `if:` \
+         expression text. Update whichever one is stale in the same change \
+         as whatever added or removed a skip-tolerant job."
+    );
+}
 
 /// Find the byte index of a legitimate YAML comment start in `s`: a `#`
 /// immediately preceded by whitespace (space or tab). Returns `None` if no
