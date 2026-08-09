@@ -5507,3 +5507,277 @@ fn test_allowed_skips_has_exactly_three_code_level_references() {
          read, never a widening write."
     );
 }
+
+// ---------------------------------------------------------------------------
+// S-626-1 — DEC-246 follow-on hardening: sibling-workflow exposure (Guard A)
+// and matrix staticity (Guard B)
+// ---------------------------------------------------------------------------
+//
+// Basis: `.factory/research/dec-246-github-actions-gating-semantics.md`
+// (2026-08-09), specifically §"Sibling-workflow frontier" (Guard A) and
+// the "New material this reconstruction contributes" item 1 (Guard B).
+//
+// KNOWN LIMITATION SHARED BY BOTH GUARDS BELOW (round-16 residual, restated
+// here rather than assumed known): every extractor in this file, including
+// the two new ones added for these guards, is LINE-BASED. A YAML NODE
+// PROPERTY (an anchor `&name` or a tag `!tag`/`!!tag`) prefixing a mapping
+// key on the same physical line defeats line-based key detection with zero
+// non-LF bytes involved and zero line breaks — `extract_key_name_at_indent`
+// stops at the space after `&x`/`!!str`, sees no colon, and returns `None`.
+// Neither guard below closes that residual; both inherit it exactly as
+// every other set-equality pin in this file does. It is tracked as
+// follow-up story S-CIGATE-3 (durable YAML-parser rewrite) — see
+// `CLAUDE.md`'s CI Gate section, "Round 16", for the full record. Do not
+// read either guard below as covering the line-based-lexer-vs-real-parser
+// gap generally; neither does.
+
+/// Read an arbitrary workflow YAML file, applying the same normalization as
+/// `read_ci_yml` (CRLF -> LF, strip a leading BOM) so downstream line-based
+/// scanning behaves identically regardless of which workflow file is read.
+/// A deliberately separate function from `read_ci_yml` (which is hardcoded
+/// to `.github/workflows/ci.yml`) rather than a generalization of it — this
+/// file's established precedent (see `extract_and_normalize_sole_run_line`
+/// vs. `extract_and_normalize_if_expr`) is to duplicate small, load-bearing
+/// normalization logic rather than risk widening a more heavily-relied-on
+/// function's contract.
+fn read_workflow_file(path: &Path) -> String {
+    let raw = fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
+    let raw = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
+    raw.replace("\r\n", "\n")
+}
+
+/// Enumerate every `.github/workflows/*.yml` / `*.yaml` file, sorted for
+/// deterministic iteration order.
+///
+/// Glob-based over the directory — deliberately NOT a hardcoded file list.
+/// A hardcoded list would reproduce, one level up, the exact
+/// closed-enumeration defect S-626-1's U1 finding closed for
+/// `ci-gate.needs` (`test_ci_gate_needs_partitions_all_ci_yml_jobs`): a new
+/// sibling workflow file added later would silently sit outside a
+/// hand-maintained list, and this guard exists specifically to prevent
+/// that class of gap for the sibling-workflow-name vector.
+fn list_workflow_files() -> Vec<std::path::PathBuf> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
+    let mut files: Vec<std::path::PathBuf> = fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("Could not read {}: {e}", dir.display()))
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|p| {
+            matches!(
+                p.extension().and_then(|e| e.to_str()),
+                Some("yml") | Some("yaml")
+            )
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// List every job id defined under a workflow file's top-level `jobs:` map.
+///
+/// Deliberately a SEPARATE function from `list_all_ci_yml_job_names` rather
+/// than a generalization of it — same precedent cited on
+/// `read_workflow_file` above. `list_all_ci_yml_job_names`'s
+/// panic-on-missing-`jobs:` behavior is deliberately load-bearing for
+/// `ci.yml`, which is on the gate's decision path. A sibling workflow file
+/// is NOT on that path: this function returns an empty `Vec` rather than
+/// panicking when a file has no `jobs:` key, so a malformed or unusual
+/// sibling workflow file makes Guard A a no-op for that file (nothing to
+/// check) instead of a spurious hard failure unrelated to `ci-gate` itself.
+fn list_job_ids_in_workflow(content: &str) -> Vec<String> {
+    let Some(jobs_start) = content.find("\njobs:\n") else {
+        return Vec::new();
+    };
+    let jobs_section = &content[jobs_start + 1..];
+    let mut names = Vec::new();
+    for line in jobs_section.lines().skip(1) {
+        if line.is_empty() || line.starts_with(' ') {
+            if line.starts_with("  ") && line.chars().nth(2).map(|c| c != ' ').unwrap_or(false) {
+                let without_comment = line.split('#').next().unwrap_or(line).trim_end();
+                if let Some(name) = without_comment
+                    .strip_prefix("  ")
+                    .and_then(|s| s.strip_suffix(':'))
+                {
+                    if !name.is_empty() {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        // A non-empty, 0-indent line: end of the `jobs:` map.
+        break;
+    }
+    names
+}
+
+/// Extract a job block's job-level `name:` value (4-space indent), trimmed
+/// and with one layer of matching surrounding quotes stripped. A trailing
+/// YAML comment on the same line is stripped before the quote check, same
+/// convention `extract_job_block` already uses for job-key lines. Returns
+/// `None` if the job block has no job-level `name:` key at all (GitHub then
+/// displays the job id itself as the check name).
+///
+/// Anchored on `extract_key_name_at_indent(line, 4)` so a step-level
+/// `      - name: ...` line (6-space indent, one level deeper) is never
+/// mistaken for the job's own `name:` — the same indent discipline
+/// `extract_job_level_key_set` already relies on for job-level keys
+/// generally.
+fn extract_job_display_name(job_block: &str) -> Option<String> {
+    for line in job_block.lines() {
+        if extract_key_name_at_indent(line, 4).as_deref() != Some("name") {
+            continue;
+        }
+        let value = line.trim_start().strip_prefix("name:")?.trim();
+        let value = value.split('#').next().unwrap_or(value).trim();
+        for quote in ['"', '\''] {
+            if let Some(stripped) = value.strip_prefix(quote) {
+                if let Some(stripped) = stripped.strip_suffix(quote) {
+                    return Some(stripped.to_string());
+                }
+            }
+        }
+        return Some(value.to_string());
+    }
+    None
+}
+
+/// S-626-1 Guard A (DEC-246 §"Sibling-workflow frontier"): branch
+/// protection matches a required status check by the job's `name:` STRING
+/// ALONE — the workflow FILE that declares the job is not part of the
+/// check's identity. GitHub's own docs state plainly that "[u]sing the
+/// same job name in multiple workflows can cause **ambiguous** status
+/// check results" and instruct keeping job names unique across all
+/// workflows
+/// (<https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches>,
+/// verified 2026-08-09 — see DEC-246 Q5). Every existing pin in this file
+/// reads `ci.yml` alone (via `read_ci_yml`/`extract_job_block`) — a job
+/// named `CI Gate` declared in ANY OTHER workflow file is outside every one
+/// of those pins BY CONSTRUCTION, structurally the same blind spot as the
+/// workflow-level `defaults:` vector found in round 11 (see
+/// `common::yaml::extract_job_block`'s doc comment for that precedent).
+///
+/// This test enumerates every `.github/workflows/*.yml`/`*.yaml` file via
+/// `list_workflow_files` (glob-based, not a hardcoded list — see that
+/// function's doc comment) and asserts that no workflow file OTHER than
+/// `ci.yml` declares a job whose `name:` value, after trimming and
+/// unquoting, equals `CI Gate` case-sensitively (GitHub check names are
+/// case-sensitive).
+///
+/// See the module-level "KNOWN LIMITATION SHARED BY BOTH GUARDS" note above
+/// this section — this test is line-based and shares the round-16
+/// node-property residual like every other pin in this file.
+#[test]
+fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
+    for path in list_workflow_files() {
+        if path.file_name().and_then(|f| f.to_str()) == Some("ci.yml") {
+            continue;
+        }
+
+        let content = read_workflow_file(&path);
+        for job_id in list_job_ids_in_workflow(&content) {
+            let Some(job_block) = extract_job_block(&content, &job_id) else {
+                continue;
+            };
+            if extract_job_display_name(job_block).as_deref() == Some("CI Gate") {
+                panic!(
+                    "FAIL (S-626-1 Guard A, DEC-246 Sibling-workflow frontier): \
+                     {} declares job `{job_id}` with `name: CI Gate` — the SAME \
+                     required-check name as `.github/workflows/ci.yml`'s \
+                     `ci-gate` job.\n\
+                     \n\
+                     Branch protection matches a required status check by job \
+                     NAME ALONE; the declaring workflow file is not part of the \
+                     check's identity. GitHub's own docs state that using the \
+                     same job name in multiple workflows \"can cause ambiguous \
+                     status check results\" and instruct keeping job names \
+                     unique across all workflows. Every pin in \
+                     tests/ci_gate_completeness.rs reads ci.yml alone — a \
+                     second `CI Gate` check produced by this job sits outside \
+                     every one of those pins by construction.\n\
+                     \n\
+                     Fix: rename this job's `name:` to something other than \
+                     `CI Gate`.",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+/// S-626-1 Guard B (DEC-246 §Q4 + "New material this reconstruction
+/// contributes" item 1): `ci-gate.needs` includes two matrix jobs, `clippy`
+/// and `test`. What `needs.<job>.result` reports when a matrix job expands
+/// to ZERO legs is UNDOCUMENTED by GitHub — tracked as the open drift item
+/// `ZERO-LEG-MATRIX-RESULT-UNDOCUMENTED`, with community reports split
+/// between `skipped` (safe) and `success` (a silent false green), and
+/// GitHub's own docs silent on matrix-parent -> `needs.result` aggregation
+/// entirely. DEC-246 established that case is currently UNREACHABLE in
+/// this file: both matrix jobs use STATIC LITERAL `os:` lists
+/// (`[ubuntu-latest, windows-latest]` and `[ubuntu-latest, macos-latest,
+/// windows-latest]`), and a static literal list cannot ever evaluate to
+/// zero legs. The zero-leg case becomes reachable only if a future edit
+/// converts one of these to a DYNAMIC matrix (e.g. `fromJSON(...)`).
+///
+/// This test converts that undecidable RUNTIME question ("what does a
+/// zero-leg matrix report to `needs`?") into a decidable SOURCE property
+/// ("is the matrix still static?") — far cheaper than a live empirical
+/// probe, and correct for exactly as long as it holds: it asserts both
+/// `clippy` and `test`'s `strategy.matrix.os:` value contains neither a
+/// `${{ }}` expression nor a `fromJSON` call.
+///
+/// See the module-level "KNOWN LIMITATION SHARED BY BOTH GUARDS" note above
+/// this section — this test is line-based and shares the round-16
+/// node-property residual like every other pin in this file.
+#[test]
+fn test_matrix_os_lists_remain_static_literals() {
+    let ci = read_ci_yml();
+
+    for job_id in ["clippy", "test"] {
+        let job_block = extract_job_block(&ci, job_id)
+            .unwrap_or_else(|| panic!("FAIL: no `{job_id}:` job in ci.yml."));
+
+        let os_line = job_block
+            .lines()
+            .find(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("os"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "FAIL (S-626-1 Guard B): `{job_id}` has no \
+                     `strategy.matrix.os:` line at the expected 8-space \
+                     indent — has this job's matrix shape changed? If `os:` \
+                     moved to a different indent or key name, update this \
+                     test's anchor alongside the ci.yml change."
+                )
+            });
+
+        let value = os_line
+            .trim_start()
+            .strip_prefix("os:")
+            .unwrap_or("")
+            .trim();
+
+        assert!(
+            !value.contains("${{") && !value.contains("fromJSON"),
+            "FAIL (S-626-1 Guard B, DEC-246 §Q4): `{job_id}.strategy.matrix.os` \
+             is no longer a static literal list (found: `{value}`).\n\
+             \n\
+             GitHub does not document what `needs.{job_id}.result` reports \
+             when a DYNAMIC matrix (e.g. `fromJSON(...)`) expands to ZERO \
+             legs — community reports on the general zero-leg-matrix \
+             question are split between `skipped` (safe) and `success` (a \
+             silent false green), and this repository has never verified \
+             which applies here. A static literal `os:` list can never \
+             expand to zero legs, so this question has been provably moot \
+             until now.\n\
+             \n\
+             Before converting `{job_id}`'s matrix to a dynamic form, first \
+             resolve ZERO-LEG-MATRIX-RESULT-UNDOCUMENTED empirically (a \
+             throwaway PR with a matrix that can expand to zero legs, \
+             observed against a real GitHub Actions run) — do not resolve \
+             it by inference, and do not land the conversion in the same \
+             change that would make this newly-reachable question live \
+             without that verification.",
+        );
+    }
+}
