@@ -498,10 +498,22 @@ run_self_test() {
 
     # Fixture 10 — syntactically invalid JSON -> FAIL closed with rc=2
     # (input rejected before any per-job decision is made).
+    #
+    # ADV-P56-LOW-001: without a discriminating 4th argument, this fixture
+    # was indistinguishable-by-assertion from "empty-or-whitespace-input"
+    # (fixture 9) and "non-object-json-array" (fixture 11) — all three
+    # share rc=2. Deleting the dedicated `jq empty` validity check (the
+    # code path this fixture exists to pin) would leave `not json` falling
+    # through to the LATER object-shape check instead, which also exits 2
+    # (jq's `type == "object"` predicate fails on unparseable input too) —
+    # so rc-only comparison stayed 13/13 green with that check deleted.
+    # Pinning the dedicated check's own message closes that gap, mirroring
+    # the 4th-argument discrimination already used on fixture 9.
     check_fixture \
         "malformed-json" \
         'not json' \
-        "fail:2"
+        "fail:2" \
+        "input is not valid JSON"
 
     # Fixture 11 — syntactically VALID JSON that is not an object (a bare
     # array) -> FAIL closed with rc=2. `jq empty` alone is not sufficient

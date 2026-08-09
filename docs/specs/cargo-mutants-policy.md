@@ -37,6 +37,9 @@ narrows to lines changed in the PR diff.
 Note: cargo-mutants v27+ reads its config from `.cargo/mutants.toml` (not `.mutants.toml`
 at repo root). This is the canonical config location for this project.
 
+Current `examine_globs` count: 16 entries (verify against `.cargo/mutants.toml` before citing
+this number elsewhere — it has drifted before and will drift again as scope changes).
+
 ### Sibling Candidates Considered and Deferred (MAINT-MUTANTS-GLOBS-01)
 
 These files were evaluated when `issues.rs` and `cache.rs` were added. Their dispositions
@@ -47,6 +50,37 @@ are recorded here so future reviewers know they were considered, not overlooked.
 | `src/api/pagination.rs` | EXCLUDE | Simple serde structs + `items()` field accessor. No conditional logic or error-handling branches worth mutating; survivors would be caught by the broad integration test suite. Low payoff relative to baseline cost. |
 | `src/jql.rs` | EXCLUDE | Already property-tested inline with proptest. Mutation survivors in JQL escaping/validation would almost certainly be caught by existing proptest strategies. |
 | `src/api/jira/users.rs` | DEFER | Contains the `USER_PAGE_SIZE`-advance pagination workaround (JRACLOUD-71293 fix). Good candidate in principle, but test coverage via `tests/user_commands.rs` is limited — adding it without targeted pagination tests risks a noisy first-run kill rate. Revisit in a dedicated "users pagination hardening" cycle. |
+
+### Out of Scope by Design: `tests/`, `scripts/`, and CI YAML (S-626-1 pass-56, ADV-P56-LOW-004)
+
+`examine_globs` intentionally contains no entry from `tests/` or `scripts/` — `cargo-mutants`
+mutates `src/` production code and re-runs the test suite against each mutant; it has no
+mechanism to mutate a *test file* (there is no "implementation" for a test to verify) or a
+standalone shell script (`cargo-mutants` operates on the Rust compilation unit, never invoking
+bash scripts as a mutation target). Two consequences worth stating explicitly, since a reader
+skimming `examine_globs` could otherwise assume test/script code is either covered elsewhere or
+simply forgotten:
+
+- `.github/workflows/ci.yml` and `scripts/check-ci-gate.sh` are structurally unreachable by
+  any Rust mutation tool. Both are covered instead by `scripts/check-ci-gate.sh --self-test`'s
+  own fixture suite (a fixed-denominator, `EXPECTED_FIXTURES`-pinned set — see that script's
+  self-test header) and by `tests/ci_gate_completeness.rs`'s line-based structural pins, which
+  read `ci.yml` directly and assert over its text. Neither is a cargo-mutants concern.
+- The line-based YAML extractor and pin-comparison helper functions in
+  `tests/ci_gate_completeness.rs` itself (`extract_key_name_at_indent`,
+  `extract_and_normalize_if_expr`, `extract_and_normalize_sole_run_line`,
+  `extract_and_normalize_sole_needs_line`, `collect_mapping_key_set`, `parse_needs_set`,
+  `list_job_ids_in_workflow`, `extract_job_display_name`, and roughly a dozen more of the same
+  shape — ~15 functions in total at time of writing, an approximate count that will drift as the
+  file grows) are themselves ordinary Rust functions a mutation tool COULD in principle mutate,
+  but `tests/` is outside `examine_globs` by the same rule as any other test file, so none of
+  them are. Their correctness is instead established by the PR-review discipline this file's own
+  20+ adversarial-review rounds document: manual RED-proof construction (deliberately mutate the
+  extractor or plant an adversarial YAML payload, confirm the expected test fails, then revert)
+  plus human code review of the diff. This is a real, accepted gap relative to `src/` code, which
+  gets both test coverage AND mutation coverage — it is documented here so a future reviewer
+  evaluating "is this helper actually tested" does not go looking for a cargo-mutants report that
+  will never exist for it.
 
 ## Kill-Rate Target
 

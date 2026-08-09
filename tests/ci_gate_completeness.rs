@@ -170,50 +170,85 @@ use common::yaml::extract_job_block;
 ///   - a
 ///   - b
 /// ```
-/// Returns `None` if no `needs:` line is found in the block.
+/// Returns `None` if no job-level `needs:` line is found in the block.
+///
+/// S-626-1 pass-55 (ADV-P55-HIGH-001): the original version of this
+/// function applied `line.trim()` to EVERY line in `job_block` and matched
+/// on `trimmed.strip_prefix("needs:")` / `trimmed == "needs:"` — with no
+/// indentation check at all, a `needs:` key nested arbitrarily deep (e.g.
+/// inside a step's `with:` block, or a decoy `env:` value) was
+/// indistinguishable from the job's own job-level `needs:` key. Verified:
+/// planting a decoy `needs: [<all ci-gate.needs members>]` inside the gate
+/// step's `with:` block left the REAL `ci-gate.needs` (a genuinely
+/// different, narrower set) invisible to this function — it returned the
+/// decoy's full membership instead, defeating every one of this function's
+/// six-plus callers from a single read, including
+/// `test_ci_gate_needs_partitions_all_ci_yml_jobs` (the U1 fix). Fixed by
+/// anchoring key detection to `extract_key_name_at_indent(line, 4)` — the
+/// SAME quote/whitespace-aware, depth-exact matcher every other job-level
+/// key check in this file already uses — so a nested decoy is invisible to
+/// this function by construction, not by luck. A SECOND job-level `needs:`
+/// key anywhere in the block is a hard `panic!`, mirroring
+/// `extract_and_normalize_if_expr`'s refusal to silently pick a winner
+/// between two job-level `if:` keys (also invalid YAML — a duplicate
+/// mapping key GitHub Actions/actionlint reject at parse time — but this
+/// checker does not rely on that external validation alone).
 fn parse_needs_set(job_block: &str) -> Option<HashSet<String>> {
+    let lines: Vec<&str> = job_block.lines().collect();
+    let needs_line_indices: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| extract_key_name_at_indent(l, 4).as_deref() == Some("needs"))
+        .map(|(i, _)| i)
+        .collect();
+
+    if needs_line_indices.len() > 1 {
+        panic!(
+            "FAIL (S-626-1 pass-55, ADV-P55-HIGH-001): job block contains \
+             {} job-level `needs:` keys at 4-space indent — this checker \
+             refuses to silently pick one. This is ALSO invalid YAML (a \
+             duplicate mapping key) that GitHub Actions and actionlint \
+             both reject at parse time, but this checker will not rely on \
+             that external validation alone.\n\
+             Job block:\n{job_block}",
+            needs_line_indices.len()
+        );
+    }
+
+    let needs_line_idx = needs_line_indices.first().copied()?;
+
     // Try inline-array form first: `needs: [fmt, clippy, ...]`
-    for line in job_block.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("needs:") {
-            let rest = rest.trim();
-            if rest.starts_with('[') && rest.ends_with(']') {
-                // Inline array: strip brackets, split on `,`, trim each item.
-                let inner = &rest[1..rest.len() - 1];
-                let set: HashSet<String> = inner
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                return Some(set);
-            }
+    let trimmed = lines[needs_line_idx].trim();
+    if let Some(rest) = trimmed.strip_prefix("needs:") {
+        let rest = rest.trim();
+        if rest.starts_with('[') && rest.ends_with(']') {
+            // Inline array: strip brackets, split on `,`, trim each item.
+            let inner = &rest[1..rest.len() - 1];
+            let set: HashSet<String> = inner
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            return Some(set);
         }
     }
 
-    // Try block-list form: `needs:` on its own line, followed by `  - item` lines.
-    let mut in_needs = false;
+    // Try block-list form: `needs:` on its own line, followed by `  - item`
+    // lines, scanning ONLY from the single job-level `needs:` line found
+    // above (never re-scanning the whole block for a bare `needs:` literal
+    // at any depth).
     let mut set = HashSet::new();
-    for line in job_block.lines() {
+    for line in &lines[needs_line_idx + 1..] {
         let trimmed = line.trim();
-        if trimmed == "needs:" {
-            in_needs = true;
-            continue;
-        }
-        if in_needs {
-            if let Some(item) = trimmed.strip_prefix("- ") {
-                set.insert(item.trim().to_string());
-            } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                // Reached a non-list-item non-comment line — end of needs block.
-                break;
-            }
+        if let Some(item) = trimmed.strip_prefix("- ") {
+            set.insert(item.trim().to_string());
+        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            // Reached a non-list-item non-comment line — end of needs block.
+            break;
         }
     }
 
-    if in_needs && !set.is_empty() {
-        Some(set)
-    } else {
-        None
-    }
+    if !set.is_empty() { Some(set) } else { None }
 }
 
 /// List every job name defined anywhere in `.github/workflows/ci.yml`'s
@@ -258,26 +293,20 @@ fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
         panic!("FAIL: `.github/workflows/ci.yml` has no top-level `jobs:` key.");
     };
     let jobs_section = &ci[jobs_start + 1..];
-    let mut names = Vec::new();
-    for line in jobs_section.lines().skip(1) {
-        if line.is_empty() || line.starts_with(' ') {
-            if line.starts_with("  ") && line.chars().nth(2).map(|c| c != ' ').unwrap_or(false) {
-                let without_comment = line.split('#').next().unwrap_or(line).trim_end();
-                if let Some(name) = without_comment
-                    .strip_prefix("  ")
-                    .and_then(|s| s.strip_suffix(':'))
-                {
-                    if !name.is_empty() {
-                        names.push(name.to_string());
-                    }
-                }
-            }
-            continue;
-        }
-        // A non-empty, 0-indent line: end of the `jobs:` map.
-        break;
-    }
-    names
+    // S-626-1 pass-55, ADV-P55-MED-002: per-job-id detection previously
+    // required the line to END with `:` (`strip_prefix("  ").and_then(|s|
+    // s.strip_suffix(':'))`) — a flow-style job entry (e.g. `gate: {name:
+    // CI Gate, runs-on: ubuntu-latest}`) does not end with `:` at all and
+    // was invisible to this scan, reopening the exact U1 partition gap
+    // this function's own caller (`test_ci_gate_needs_partitions_all_
+    // ci_yml_jobs`) exists to close, by formatting alone. Routed through
+    // `collect_mapping_key_set` — the same quote/whitespace-aware,
+    // comment-and-blank-line-tolerant primitive `extract_gate_env_key_set`
+    // / `extract_workflow_env_key_set` already use for an identical
+    // "collect this mapping's child key set" shape — rather than
+    // reimplementing key detection a third time.
+    let lines: Vec<&str> = jobs_section.lines().skip(1).collect();
+    collect_mapping_key_set(&lines, 0, 2)
 }
 
 /// Cross-platform-safe (NOT `#[cfg(unix)]`-gated) list of `ci-gate.needs`
@@ -338,6 +367,51 @@ fn always_run_needs_members(ci: &str) -> Vec<String> {
         .collect();
     always_run.sort();
     always_run
+}
+
+/// Every `ci-gate.needs` member whose job block declares a job-level
+/// `strategy:` key (4-space indent) — i.e. every build-matrix job, derived
+/// from the LIVE `needs:` set rather than a hand-maintained literal.
+///
+/// S-626-1 pass-56 (ADV-P56-LOW-002): Guard B's iteration list used to be
+/// the closed-enumeration literal `["clippy", "test"]` — the exact
+/// "allowlist not tied to the real universe" shape `always_run_needs_
+/// members`'s own doc comment above condemns, one level down (within
+/// `ci-gate.needs`'s matrix-job subset, rather than across all of
+/// `ci-gate.needs`). A future matrix job added to `ci-gate.needs` without
+/// also being added to that literal would silently escape Guard B
+/// entirely — the same class the U1 finding closed one level up. Deriving
+/// this list from the LIVE `needs:` set plus a `strategy:` presence check
+/// means a newly-added matrix job is automatically covered the moment it
+/// lands in `ci-gate.needs`, with no second edit to remember.
+fn matrix_needs_members(ci: &str) -> Vec<String> {
+    let gate_block = extract_job_block(ci, "ci-gate").unwrap_or_else(|| {
+        panic!(
+            "FAIL (RED GATE): `.github/workflows/ci.yml` does not contain a \
+             `ci-gate:` job."
+        )
+    });
+    let needs = parse_needs_set(gate_block).unwrap_or_else(|| {
+        panic!(
+            "FAIL (RED GATE): The `ci-gate` job block does not contain a \
+             `needs:` key.\n\
+             Current ci-gate block:\n{gate_block}"
+        )
+    });
+
+    let mut matrix_jobs: Vec<String> = needs
+        .into_iter()
+        .filter(|job_id| {
+            let Some(job_block) = extract_job_block(ci, job_id) else {
+                return false;
+            };
+            job_block
+                .lines()
+                .any(|l| extract_key_name_at_indent(l, 4).as_deref() == Some("strategy"))
+        })
+        .collect();
+    matrix_jobs.sort();
+    matrix_jobs
 }
 
 /// Does `line` declare the YAML key `key` at a job's direct-child level
@@ -1027,6 +1101,18 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 /// over-reaching for its documented purpose and re-narrow it back to an
 /// event-conditional-only match, silently reopening the two escapes F-03
 /// closed. The name now states the actual predicate.
+///
+/// S-626-1 pass-55 (ADV-P55-LOW-001): "no job-level `if:` key at all"
+/// above describes VALUE-content independence (this check does not care
+/// what the condition says, only that the key exists) — that claim was
+/// always accurate. What was NOT fully accurate, here and in the
+/// corresponding `CLAUDE.md` sentence, was KEY-SPELLING coverage: the
+/// detection itself was a bare `line.starts_with("    if:")`, matching
+/// only that one literal spelling and missing `"if":`, `'if':`, and
+/// `if :` (space before colon) — all PyYAML-identical to the bare
+/// spelling. Fixed by routing detection through
+/// `extract_key_name_at_indent`, the same quote/whitespace-aware matcher
+/// used everywhere else in this file.
 #[test]
 fn test_ci_gate_needs_jobs_have_no_job_level_if() {
     let ci = read_ci_yml();
@@ -1052,15 +1138,19 @@ fn test_ci_gate_needs_jobs_have_no_job_level_if() {
         // job key (GitHub Actions YAML convention).  Step-level `if:` blocks
         // are indented 8+ spaces; those are irrelevant to this check.
         //
-        // We detect a job-level if: KEY by looking for lines that start with
-        // exactly four spaces followed by "if:" — deliberately NOT filtering
+        // We detect a job-level if: KEY via `extract_key_name_at_indent`
+        // (S-626-1 pass-55, ADV-P55-LOW-001) — deliberately NOT filtering
         // on the condition's content or shape (see F-03 docstring above):
         // any job-level `if:` key on these seven jobs is hazardous, whether
         // it's a single-line condition, a folded/block scalar, or references
-        // something other than `github.event_name`.
+        // something other than `github.event_name`. A bare `starts_with("
+        // if:")` used to match ONLY that one spelling, missing `"if":`,
+        // `'if':`, and `if :` (space before colon) — all PyYAML-identical
+        // to the bare spelling, and all recognized by
+        // `extract_key_name_at_indent` already.
         for line in job_block.lines() {
             // Match lines at job-property indent (4 spaces, not 8+).
-            if line.starts_with("    if:") && !line.starts_with("        ") {
+            if extract_key_name_at_indent(line, 4).as_deref() == Some("if") {
                 panic!(
                     "FAIL (M1/F-03): Job `{job_name}` has a job-level `if:` \
                      key:\n\
@@ -1531,6 +1621,40 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
          attack this key-set pin exists to close. If this is a \
          deliberate, reviewed change, update PINNED_GATE_ENV_KEYS in the \
          SAME change.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Assertion 11 (M2-p, S-626-1 pass-55, ADV-P55-HIGH-001 part (c)): every
+    // other decision-path text line in this job (the run line, the
+    // NEEDS_JSON payload source, the job's own `if:`) is byte-pinned — the
+    // job's `needs:` line was the one remaining exception, covered only by
+    // `parse_needs_set`'s SET-membership extraction (now depth-anchored
+    // and duplicate-key-safe, see that function's own doc comment) with no
+    // pin on the line's own TEXT. Pin it the same way, closing the last
+    // gap in this run of byte-for-byte decision-path pins.
+    // -----------------------------------------------------------------------
+    let actual_needs_line =
+        extract_and_normalize_sole_needs_line(gate_block).unwrap_or_else(|reason| {
+            panic!(
+                "FAIL (M2-p, S-626-1 pass-55, ADV-P55-HIGH-001): the \
+                 `ci-gate` job's `needs:` line {reason}\n\
+                 Current ci-gate block:\n{gate_block}"
+            )
+        });
+
+    assert_eq!(
+        actual_needs_line, PINNED_GATE_NEEDS_LINE,
+        "FAIL (M2-p, S-626-1 pass-55, ADV-P55-HIGH-001): the `ci-gate` \
+         job's `needs:` value (\"{actual_needs_line}\") does not \
+         byte-match the pinned, human-reviewed literal \
+         (\"{PINNED_GATE_NEEDS_LINE}\"). `needs:` is the entire membership \
+         list `scripts/check-ci-gate.sh` evaluates via `toJSON(needs)` — \
+         every set-based pin in this file (M2-k's job key set included) \
+         still ultimately depends on this one text line. If this is a \
+         deliberate, reviewed change to `ci-gate.needs`, update BOTH \
+         PINNED_GATE_NEEDS_LINE here AND `test_ci_gate_needs_exactly_the_ \
+         required_jobs`'s exact-set pin in the SAME change.\n\
          Current ci-gate block:\n{gate_block}"
     );
 
@@ -2939,12 +3063,23 @@ fn test_ci_yml_workflow_level_env_key_set_is_pinned() {
 /// narrower slice" (what this file actually does). That rewrite is out
 /// of scope for this round and is tracked as a follow-up story in that
 /// specific direction — it is not implied closed by this test.
+/// S-626-1 pass-55 (ADV-P55-LOW-002): originally scoped to `ci.yml` alone.
+/// Guard A (`test_no_sibling_workflow_declares_a_job_named_ci_gate`) and
+/// its helpers (`list_job_ids_in_workflow`, `extract_job_display_name`)
+/// now also line-scan every sibling `.github/workflows/*.yml`/`*.yaml`
+/// file — each of those extractors shares the exact same `str::lines()`-
+/// only line-splitting this test exists to guard, but until this fix, no
+/// byte-level scan covered them: a lone CR (or NEL / LINE SEPARATOR /
+/// PARAGRAPH SEPARATOR) smuggled into a sibling workflow file could hide a
+/// `name: CI Gate` job-key from `extract_job_display_name`'s line-based
+/// scan the same way round 14 showed it could hide a key from `ci.yml`'s
+/// own extractors — with no test anywhere in this file able to catch it.
+/// Extended (cheaper than a second, separate test, and `list_workflow_
+/// files` is already a directory walk this file performs elsewhere) to
+/// scan every file `list_workflow_files` enumerates, `ci.yml` included,
+/// rather than leave sibling files as a documented-but-unguarded gap.
 #[test]
 fn test_ci_yml_contains_no_non_lf_yaml_line_breaks() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/ci.yml");
-    let raw = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
-
     const FORBIDDEN: &[(char, &str)] = &[
         ('\r', "CR (U+000D)"),
         ('\u{0085}', "NEL (U+0085)"),
@@ -2952,29 +3087,38 @@ fn test_ci_yml_contains_no_non_lf_yaml_line_breaks() {
         ('\u{2029}', "PARAGRAPH SEPARATOR (U+2029)"),
     ];
 
-    for (byte_offset, ch) in raw.char_indices() {
-        if let Some((_, label)) = FORBIDDEN.iter().find(|(forbidden, _)| *forbidden == ch) {
-            panic!(
-                "FAIL (PR #671 review round 14, CRITICAL): \
-                 `.github/workflows/ci.yml` contains a {label} character \
-                 at byte offset {byte_offset}. Every extractor in this \
-                 suite splits on `str::lines()`, which recognizes ONLY \
-                 `\\n` as a line break — but this character is a valid \
-                 YAML line break in its own right (YAML 1.1 `b-char`; \
-                 PyYAML and Ruby Psych/libyaml both honor it) that a real \
-                 YAML parser treats as ending the logical line. A key \
-                 placed after this character, on the same physical text \
-                 line as a preceding key, is INVISIBLE to every line- \
-                 based check in this file simultaneously while a real \
-                 parser sees a normal, separate key — see this test's \
-                 doc comment for three reproduced one-line exploits \
-                 (workflow-env, workflow `defaults:`, and gate-step \
-                 `shell:` smuggling). This is a byte-level tripwire, not \
-                 a general fix for line-based extraction — see the doc \
-                 comment for why a real YAML-parse rewrite is the \
-                 durable fix, tracked as a follow-up story, not this \
-                 test."
-            );
+    for path in list_workflow_files() {
+        let raw = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
+
+        for (byte_offset, ch) in raw.char_indices() {
+            if let Some((_, label)) = FORBIDDEN.iter().find(|(forbidden, _)| *forbidden == ch) {
+                panic!(
+                    "FAIL (PR #671 review round 14, CRITICAL; extended to \
+                     sibling workflows S-626-1 pass-55, ADV-P55-LOW-002): \
+                     {} contains a {label} character at byte offset \
+                     {byte_offset}. Every line-based extractor in this \
+                     suite splits on `str::lines()`, which recognizes ONLY \
+                     `\\n` as a line break — but this character is a valid \
+                     YAML line break in its own right (YAML 1.1 `b-char`; \
+                     PyYAML and Ruby Psych/libyaml both honor it) that a \
+                     real YAML parser treats as ending the logical line. A \
+                     key placed after this character, on the same \
+                     physical text line as a preceding key, is INVISIBLE \
+                     to every line-based check in this file simultaneously \
+                     while a real parser sees a normal, separate key — see \
+                     this test's doc comment for three reproduced \
+                     one-line exploits against `ci.yml` (workflow-env, \
+                     workflow `defaults:`, and gate-step `shell:` \
+                     smuggling); the same mechanism applies to Guard A's \
+                     sibling-workflow scan. This is a byte-level tripwire, \
+                     not a general fix for line-based extraction — see the \
+                     doc comment for why a real YAML-parse rewrite is the \
+                     durable fix, tracked as a follow-up story, not this \
+                     test.",
+                    path.display()
+                );
+            }
         }
     }
 }
@@ -3092,6 +3236,40 @@ fn test_spec_guard_contains_check_ci_gate_self_test_step() {
          pattern already used in this job for \
          `check-cargo-mutants-policy-citations.sh --self-test` and \
          `check-bc-citation-symbols.sh --self-test`.\n\
+         Current spec-guard block:\n{spec_guard_block}"
+    );
+
+    // S-626-1 pass-54/56 (ADV-P54-MED-001 / ADV-P56-MED-001, dedupe): the
+    // two substring checks above are satisfied by EITHER substring
+    // appearing anywhere in `spec-guard` — including inside one of the
+    // job's TWO OTHER `--self-test` steps, unrelated to `check-ci-gate.sh`
+    // — so they can never independently confirm the check-ci-gate.sh
+    // self-test step specifically executes anything. Byte-pin that step's
+    // OWN `run:` line, anchored to the step named "check-ci-gate self-test
+    // (fixture suite, S-CIGATE-2)".
+    let actual_self_test_run_line = extract_and_normalize_step_run_line_by_name(
+        spec_guard_block,
+        "check-ci-gate self-test (fixture suite, S-CIGATE-2)",
+    )
+    .unwrap_or_else(|reason| {
+        panic!(
+            "FAIL (S-626-1 pass-54, ADV-P54-MED-001): `spec-guard` {reason}\n\
+             Current spec-guard block:\n{spec_guard_block}"
+        )
+    });
+    assert_eq!(
+        actual_self_test_run_line, PINNED_CI_GATE_SELF_TEST_RUN_LINE,
+        "FAIL (S-626-1 pass-54, ADV-P54-MED-001): `spec-guard`'s \
+         check-ci-gate self-test step's `run:` line \
+         (\"{actual_self_test_run_line}\") does not byte-match the pinned, \
+         human-reviewed literal (\"{PINNED_CI_GATE_SELF_TEST_RUN_LINE}\"). \
+         A suffix like `|| true` would silently disable the entire \
+         13-fixture suite's pass/fail signal while leaving both substring \
+         checks above (and `test_always_run_jobs_have_no_continue_on_error`, \
+         which only bans the `continue-on-error` KEY, not a shell-level \
+         suffix) fully satisfied. If this is a deliberate, reviewed \
+         change, update PINNED_CI_GATE_SELF_TEST_RUN_LINE in the SAME \
+         change.\n\
          Current spec-guard block:\n{spec_guard_block}"
     );
 
@@ -3471,7 +3649,12 @@ fn find_comment_start(s: &str) -> Option<usize> {
 /// judgment call that produced six rounds of predicate bypasses.)
 fn extract_and_normalize_if_expr(job_block: &str) -> Result<Option<String>, String> {
     let lines: Vec<&str> = job_block.lines().collect();
-    let is_job_level_if_line = |l: &&str| l.starts_with("    if:") && !l.starts_with("        ");
+    // S-626-1 pass-55, ADV-P55-LOW-001: routed through
+    // `extract_key_name_at_indent` rather than a bare `starts_with("    if:")`,
+    // which matched only that one spelling and missed `"if":`, `'if':`, and
+    // `if :` (space before colon) — all PyYAML-identical to the bare
+    // spelling.
+    let is_job_level_if_line = |l: &&str| extract_key_name_at_indent(l, 4).as_deref() == Some("if");
 
     // SUGGESTION (PR #671 review round 9): a job block with TWO job-level
     // `if:` keys is a hard `Err`, never "use the first match". Reviewed and
@@ -3741,6 +3924,139 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
 
     if collapsed.is_empty() {
         return Err("has an empty `run:` value.".to_string());
+    }
+
+    Ok(collapsed)
+}
+
+/// PINNED, human-reviewed exact text of the `spec-guard` job's
+/// `check-ci-gate self-test (fixture suite, S-CIGATE-2)` step's `run:`
+/// line (S-626-1 pass-54/56, ADV-P54-MED-001 / ADV-P56-MED-001 — same
+/// finding reported twice, deduped here).
+///
+/// `test_spec_guard_contains_check_ci_gate_self_test_step` (AC-008) used
+/// to check only `spec_guard_block.contains("check-ci-gate.sh") &&
+/// spec_guard_block.contains("--self-test")` — two independent whole-BLOCK
+/// substring checks, satisfied by either substring appearing ANYWHERE in
+/// `spec-guard`, not necessarily on the same line or step. `spec-guard`
+/// contains TWO OTHER `--self-test` invocations (`check-cargo-mutants-
+/// policy-citations.sh --self-test`, `check-bc-citation-symbols.sh
+/// --self-test`), so the `--self-test` conjunct can never fail on its own
+/// — it is trivially satisfied by either of those two, independent of
+/// whether the `check-ci-gate.sh --self-test` step exists at all.
+/// Reproduced: replacing the step's `run:` line with `run: bash
+/// scripts/check-ci-gate.sh --self-test || true` (silently disabling the
+/// entire 13-fixture suite's pass/fail signal) leaves both substring
+/// checks satisfied and `test_always_run_jobs_have_no_continue_on_error`
+/// green too (that test bans the literal `continue-on-error` key, not a
+/// shell-level `|| true` suffix) — the whole regression suite stays green
+/// while the self-test step becomes a permanent no-op.
+const PINNED_CI_GATE_SELF_TEST_RUN_LINE: &str = "bash scripts/check-ci-gate.sh --self-test";
+
+/// Extract and normalize the SOLE `run:` line belonging to the step whose
+/// `name:` value is EXACTLY `step_name` (matched as the literal line
+/// `      - name: {step_name}`, 6-space step-marker indent — the shape
+/// every step in `spec-guard` currently uses) inside `job_block`.
+///
+/// A deliberately separate function from `extract_and_normalize_sole_run_
+/// line` rather than a generalization of it — same precedent that
+/// function's own doc comment cites for staying separate from
+/// `extract_and_normalize_if_expr`: reject-don't-parse normalization is
+/// duplicated, not shared. This function additionally scopes its search
+/// to ONE step (bounded by the next `      -` step marker or EOF) rather
+/// than the whole job block, since `spec-guard` — unlike `ci-gate` — has
+/// many steps and many `run:` lines; `extract_and_normalize_sole_run_
+/// line`'s "exactly one `run:` in the whole block" invariant does not
+/// hold there.
+fn extract_and_normalize_step_run_line_by_name(
+    job_block: &str,
+    step_name: &str,
+) -> Result<String, String> {
+    let lines: Vec<&str> = job_block.lines().collect();
+    let name_needle = format!("- name: {step_name}");
+    let Some(name_line_idx) = lines.iter().position(|l| l.trim_start() == name_needle) else {
+        return Err(format!(
+            "has no step with `name: {step_name}` at all (checked for the \
+             exact line `      - name: {step_name}`)."
+        ));
+    };
+
+    let next_step_offset = lines[name_line_idx + 1..]
+        .iter()
+        .position(|l| l.starts_with("      -"));
+    let step_end = next_step_offset
+        .map(|off| name_line_idx + 1 + off)
+        .unwrap_or(lines.len());
+    let step_lines = &lines[name_line_idx..step_end];
+
+    let run_line_indices: Vec<usize> = step_lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| extract_key_name_at_indent(l, 8).as_deref() == Some("run"))
+        .map(|(i, _)| i)
+        .collect();
+
+    if run_line_indices.is_empty() {
+        return Err(format!(
+            "'s `{step_name}` step has no step-level `run:` line at the \
+             expected 8-space indent."
+        ));
+    }
+    if run_line_indices.len() > 1 {
+        return Err(format!(
+            "'s `{step_name}` step has {} step-level `run:` lines — this \
+             checker requires exactly one so a single pinned literal \
+             unambiguously covers it.",
+            run_line_indices.len()
+        ));
+    }
+    let run_line = step_lines[run_line_indices[0]];
+
+    let raw = run_line.trim_start().strip_prefix("run:").unwrap_or("");
+    let raw_value_leading_trimmed = raw.trim_start();
+
+    if raw_value_leading_trimmed.starts_with('>') || raw_value_leading_trimmed.starts_with('|') {
+        return Err(format!(
+            "'s `{step_name}` step's `run:` value uses a YAML block-scalar \
+             form (\"{}\") — the real command lives on continuation lines \
+             this checker does not read, so it cannot be safely \
+             represented as a single pinned literal.",
+            raw_value_leading_trimmed.trim()
+        ));
+    }
+
+    if let Some(next_line) = step_lines[run_line_indices[0] + 1..].iter().find(|l| {
+        let trimmed = l.trim_start();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    }) {
+        let indent = next_line.len() - next_line.trim_start().len();
+        if indent > 8 {
+            return Err(format!(
+                "'s `{step_name}` step's `run:` value appears to continue \
+                 onto a following line (\"{}\", indented {indent} spaces) \
+                 — this cannot be safely represented as a single pinned \
+                 literal.",
+                next_line.trim()
+            ));
+        }
+    }
+
+    let value = match find_comment_start(raw) {
+        Some(idx) => &raw[..idx],
+        None => raw,
+    };
+    if value.contains('#') {
+        return Err(format!(
+            "'s `{step_name}` step's `run:` value contains a `#` that is \
+             not a clearly whitespace-delimited trailing comment \
+             (\"{}\") — this cannot be safely normalized.",
+            raw.trim()
+        ));
+    }
+
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return Err(format!("'s `{step_name}` step has an empty `run:` value."));
     }
 
     Ok(collapsed)
@@ -4318,6 +4634,127 @@ fn extract_and_normalize_sole_needs_json_line(job_block: &str) -> Result<String,
     let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.is_empty() {
         return Err("has an empty `NEEDS_JSON:` value.".to_string());
+    }
+
+    Ok(collapsed)
+}
+
+/// PINNED, human-reviewed exact text of the `ci-gate` job's own job-level
+/// `needs:` value (S-626-1 pass-55, ADV-P55-HIGH-001 part (c)).
+///
+/// `parse_needs_set` (above) is the SET-membership extractor every other
+/// test in this file relies on; it is now depth-anchored and panics on a
+/// duplicate job-level `needs:` key (parts (a)/(b) of this same finding),
+/// but nothing byte-pins the line's own TEXT the way `PINNED_GATE_RUN_LINE`
+/// and `PINNED_GATE_NEEDS_JSON_LINE` pin theirs. `needs:` is exactly as
+/// load-bearing as those two: it is the entire membership list
+/// `check-ci-gate.sh` evaluates via `toJSON(needs)`, and every set-based
+/// pin in this file is still, ultimately, downstream of one text line. A
+/// byte-for-byte pin here closes the class the same way, rather than
+/// leaving `needs:` as the one job-level key in `PINNED_GATE_JOB_KEYS`
+/// with a presence pin but no value pin.
+const PINNED_GATE_NEEDS_LINE: &str =
+    "[fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants]";
+
+/// Extract and normalize the SOLE job-level `needs:` line (4-space indent)
+/// for pinned-literal comparison against `PINNED_GATE_NEEDS_LINE`.
+///
+/// A deliberately separate function from `extract_and_normalize_sole_run_line`
+/// / `_needs_json_line` rather than a generalization of either — same
+/// precedent those two functions' own doc comments cite: reject-don't-parse
+/// normalization is duplicated, not shared, so a bug in one byte-pin
+/// extractor cannot silently widen into another. Only the indent depth (4,
+/// for a job-level key, vs. 8/10 for a step-level or env-child key) and the
+/// key name differ from `extract_and_normalize_sole_needs_json_line`.
+///
+/// Only the inline-array form (`needs: [a, b, c]`) is supported for
+/// pinning — `ci.yml`'s current convention — mirroring `parse_needs_set`'s
+/// own inline-array-first handling. A same-line-empty value (block-list
+/// form) is `Err`, not silently treated as "no pin to check": this checker
+/// refuses to guess at a form it was not built to normalize.
+fn extract_and_normalize_sole_needs_line(job_block: &str) -> Result<String, String> {
+    let lines: Vec<&str> = job_block.lines().collect();
+    let needs_line_indices: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| extract_key_name_at_indent(l, 4).as_deref() == Some("needs"))
+        .map(|(i, _)| i)
+        .collect();
+
+    if needs_line_indices.is_empty() {
+        return Err(
+            "has no job-level `needs:` line at 4-space indent — `ci-gate` \
+             must declare which upstream jobs it aggregates."
+                .to_string(),
+        );
+    }
+    if needs_line_indices.len() > 1 {
+        return Err(format!(
+            "has {} job-level `needs:` lines — this checker requires \
+             exactly one so a single pinned literal unambiguously covers \
+             the aggregated job set. This is ALSO invalid YAML (a \
+             duplicate mapping key) that GitHub Actions and actionlint \
+             both reject at parse time; this checker refuses to silently \
+             pick a winner rather than rely on that external validation.",
+            needs_line_indices.len()
+        ));
+    }
+    let idx = needs_line_indices[0];
+
+    let line = lines[idx];
+    let raw = line.trim_start().strip_prefix("needs:").unwrap_or("");
+    let raw_value_leading_trimmed = raw.trim_start();
+
+    if raw_value_leading_trimmed.starts_with('>') || raw_value_leading_trimmed.starts_with('|') {
+        return Err(format!(
+            "uses a YAML block-scalar form (\"{}\") for its `needs:` value \
+             — the real list lives on continuation lines this checker does \
+             not read, so it cannot be safely represented as a single \
+             pinned literal.",
+            raw_value_leading_trimmed.trim()
+        ));
+    }
+
+    if raw_value_leading_trimmed.is_empty() {
+        return Err("has an empty same-line `needs:` value — this checker only \
+             supports the inline-array form (`needs: [a, b, c]`), \
+             `ci.yml`'s current convention; a block-list form (items on \
+             following `- item` lines) cannot be safely represented as a \
+             single pinned literal by this function."
+            .to_string());
+    }
+
+    if let Some(next_line) = lines[idx + 1..].iter().find(|l| {
+        let trimmed = l.trim_start();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    }) {
+        let indent = next_line.len() - next_line.trim_start().len();
+        if indent > 4 {
+            return Err(format!(
+                "has a `needs:` value that appears to continue onto a \
+                 following line (\"{}\", indented {indent} spaces) — this \
+                 cannot be safely represented as a single pinned literal.",
+                next_line.trim()
+            ));
+        }
+    }
+
+    let value = match find_comment_start(raw) {
+        Some(i) => &raw[..i],
+        None => raw,
+    };
+    if value.contains('#') {
+        return Err(format!(
+            "has a `needs:` value containing a `#` that is not a clearly \
+             whitespace-delimited trailing comment (\"{}\") — this cannot \
+             be safely normalized.",
+            raw.trim()
+        ));
+    }
+
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return Err("has an empty `needs:` value.".to_string());
     }
 
     Ok(collapsed)
@@ -5578,38 +6015,55 @@ fn list_workflow_files() -> Vec<std::path::PathBuf> {
 ///
 /// Deliberately a SEPARATE function from `list_all_ci_yml_job_names` rather
 /// than a generalization of it — same precedent cited on
-/// `read_workflow_file` above. `list_all_ci_yml_job_names`'s
-/// panic-on-missing-`jobs:` behavior is deliberately load-bearing for
-/// `ci.yml`, which is on the gate's decision path. A sibling workflow file
-/// is NOT on that path: this function returns an empty `Vec` rather than
-/// panicking when a file has no `jobs:` key, so a malformed or unusual
-/// sibling workflow file makes Guard A a no-op for that file (nothing to
-/// check) instead of a spurious hard failure unrelated to `ci-gate` itself.
-fn list_job_ids_in_workflow(content: &str) -> Vec<String> {
-    let Some(jobs_start) = content.find("\njobs:\n") else {
+/// `read_workflow_file` above. A file with genuinely EMPTY content (or only
+/// whitespace) returns an empty `Vec` rather than panicking — a sibling
+/// workflow file is not on the gate's decision path, so an incidentally
+/// content-free file is a legitimate no-op for Guard A, not a hard
+/// failure.
+///
+/// S-626-1 pass-54 (ADV-P54-MED-002): a file with REAL, non-empty content
+/// but no detectable `jobs:` key is different — that shape is exactly what
+/// a malformed or unusually-formatted (but not empty) sibling workflow
+/// file looks like, and silently returning an empty `Vec` for it would
+/// make Guard A a silent no-op for a file that may genuinely define a job
+/// this checker never got a chance to inspect — the same closed-
+/// enumeration blind spot the U1 finding closed one level up for
+/// `ci-gate.needs`. Panics loudly instead, naming the file. Both the
+/// `jobs:` key itself (0-indent) and each job id under it (2-indent) are
+/// detected via `collect_mapping_key_set` — the same quote/whitespace-
+/// aware, comment-and-blank-line-tolerant primitive
+/// `list_all_ci_yml_job_names` above now also uses — rather than the
+/// original bespoke `strip_prefix("  ").and_then(|s| s.strip_suffix(':'))`
+/// scan, which required the job-id line to END with `:` and was blind to
+/// a flow-style job entry (e.g. `gate: {name: CI Gate, ...}`) for the same
+/// reason ADV-P55-MED-002 fixed in `list_all_ci_yml_job_names`.
+fn list_job_ids_in_workflow(content: &str, path: &Path) -> Vec<String> {
+    if content.trim().is_empty() {
         return Vec::new();
-    };
-    let jobs_section = &content[jobs_start + 1..];
-    let mut names = Vec::new();
-    for line in jobs_section.lines().skip(1) {
-        if line.is_empty() || line.starts_with(' ') {
-            if line.starts_with("  ") && line.chars().nth(2).map(|c| c != ' ').unwrap_or(false) {
-                let without_comment = line.split('#').next().unwrap_or(line).trim_end();
-                if let Some(name) = without_comment
-                    .strip_prefix("  ")
-                    .and_then(|s| s.strip_suffix(':'))
-                {
-                    if !name.is_empty() {
-                        names.push(name.to_string());
-                    }
-                }
-            }
-            continue;
-        }
-        // A non-empty, 0-indent line: end of the `jobs:` map.
-        break;
     }
-    names
+
+    let lines: Vec<&str> = content.lines().collect();
+    let Some(jobs_line_idx) = lines
+        .iter()
+        .position(|l| extract_key_name_at_indent(l, 0).as_deref() == Some("jobs"))
+    else {
+        panic!(
+            "FAIL (S-626-1 pass-54, ADV-P54-MED-002): {} has non-empty \
+             content but no detectable top-level `jobs:` key (checked via \
+             the same quote/whitespace-aware matcher used everywhere else \
+             in this file). A malformed or unusually-formatted sibling \
+             workflow file that genuinely defines jobs would otherwise \
+             silently sit outside Guard A's coverage entirely — the exact \
+             closed-enumeration shape the U1 finding closed one level up \
+             for `ci-gate.needs`. If this file legitimately has no \
+             `jobs:` key at all (e.g. a reusable-workflow fragment with \
+             only top-level metadata), narrow this panic; do not silently \
+             return an empty Vec for a file with real content.",
+            path.display()
+        );
+    };
+
+    collect_mapping_key_set(&lines, jobs_line_idx + 1, 2)
 }
 
 /// Extract a job block's job-level `name:` value (4-space indent), trimmed
@@ -5624,16 +6078,91 @@ fn list_job_ids_in_workflow(content: &str) -> Vec<String> {
 /// mistaken for the job's own `name:` — the same indent discipline
 /// `extract_job_level_key_set` already relies on for job-level keys
 /// generally.
+///
+/// S-626-1 pass-56 (ADV-P56-HIGH-002 + ADV-P55-MED-003): two distinct
+/// fail-open gaps closed together, both diagnosed as the same root cause
+/// as ADV-P56-HIGH-001 below — detect the key with the quote/whitespace-
+/// aware matcher, then re-read the VALUE with a bare, non-quote-aware
+/// re-parse, silently swallowing the mismatch:
+///   1. (HIGH-002) `line.trim_start().strip_prefix("name:")?` used `?` to
+///      propagate a `None` up through the WHOLE function on ANY line whose
+///      bare re-read didn't match — including a quoted key spelling
+///      (`"name":` / `'name':`) or `name :` (space before colon), both of
+///      which `extract_key_name_at_indent` above already recognizes as
+///      declaring `name`. That `None` is indistinguishable from "this job
+///      declares no `name:` key at all", silently letting a job spelled
+///      that way escape Guard A's sibling-workflow check entirely. Fixed:
+///      `unwrap_or_else` now panics loudly instead, naming the offending
+///      line — this function refuses to guess at a value it detected the
+///      KEY for but cannot safely re-parse.
+///   2. (MED-003) even once the value is reached, comparing its raw SOURCE
+///      bytes against a plain-scalar constant like `"CI Gate"` silently
+///      misses two YAML forms that render to the identical string: a
+///      block-scalar (`name: >-` with the text on continuation lines this
+///      function does not read) and a double-quoted scalar containing a
+///      backslash escape (`"\x43I Gate"` — this function does not
+///      interpret YAML escape sequences). Reject-don't-parse, the same
+///      discipline `extract_and_normalize_if_expr` uses for its `${{ }}`
+///      wrapper: panic rather than guess at folding/escape rules this
+///      checker was never built to interpret.
 fn extract_job_display_name(job_block: &str) -> Option<String> {
     for line in job_block.lines() {
         if extract_key_name_at_indent(line, 4).as_deref() != Some("name") {
             continue;
         }
-        let value = line.trim_start().strip_prefix("name:")?.trim();
+        let after_key = line.trim_start().strip_prefix("name:").unwrap_or_else(|| {
+            panic!(
+                "FAIL (S-626-1 Guard A, ADV-P56-HIGH-002): a job-level \
+                 `name:` key was detected via the quote/whitespace-aware \
+                 matcher at 4-space indent, but this function's own \
+                 value-extraction re-read (a bare `strip_prefix(\"name:\")`) \
+                 could not parse the same line — most likely a quoted key \
+                 spelling (`\"name\":` / `'name':`) or `name :` (space \
+                 before colon), which `extract_key_name_at_indent` \
+                 recognizes but this bare re-read does not. Silently \
+                 returning `None` here would be indistinguishable from \
+                 \"this job declares no name\" and would let a job spelled \
+                 this way escape Guard A's sibling-workflow check \
+                 entirely.\n\
+                 Offending line: {line:?}"
+            )
+        });
+        let value = after_key.trim();
         let value = value.split('#').next().unwrap_or(value).trim();
+
+        if value.starts_with('>') || value.starts_with('|') {
+            panic!(
+                "FAIL (S-626-1 Guard A, ADV-P55-MED-003): a job-level \
+                 `name:` value uses a YAML block-scalar form (\"{value}\") \
+                 — the real rendered name lives on continuation lines this \
+                 checker does not read, so it cannot be safely compared \
+                 against a plain-scalar constant like `\"CI Gate\"`. This \
+                 checker refuses to guess at block-scalar folding rules \
+                 rather than risk silently missing a spelling of the exact \
+                 same rendered name Guard A exists to catch.\n\
+                 Offending line: {line:?}"
+            );
+        }
+
         for quote in ['"', '\''] {
             if let Some(stripped) = value.strip_prefix(quote) {
                 if let Some(stripped) = stripped.strip_suffix(quote) {
+                    if quote == '"' && stripped.contains('\\') {
+                        panic!(
+                            "FAIL (S-626-1 Guard A, ADV-P55-MED-003): a \
+                             job-level `name:` value is a double-quoted \
+                             YAML scalar containing a backslash escape \
+                             (\"{stripped}\") — this checker treats \
+                             double-quoted values as opaque, unescaped \
+                             text and does not interpret YAML escape \
+                             sequences (`\\\"`, `\\x43`, `\\n`, ...), so it \
+                             cannot safely compare this against a \
+                             plain-scalar constant like `\"CI Gate\"` \
+                             without risking a silent miss on an escaped \
+                             spelling of the identical rendered name.\n\
+                             Offending line: {line:?}"
+                        );
+                    }
                     return Some(stripped.to_string());
                 }
             }
@@ -5676,9 +6205,32 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
         }
 
         let content = read_workflow_file(&path);
-        for job_id in list_job_ids_in_workflow(&content) {
+        for job_id in list_job_ids_in_workflow(&content, &path) {
+            // S-626-1 pass-55, ADV-P55-MED-001: `list_job_ids_in_workflow`
+            // detected `job_id` under `jobs:`, but `extract_job_block`
+            // could not anchor to it — its needle requires an EXACT
+            // `  {job_id}:\n` line with no trailing comment (e.g. a
+            // legitimate `  gate:  # comment` job-key spelling, the exact
+            // shape `extract_job_block`'s own doc comment cites as its
+            // motivating example). Two extractors in this file
+            // disagreeing about whether a job exists is a precondition
+            // violation this check refuses to silently paper over by
+            // skipping the job — that silent skip is exactly how a job
+            // spelled with a `name: CI Gate` and a trailing-comment job
+            // key would escape Guard A entirely.
             let Some(job_block) = extract_job_block(&content, &job_id) else {
-                continue;
+                panic!(
+                    "FAIL (S-626-1 Guard A, ADV-P55-MED-001): {} — \
+                     `list_job_ids_in_workflow` detected job id `{job_id}` \
+                     under `jobs:`, but `extract_job_block` could not \
+                     anchor to it. This checker refuses to silently skip \
+                     a job two of its own extractors disagree about the \
+                     existence of — investigate the job-key line's exact \
+                     spelling (a trailing comment, quoting, or unusual \
+                     whitespace are the likely causes) rather than treat \
+                     this as \"nothing to check\".",
+                    path.display()
+                );
             };
             if extract_job_display_name(job_block).as_deref() == Some("CI Gate") {
                 panic!(
@@ -5734,13 +6286,29 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
 fn test_matrix_os_lists_remain_static_literals() {
     let ci = read_ci_yml();
 
-    for job_id in ["clippy", "test"] {
+    // S-626-1 pass-56, ADV-P56-LOW-002: derived from the live `needs:` set
+    // (see `matrix_needs_members`'s doc comment) rather than the prior
+    // hardcoded `["clippy", "test"]` literal.
+    let matrix_job_ids = matrix_needs_members(&ci);
+    assert!(
+        !matrix_job_ids.is_empty(),
+        "FAIL (S-626-1 Guard B, ADV-P56-LOW-002): no `ci-gate.needs` member \
+         declares a job-level `strategy:` key at 4-space indent, so Guard B \
+         has nothing to check. If `clippy`/`test` genuinely lost their \
+         build matrices, this is expected and this assertion should be \
+         relaxed deliberately; if it fires unexpectedly, `strategy:`'s \
+         indent, `matrix_needs_members`'s `needs:` derivation, or the job's \
+         extracted block may be broken."
+    );
+
+    for job_id in &matrix_job_ids {
         let job_block = extract_job_block(&ci, job_id)
             .unwrap_or_else(|| panic!("FAIL: no `{job_id}:` job in ci.yml."));
 
-        let os_line = job_block
-            .lines()
-            .find(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("os"))
+        let lines: Vec<&str> = job_block.lines().collect();
+        let os_line_idx = lines
+            .iter()
+            .position(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("os"))
             .unwrap_or_else(|| {
                 panic!(
                     "FAIL (S-626-1 Guard B): `{job_id}` has no \
@@ -5750,12 +6318,88 @@ fn test_matrix_os_lists_remain_static_literals() {
                      test's anchor alongside the ci.yml change."
                 )
             });
+        let os_line = lines[os_line_idx];
 
-        let value = os_line
+        // ADV-P56-HIGH-001: the key was detected via the quote/whitespace-
+        // aware `extract_key_name_at_indent` above, but this bare
+        // `strip_prefix("os:")` re-read of the SAME line does not
+        // recognize a quoted key spelling (`"os":` / `'os':`) or `os :`
+        // (space before colon). The prior `.unwrap_or("")` silently
+        // collapsed that mismatch to an empty string, and an empty string
+        // trivially satisfies `!"".contains("${{") &&
+        // !"".contains("fromJSON")` — CERTIFYING a dynamic matrix as
+        // static rather than merely missing it. Panic loudly instead: this
+        // checker refuses to guess at a value it detected the KEY for but
+        // cannot safely re-parse.
+        let raw_value = os_line
             .trim_start()
             .strip_prefix("os:")
-            .unwrap_or("")
+            .unwrap_or_else(|| {
+                panic!(
+                    "FAIL (S-626-1 Guard B, ADV-P56-HIGH-001): `{job_id}`'s \
+                     `strategy.matrix.os:` key was detected via the \
+                     quote/whitespace-aware matcher at 8-space indent, but \
+                     this checker's own value-extraction re-read (a bare \
+                     `strip_prefix(\"os:\")`) could not parse the same \
+                     line — most likely a quoted key spelling (`\"os\":` / \
+                     `'os':`) or `os :` (space before colon). Silently \
+                     collapsing to an empty string here would make \
+                     `!\"\".contains(\"${{{{\") && \
+                     !\"\".contains(\"fromJSON\")` evaluate TRUE, \
+                     CERTIFYING a dynamic matrix as static rather than \
+                     merely missing it.\n\
+                     Offending line: {os_line:?}"
+                )
+            })
             .trim();
+
+        // ADV-P55-MED-004: `os:` alone on its own line, with the actual
+        // list on FOLLOWING `- item` block-sequence lines, is legal YAML
+        // and leaves `raw_value` empty here — which, exactly as above,
+        // would trivially (and wrongly) certify the matrix as static
+        // without this checker ever reading the real list. Read the
+        // block-sequence form explicitly rather than let an empty same-
+        // line value fall through unnoticed.
+        let value: std::borrow::Cow<'_, str> = if raw_value.is_empty() {
+            let mut collected: Vec<String> = Vec::new();
+            for line in &lines[os_line_idx + 1..] {
+                let trimmed = line.trim_start();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                let indent = line.len() - trimmed.len();
+                if indent <= 8 {
+                    break;
+                }
+                let Some(item) = trimmed.strip_prefix("- ") else {
+                    panic!(
+                        "FAIL (S-626-1 Guard B, ADV-P55-MED-004): \
+                         `{job_id}`'s `strategy.matrix.os:` has an empty \
+                         same-line value, and the following indented line \
+                         (\"{line}\") is not a plain `- item` \
+                         block-sequence entry. This checker only supports \
+                         the inline-array (`os: [a, b]`) and plain \
+                         block-sequence (`- a` / `- b`) forms and refuses \
+                         to guess at anything else (e.g. a flow mapping \
+                         per item) rather than risk certifying a dynamic \
+                         matrix as static."
+                    );
+                };
+                collected.push(item.trim().to_string());
+            }
+            if collected.is_empty() {
+                panic!(
+                    "FAIL (S-626-1 Guard B, ADV-P55-MED-004): `{job_id}`'s \
+                     `strategy.matrix.os:` has an empty same-line value and \
+                     no following block-sequence items at all — this \
+                     checker cannot certify a matrix with no discoverable \
+                     `os` list as static."
+                );
+            }
+            std::borrow::Cow::Owned(collected.join(", "))
+        } else {
+            std::borrow::Cow::Borrowed(raw_value)
+        };
 
         assert!(
             !value.contains("${{") && !value.contains("fromJSON"),
@@ -5780,4 +6424,51 @@ fn test_matrix_os_lists_remain_static_literals() {
              without that verification.",
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// S-626-1 pass-54 — fixed-denominator self-check (ADV-P54-MED-003)
+// ---------------------------------------------------------------------------
+
+/// PINNED count of `#[test]` functions in THIS file.
+///
+/// POL-11's `test` job canary requires only a NON-ZERO passed count from
+/// the `ci_gate_completeness` binary — it says nothing about HOW MANY
+/// tests this binary is supposed to contain. Deleting some number of
+/// `#[test]` functions from this file trips nothing under that guard: the
+/// binary still runs, still reports a non-zero passed count, and the
+/// canary stays green. Mirrors the fixed-denominator pattern already used
+/// by `scripts/check-ci-gate.sh --self-test`'s own `EXPECTED_FIXTURES`,
+/// `scripts/check-bc-citation-symbols.sh`'s, and
+/// `scripts/check-cargo-mutants-policy-citations.sh`'s self-tests — and,
+/// within this file, `test_allowed_skips_has_exactly_three_code_level_
+/// references`'s narrower precedent of counting textual occurrences of a
+/// known-good shape.
+///
+/// UPDATE THIS CONSTANT in the SAME change whenever a `#[test]` fn is
+/// added to or removed from this file. This is a tripwire, not a
+/// mechanism meant to stay in sync automatically — a mismatch is a signal
+/// to look at what changed (a legitimate addition/removal vs. an
+/// accidental deletion), not something to silence by "fixing" the number
+/// without checking why it moved.
+const EXPECTED_GUARD_TEST_COUNT: usize = 27;
+
+#[test]
+fn test_this_file_test_count_matches_expected_denominator() {
+    let source = include_str!("ci_gate_completeness.rs");
+    let actual = source.lines().filter(|l| l.trim() == "#[test]").count();
+    assert_eq!(
+        actual, EXPECTED_GUARD_TEST_COUNT,
+        "FAIL (S-626-1 pass-54, ADV-P54-MED-003): this file contains \
+         {actual} `#[test]` functions, but EXPECTED_GUARD_TEST_COUNT pins \
+         {EXPECTED_GUARD_TEST_COUNT}. POL-11's zero-test-floor canary in \
+         `ci.yml :: test` only requires a NON-ZERO passed count from this \
+         binary — it does not know how many tests this file is SUPPOSED \
+         to contain, so silently deleting tests from this file trips \
+         nothing there. If this mismatch is from a deliberate, reviewed \
+         addition or removal of a `#[test]` fn, update \
+         EXPECTED_GUARD_TEST_COUNT in the SAME change. If it is not \
+         deliberate, some `#[test]` fn was lost — find out which one \
+         before changing this constant."
+    );
 }
