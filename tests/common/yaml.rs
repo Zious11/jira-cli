@@ -26,10 +26,58 @@
 /// `tests/ci_gate_completeness.rs::test_ci_yml_has_no_workflow_level_shell_override`
 /// for the one check in this codebase that reads `ci.yml` at the
 /// workflow level specifically because of this gap.
+///
+/// S-626-1 (`ADV-P56-INFO-004`): the job-header search is LINE-ANCHORED —
+/// a candidate `  <job_name>:\n` match only counts if it starts at byte 0
+/// of `yaml` or immediately follows a `\n`. The prior implementation
+/// (`yaml.find(&needle)`) was a raw substring search taking the FIRST
+/// match in file order regardless of position on its line, harmless in
+/// `ci.yml` today only because no earlier occurrence happens to exist for
+/// any current job id. If MULTIPLE line-anchored occurrences of the same
+/// `  <job_name>:\n` text exist — a genuine duplicate top-level job key
+/// (itself invalid YAML, rejected by GitHub Actions and `actionlint` at
+/// parse time) or, more realistically, a coincidental two-space-indented
+/// `<job_name>:` line living inside a block scalar, a `with:` value, or a
+/// comment — this function refuses to silently take the first and panics
+/// instead, naming the job id and the byte offset of every anchored match
+/// it found (this function receives raw YAML text, not a file path, so it
+/// cannot name the source file itself; every caller in this codebase reads
+/// exactly one workflow file per call, so the panic's context is
+/// unambiguous in practice). Deliberately NOT quote-aware (unlike
+/// `extract_key_name_at_indent` elsewhere in this codebase) — this
+/// function is relied on by many existing callers, and this codebase's
+/// stated precedent is to duplicate a narrower checker rather than widen a
+/// heavily-used one. Quote-tolerance for job-id enumeration is covered
+/// downstream instead: `tests/ci_gate_completeness.rs`'s Guard A hard-fails
+/// when `list_job_ids_in_workflow` (quote-aware) enumerates a job id this
+/// function cannot anchor to, rather than silently skipping it
+/// (`ADV-P55-MED-001`).
 pub fn extract_job_block<'a>(yaml: &'a str, job_name: &str) -> Option<&'a str> {
     // Job headers in GitHub Actions YAML are at two-space indent: "  <id>:\n"
     let needle = format!("  {job_name}:\n");
-    let start = yaml.find(&needle)?;
+
+    let anchored_starts: Vec<usize> = yaml
+        .match_indices(needle.as_str())
+        .map(|(idx, _)| idx)
+        .filter(|&idx| idx == 0 || yaml.as_bytes()[idx - 1] == b'\n')
+        .collect();
+
+    let start = match anchored_starts.as_slice() {
+        [] => return None,
+        [only] => *only,
+        multiple => panic!(
+            "extract_job_block: job id `{job_name}` anchors to {} separate \
+             line-start locations in the supplied YAML text (byte offsets \
+             {multiple:?}) — refusing to silently take the first match. \
+             This is either a genuine duplicate job id (invalid YAML — \
+             GitHub Actions and actionlint both reject duplicate mapping \
+             keys at parse time) or a coincidental two-space-indented \
+             `{job_name}:` line appearing elsewhere in the file (e.g. \
+             inside a block scalar, a `with:` value, or a comment). \
+             Investigate the source before relying on this extraction.",
+            multiple.len(),
+        ),
+    };
 
     // The end of this job block is the next line at the same indent level
     // (i.e., the next "  <something>:\n" after our start).

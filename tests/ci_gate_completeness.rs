@@ -6268,16 +6268,38 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
 /// entirely. DEC-246 established that case is currently UNREACHABLE in
 /// this file: both matrix jobs use STATIC LITERAL `os:` lists
 /// (`[ubuntu-latest, windows-latest]` and `[ubuntu-latest, macos-latest,
-/// windows-latest]`), and a static literal list cannot ever evaluate to
-/// zero legs. The zero-leg case becomes reachable only if a future edit
-/// converts one of these to a DYNAMIC matrix (e.g. `fromJSON(...)`).
+/// windows-latest]`). The zero-leg case becomes reachable if a future edit
+/// converts one of these to a DYNAMIC matrix (e.g. `fromJSON(...)`) — that
+/// vector is what the assertion below (the `${{ }}` / `fromJSON` check)
+/// exists to catch.
 ///
-/// This test converts that undecidable RUNTIME question ("what does a
-/// zero-leg matrix report to `needs`?") into a decidable SOURCE property
-/// ("is the matrix still static?") — far cheaper than a live empirical
-/// probe, and correct for exactly as long as it holds: it asserts both
-/// `clippy` and `test`'s `strategy.matrix.os:` value contains neither a
-/// `${{ }}` expression nor a `fromJSON` call.
+/// CORRECTED CLAIM (S-626-1 pass-57, `ADV-P56-INFO-001`): an earlier
+/// revision of this docstring claimed "a static literal list cannot ever
+/// evaluate to zero legs" without qualification. That overstates it — a
+/// static literal `os:` list cannot ever EXPAND to zero legs on its own,
+/// but GitHub Actions' `strategy.matrix.exclude:` key can remove
+/// combinations from an already-expanded static list, and a fully-excluded
+/// matrix (every generated combination removed) is a second, independent
+/// path to the same undocumented zero-leg question — orthogonal to
+/// `fromJSON`/`${{ }}` dynamism. Whether GitHub permits a fully-excluded
+/// matrix at all (rejects it at parse/schedule time) or lets it through to
+/// produce zero legs is **UNVERIFIED** here; this docstring does not
+/// resolve that by inference, and neither does the test below. Today
+/// neither matrix job declares an `exclude:` key at all (verified, and
+/// pinned by the assertion below) — the `exclude:` vector is CLOSED BY
+/// SOURCE PROPERTY, not by an argument about what `exclude:` can or cannot
+/// produce at runtime.
+///
+/// This test converts the undecidable RUNTIME question ("what does a
+/// zero-leg matrix report to `needs`?") into two decidable SOURCE
+/// properties — far cheaper than a live empirical probe, and correct for
+/// exactly as long as they hold: (1) both `clippy` and `test`'s
+/// `strategy.matrix.os:` value contains neither a `${{ }}` expression nor
+/// a `fromJSON` call, and (2) neither job's `strategy.matrix:` mapping
+/// declares an `exclude:` key at all. Adding an `exclude:` key to either
+/// matrix reopens the zero-leg question this test currently keeps closed —
+/// it must be resolved (see `ZERO-LEG-MATRIX-RESULT-UNDOCUMENTED` above)
+/// before that change lands, not inferred.
 ///
 /// See the module-level "KNOWN LIMITATION SHARED BY BOTH GUARDS" note above
 /// this section — this test is line-based and shares the round-16
@@ -6423,6 +6445,50 @@ fn test_matrix_os_lists_remain_static_literals() {
              change that would make this newly-reachable question live \
              without that verification.",
         );
+
+        // S-626-1 pass-57, ADV-P56-INFO-001 (b): converts the second,
+        // independent zero-leg vector — `strategy.matrix.exclude:` removing
+        // combinations from an otherwise-static list — into the same kind
+        // of decidable source property as the `${{ }}`/`fromJSON` check
+        // above: does `{job_id}.strategy.matrix` declare an `exclude:` key
+        // at all? Scoped to the `matrix:` mapping specifically (not a bare
+        // `job_block.contains("exclude:")`) via `collect_mapping_key_set`
+        // — the same quote/whitespace-aware, comment-and-blank-line-
+        // tolerant primitive used for every other key-set pin in this
+        // file — anchored on the `matrix:` key at 6-space indent (one
+        // level above `os:`'s 8-space indent) so a coincidental
+        // `exclude:` living under a step's `with:` block elsewhere in the
+        // job would not be mistaken for this one.
+        let matrix_line_idx = lines
+            .iter()
+            .position(|l| extract_key_name_at_indent(l, 6).as_deref() == Some("matrix"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "FAIL (S-626-1 Guard B, ADV-P56-INFO-001): `{job_id}` \
+                     has no `strategy.matrix:` line at the expected \
+                     6-space indent, even though it has an `os:` line at \
+                     8-space indent one level deeper — has this job's \
+                     matrix nesting changed? Update this test's anchor \
+                     alongside the ci.yml change."
+                )
+            });
+        let matrix_keys = collect_mapping_key_set(&lines, matrix_line_idx + 1, 8);
+        assert!(
+            !matrix_keys.iter().any(|k| k == "exclude"),
+            "FAIL (S-626-1 Guard B, ADV-P56-INFO-001): \
+             `{job_id}.strategy.matrix` now declares an `exclude:` key.\n\
+             \n\
+             `exclude:` can remove combinations from an otherwise-static \
+             matrix, reopening the same undocumented \
+             ZERO-LEG-MATRIX-RESULT-UNDOCUMENTED question the `${{{{ }}}}`/\
+             `fromJSON` check above exists to guard against — whether \
+             GitHub permits a fully-excluded matrix at all, and if so what \
+             `needs.{job_id}.result` reports for it, is UNVERIFIED. Do not \
+             resolve this by inference: first verify empirically (a \
+             throwaway PR with a matrix that can fully exclude itself, \
+             observed against a real GitHub Actions run) before landing \
+             an `exclude:` on this matrix.",
+        );
     }
 }
 
@@ -6453,10 +6519,33 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// without checking why it moved.
 const EXPECTED_GUARD_TEST_COUNT: usize = 27;
 
+/// Coverage note (S-626-1 pass-57, `DENOMINATOR-GUARD-USES-EXACT-LINE-MATCH`):
+/// counts lines whose TRIMMED text STARTS WITH the literal `#[test]`, not
+/// lines EQUAL to it. The prior exact-`==` match was the same shape the
+/// `910b8ab0` class sweep fixed everywhere else in this file (key-detect
+/// vs. value-reparse swallow) — it missed `#[test] fn foo() {}` written on
+/// one line, silently lowering the denominator; that evasion was mitigated
+/// only by `cargo fmt --check` forcing the attribute onto its own line in a
+/// DIFFERENT CI job, not by this guard itself. `starts_with` also counts a
+/// `#[test]` line followed by trailing same-line content (a comment, or —
+/// as just described — the function signature itself).
+///
+/// This is still a literal textual match, not a Rust parser: it does NOT
+/// catch semantically-equivalent-but-differently-spelled forms such as
+/// `#[ test ]` (internal whitespace before the trimmed prefix breaks),
+/// `#[core::prelude::v1::test]` (fully-qualified attribute path), or a
+/// locally aliased/renamed `test` import — none of which occur in this file
+/// today. Verified this change does not move `EXPECTED_GUARD_TEST_COUNT`:
+/// the file's other seven textual occurrences of `#[test]` all live inside
+/// `///` doc comments or a panic-message string literal, and none of those
+/// lines' trimmed text starts with the literal `#[test]`.
 #[test]
 fn test_this_file_test_count_matches_expected_denominator() {
     let source = include_str!("ci_gate_completeness.rs");
-    let actual = source.lines().filter(|l| l.trim() == "#[test]").count();
+    let actual = source
+        .lines()
+        .filter(|l| l.trim().starts_with("#[test]"))
+        .count();
     assert_eq!(
         actual, EXPECTED_GUARD_TEST_COUNT,
         "FAIL (S-626-1 pass-54, ADV-P54-MED-003): this file contains \
