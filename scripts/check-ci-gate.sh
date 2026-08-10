@@ -86,6 +86,24 @@ set -euo pipefail
 bash -n "${BASH_SOURCE[0]}"
 
 # ---------------------------------------------------------------------------
+# Self-test fixed-denominator pins (S-626-1 ADV-P61-INFO-006).
+#
+# EXPECTED_FIXTURES and EXPECTED_JQ_TRUST_CHECKS were previously declared
+# `readonly` from INSIDE run_self_test()/run_jq_trust_self_test() without
+# `local` — a bare `readonly NAME=val` inside a bash function still
+# creates a GLOBAL readonly variable, not a function-local one. That is
+# harmless today only because `main --self-test` calls each function
+# exactly once per process; a second call in the same shell (e.g. a
+# future test harness invoking these functions directly, the way this
+# file's own doc comments already describe `is_trusted_jq_dir()` being
+# unit-tested directly) would abort on the second `readonly` assignment
+# under `set -e`. Declared here at file scope instead — assigned exactly
+# once when this file is parsed, regardless of how many times any
+# function below is called.
+readonly EXPECTED_FIXTURES=13
+readonly EXPECTED_JQ_TRUST_CHECKS=17
+
+# ---------------------------------------------------------------------------
 # ALLOWED_SKIPS — restrictive per-job carve-out (S-CIGATE-2 AC-002).
 #
 # A job named here may ADDITIONALLY report `skipped` and still pass the
@@ -291,12 +309,22 @@ EOF
 #
 # Enforced STRICTLY (the resolved path's directory must be a member of
 # trusted_jq_dirs_for($RUNNER_OS) — see that function immediately below)
-# only when `GITHUB_ACTIONS=true`, i.e. the actual runtime this script
-# executes in for `ci-gate`/`spec-guard`/the `#[cfg(unix)]` subprocess
-# tests. Outside that (local `--self-test` runs under any package
-# manager's jq), only an absolute, existing path is required — this
-# script has no adversarial PATH to defend against outside a real GitHub
+# whenever this looks like a real GitHub Actions job — `GITHUB_ACTIONS=true`
+# OR `RUNNER_OS` non-empty (S-626-1 ADV-P61-MEDIUM-002; see that section's
+# comment below for why BOTH signals gate strict mode, not just the first).
+# Outside that (local `--self-test` runs under any package manager's jq),
+# every path still goes through the absolute/executable check immediately
+# below — the ONLY thing NOT enforced outside strict mode is directory
+# membership in trusted_jq_dirs_for($RUNNER_OS). This script has no
+# adversarial PATH to defend against beyond that outside a real GitHub
 # Actions job.
+#
+# ADV-P61-LOW-003 (fixed, not just documented): this comment previously
+# claimed "only an absolute, existing path is required" outside strict
+# mode, but no such check existed — a relative path like `./jq` from cwd
+# was accepted and executed unconditionally. The absolute+executable check
+# a few lines below now makes this comment's claim true instead of
+# weakening the comment to match the gap.
 #
 # S-626-1 CI-BREAK-1 (real CI run 31406705091 on commit a17939e2): the
 # ORIGINAL version of this function pinned exactly one path,
@@ -338,8 +366,70 @@ resolve_trusted_jq() {
         echo "ERROR: jq is required but was not found on PATH." >&2
         return 2
     fi
-    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-        local os="${RUNNER_OS:-}"
+
+    # ADV-P61-LOW-003: applies in EVERY mode, not just strict — a resolved
+    # jq must be an absolute, existing, executable path. `command -v`
+    # ordinarily returns an absolute path for a PATH-resolved binary, but
+    # if PATH contains a relative entry (e.g. "." — plausible if an
+    # earlier step cd's somewhere and prepends it, or simply a developer's
+    # own shell config) it returns exactly what would be executed,
+    # relative-ness included. Reject that outright rather than silently
+    # trusting whatever the current working directory happens to be.
+    case "${resolved}" in
+        /*) ;;
+        *)
+            echo "ERROR: jq resolved to a non-absolute path '${resolved}'." >&2
+            echo "       Refusing to trust a jq found via a relative PATH" >&2
+            echo "       entry (e.g. '.')." >&2
+            return 2
+            ;;
+    esac
+    if [ ! -x "${resolved}" ]; then
+        echo "ERROR: jq resolved to '${resolved}', which is not an" >&2
+        echo "       executable file." >&2
+        return 2
+    fi
+
+    # S-626-1 ADV-P61-MEDIUM-002: `GITHUB_ACTIONS=true` alone is not a
+    # robust "am I really in a GitHub Actions job" signal — it is an
+    # ordinary environment variable, and any earlier step in the SAME job
+    # can rewrite it via $GITHUB_ENV (the same documented mechanism
+    # ADV-P59-LOW-001 already showed can plant a PATH shim via
+    # $GITHUB_PATH). Verified: unsetting GITHUB_ACTIONS, or setting it to
+    # "false"/"TRUE", each silently skipped the entire strict branch below
+    # with NO shim required for GITHUB_ACTIONS itself — only the
+    # subsequent PATH-shim step was needed to complete the bypass.
+    #
+    # Fix: treat RUNNER_OS's mere presence as an INDEPENDENT strict-mode
+    # trigger too (a real runner always sets both together), and treat a
+    # MISMATCH between the two signals — RUNNER_OS set but
+    # GITHUB_ACTIONS != "true" — as an attack indicator to fail closed on,
+    # not as "must be a local dev machine, fall back to lenient mode".
+    #
+    # HONEST SCOPE (do not overclaim closure — see this story's own "THE
+    # TRAP" review guidance): this raises the attacker's cost, it does not
+    # eliminate the vector. A sufficiently determined earlier step could
+    # still rewrite BOTH GITHUB_ACTIONS and RUNNER_OS consistently (to
+    # either both look like CI, or both look like a local machine) via
+    # $GITHUB_ENV. Doing so undetected requires overriding every reserved
+    # variable this script (and, transitively, this check) actually reads
+    # in a self-consistent way, which is a materially larger and more
+    # conspicuous diff than the single-variable bypass this fixes — but it
+    # is not proven impossible. No fully env-var-independent trust anchor
+    # was available within this story's scope.
+    local github_actions="${GITHUB_ACTIONS:-}"
+    local runner_os_seen="${RUNNER_OS:-}"
+    if [ "${github_actions}" = "true" ] || [ -n "${runner_os_seen}" ]; then
+        if [ "${github_actions}" != "true" ]; then
+            echo "ERROR: RUNNER_OS is set ('${runner_os_seen}') but" >&2
+            echo "       GITHUB_ACTIONS is not 'true'. A real GitHub" >&2
+            echo "       Actions runner always sets both together; this" >&2
+            echo "       mismatch is refused rather than treated as a" >&2
+            echo "       local, non-CI invocation (ADV-P61-MEDIUM-002) —" >&2
+            echo "       refusing to trust jq at '${resolved}'." >&2
+            return 2
+        fi
+        local os="${runner_os_seen}"
         if [ -z "${os}" ]; then
             echo "ERROR: GITHUB_ACTIONS=true but RUNNER_OS is unset. Every" >&2
             echo "       real GitHub Actions runner sets RUNNER_OS — its" >&2
@@ -350,7 +440,26 @@ resolve_trusted_jq() {
             return 2
         fi
         local dir
-        dir=$(dirname -- "${resolved}")
+        # Pure-bash dirname (S-626-1 ADV-P61-HIGH-001): `dirname` is
+        # itself resolved via PATH, so calling the external binary here
+        # let the SAME $GITHUB_PATH shim that supplies a malicious `jq`
+        # also supply a `dirname` that unconditionally prints a trusted
+        # directory (e.g. "/usr/bin"), defeating the directory-allowlist
+        # check below with a jq shim that was never actually in a
+        # trusted location. Reproduced end-to-end pre-fix: a two-file
+        # shim directory (`jq` + `dirname`, the latter always printing
+        # `/usr/bin`) prepended to PATH made resolve_trusted_jq() accept
+        # the shim under GITHUB_ACTIONS=true. Computing the directory
+        # with bash parameter expansion instead closes this by
+        # construction — there is no external `dirname` left on the
+        # decision path to shim. See run_jq_trust_self_test's
+        # "reject-dirname-shim..." check for the regression pin.
+        if [ "${resolved}" = "${resolved#*/}" ]; then
+            dir=""                       # no slash at all -> not absolute
+        else
+            dir="${resolved%/*}"
+            [ -z "${dir}" ] && dir="/"   # "/jq" -> "/"
+        fi
         if ! is_trusted_jq_dir "${os}" "${dir}"; then
             echo "ERROR: jq resolved to '${resolved}' (directory" >&2
             echo "       '${dir}') under RUNNER_OS='${os}', which is not" >&2
@@ -536,16 +645,45 @@ evaluate_needs() {
 #      under test is specifically "a PATH-prepend shim is rejected").
 #   3. FAIL-CLOSED — check 12: GITHUB_ACTIONS=true with RUNNER_OS unset
 #      refuses, regardless of where jq resolves.
+#
+# S-626-1 ADV-P61 additions (checks 14-17) — a targeted review found the
+# jq-identity pin above did NOT, by itself, achieve "an attacker cannot
+# forge the gate's decision": every OTHER external binary this script (or
+# resolve_trusted_jq specifically) touched was still PATH-resolved and
+# unpinned, so the same $GITHUB_PATH-shim capability that motivated
+# pinning jq also defeated the pin itself. See CLAUDE.md's CI Gate
+# history and this story's commit for the honest, non-overclaiming scope
+# statement — these checks raise attacker cost, they do not claim a fully
+# closed decision path (that would require pinning EVERY external binary
+# call transitively reachable from ci.yml's `ci-gate` job, which is out
+# of this story's scope):
+#   14. reject-dirname-shim-lying-about-trusted-dir (ADV-P61-HIGH-001) —
+#       a shim directory supplying BOTH a fake `jq` and a `dirname` that
+#       always prints a trusted path is still refused, because
+#       resolve_trusted_jq no longer calls external `dirname` at all.
+#   15. reject-relative-path-jq-regardless-of-mode (ADV-P61-LOW-003) — the
+#       absolute+executable check applies in every mode, not just strict.
+#   16. fail-closed-runner-os-set-github-actions-not-true
+#       (ADV-P61-MEDIUM-002) — a mismatched signal (RUNNER_OS set,
+#       GITHUB_ACTIONS not "true") refuses rather than silently falling
+#       back to non-strict mode.
+#   17. reject-cat-shim-for-main-stdin-read (ADV-P61-INFO-005) — the ONLY
+#       check in this suite that spawns the WHOLE script as a real
+#       subprocess (via `bash "${BASH_SOURCE[0]}"`, not `--self-test`),
+#       because the `cat` vector lives in main()'s stdin read, not in
+#       resolve_trusted_jq(); proves the real piped-in JSON drove the
+#       decision despite a hostile `cat` earlier on PATH.
 # ---------------------------------------------------------------------------
 run_jq_trust_self_test() {
     echo
     echo "=== check-ci-gate.sh JQ-TRUST SELF-TEST (S-626-1 CI-BREAK-1) ==="
     echo
 
-    # Same fixed-denominator pin rationale as EXPECTED_FIXTURES above —
-    # without it, silently deleting a check (e.g. the FAIL-CLOSED one)
-    # would still print "N/N checks matched" as success.
-    readonly EXPECTED_JQ_TRUST_CHECKS=13
+    # Same fixed-denominator pin rationale as EXPECTED_FIXTURES — without
+    # it, silently deleting a check (e.g. the FAIL-CLOSED one) would still
+    # print "N/N checks matched" as success. EXPECTED_JQ_TRUST_CHECKS is
+    # declared at file scope (ADV-P61-INFO-006) — see that declaration's
+    # comment near the top of this file.
     local jq_trust_total=0
     local jq_trust_mismatches=0
 
@@ -653,6 +791,67 @@ JQSHIM
 
     rm -rf "${scratch}"
 
+    # --- REJECT: dirname-shim variant of the same attack (14, ADV-P61-HIGH-001) ---
+    #
+    # Same shape as check 11, but the shim directory ALSO supplies a
+    # `dirname` that unconditionally prints a trusted directory
+    # ("/usr/bin") regardless of its argument — the exact construction
+    # that defeated the pre-fix version of resolve_trusted_jq(), which
+    # called the external `dirname` binary (itself PATH-resolved) to
+    # compute the jq shim's own directory. If this ever regresses back to
+    # calling external `dirname`, this check fails because the shimmed
+    # `dirname` would misreport the untrusted directory as trusted.
+    local dn_scratch dn_untrusted_dir dn_out dn_rc
+    dn_scratch=$(mktemp -d)
+    dn_untrusted_dir="${dn_scratch}/untrusted"
+    mkdir -p "${dn_untrusted_dir}"
+    cat >"${dn_untrusted_dir}/jq" <<'JQSHIM'
+#!/usr/bin/env bash
+echo '{}'
+JQSHIM
+    chmod +x "${dn_untrusted_dir}/jq"
+    cat >"${dn_untrusted_dir}/dirname" <<'DIRNAMESHIM'
+#!/usr/bin/env bash
+echo "/usr/bin"
+DIRNAMESHIM
+    chmod +x "${dn_untrusted_dir}/dirname"
+
+    dn_rc=0
+    dn_out=$(
+        {
+            export PATH="${dn_untrusted_dir}:${PATH}"
+            export GITHUB_ACTIONS=true
+            export RUNNER_OS=Linux
+            resolve_trusted_jq
+        } 2>&1
+    ) || dn_rc=$?
+    record_resolve_check \
+        "reject-dirname-shim-lying-about-trusted-dir" "${dn_rc}" "fail:2" "${dn_out}" \
+        "one of the trusted system jq directories"
+
+    rm -rf "${dn_scratch}"
+
+    # --- REJECT: resolved jq must be absolute + executable, in EVERY mode (15, ADV-P61-LOW-003) ---
+    local rel_scratch rel_out rel_rc
+    rel_scratch=$(mktemp -d)
+    cat >"${rel_scratch}/jq" <<'RELSHIM'
+#!/usr/bin/env bash
+echo '{}'
+RELSHIM
+    chmod +x "${rel_scratch}/jq"
+
+    rel_rc=0
+    rel_out=$(
+        {
+            cd "${rel_scratch}" && PATH=".:${PATH}" resolve_trusted_jq
+        } 2>&1
+    ) || rel_rc=$?
+    record_resolve_check \
+        "reject-relative-path-jq-regardless-of-mode" "${rel_rc}" "fail:2" "${rel_out}" \
+        "non-absolute path"
+
+    rm -rf "${rel_scratch}"
+
     # --- FAIL-CLOSED: GITHUB_ACTIONS=true with RUNNER_OS unset (12) ---
     rc=0
     out=$(
@@ -665,6 +864,26 @@ JQSHIM
     record_resolve_check \
         "fail-closed-runner-os-unset" "${rc}" "fail:2" "${out}" \
         "RUNNER_OS is unset"
+
+    # --- FAIL-CLOSED: RUNNER_OS set but GITHUB_ACTIONS not "true" (16, ADV-P61-MEDIUM-002) ---
+    #
+    # Reproduces the bypass an earlier step could attempt via $GITHUB_ENV:
+    # rewrite GITHUB_ACTIONS to something other than "true" while leaving
+    # RUNNER_OS (and the rest of the real job environment) untouched. The
+    # pre-fix `[ "${GITHUB_ACTIONS:-}" = "true" ]`-only gate silently fell
+    # back to non-strict mode here — no directory check at all. This
+    # mismatched-signal state must now refuse outright instead.
+    rc=0
+    out=$(
+        {
+            export RUNNER_OS=Linux
+            unset GITHUB_ACTIONS
+            resolve_trusted_jq
+        } 2>&1
+    ) || rc=$?
+    record_resolve_check \
+        "fail-closed-runner-os-set-github-actions-not-true" "${rc}" "fail:2" "${out}" \
+        "GITHUB_ACTIONS is not 'true'"
 
     # --- ACCEPT: live, host-adaptive end-to-end wiring proof (13) ---
     #
@@ -702,6 +921,54 @@ JQSHIM
     record_resolve_check \
         "accept-real-host-jq-in-trusted-dir (uname=${host_os}, RUNNER_OS=${runner_os:-<unmapped>})" \
         "${rc}" "pass" "${out}"
+
+    # --- REJECT: main()'s stdin read must not go through an external
+    # `cat` on PATH (17, ADV-P61-INFO-005) ---
+    #
+    # Distinct from every check above: this exercises the WHOLE script as
+    # a real subprocess (not just resolve_trusted_jq()), because the `cat`
+    # vector lives in main()'s stdin read, not in jq trust. A `cat` shim
+    # fabricating a payload proves nothing by itself — the meaningful
+    # assertion is that the REAL stdin JSON piped in is what actually
+    # drove the decision, despite a hostile `cat` sitting first on PATH.
+    #
+    # GITHUB_ACTIONS/RUNNER_OS are explicitly UNSET for this subprocess
+    # (deliberately decoupled from strict jq-directory trust, which checks
+    # 1-16 already cover) so this check's outcome depends only on the
+    # cat-shim property under test, never on this machine's own ambient
+    # environment or where its real jq happens to live.
+    local cat_scratch cat_shim_dir cat_out cat_rc
+    cat_scratch=$(mktemp -d)
+    cat_shim_dir="${cat_scratch}/shim"
+    mkdir -p "${cat_shim_dir}"
+    cat >"${cat_shim_dir}/cat" <<'CATSHIM'
+#!/usr/bin/env bash
+echo '{"bogus":{"result":"success"}}'
+CATSHIM
+    chmod +x "${cat_shim_dir}/cat"
+
+    cat_rc=0
+    cat_out=$(
+        {
+            unset GITHUB_ACTIONS
+            unset RUNNER_OS
+            PATH="${cat_shim_dir}:${PATH}" \
+                bash "${BASH_SOURCE[0]}" <<<'{"fmt":{"result":"success"}}'
+        } 2>&1
+    ) || cat_rc=$?
+    jq_trust_total=$((jq_trust_total + 1))
+    if [ "${cat_rc}" -eq 0 ] && grep -qF 'OK  fmt = success' <<<"${cat_out}" \
+        && ! grep -qF 'bogus' <<<"${cat_out}"; then
+        echo "[PASS] reject-cat-shim-for-main-stdin-read" \
+             "(real stdin honored despite \$PATH cat shim)"
+    else
+        echo "[FAIL] reject-cat-shim-for-main-stdin-read" \
+             "(expected the real piped stdin JSON to be read via a bash" \
+             "builtin, unaffected by a \$PATH cat shim; got rc=${cat_rc}," \
+             "output: ${cat_out})"
+        jq_trust_mismatches=$((jq_trust_mismatches + 1))
+    fi
+    rm -rf "${cat_scratch}"
 
     echo
     echo "${jq_trust_total}/${EXPECTED_JQ_TRUST_CHECKS} jq-trust checks run," \
@@ -757,8 +1024,8 @@ run_self_test() {
     # scripts/check-bc-citation-symbols.sh and
     # scripts/check-cargo-mutants-policy-citations.sh (both pin
     # EXPECTED_FIXTURES against a `fixtures_run` counter) — mirrored here
-    # rather than invented fresh.
-    readonly EXPECTED_FIXTURES=13
+    # rather than invented fresh. Declared at file scope (ADV-P61-INFO-006)
+    # — see that declaration's comment near the top of this file.
     local total=0
     local mismatches=0
 
@@ -1077,7 +1344,18 @@ main() {
     fi
 
     local json
-    json="$(cat)"
+    # S-626-1 ADV-P61-INFO-005: `json="$(cat)"` shelled out to an
+    # external `cat` on PATH to read this script's own decision input —
+    # a `cat` shim planted via $GITHUB_PATH could return an arbitrary,
+    # fabricated payload (e.g. an all-`"success"` map) regardless of the
+    # real `toJSON(needs)` piped in, driving evaluate_needs() to a false
+    # PASS with no dependency on jq at all. Verified: a `cat` shim alone
+    # (real, correctly-trusted jq otherwise untouched) reproduced this.
+    # `$(<...)` is a bash builtin fast-path for reading a file/fd into a
+    # variable — no external process is spawned, so there is nothing on
+    # PATH left to shim for this read. See run_jq_trust_self_test's
+    # "reject-cat-shim..." check for the regression pin.
+    json="$(</dev/stdin)"
     evaluate_needs "${json}"
     exit $?
 }
