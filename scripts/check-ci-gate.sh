@@ -218,11 +218,69 @@ print_allowed_skips() {
 # it, so the failure would only surface in `cargo test`, not in this
 # script's own `--self-test` run.
 # ---------------------------------------------------------------------------
+
+# resolve_trusted_jq — S-626-1 pass-59 (ADV-P59-LOW-001): every decision
+# value this script produces is jq-derived, resolved via a bare `command -v
+# jq` lookup. `$GITHUB_PATH` is a documented GitHub Actions mechanism that
+# lets ANY earlier step in the same job prepend a directory to `PATH` for
+# every subsequent step — a `jq` shim placed there and printing
+# `"success"` for every `.result` query (or, worse, `command -v jq`
+# resolving to a step-written shim after a `sudo`-writable-`/usr/bin`
+# compromise) drives `evaluate_needs` to exit 0 while ALSO printing a
+# manufactured `OK  <job> = success` line per job — a fabricated clean
+# record, worse than a bare `|| true` appended to the run line (that
+# vector is pinned by `tests/ci_gate_completeness.rs`'s M2-i; this one is
+# a PATH/binary-identity vector, not a `run:` line vector, and sits
+# entirely outside every existing byte-pin in that file). CLAUDE.md's
+# round-13 IMPORTANT-2 note previously described this exposure as
+# `$GITHUB_ENV` -> `BASH_ENV` (an environment-variable model); the actual
+# channel is `PATH` -> WHICH BINARY RUNS, a different mechanism no
+# env-surface pin or future YAML-parser rewrite would touch.
+#
+# Resolved once per `evaluate_needs` call and reused for every jq
+# invocation inside it (rather than re-resolving per call), so a single
+# TOCTOU-style PATH mutation mid-function cannot make different
+# invocations within the same decision see different binaries.
+#
+# Enforced STRICTLY (must resolve to exactly `/usr/bin/jq`, the
+# pre-installed location on `ubuntu-latest` — see the TOOLING CHOICE
+# comment at the top of this file) only when `GITHUB_ACTIONS=true`, i.e.
+# the actual runtime this script executes in for `ci-gate`/`spec-guard`.
+# Outside that (local `--self-test` runs under any package manager's jq —
+# e.g. Homebrew's `/opt/homebrew/bin/jq` on macOS, or Linux distros that
+# ship jq at `/bin/jq` via a `/bin` -> `/usr/bin` symlink), only an
+# absolute, existing path is required — this script has no adversarial
+# PATH to defend against outside a real GitHub Actions job, and hardcoding
+# `/usr/bin/jq` unconditionally would make `--self-test` unrunnable on any
+# machine that does not use that exact path.
+resolve_trusted_jq() {
+    local resolved
+    if ! resolved=$(command -v jq 2>/dev/null); then
+        echo "ERROR: jq is required but was not found on PATH." >&2
+        return 2
+    fi
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+        case "${resolved}" in
+            /usr/bin/jq) ;;
+            *)
+                echo "ERROR: jq resolved to '${resolved}' via PATH, not the" >&2
+                echo "       trusted /usr/bin/jq. Refusing to trust a jq" >&2
+                echo "       binary found elsewhere on PATH inside a GitHub" >&2
+                echo "       Actions job (possible PATH-prepend shim attack" >&2
+                echo "       via \$GITHUB_PATH — see resolve_trusted_jq's" >&2
+                echo "       comment in this file)." >&2
+                return 2
+                ;;
+        esac
+    fi
+    printf '%s\n' "${resolved}"
+}
+
 evaluate_needs() {
     local json="$1"
 
-    if ! command -v jq >/dev/null 2>&1; then
-        echo "ERROR: jq is required but was not found on PATH." >&2
+    local jq_bin
+    if ! jq_bin=$(resolve_trusted_jq); then
         return 2
     fi
 
@@ -240,7 +298,7 @@ evaluate_needs() {
         return 2
     fi
 
-    if ! echo "${json}" | jq empty >/dev/null 2>&1; then
+    if ! echo "${json}" | "${jq_bin}" empty >/dev/null 2>&1; then
         echo "ERROR: input is not valid JSON." >&2
         return 2
     fi
@@ -254,7 +312,7 @@ evaluate_needs() {
     # documented 0/1/2 exit contract and surfacing a raw jq trace instead of
     # a clean ERROR: message. Fail closed through the documented path
     # instead.
-    if ! echo "${json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    if ! echo "${json}" | "${jq_bin}" -e 'type == "object"' >/dev/null 2>&1; then
         echo "ERROR: input JSON is valid but is not an object (expected a" >&2
         echo "       job -> result map shaped like toJSON(needs))." >&2
         return 2
@@ -271,7 +329,7 @@ evaluate_needs() {
     # it today.
     local jobs
     local jq_status=0
-    jobs=$(echo "${json}" | jq -r 'keys[]' 2>/dev/null) || jq_status=$?
+    jobs=$(echo "${json}" | "${jq_bin}" -r 'keys[]' 2>/dev/null) || jq_status=$?
 
     if [ "${jq_status}" -ne 0 ]; then
         echo "ERROR: jq failed while extracting job names from the needs" >&2
@@ -296,7 +354,7 @@ evaluate_needs() {
         # -c keeps the extracted value on a single line even if `.result`
         # is ever something other than a plain string (an object/array),
         # so one job never garbles the OK/FAIL log into multiple lines.
-        result=$(echo "${json}" | jq -rc --arg j "${job}" '.[$j].result')
+        result=$(echo "${json}" | "${jq_bin}" -rc --arg j "${job}" '.[$j].result')
 
         # Exact match against ALLOWED_SKIPS only (is_allowed_skip) — no
         # substring/prefix matching, so e.g. a job named `mutants-extra`

@@ -369,6 +369,61 @@ fn always_run_needs_members(ci: &str) -> Vec<String> {
     always_run
 }
 
+/// S-626-1 pass-59 (ADV-P57-HIGH-001 + ADV-P57-MED-001, shared fix — one
+/// root cause, two silent-fail-open call sites): every hardcoded-indent
+/// check in this file (`extract_key_name_at_indent(line, 4)` for job-level
+/// keys, `extract_job_display_name`, `matrix_needs_members`'s `strategy:`
+/// scan, ...) ASSUMES a job's direct children are indented exactly 4
+/// spaces. That assumption is legal, `actionlint`-clean, PyYAML-valid YAML
+/// only by CONVENTION — a job's own children need only be indented
+/// CONSISTENTLY WITH EACH OTHER, not with any other job's indent choice
+/// (the same acknowledged limitation `extract_key_name_at_indent`'s own
+/// doc comment already names). Verified end-to-end (S-626-1 pass-59): a
+/// sibling workflow job body written at 3-, 6-, or 8-space indent left
+/// `extract_key_name_at_indent(l, 4)` returning `None` for EVERY line in
+/// that job's block — not "this job declares no name"/"no strategy", but
+/// "this checker looked at the wrong indent level entirely" — and the
+/// 910b8ab0 class sweep's "key-detect vs. value-reparse swallow" fix does
+/// not help here, because there is no KEY DETECTED to re-read a value
+/// for: the miss happens one step earlier, at indent selection.
+///
+/// This function derives each job block's ACTUAL direct-child indent —
+/// the indentation of the first non-blank, non-comment line after the
+/// job-key line itself — and panics if it is not 4, rather than silently
+/// certifying an unverifiable absence. `assert!`, not a `Result`: every
+/// caller of this function is itself in a "reject, don't parse" context
+/// (a `panic!`/`unwrap_or_else(|| panic!(...))` site), so a bool-returning
+/// helper would just be unwrapped at the call site anyway.
+fn assert_job_block_uses_4_space_child_indent(job_block: &str, caller: &str) {
+    let Some(child_line) = job_block.lines().skip(1).find(|l| {
+        let t = l.trim();
+        !t.is_empty() && !t.starts_with('#')
+    }) else {
+        // No children at all (an empty job block, or a job block that is
+        // ONLY the job-key line) — nothing to verify an indent assumption
+        // against.
+        return;
+    };
+    let indent = child_line.len() - child_line.trim_start().len();
+    assert!(
+        indent == 4,
+        "FAIL ({caller}, S-626-1 pass-59, ADV-P57-HIGH-001/MED-001): this \
+         job block's direct children are indented {indent} spaces, not \
+         the 4-space indent every hardcoded-indent check in this file \
+         assumes. This is legal, `actionlint`-clean, PyYAML-valid YAML (a \
+         job's own children need only be indented CONSISTENTLY WITH EACH \
+         OTHER, not with any other job's indent choice) — but every \
+         `extract_key_name_at_indent(line, 4)` call against this job \
+         block would silently see NO job-level keys at all: not \"this \
+         job declares no name\"/\"no strategy\", but \"this checker looked \
+         at the wrong indent level\". This checker refuses to silently \
+         certify an unverifiable absence — investigate this job's indent \
+         before relying on any indent-4 extraction against it.\n\
+         First child line found: {child_line:?}\n\
+         Job block:\n{job_block}"
+    );
+}
+
 /// Every `ci-gate.needs` member whose job block declares a job-level
 /// `strategy:` key (4-space indent) — i.e. every build-matrix job, derived
 /// from the LIVE `needs:` set rather than a hand-maintained literal.
@@ -384,6 +439,15 @@ fn always_run_needs_members(ci: &str) -> Vec<String> {
 /// this list from the LIVE `needs:` set plus a `strategy:` presence check
 /// means a newly-added matrix job is automatically covered the moment it
 /// lands in `ci-gate.needs`, with no second edit to remember.
+///
+/// S-626-1 pass-59 (ADV-P57-LOW-002): the `extract_job_block(ci, job_id)`
+/// miss branch used to silently `return false` — the exact silent-skip
+/// shape this same commit replaces with a hard panic ~40 lines away in
+/// Guard A's sibling-workflow check
+/// (`test_no_sibling_workflow_declares_a_job_named_ci_gate`). A
+/// `ci-gate.needs` member naming a job that does not actually exist under
+/// `jobs:` is a broken configuration, not "not a matrix job" — panic
+/// loudly instead, matching the Guard A precedent.
 fn matrix_needs_members(ci: &str) -> Vec<String> {
     let gate_block = extract_job_block(ci, "ci-gate").unwrap_or_else(|| {
         panic!(
@@ -402,9 +466,23 @@ fn matrix_needs_members(ci: &str) -> Vec<String> {
     let mut matrix_jobs: Vec<String> = needs
         .into_iter()
         .filter(|job_id| {
-            let Some(job_block) = extract_job_block(ci, job_id) else {
-                return false;
-            };
+            let job_block = extract_job_block(ci, job_id).unwrap_or_else(|| {
+                panic!(
+                    "FAIL (S-626-1 Guard B, ADV-P57-LOW-002): `ci-gate.needs` \
+                     names job `{job_id}`, but no `{job_id}:` job block \
+                     exists under `jobs:` in ci.yml. This checker refuses \
+                     to silently treat a missing job as \"not a matrix \
+                     job\" — the same silent-skip shape Guard A's \
+                     sibling-workflow check \
+                     (`test_no_sibling_workflow_declares_a_job_named_ci_gate`) \
+                     already refuses via a hard panic. Investigate why \
+                     `ci-gate.needs` names a job that does not exist."
+                )
+            });
+            assert_job_block_uses_4_space_child_indent(
+                job_block,
+                "S-626-1 Guard B, ADV-P57-HIGH-001 (matrix_needs_members)",
+            );
             job_block
                 .lines()
                 .any(|l| extract_key_name_at_indent(l, 4).as_deref() == Some("strategy"))
@@ -1237,35 +1315,44 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     // contain `contains(needs`.
     //
     // "Job-level" means the `if:` key is a direct child of the job block,
-    // indented 4 spaces from the left margin (GitHub Actions YAML convention).
-    // We stop scanning once we enter the `steps:` section to avoid picking up
-    // step-level `if:` lines.
+    // indented 4 spaces from the left margin (GitHub Actions YAML
+    // convention) — detected via `extract_key_name_at_indent`, the same
+    // quote/whitespace-aware matcher used throughout this file, rather
+    // than a raw `line.starts_with("    if:")`.
+    //
+    // S-626-1 pass-59 (ADV-P58-LOW-003): the prior manual scan (a
+    // hand-rolled `in_steps` flag plus `line.starts_with("    if:")`) was
+    // absence-shaped and fail-open two ways: (1) a quoted key spelling
+    // (`"if":`/`'if':`) or `if :` (space before colon) — all forms
+    // `extract_key_name_at_indent` already recognizes elsewhere in this
+    // file — made this scan report "no job-level `if:` line" even though
+    // one plainly exists: a MISDIAGNOSIS, since M2-m below (which already
+    // routes through `extract_and_normalize_if_expr`'s quote-aware
+    // detection) would have found and evaluated it correctly, but M2-a
+    // fires FIRST and its wrong diagnosis masked M2-m's accurate one
+    // before this test could ever reach it; (2) the `in_steps` bookkeeping
+    // was needed only because a raw `starts_with` has no notion of indent
+    // depth on its own — an exact-indent matcher removes the need for it
+    // entirely, since a step-level `if:` (8-space indent) never satisfies
+    // `extract_key_name_at_indent(line, 4)` regardless of whether the scan
+    // has "entered steps:" yet.
     // -----------------------------------------------------------------------
-    let mut found_job_level_if = false;
-    let mut in_steps = false;
-    let mut job_if_line = String::new();
-
-    for line in gate_block.lines() {
-        // Detect entry into the steps: section (4-space indent).
-        if line.starts_with("    steps:") && !line.starts_with("        ") {
-            in_steps = true;
-        }
-        // A job-level `if:` is at 4-space indent, NOT inside steps.
-        if !in_steps && line.starts_with("    if:") && !line.starts_with("        ") {
-            found_job_level_if = true;
-            job_if_line = line.to_string();
-            break;
-        }
-    }
+    let job_if_line = gate_block
+        .lines()
+        .find(|l| extract_key_name_at_indent(l, 4).as_deref() == Some("if"));
 
     assert!(
-        found_job_level_if,
-        "FAIL (M2-a): The `ci-gate` job block has no job-level `if:` line \
-         (expected at 4-space indent, before `steps:`).\n\
+        job_if_line.is_some(),
+        "FAIL (M2-a): The `ci-gate` job block has no job-level `if:` key \
+         at 4-space indent (checked via the same quote/whitespace-aware \
+         matcher used throughout this file — `if:`, `\"if\":`, `'if':`, \
+         and `if :` are all recognized, so this is not merely a bare-\
+         spelling presence check).\n\
          Required: `    if: ${{{{ always() }}}}` so that ci-gate runs even when \
          upstream jobs fail.\n\
          Current ci-gate block:\n{gate_block}"
     );
+    let job_if_line = job_if_line.unwrap_or_default();
 
     assert!(
         job_if_line.contains("always()"),
@@ -1311,17 +1398,31 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     // code from an UNCONDITIONAL `run:` step — reintroducing a step-level
     // `if:` here would mean some upstream results no longer even reach the
     // script.
+    //
+    // S-626-1 pass-59 (ADV-P58-LOW-003): routed through
+    // `extract_key_name_at_indent(l, 8)` rather than a raw
+    // `l.starts_with("        if:")`, for the same quote-awareness reason
+    // as M2-a above (`"if":`/`'if':`/`if :` are all recognized).
     // -----------------------------------------------------------------------
-    let has_step_level_if = gate_block.lines().any(|l| l.starts_with("        if:"));
+    let has_step_level_if = gate_block
+        .lines()
+        .any(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("if"));
 
     assert!(
         !has_step_level_if,
         "FAIL (M2-d, S-CIGATE-2): The `ci-gate` job block contains a \
-         step-level `if:`. Under Option C, `scripts/check-ci-gate.sh` is \
-         invoked unconditionally and its own exit code IS the pass/fail \
-         signal — no step-level `if:` should gate that invocation (a \
-         reintroduced `if:` here would mean some upstream results never \
-         even reach the script).\n\
+         step-level `if:` key at 8-space indent (checked via the same \
+         quote/whitespace-aware matcher used throughout this file). Under \
+         Option C, `scripts/check-ci-gate.sh` is invoked unconditionally \
+         and its own exit code IS the pass/fail signal — no step-level \
+         `if:` should gate that invocation (a reintroduced `if:` here \
+         would mean some upstream results never even reach the script). \
+         NOTE: M2-l below (the per-step COMPLETE key-set pin,\
+         `PINNED_GATE_STEP_KEY_SETS`) is the OPERATIVE default-deny for a \
+         step-level `if:` in ANY form — even a spelling this presence \
+         check does not recognize would still surface there as an \
+         unexpected `if` key on that step; this assertion is a faster, \
+         more specific diagnostic, not the sole backstop.\n\
          Current ci-gate block:\n{gate_block}"
     );
 
@@ -3273,6 +3374,48 @@ fn test_spec_guard_contains_check_ci_gate_self_test_step() {
          Current spec-guard block:\n{spec_guard_block}"
     );
 
+    // S-626-1 pass-59 (ADV-P58-MED-001): the run-line pin above covers the
+    // step's `run:` VALUE, but nothing previously asserted the step's
+    // KEYS were exactly `{name, run}` — the same "value pinned, keys left
+    // an open enumeration" gap round 11 closed for `ci-gate` itself via
+    // `PINNED_GATE_STEP_KEY_SETS`. Reproduced: `if: false` on this step
+    // (the step silently never runs; job concludes `success`) and `shell:
+    // cat {0}` (the runner `cat`s the run line's script body instead of
+    // executing it) each leave the byte-pinned run-line assertion above,
+    // both substring checks, and `test_always_run_jobs_have_no_continue_
+    // on_error` all satisfied.
+    let actual_self_test_step_keys = extract_step_key_set_by_name(
+        spec_guard_block,
+        "check-ci-gate self-test (fixture suite, S-CIGATE-2)",
+    )
+    .unwrap_or_else(|reason| {
+        panic!(
+            "FAIL (S-626-1 pass-59, ADV-P58-MED-001): `spec-guard` {reason}\n\
+             Current spec-guard block:\n{spec_guard_block}"
+        )
+    });
+    let mut expected_self_test_step_keys: Vec<String> = PINNED_CI_GATE_SELF_TEST_STEP_KEYS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    expected_self_test_step_keys.sort();
+    assert_eq!(
+        actual_self_test_step_keys, expected_self_test_step_keys,
+        "FAIL (S-626-1 pass-59, ADV-P58-MED-001): `spec-guard`'s \
+         check-ci-gate self-test step's key set \
+         ({actual_self_test_step_keys:?}) does not match the pinned set \
+         ({PINNED_CI_GATE_SELF_TEST_STEP_KEYS:?}). An added `if:` \
+         (silently skips the step; job still concludes `success`) or \
+         `shell:` (replaces the run line's interpreter — the same \
+         `shell: cat {{0}}` vector rounds 11/14 already showed defeats a \
+         pinned `run:` line elsewhere in this file) would leave the \
+         byte-pinned run-line value above untouched while neutralizing \
+         the entire 13-fixture self-test suite. If this is a deliberate, \
+         reviewed change, update PINNED_CI_GATE_SELF_TEST_STEP_KEYS in \
+         the SAME change.\n\
+         Current spec-guard block:\n{spec_guard_block}"
+    );
+
     // The self-test must NOT be wired into ci-gate itself — structurally
     // impossible/circular (a gate cannot depend on a job that depends on
     // it). This distinguishes the real gate check (against the actual
@@ -3684,7 +3827,42 @@ fn extract_and_normalize_if_expr(job_block: &str) -> Result<Option<String>, Stri
     };
 
     let if_line = lines[if_line_idx];
-    let raw = if_line.trim_start().strip_prefix("if:").unwrap_or("");
+    // S-626-1 pass-59 (ADV-P58-LOW-002): the key was detected via
+    // `is_job_level_if_line` (`extract_key_name_at_indent`, quote/
+    // whitespace-aware), but this VALUE re-read used to be a bare
+    // `strip_prefix("if:").unwrap_or("")` — the identical key-detect vs.
+    // value-reparse swallow shape the `910b8ab0` class sweep fixed at the
+    // two OTHER sites in this file that share this exact pattern
+    // (`extract_job_display_name`'s `name:` re-read,
+    // `test_matrix_os_lists_remain_static_literals`'s `os:` re-read). A
+    // quoted key spelling (`"if":`/`'if':`) or `if :` (space before
+    // colon) made `raw` silently collapse to `""`, which then normalizes
+    // to `collapsed.is_empty()` -> `Ok(None)` — INDISTINGUISHABLE from
+    // "this job declares no job-level `if:` key at all" for a job that
+    // plainly has one. Every M2-m-style pin built on this function
+    // compares against `Some(pin)`, so `Ok(None)` still fails LOUDLY
+    // today only as an accident of that comparison shape, not because
+    // this function itself refuses to guess — the same brittleness this
+    // sweep's own rationale (see `extract_job_display_name`'s doc
+    // comment) rejects. Fixed: `Err`, not a silent `Ok(None)`, so the
+    // failure is diagnosable on its own terms rather than merely
+    // happening to also fail a downstream equality check.
+    let Some(raw) = if_line.trim_start().strip_prefix("if:") else {
+        return Err(format!(
+            "has a job-level `if:` key detected via the quote/whitespace-\
+             aware matcher at 4-space indent, but this function's own \
+             value-extraction re-read (a bare `strip_prefix(\"if:\")`) \
+             could not parse the same line — most likely a quoted key \
+             spelling (`\"if\":` / `'if':`) or `if :` (space before \
+             colon), which `extract_key_name_at_indent` recognizes but \
+             this bare re-read does not. Silently collapsing to an empty \
+             string here would make this function return `Ok(None)` — \
+             indistinguishable from \"this job declares no `if:` key at \
+             all\" for a job that plainly has one, defeating every pin \
+             built on this function's result.\n\
+             Offending line: {if_line:?}"
+        ));
+    };
     let raw_value_leading_trimmed = raw.trim_start();
 
     // CRITICAL-1a: reject any YAML block-scalar header.
@@ -3953,6 +4131,84 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
 /// while the self-test step becomes a permanent no-op.
 const PINNED_CI_GATE_SELF_TEST_RUN_LINE: &str = "bash scripts/check-ci-gate.sh --self-test";
 
+/// PINNED, human-reviewed COMPLETE key set of the `spec-guard` job's
+/// `check-ci-gate self-test (fixture suite, S-CIGATE-2)` step (S-626-1
+/// pass-59, ADV-P58-MED-001). Mirrors `PINNED_GATE_STEP_KEY_SETS`/
+/// `PINNED_TEST_GUARD_STEP_KEYS`'s idiom: `PINNED_CI_GATE_SELF_TEST_RUN_
+/// LINE` (above) pins the `run:` line's VALUE, but nothing previously
+/// asserted the step's KEYS were exactly `{name, run}` — an added
+/// `if: false` or `shell: cat {0}` on this step leaves the run-line pin
+/// (and every substring check in this test) fully satisfied while making
+/// the entire 13-fixture self-test suite silently not run at all (`if:
+/// false`) or run the wrong interpreter entirely (`shell: cat {0}`, the
+/// same custom-shell-template override rounds 11/14 already showed
+/// defeats a pinned `run:` line elsewhere in this file).
+const PINNED_CI_GATE_SELF_TEST_STEP_KEYS: &[&str] = &["name", "run"];
+
+/// Locate the SOLE step in `lines` whose `name:` value is EXACTLY
+/// `step_name` (matched as the literal line `      - name: {step_name}`,
+/// 6-space step-marker indent), returning its line index. `Err` if zero
+/// or more than one step matches.
+///
+/// Shared by `extract_and_normalize_step_run_line_by_name` and
+/// `extract_step_key_set_by_name` — factored out (S-626-1 pass-59,
+/// ADV-P58-MED-001) so the duplicate-step-name rejection lives in exactly
+/// one place rather than being reimplemented (and potentially
+/// re-forgotten) at each new by-name step accessor.
+fn find_sole_step_by_name(lines: &[&str], step_name: &str) -> Result<usize, String> {
+    let name_needle = format!("- name: {step_name}");
+    let matches: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim_start() == name_needle)
+        .map(|(i, _)| i)
+        .collect();
+    match matches.as_slice() {
+        [] => Err(format!(
+            "has no step with `name: {step_name}` at all (checked for the \
+             exact line `      - name: {step_name}`)."
+        )),
+        [only] => Ok(*only),
+        multiple => Err(format!(
+            "has {} steps named `name: {step_name}` (checked for the \
+             exact line `      - name: {step_name}`) — this checker \
+             requires exactly one so a single pinned literal \
+             unambiguously covers it. A decoy step sharing the real \
+             step's name, inserted anywhere in the job block, would \
+             otherwise silently win a first-match lookup instead of \
+             being flagged as ambiguous.",
+            multiple.len()
+        )),
+    }
+}
+
+/// Extract the sorted, complete key set (6/8-space indent — a step's own
+/// first key, on the `- ` marker line, plus every subsequent step-level
+/// key) of the SOLE step in `job_block` whose `name:` value is EXACTLY
+/// `step_name`, for comparison against `PINNED_CI_GATE_SELF_TEST_STEP_
+/// KEYS`. Mirrors `extract_test_guard_step_keys`'s `indent(6).or_else(
+/// indent(8))` idiom for a step's key set.
+fn extract_step_key_set_by_name(job_block: &str, step_name: &str) -> Result<Vec<String>, String> {
+    let lines: Vec<&str> = job_block.lines().collect();
+    let name_line_idx = find_sole_step_by_name(&lines, step_name)?;
+
+    let next_step_offset = lines[name_line_idx + 1..]
+        .iter()
+        .position(|l| l.starts_with("      -"));
+    let step_end = next_step_offset
+        .map(|off| name_line_idx + 1 + off)
+        .unwrap_or(lines.len());
+
+    let mut keys: Vec<String> = lines[name_line_idx..step_end]
+        .iter()
+        .filter_map(|l| {
+            extract_key_name_at_indent(l, 6).or_else(|| extract_key_name_at_indent(l, 8))
+        })
+        .collect();
+    keys.sort();
+    Ok(keys)
+}
+
 /// Extract and normalize the SOLE `run:` line belonging to the step whose
 /// `name:` value is EXACTLY `step_name` (matched as the literal line
 /// `      - name: {step_name}`, 6-space step-marker indent — the shape
@@ -3968,18 +4224,27 @@ const PINNED_CI_GATE_SELF_TEST_RUN_LINE: &str = "bash scripts/check-ci-gate.sh -
 /// many steps and many `run:` lines; `extract_and_normalize_sole_run_
 /// line`'s "exactly one `run:` in the whole block" invariant does not
 /// hold there.
+///
+/// S-626-1 pass-59 (ADV-P58-MED-001): despite the `_sole_` in this
+/// function's name describing the "exactly one `run:` line WITHIN the
+/// matched step" invariant, step-NAME matching itself used to be
+/// `.position(...)` — first match, with NO duplicate-name rejection. A
+/// second, decoy step also named `name: {step_name}` inserted BEFORE the
+/// real one (e.g. a no-op `run: true` step with the identical name) would
+/// silently make this function pin the DECOY's `run:` line instead of the
+/// real step's — the whole 27/27 suite stays green while the check-
+/// ci-gate self-test step (or any future caller) is invisibly bypassed.
+/// Fixed to collect ALL matching `name:` line indices and `Err` on more
+/// than one, mirroring the `needs_line_indices`/`run_line_indices`
+/// multiple-match rejection idiom already used throughout this file
+/// (`parse_needs_set`, `extract_and_normalize_if_expr`, and this same
+/// function's own `run:`-line duplicate check just below).
 fn extract_and_normalize_step_run_line_by_name(
     job_block: &str,
     step_name: &str,
 ) -> Result<String, String> {
     let lines: Vec<&str> = job_block.lines().collect();
-    let name_needle = format!("- name: {step_name}");
-    let Some(name_line_idx) = lines.iter().position(|l| l.trim_start() == name_needle) else {
-        return Err(format!(
-            "has no step with `name: {step_name}` at all (checked for the \
-             exact line `      - name: {step_name}`)."
-        ));
-    };
+    let name_line_idx = find_sole_step_by_name(&lines, step_name)?;
 
     let next_step_offset = lines[name_line_idx + 1..]
         .iter()
@@ -4702,7 +4967,32 @@ fn extract_and_normalize_sole_needs_line(job_block: &str) -> Result<String, Stri
     let idx = needs_line_indices[0];
 
     let line = lines[idx];
-    let raw = line.trim_start().strip_prefix("needs:").unwrap_or("");
+    // S-626-1 pass-59 (ADV-P57-INFO-003): the key was detected via
+    // `extract_key_name_at_indent` (quote/whitespace-aware), but this
+    // VALUE re-read used to be a bare `strip_prefix("needs:").unwrap_or(
+    // "")` — a quoted key spelling (`"needs":`/`'needs':`) or `needs :`
+    // (space before colon) silently collapsed `raw` to `""`, which then
+    // fell into the `is_empty()` branch below and reported the MISLEADING
+    // message "has an empty same-line `needs:` value ... a block-list \
+    // form ... cannot be safely represented" — actively wrong for a
+    // quoted-key job block, which has neither an empty value nor a
+    // block-list form. Same key-detect vs. value-reparse swallow shape
+    // the `910b8ab0` sweep closed elsewhere; fixed the same way (a loud,
+    // specific `Err` on the re-read itself) rather than leaving a
+    // downstream branch to misdiagnose the symptom.
+    let Some(raw) = line.trim_start().strip_prefix("needs:") else {
+        return Err(format!(
+            "has a job-level `needs:` key detected via the quote/\
+             whitespace-aware matcher at 4-space indent, but this \
+             function's own value-extraction re-read (a bare \
+             `strip_prefix(\"needs:\")`) could not parse the same line — \
+             most likely a quoted key spelling (`\"needs\":` / \
+             `'needs':`) or `needs :` (space before colon), which \
+             `extract_key_name_at_indent` recognizes but this bare \
+             re-read does not.\n\
+             Offending line: {line:?}"
+        ));
+    };
     let raw_value_leading_trimmed = raw.trim_start();
 
     if raw_value_leading_trimmed.starts_with('>') || raw_value_leading_trimmed.starts_with('|') {
@@ -5840,9 +6130,25 @@ fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
             )
         });
 
+        // S-626-1 pass-59 (ADV-P57-INFO-001): routed through
+        // `extract_key_name_at_indent`, the same quote/whitespace-aware
+        // matcher used throughout this file, rather than a raw
+        // `l.starts_with("    if:")` — this was the THIRD such site the
+        // `910b8ab0` class sweep missed (M2-a/M2-d were the other two;
+        // see `test_ci_gate_pass_fail_semantics_are_structurally_placed`).
+        // Also drops the dead conjunct `&& !l.starts_with("        ")`,
+        // which — as round 10 already noted when removing the same dead
+        // conjunct from `line_declares_job_level_key` — could never be
+        // `false` once the 4-space-prefix check had already matched (no
+        // line can simultaneously start with exactly 4 spaces AND 8
+        // spaces). This test is a faster diagnostic layered on top of the
+        // behavioral closure in
+        // `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
+        // (see this function's own doc comment) — fail-closed either way,
+        // consistency fix only.
         let has_job_level_if = job_block
             .lines()
-            .any(|l| l.starts_with("    if:") && !l.starts_with("        "));
+            .any(|l| extract_key_name_at_indent(l, 4).as_deref() == Some("if"));
 
         assert!(
             has_job_level_if,
@@ -6105,12 +6411,46 @@ fn list_job_ids_in_workflow(content: &str, path: &Path) -> Vec<String> {
 ///      discipline `extract_and_normalize_if_expr` uses for its `${{ }}`
 ///      wrapper: panic rather than guess at folding/escape rules this
 ///      checker was never built to interpret.
+///
+/// S-626-1 pass-59 (ADV-P57-HIGH-001): a third gap, one step EARLIER than
+/// either of the two above — this function's `extract_key_name_at_indent
+/// (line, 4)` scan silently finds nothing at all (not a wrong VALUE, no
+/// KEY detected in the first place) when the job body is written at any
+/// indent other than 4 spaces, which is legal, `actionlint`-clean YAML.
+/// Verified: a sibling-workflow job with `name: CI Gate` at 6-space
+/// indent returned `None` here — indistinguishable from "declares no
+/// name" — leaving Guard A's `Some("CI Gate")` comparison silently
+/// unable to catch the exact duplicate-check-name collision it exists to
+/// detect. See `assert_job_block_uses_4_space_child_indent`'s doc comment
+/// for the shared root-cause analysis (also applied to
+/// `matrix_needs_members`).
 fn extract_job_display_name(job_block: &str) -> Option<String> {
+    assert_job_block_uses_4_space_child_indent(
+        job_block,
+        "S-626-1 Guard A, ADV-P57-HIGH-001 (extract_job_display_name)",
+    );
     for line in job_block.lines() {
         if extract_key_name_at_indent(line, 4).as_deref() != Some("name") {
             continue;
         }
-        let after_key = line.trim_start().strip_prefix("name:").unwrap_or_else(|| {
+        // S-626-1 pass-59 (ADV-P57-INFO-004): strip a leading `- `
+        // sequence marker before the bare `strip_prefix("name:")` re-read
+        // below, mirroring `extract_key_name_at_indent`'s own marker-
+        // stripping step. Without this, a 4-space step-SEQUENCE-style
+        // line (`    - name: ...`) — latent today (no file in this repo
+        // uses it; `jobs.<id>` must be a YAML MAPPING per the GitHub
+        // Actions schema, so a job whose value is a sequence is rejected
+        // by GitHub's own parser before this checker would ever see it
+        // run) — was detected as declaring `name` by the marker-aware key
+        // matcher above, but this un-stripped re-read did not recognize
+        // the same `- ` prefix and hard-panicked with a MISLEADING
+        // "quoted key spelling" diagnosis on a line that has neither.
+        // Fixed for robustness against unrelated YAML mistakes in a
+        // sibling workflow (a false-red here would block an unrelated
+        // PR), not because this construct is a reachable Guard A bypass.
+        let trimmed = line.trim_start();
+        let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+        let after_key = trimmed.strip_prefix("name:").unwrap_or_else(|| {
             panic!(
                 "FAIL (S-626-1 Guard A, ADV-P56-HIGH-002): a job-level \
                  `name:` key was detected via the quote/whitespace-aware \
@@ -6140,6 +6480,42 @@ fn extract_job_display_name(job_block: &str) -> Option<String> {
                  checker refuses to guess at block-scalar folding rules \
                  rather than risk silently missing a spelling of the exact \
                  same rendered name Guard A exists to catch.\n\
+                 Offending line: {line:?}"
+            );
+        }
+
+        // S-626-1 pass-59 (ADV-P57-LOW-001): a value beginning with `*`
+        // (an alias reference), `&` (an anchor declaration — usually
+        // paired with a `*`-referenced value elsewhere), or `!` (an
+        // explicit YAML tag, e.g. `!!str`) is a node-property form this
+        // checker cannot resolve from this one line alone: an alias's
+        // real text lives at its `&anchor` definition elsewhere in the
+        // file, and a tag does not change the scalar's rendered text but
+        // this checker does not interpret tag semantics to know that.
+        // Verified (PyYAML AND Ruby Psych, independent implementations):
+        // `name: *nm` (with `x-tpl: &nm CI Gate` declared elsewhere) and
+        // `name: !!str CI Gate` both render to the plain string `CI
+        // Gate` — exactly the duplicate-check-name collision Guard A
+        // exists to catch — while comparing the literal text `"*nm"` or
+        // `"!!str CI Gate"` against `"CI Gate"` would silently miss it.
+        // Same class this file's CLAUDE.md documents as "round 16 —
+        // UNGUARDED, code review is the control": this checker refuses to
+        // guess at anchor/alias/tag resolution rather than risk silently
+        // missing a spelling of the identical rendered name.
+        if value.starts_with('*') || value.starts_with('&') || value.starts_with('!') {
+            panic!(
+                "FAIL (S-626-1 Guard A, ADV-P57-LOW-001): a job-level \
+                 `name:` value uses a YAML alias/anchor/tag form \
+                 (\"{value}\") — an alias (`*name`), anchor (`&name`), or \
+                 explicit tag (`!tag`/`!!str`) renders to a string this \
+                 checker cannot resolve from this line alone (an alias's \
+                 real text lives at its `&anchor` definition elsewhere in \
+                 the file; a tag does not change the scalar's rendered \
+                 text, but this checker does not interpret tag semantics \
+                 to know that). This checker refuses to guess at \
+                 anchor/alias/tag resolution rather than risk silently \
+                 missing a spelling of the exact same rendered name Guard \
+                 A exists to catch.\n\
                  Offending line: {line:?}"
             );
         }
@@ -6304,6 +6680,15 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
 /// See the module-level "KNOWN LIMITATION SHARED BY BOTH GUARDS" note above
 /// this section — this test is line-based and shares the round-16
 /// node-property residual like every other pin in this file.
+///
+/// PINNED count of `ci-gate.needs` members that carry a build matrix
+/// (today: `clippy`, `test`). S-626-1 pass-59 (ADV-P57-HIGH-001): an
+/// exact-arity pin, not a mere non-empty check — see the assertion below
+/// for why a non-empty check alone cannot detect losing ONE of several
+/// matrix jobs. Update in the SAME change as any deliberate
+/// addition/removal of a build-matrix job.
+const PINNED_MATRIX_NEEDS_MEMBER_COUNT: usize = 2;
+
 #[test]
 fn test_matrix_os_lists_remain_static_literals() {
     let ci = read_ci_yml();
@@ -6312,15 +6697,29 @@ fn test_matrix_os_lists_remain_static_literals() {
     // (see `matrix_needs_members`'s doc comment) rather than the prior
     // hardcoded `["clippy", "test"]` literal.
     let matrix_job_ids = matrix_needs_members(&ci);
-    assert!(
-        !matrix_job_ids.is_empty(),
-        "FAIL (S-626-1 Guard B, ADV-P56-LOW-002): no `ci-gate.needs` member \
-         declares a job-level `strategy:` key at 4-space indent, so Guard B \
-         has nothing to check. If `clippy`/`test` genuinely lost their \
-         build matrices, this is expected and this assertion should be \
-         relaxed deliberately; if it fires unexpectedly, `strategy:`'s \
-         indent, `matrix_needs_members`'s `needs:` derivation, or the job's \
-         extracted block may be broken."
+    // S-626-1 pass-59 (ADV-P57-HIGH-001 arity check): `!is_empty()` only
+    // proves Guard B has SOMETHING to check — losing one of TWO matrix
+    // jobs (today: `clippy`, `test`) is invisible to a non-empty check,
+    // since the set still has ≥1 member either way. Pin the exact count
+    // instead, mirroring every other exact-arity pin in this file (e.g.
+    // `PINNED_GATE_JOB_KEYS`'s set-equality). Update
+    // `PINNED_MATRIX_NEEDS_MEMBER_COUNT` in the SAME change as any
+    // deliberate addition/removal of a build-matrix job.
+    assert_eq!(
+        matrix_job_ids.len(),
+        PINNED_MATRIX_NEEDS_MEMBER_COUNT,
+        "FAIL (S-626-1 Guard B, ADV-P57-HIGH-001): `matrix_needs_members` \
+         returned {} member(s) ({matrix_job_ids:?}), not the pinned count \
+         of {PINNED_MATRIX_NEEDS_MEMBER_COUNT}. A non-empty check alone \
+         cannot detect losing ONE of several matrix jobs (e.g. `clippy` \
+         silently dropping out while `test` remains) — the set would \
+         still be non-empty either way. If `clippy`/`test` (or a future \
+         matrix job) genuinely gained or lost a build matrix, this is \
+         expected; update PINNED_MATRIX_NEEDS_MEMBER_COUNT in the SAME \
+         change. If it fires unexpectedly, `strategy:`'s indent, \
+         `matrix_needs_members`'s `needs:` derivation, or a job's \
+         extracted block may be broken.",
+        matrix_job_ids.len()
     );
 
     for job_id in &matrix_job_ids {
@@ -6539,6 +6938,44 @@ const EXPECTED_GUARD_TEST_COUNT: usize = 27;
 /// the file's other seven textual occurrences of `#[test]` all live inside
 /// `///` doc comments or a panic-message string literal, and none of those
 /// lines' trimmed text starts with the literal `#[test]`.
+///
+/// S-626-1 pass-59 (ADV-P57-MED-002 ≡ ADV-P58-MED-002, dedupe — same
+/// finding reported twice): `EXPECTED_GUARD_TEST_COUNT` above pins the
+/// `#[test]` ATTRIBUTE count, not ENFORCEMENT. Two distinct ways to make
+/// a test attribute stop running while the count above stays unmoved:
+///   - `#[ignore]`: `cargo test` still reports the binary's overall
+///     result as `ok` (e.g. "26 passed; 1 ignored"), so `ci.yml`'s
+///     POL-11 gate (3) — which only requires a non-zero passed count
+///     from THIS binary (`_canary_passed -eq 0` → FAIL) — is satisfied
+///     by the 26 REMAINING tests.
+///   - `#[cfg(target_os = "haiku")]` (or any predicate false on every
+///     platform this repo actually builds for — `ubuntu-latest` /
+///     `windows-latest` / `macos-latest`, per the `test` job's matrix):
+///     the gated `#[test]` fn does not exist in the compiled binary AT
+///     ALL, on ANY of those platforms, yet the textual attribute is
+///     still present in `include_str!`'s source, so `actual` above is
+///     unaffected.
+///
+/// Either construction, applied to
+/// `test_ci_gate_pass_fail_semantics_are_structurally_placed` — the
+/// single largest concentration of decision-path pins in this file
+/// (M2-a..p) — silently removes that entire test from every CI run while
+/// `EXPECTED_GUARD_TEST_COUNT` and POL-11's canary both stay green.
+///
+/// FIX: assert zero `#[ignore]` attributes anywhere in this file, and
+/// that every `#[cfg(...)]` line immediately preceding a `#[test]` line
+/// is the ONE legitimate form in this file today, `#[cfg(unix)]` (used
+/// by the tests that shell out to bash and therefore cannot exist on
+/// Windows — see `list_all_ci_yml_job_names`'s doc comment for the
+/// "gating a test also orphans its helpers" lesson from PR #671 review
+/// round 15, which this same allowlist must be kept consistent with).
+/// `ci.yml`'s POL-11 gate (3) is NOT changed from `> 0` to an equality
+/// against `EXPECTED_GUARD_TEST_COUNT`: this file's `test` job runs on a
+/// TWO-OS matrix (`ubuntu-latest`, `windows-latest`), and the four
+/// `#[cfg(unix)]`-gated `#[test]` fns in this file genuinely do not
+/// compile on the Windows leg — a literal `27` there would fail every
+/// Windows `test` run even on a fully green tree. That entanglement is
+/// resolved on the Rust side only; see this test's assertions below.
 #[test]
 fn test_this_file_test_count_matches_expected_denominator() {
     let source = include_str!("ci_gate_completeness.rs");
