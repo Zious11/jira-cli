@@ -309,15 +309,31 @@ EOF
 #
 # Enforced STRICTLY (the resolved path's directory must be a member of
 # trusted_jq_dirs_for($RUNNER_OS) — see that function immediately below)
-# whenever this looks like a real GitHub Actions job — `GITHUB_ACTIONS=true`
-# OR `RUNNER_OS` non-empty (S-626-1 ADV-P61-MEDIUM-002; see that section's
-# comment below for why BOTH signals gate strict mode, not just the first).
-# Outside that (local `--self-test` runs under any package manager's jq),
-# every path still goes through the absolute/executable check immediately
-# below — the ONLY thing NOT enforced outside strict mode is directory
-# membership in trusted_jq_dirs_for($RUNNER_OS). This script has no
-# adversarial PATH to defend against beyond that outside a real GitHub
-# Actions job.
+# whenever `RUNNER_OS` is non-empty. Outside that (local `--self-test`
+# runs under any package manager's jq, where `RUNNER_OS` is normally
+# unset), every path still goes through the absolute/executable check
+# immediately below — the ONLY thing NOT enforced outside strict mode is
+# directory membership in trusted_jq_dirs_for($RUNNER_OS).
+#
+# S-626-1 ADV-P61 follow-up research — WHY `RUNNER_OS`, NOT `GITHUB_ACTIONS`
+# (this superseded an earlier revision of this fix that gated on
+# `GITHUB_ACTIONS=true` OR `RUNNER_OS` non-empty, treating a mismatch as
+# an error): a GitHub-supplied source-level fact search of `actions/runner`
+# found `FileCommandManager.cs`'s `$GITHUB_ENV` write blocklist is
+# verbatim `{ "NODE_OPTIONS" }` — no `GITHUB_*`/`RUNNER_*` prefix filter —
+# so an earlier step in the SAME job can very likely overwrite
+# `GITHUB_ACTIONS` to anything it wants (this specific claim is a
+# high-confidence INFERENCE from source reading, not independently run
+# against a live workflow, and it contradicts GitHub's own docs stating
+# `GITHUB_*`/`RUNNER_*` "can't be overwritten" — docs and source disagree
+# here). `RUNNER_OS`, by contrast, is CONFIRMED protected: every
+# `RunnerContext` key, `RUNNER_OS` included, is regenerated from
+# `RunnerContext.GetRuntimeEnvironmentVariables()` with no allowlist gap,
+# so even if an earlier step's `$GITHUB_ENV` write reaches the process
+# environment at all, the runner's own context regeneration overwrites it
+# back to the true value before the next step runs. Keying strict mode on
+# `RUNNER_OS` alone (not `GITHUB_ACTIONS`, and not a mismatch between the
+# two) uses the one signal in this pair that is actually known-trustworthy.
 #
 # ADV-P61-LOW-003 (fixed, not just documented): this comment previously
 # claimed "only an absolute, existing path is required" outside strict
@@ -325,6 +341,30 @@ EOF
 # was accepted and executed unconditionally. The absolute+executable check
 # a few lines below now makes this comment's claim true instead of
 # weakening the comment to match the gap.
+#
+# HONEST SCOPE — WHAT THIS CANNOT CLOSE (S-626-1 ADV-P61 follow-up
+# research, do not remove or soften this paragraph; see "THE TRAP" review
+# guidance this story's own commit history already cites): both
+# `ubuntu-latest` and `macos-latest` GitHub-hosted runners grant the job
+# PASSWORDLESS sudo (CONFIRMED — GitHub Docs "GitHub-hosted runners" §
+# "Administrative privileges"; corroborated by `actions/runner-images`
+# issue #10484 showing `/etc/sudoers.d/runner` grants
+# `runner ALL=(root) NOPASSWD:ALL`). An attacker with this story's modeled
+# capability — arbitrary execution in an EARLIER STEP of the same job —
+# does not need a PATH shim at all: `sudo cp /tmp/shim /usr/bin/jq`
+# replaces the TRUSTED system binary in place. No directory allowlist,
+# however refined, can detect that — the shim now IS the trusted path.
+# This function's checks (dirname-immune directory allowlisting, absolute
+# +executable, RUNNER_OS-keyed strict mode) close the cheaper PATH-shim
+# vector and are worth keeping, but they do not achieve, and must never be
+# described as achieving, "an attacker cannot forge the gate's decision"
+# — that property is unreachable from inside this script. The actual
+# control for the sudo-replacement vector is not running untrusted code in
+# an earlier step of the `ci-gate` job at all, which is the `uses:`-value
+# pinning question CLAUDE.md's CI Gate history already records as a
+# knowing, deliberate scope decision (out of this story, which is about
+# the pass/fail decision path once inputs are trusted, not supply-chain
+# pinning of what runs before it).
 #
 # S-626-1 CI-BREAK-1 (real CI run 31406705091 on commit a17939e2): the
 # ORIGINAL version of this function pinned exactly one path,
@@ -390,55 +430,21 @@ resolve_trusted_jq() {
         return 2
     fi
 
-    # S-626-1 ADV-P61-MEDIUM-002: `GITHUB_ACTIONS=true` alone is not a
-    # robust "am I really in a GitHub Actions job" signal — it is an
-    # ordinary environment variable, and any earlier step in the SAME job
-    # can rewrite it via $GITHUB_ENV (the same documented mechanism
-    # ADV-P59-LOW-001 already showed can plant a PATH shim via
-    # $GITHUB_PATH). Verified: unsetting GITHUB_ACTIONS, or setting it to
-    # "false"/"TRUE", each silently skipped the entire strict branch below
-    # with NO shim required for GITHUB_ACTIONS itself — only the
-    # subsequent PATH-shim step was needed to complete the bypass.
-    #
-    # Fix: treat RUNNER_OS's mere presence as an INDEPENDENT strict-mode
-    # trigger too (a real runner always sets both together), and treat a
-    # MISMATCH between the two signals — RUNNER_OS set but
-    # GITHUB_ACTIONS != "true" — as an attack indicator to fail closed on,
-    # not as "must be a local dev machine, fall back to lenient mode".
-    #
-    # HONEST SCOPE (do not overclaim closure — see this story's own "THE
-    # TRAP" review guidance): this raises the attacker's cost, it does not
-    # eliminate the vector. A sufficiently determined earlier step could
-    # still rewrite BOTH GITHUB_ACTIONS and RUNNER_OS consistently (to
-    # either both look like CI, or both look like a local machine) via
-    # $GITHUB_ENV. Doing so undetected requires overriding every reserved
-    # variable this script (and, transitively, this check) actually reads
-    # in a self-consistent way, which is a materially larger and more
-    # conspicuous diff than the single-variable bypass this fixes — but it
-    # is not proven impossible. No fully env-var-independent trust anchor
-    # was available within this story's scope.
-    local github_actions="${GITHUB_ACTIONS:-}"
-    local runner_os_seen="${RUNNER_OS:-}"
-    if [ "${github_actions}" = "true" ] || [ -n "${runner_os_seen}" ]; then
-        if [ "${github_actions}" != "true" ]; then
-            echo "ERROR: RUNNER_OS is set ('${runner_os_seen}') but" >&2
-            echo "       GITHUB_ACTIONS is not 'true'. A real GitHub" >&2
-            echo "       Actions runner always sets both together; this" >&2
-            echo "       mismatch is refused rather than treated as a" >&2
-            echo "       local, non-CI invocation (ADV-P61-MEDIUM-002) —" >&2
-            echo "       refusing to trust jq at '${resolved}'." >&2
-            return 2
-        fi
-        local os="${runner_os_seen}"
-        if [ -z "${os}" ]; then
-            echo "ERROR: GITHUB_ACTIONS=true but RUNNER_OS is unset. Every" >&2
-            echo "       real GitHub Actions runner sets RUNNER_OS — its" >&2
-            echo "       absence here means this script's execution" >&2
-            echo "       context cannot be trusted to select the correct" >&2
-            echo "       jq directory allowlist. Refusing to trust jq at" >&2
-            echo "       '${resolved}'." >&2
-            return 2
-        fi
+    # S-626-1 ADV-P61-MEDIUM-002, RE-KEYED per follow-up research (see the
+    # HONEST SCOPE / "WHY RUNNER_OS, NOT GITHUB_ACTIONS" comment block
+    # above this function): strict mode is gated on `RUNNER_OS` alone.
+    # `RUNNER_OS` is CONFIRMED regenerated by the runner's own context
+    # machinery every step, with no override path found — unlike
+    # `GITHUB_ACTIONS`, which prior research found very likely
+    # attacker-writable via an earlier step's `$GITHUB_ENV` write (no
+    # `GITHUB_*`/`RUNNER_*` prefix filter on that blocklist). An earlier
+    # revision of this fix additionally gated on `GITHUB_ACTIONS=true` and
+    # treated a mismatch against `RUNNER_OS` as an error; that is removed
+    # here — `GITHUB_ACTIONS`'s value carries no security-relevant
+    # information once `RUNNER_OS` alone is the trigger, so checking it
+    # would add complexity without adding assurance.
+    local os="${RUNNER_OS:-}"
+    if [ -n "${os}" ]; then
         local dir
         # Pure-bash dirname (S-626-1 ADV-P61-HIGH-001): `dirname` is
         # itself resolved via PATH, so calling the external binary here
@@ -643,8 +649,13 @@ evaluate_needs() {
 #      ADV-P59-LOW-001 security property this whole guard exists to
 #      enforce (meaningless as a pure string check, since the property
 #      under test is specifically "a PATH-prepend shim is rejected").
-#   3. FAIL-CLOSED — check 12: GITHUB_ACTIONS=true with RUNNER_OS unset
-#      refuses, regardless of where jq resolves.
+#   3. FAIL-CLOSED (as originally written) — check 12 asserted
+#      GITHUB_ACTIONS=true with RUNNER_OS unset refuses. THIS WAS CHANGED
+#      by the ADV-P61 follow-up research below: check 12 now asserts the
+#      opposite (ACCEPT, non-strict) for that exact input, because strict
+#      mode is no longer gated on GITHUB_ACTIONS at all — see its own
+#      comment at the check site for why this is correct, not a
+#      regression.
 #
 # S-626-1 ADV-P61 additions (checks 14-17) — a targeted review found the
 # jq-identity pin above did NOT, by itself, achieve "an attacker cannot
@@ -656,17 +667,25 @@ evaluate_needs() {
 # statement — these checks raise attacker cost, they do not claim a fully
 # closed decision path (that would require pinning EVERY external binary
 # call transitively reachable from ci.yml's `ci-gate` job, which is out
-# of this story's scope):
+# of this story's scope — and, per the follow-up research documented on
+# resolve_trusted_jq itself, GitHub-hosted runners' passwordless sudo
+# means no in-script check can fully close this class regardless of
+# scope):
 #   14. reject-dirname-shim-lying-about-trusted-dir (ADV-P61-HIGH-001) —
 #       a shim directory supplying BOTH a fake `jq` and a `dirname` that
 #       always prints a trusted path is still refused, because
 #       resolve_trusted_jq no longer calls external `dirname` at all.
 #   15. reject-relative-path-jq-regardless-of-mode (ADV-P61-LOW-003) — the
 #       absolute+executable check applies in every mode, not just strict.
-#   16. fail-closed-runner-os-set-github-actions-not-true
-#       (ADV-P61-MEDIUM-002) — a mismatched signal (RUNNER_OS set,
-#       GITHUB_ACTIONS not "true") refuses rather than silently falling
-#       back to non-strict mode.
+#   12 (repurposed) / 16 (ADV-P61-MEDIUM-002, RE-KEYED after follow-up
+#       research replaced the GITHUB_ACTIONS-mismatch design with a
+#       RUNNER_OS-only trigger — see resolve_trusted_jq's own comment):
+#       12 now proves RUNNER_OS-unset is genuinely non-strict regardless
+#       of GITHUB_ACTIONS (ACCEPT, an untrusted-dir shim); 16 proves
+#       RUNNER_OS-set alone still triggers strict rejection with
+#       GITHUB_ACTIONS entirely unset (REJECT, same untrusted-dir shim).
+#       Together they show GITHUB_ACTIONS's value no longer has any
+#       bearing on the decision either way.
 #   17. reject-cat-shim-for-main-stdin-read (ADV-P61-INFO-005) — the ONLY
 #       check in this suite that spawns the WHOLE script as a real
 #       subprocess (via `bash "${BASH_SOURCE[0]}"`, not `--self-test`),
@@ -852,38 +871,76 @@ RELSHIM
 
     rm -rf "${rel_scratch}"
 
-    # --- FAIL-CLOSED: GITHUB_ACTIONS=true with RUNNER_OS unset (12) ---
-    rc=0
-    out=$(
-        {
-            unset RUNNER_OS
-            export GITHUB_ACTIONS=true
-            resolve_trusted_jq
-        } 2>&1
-    ) || rc=$?
-    record_resolve_check \
-        "fail-closed-runner-os-unset" "${rc}" "fail:2" "${out}" \
-        "RUNNER_OS is unset"
-
-    # --- FAIL-CLOSED: RUNNER_OS set but GITHUB_ACTIONS not "true" (16, ADV-P61-MEDIUM-002) ---
+    # --- ACCEPT (intentional, non-strict): RUNNER_OS unset skips directory
+    # enforcement regardless of GITHUB_ACTIONS (12, re-keyed per ADV-P61
+    # follow-up research — see resolve_trusted_jq's "WHY RUNNER_OS, NOT
+    # GITHUB_ACTIONS" comment) ---
     #
-    # Reproduces the bypass an earlier step could attempt via $GITHUB_ENV:
-    # rewrite GITHUB_ACTIONS to something other than "true" while leaving
-    # RUNNER_OS (and the rest of the real job environment) untouched. The
-    # pre-fix `[ "${GITHUB_ACTIONS:-}" = "true" ]`-only gate silently fell
-    # back to non-strict mode here — no directory check at all. This
-    # mismatched-signal state must now refuse outright instead.
-    rc=0
-    out=$(
+    # A jq shim planted in an arbitrary UNTRUSTED directory is still
+    # ACCEPTED here, on purpose: with GITHUB_ACTIONS=true set but RUNNER_OS
+    # genuinely unset, this script has no directory allowlist to check
+    # against (there is no RUNNER_OS to key trusted_jq_dirs_for() with) —
+    # this is the documented local/non-CI posture, not a gap, because
+    # RUNNER_OS's absence in a real GitHub Actions job is not attacker-
+    # reachable (CONFIRMED regenerated every step, no override path
+    # found). Proves the earlier (superseded) mismatch-based design's
+    # "GITHUB_ACTIONS=true but RUNNER_OS unset -> hard error" branch is
+    # gone: this state now just means non-strict mode, same as a plain
+    # developer laptop.
+    local unset_scratch unset_dir unset_out unset_rc
+    unset_scratch=$(mktemp -d)
+    unset_dir="${unset_scratch}/wherever"
+    mkdir -p "${unset_dir}"
+    cat >"${unset_dir}/jq" <<'JQSHIM'
+#!/usr/bin/env bash
+echo '{}'
+JQSHIM
+    chmod +x "${unset_dir}/jq"
+    unset_rc=0
+    unset_out=$(
         {
-            export RUNNER_OS=Linux
-            unset GITHUB_ACTIONS
+            export PATH="${unset_dir}:${PATH}"
+            export GITHUB_ACTIONS=true
+            unset RUNNER_OS
             resolve_trusted_jq
         } 2>&1
-    ) || rc=$?
+    ) || unset_rc=$?
     record_resolve_check \
-        "fail-closed-runner-os-set-github-actions-not-true" "${rc}" "fail:2" "${out}" \
-        "GITHUB_ACTIONS is not 'true'"
+        "non-strict-accepts-untrusted-dir-jq-when-runner-os-unset" "${unset_rc}" "pass" "${unset_out}"
+    rm -rf "${unset_scratch}"
+
+    # --- REJECT: RUNNER_OS alone triggers strict mode, independent of
+    # GITHUB_ACTIONS (16, ADV-P61-MEDIUM-002 re-keyed) ---
+    #
+    # A jq shim in an UNTRUSTED directory is still REFUSED here even with
+    # GITHUB_ACTIONS entirely unset — proving RUNNER_OS is genuinely the
+    # sole trigger, not merely an additional condition alongside
+    # GITHUB_ACTIONS. This is the concrete, evidence-backed improvement
+    # over the superseded GITHUB_ACTIONS-mismatch design: an attacker who
+    # rewrites GITHUB_ACTIONS via $GITHUB_ENV (plausible per source
+    # reading) gains nothing, because this check no longer looks at it.
+    local ro_scratch ro_dir ro_out ro_rc
+    ro_scratch=$(mktemp -d)
+    ro_dir="${ro_scratch}/untrusted"
+    mkdir -p "${ro_dir}"
+    cat >"${ro_dir}/jq" <<'JQSHIM'
+#!/usr/bin/env bash
+echo '{}'
+JQSHIM
+    chmod +x "${ro_dir}/jq"
+    ro_rc=0
+    ro_out=$(
+        {
+            export PATH="${ro_dir}:${PATH}"
+            unset GITHUB_ACTIONS
+            export RUNNER_OS=Linux
+            resolve_trusted_jq
+        } 2>&1
+    ) || ro_rc=$?
+    record_resolve_check \
+        "strict-mode-triggers-on-runner-os-alone" "${ro_rc}" "fail:2" "${ro_out}" \
+        "one of the trusted system jq directories"
+    rm -rf "${ro_scratch}"
 
     # --- ACCEPT: live, host-adaptive end-to-end wiring proof (13) ---
     #
