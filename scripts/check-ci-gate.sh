@@ -219,6 +219,53 @@ print_allowed_skips() {
 # script's own `--self-test` run.
 # ---------------------------------------------------------------------------
 
+# trusted_jq_dirs_for <runner_os> — single source of truth for the trusted
+# system jq directory allowlist, keyed by GitHub Actions' own $RUNNER_OS
+# value ("Linux" | "macOS" | "Windows"). One directory per line on
+# stdout; empty output for an OS this guard does not (yet) model. See
+# resolve_trusted_jq's "S-626-1 CI-BREAK-1" comment below for why this is
+# a directory ALLOWLIST rather than a single-path pin or a writable-
+# location denylist.
+#
+# Only Linux and macOS are populated — the only two RUNNER_OS values
+# under which this script actually executes today (`ubuntu-latest` for
+# `spec-guard`/`ci-gate`; `ubuntu-latest` AND `macos-latest` for the
+# `#[cfg(unix)]` subprocess tests in `tests/ci_gate_completeness.rs`; no
+# `windows-latest` job invokes this script — those tests are
+# `#[cfg(unix)]`-gated and do not exist on that leg). A future job that
+# runs this script on `windows-latest` must add a `Windows` entry here
+# FIRST, deliberately, not discover the gap via another production CI
+# break of the kind this whole function exists to prevent recurring.
+trusted_jq_dirs_for() {
+    case "$1" in
+        Linux)
+            printf '%s\n' "/usr/bin" "/bin"
+            ;;
+        macOS)
+            printf '%s\n' "/usr/bin" "/bin" "/usr/local/bin" "/opt/homebrew/bin"
+            ;;
+        *)
+            ;;
+    esac
+}
+
+# is_trusted_jq_dir <runner_os> <dir> — true (rc=0) iff <dir> is exactly
+# one of trusted_jq_dirs_for(<runner_os>)'s lines. Pure string
+# comparison — no filesystem access — so every supported
+# (runner_os, dir) pair is directly unit-testable with synthetic inputs
+# in `run_jq_trust_self_test` without needing a real jq binary (or
+# anything else) to actually exist at the candidate path.
+is_trusted_jq_dir() {
+    local os="$1" dir="$2" candidate
+    while IFS= read -r candidate; do
+        [ -z "${candidate}" ] && continue
+        [ "${dir}" = "${candidate}" ] && return 0
+    done <<EOF
+$(trusted_jq_dirs_for "${os}")
+EOF
+    return 1
+}
+
 # resolve_trusted_jq — S-626-1 pass-59 (ADV-P59-LOW-001): every decision
 # value this script produces is jq-derived, resolved via a bare `command -v
 # jq` lookup. `$GITHUB_PATH` is a documented GitHub Actions mechanism that
@@ -242,17 +289,49 @@ print_allowed_skips() {
 # TOCTOU-style PATH mutation mid-function cannot make different
 # invocations within the same decision see different binaries.
 #
-# Enforced STRICTLY (must resolve to exactly `/usr/bin/jq`, the
-# pre-installed location on `ubuntu-latest` — see the TOOLING CHOICE
-# comment at the top of this file) only when `GITHUB_ACTIONS=true`, i.e.
-# the actual runtime this script executes in for `ci-gate`/`spec-guard`.
-# Outside that (local `--self-test` runs under any package manager's jq —
-# e.g. Homebrew's `/opt/homebrew/bin/jq` on macOS, or Linux distros that
-# ship jq at `/bin/jq` via a `/bin` -> `/usr/bin` symlink), only an
-# absolute, existing path is required — this script has no adversarial
-# PATH to defend against outside a real GitHub Actions job, and hardcoding
-# `/usr/bin/jq` unconditionally would make `--self-test` unrunnable on any
-# machine that does not use that exact path.
+# Enforced STRICTLY (the resolved path's directory must be a member of
+# trusted_jq_dirs_for($RUNNER_OS) — see that function immediately below)
+# only when `GITHUB_ACTIONS=true`, i.e. the actual runtime this script
+# executes in for `ci-gate`/`spec-guard`/the `#[cfg(unix)]` subprocess
+# tests. Outside that (local `--self-test` runs under any package
+# manager's jq), only an absolute, existing path is required — this
+# script has no adversarial PATH to defend against outside a real GitHub
+# Actions job.
+#
+# S-626-1 CI-BREAK-1 (real CI run 31406705091 on commit a17939e2): the
+# ORIGINAL version of this function pinned exactly one path,
+# `/usr/bin/jq` — correct for `ubuntu-latest` (where `spec-guard`/
+# `ci-gate` actually run this script) but WRONG for `macos-latest`, where
+# `tests/ci_gate_completeness.rs`'s `#[cfg(unix)]` subprocess tests
+# invoke `evaluate_needs()` and inherit the runner's own real
+# `GITHUB_ACTIONS=true` from the job environment — Homebrew installs
+# `jq` at `/opt/homebrew/bin/jq` (Apple Silicon `macos-latest`, the
+# current default) or `/usr/local/bin/jq` (Intel), never `/usr/bin/jq`.
+# The single-path pin rejected the runner's own LEGITIMATE jq on every
+# macOS `Test` leg, breaking `CI Gate` downstream (13/14 jobs succeeded
+# for real; `Test (macos-latest)` failed on this false rejection;
+# `CI Gate` correctly failed as a consequence of that failure). Why this
+# was invisible locally before merging: strict mode only engages when
+# `GITHUB_ACTIONS=true`, which is unset on a developer machine by
+# default, so `--self-test` alone never reached this branch — see
+# `run_jq_trust_self_test` below, added specifically to close that gap by
+# exercising the strict branch deterministically regardless of where
+# `--self-test` runs.
+#
+# Why a DIRECTORY ALLOWLIST keyed by $RUNNER_OS, not a denylist of
+# writable locations ($GITHUB_WORKSPACE/$RUNNER_TEMP/$HOME/...): this
+# repo's established CI-gate posture (see CLAUDE.md's CI-Gate history
+# above `evaluate_needs`) is default-deny — an allowlist of known-trusted
+# values that fails closed on anything new, not a denylist of known-bad
+# locations that silently passes anything not yet enumerated (the exact
+# allowlist-of-known-bad-values shape this whole guard exists to avoid
+# repeating, per the module-level PURPOSE comment). A writable-location
+# denylist is itself an open enumeration of the same kind that defeated
+# the round-3/round-5 `if:`-legitimacy predicates documented above. A
+# directory allowlist keyed by the runner's own reported OS is closed by
+# construction: a jq shim in ANY directory not in that OS's list is
+# rejected, including a location this comment's author never
+# anticipated.
 resolve_trusted_jq() {
     local resolved
     if ! resolved=$(command -v jq 2>/dev/null); then
@@ -260,18 +339,37 @@ resolve_trusted_jq() {
         return 2
     fi
     if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-        case "${resolved}" in
-            /usr/bin/jq) ;;
-            *)
-                echo "ERROR: jq resolved to '${resolved}' via PATH, not the" >&2
-                echo "       trusted /usr/bin/jq. Refusing to trust a jq" >&2
-                echo "       binary found elsewhere on PATH inside a GitHub" >&2
-                echo "       Actions job (possible PATH-prepend shim attack" >&2
-                echo "       via \$GITHUB_PATH — see resolve_trusted_jq's" >&2
-                echo "       comment in this file)." >&2
-                return 2
-                ;;
-        esac
+        local os="${RUNNER_OS:-}"
+        if [ -z "${os}" ]; then
+            echo "ERROR: GITHUB_ACTIONS=true but RUNNER_OS is unset. Every" >&2
+            echo "       real GitHub Actions runner sets RUNNER_OS — its" >&2
+            echo "       absence here means this script's execution" >&2
+            echo "       context cannot be trusted to select the correct" >&2
+            echo "       jq directory allowlist. Refusing to trust jq at" >&2
+            echo "       '${resolved}'." >&2
+            return 2
+        fi
+        local dir
+        dir=$(dirname -- "${resolved}")
+        if ! is_trusted_jq_dir "${os}" "${dir}"; then
+            echo "ERROR: jq resolved to '${resolved}' (directory" >&2
+            echo "       '${dir}') under RUNNER_OS='${os}', which is not" >&2
+            echo "       one of the trusted system jq directories for" >&2
+            echo "       that runner. Refusing to trust a jq binary found" >&2
+            echo "       elsewhere on PATH inside a GitHub Actions job" >&2
+            echo "       (possible PATH-prepend shim attack via" >&2
+            echo "       \$GITHUB_PATH — see resolve_trusted_jq's comment" >&2
+            echo "       in this file). Trusted directories for" >&2
+            echo "       RUNNER_OS='${os}':" >&2
+            local trusted_line
+            while IFS= read -r trusted_line; do
+                [ -z "${trusted_line}" ] && continue
+                echo "         ${trusted_line}" >&2
+            done <<EOF
+$(trusted_jq_dirs_for "${os}")
+EOF
+            return 2
+        fi
     fi
     printf '%s\n' "${resolved}"
 }
@@ -385,6 +483,245 @@ evaluate_needs() {
     done <<<"${jobs}"
 
     return "${overall_rc}"
+}
+
+# ---------------------------------------------------------------------------
+# jq-trust self-test (S-626-1 CI-BREAK-1, real CI run 31406705091 on
+# a17939e2): exercises resolve_trusted_jq's STRICT branch
+# (GITHUB_ACTIONS=true) locally. Without this, the strict directory
+# allowlist branch is unreachable from ANY local or CI `--self-test` run
+# — `run_self_test` above only ever calls evaluate_needs(), which never
+# sets GITHUB_ACTIONS=true itself, so a developer running `--self-test`
+# on a laptop never touches the strict branch at all. That is exactly
+# the defect class that shipped broken: the ORIGINAL single-path pin
+# (`/usr/bin/jq` only) was correct for `ubuntu-latest` but wrong for
+# `macos-latest`'s real Homebrew jq location, and nothing running
+# locally could have caught it because the branch it lived in only
+# engages under a real GitHub Actions job. Each check below forces
+# GITHUB_ACTIONS/RUNNER_OS/PATH for the duration of an isolated `$( … )`
+# subshell (a real subprocess fork, not the running script's own
+# environment), so none of these overrides leak into this script's own
+# execution or into any check that runs after it.
+#
+# Covers, per the story's minimum bar:
+#   1. ACCEPT — checks 1-6 below assert is_trusted_jq_dir() directly for
+#      every (RUNNER_OS, dir) pair trusted_jq_dirs_for() currently
+#      returns (Linux -> /usr/bin, /bin; macOS -> /usr/bin, /bin,
+#      /usr/local/bin, /opt/homebrew/bin). This is pure string
+#      comparison (see is_trusted_jq_dir's own doc comment) — no
+#      filesystem access, so it exercises every accept branch exactly,
+#      regardless of what jq happens to be installed on the machine
+#      running this suite, and directly reproduces the shape of
+#      CI-BREAK-1 itself (a single wrong pinned path). Check 13 adds one
+#      live, host-adaptive end-to-end call through resolve_trusted_jq()
+#      itself — using THIS machine's own real `command -v jq` result
+#      against its own real OS (mapped to RUNNER_OS) — to prove the
+#      wiring from resolve_trusted_jq through dirname/is_trusted_jq_dir
+#      is correct, not just the predicate in isolation. (Exhaustive
+#      path-exact end-to-end coverage of all four trusted directories
+#      would require placing a real binary at e.g. /usr/bin, which needs
+#      root and/or disabling SIP on macOS — out of reach for an offline,
+#      no-sudo self-test; checks 1-6 already cover those paths exactly
+#      at the predicate level, which is where CI-BREAK-1's actual defect
+#      lived.)
+#   2. REJECT — checks 7-10 assert is_trusted_jq_dir() rejects a
+#      dir/RUNNER_OS combination that is trusted for a DIFFERENT OS, an
+#      arbitrary writable directory, and an unmodeled RUNNER_OS (the
+#      empty-output `*` arm of trusted_jq_dirs_for). Check 11 is the
+#      filesystem-backed end-to-end case: a real shim executable in a
+#      throwaway `mktemp -d` directory, prepended to PATH, is refused by
+#      resolve_trusted_jq() under GITHUB_ACTIONS=true — the actual
+#      ADV-P59-LOW-001 security property this whole guard exists to
+#      enforce (meaningless as a pure string check, since the property
+#      under test is specifically "a PATH-prepend shim is rejected").
+#   3. FAIL-CLOSED — check 12: GITHUB_ACTIONS=true with RUNNER_OS unset
+#      refuses, regardless of where jq resolves.
+# ---------------------------------------------------------------------------
+run_jq_trust_self_test() {
+    echo
+    echo "=== check-ci-gate.sh JQ-TRUST SELF-TEST (S-626-1 CI-BREAK-1) ==="
+    echo
+
+    # Same fixed-denominator pin rationale as EXPECTED_FIXTURES above —
+    # without it, silently deleting a check (e.g. the FAIL-CLOSED one)
+    # would still print "N/N checks matched" as success.
+    readonly EXPECTED_JQ_TRUST_CHECKS=13
+    local jq_trust_total=0
+    local jq_trust_mismatches=0
+
+    # check_trusted_dir <desc> <os> <dir> <expected: "trusted"|"untrusted">
+    #
+    # Direct, filesystem-free assertion against is_trusted_jq_dir() —
+    # covers the ACCEPT/REJECT decision surface exactly, independent of
+    # what jq is actually installed on the machine running this suite.
+    check_trusted_dir() {
+        local desc="$1" os="$2" dir="$3" expected="$4"
+        jq_trust_total=$((jq_trust_total + 1))
+        local actual="untrusted"
+        is_trusted_jq_dir "${os}" "${dir}" && actual="trusted"
+        if [ "${actual}" = "${expected}" ]; then
+            echo "[PASS] ${desc} (expected=${expected}, actual=${actual})"
+        else
+            echo "[FAIL] ${desc} (expected=${expected}, actual=${actual})"
+            jq_trust_mismatches=$((jq_trust_mismatches + 1))
+        fi
+    }
+
+    # record_resolve_check <desc> <rc> <expected: "pass"|"fail:<rc>"> <output>
+    #                       [expected_substring]
+    #
+    # Same shape as run_self_test's check_fixture, applied to
+    # resolve_trusted_jq()'s output/exit-code instead of
+    # evaluate_needs()'s — the caller runs resolve_trusted_jq in its own
+    # isolated `$( … )` subshell (so env overrides never leak) and passes
+    # the captured rc/output in.
+    record_resolve_check() {
+        local desc="$1" rc="$2" expected="$3" output="$4" expected_substring="${5:-}"
+        jq_trust_total=$((jq_trust_total + 1))
+
+        local actual
+        if [ "${rc}" -eq 0 ]; then
+            actual="pass"
+        else
+            actual="fail:${rc}"
+        fi
+
+        local rc_ok=true
+        [ "${actual}" = "${expected}" ] || rc_ok=false
+
+        local substring_ok=true
+        if [ -n "${expected_substring}" ] && ! grep -qF -- "${expected_substring}" <<<"${output}"; then
+            substring_ok=false
+        fi
+
+        if [ "${rc_ok}" = true ] && [ "${substring_ok}" = true ]; then
+            echo "[PASS] ${desc} (expected=${expected}, actual=${actual})"
+        else
+            echo "[FAIL] ${desc} (expected=${expected}, actual=${actual})"
+            if [ "${substring_ok}" = false ]; then
+                echo "       expected output to contain: \"${expected_substring}\""
+            fi
+            echo "       --- resolve_trusted_jq output ---"
+            while IFS= read -r line; do
+                echo "       ${line}"
+            done <<<"${output}"
+            jq_trust_mismatches=$((jq_trust_mismatches + 1))
+        fi
+    }
+
+    # --- ACCEPT: every (RUNNER_OS, dir) pair trusted_jq_dirs_for() lists (1-6) ---
+    check_trusted_dir "linux-usr-bin-trusted" "Linux" "/usr/bin" "trusted"
+    check_trusted_dir "linux-bin-trusted" "Linux" "/bin" "trusted"
+    check_trusted_dir "macos-usr-bin-trusted" "macOS" "/usr/bin" "trusted"
+    check_trusted_dir "macos-bin-trusted" "macOS" "/bin" "trusted"
+    check_trusted_dir "macos-usr-local-bin-trusted" "macOS" "/usr/local/bin" "trusted"
+    check_trusted_dir "macos-opt-homebrew-bin-trusted" "macOS" "/opt/homebrew/bin" "trusted"
+
+    # --- REJECT: cross-OS and unmodeled-OS predicate checks (7-10) ---
+    check_trusted_dir \
+        "linux-rejects-macos-only-homebrew-dir" "Linux" "/opt/homebrew/bin" "untrusted"
+    check_trusted_dir \
+        "linux-rejects-arbitrary-writable-dir" "Linux" "/tmp" "untrusted"
+    check_trusted_dir \
+        "macos-rejects-arbitrary-writable-dir" "macOS" "/tmp" "untrusted"
+    check_trusted_dir \
+        "unmodeled-os-rejects-every-dir" "Windows" "/usr/bin" "untrusted"
+
+    # --- REJECT: filesystem-backed end-to-end shim rejection (11) ---
+    local scratch untrusted_dir out rc
+    scratch=$(mktemp -d)
+    untrusted_dir="${scratch}/untrusted"
+    mkdir -p "${untrusted_dir}"
+    cat >"${untrusted_dir}/jq" <<'JQSHIM'
+#!/usr/bin/env bash
+echo '{}'
+JQSHIM
+    chmod +x "${untrusted_dir}/jq"
+
+    rc=0
+    out=$(
+        {
+            export PATH="${untrusted_dir}:${PATH}"
+            export GITHUB_ACTIONS=true
+            export RUNNER_OS=Linux
+            resolve_trusted_jq
+        } 2>&1
+    ) || rc=$?
+    record_resolve_check \
+        "reject-path-prepend-shim-in-untrusted-dir" "${rc}" "fail:2" "${out}" \
+        "one of the trusted system jq directories"
+
+    rm -rf "${scratch}"
+
+    # --- FAIL-CLOSED: GITHUB_ACTIONS=true with RUNNER_OS unset (12) ---
+    rc=0
+    out=$(
+        {
+            unset RUNNER_OS
+            export GITHUB_ACTIONS=true
+            resolve_trusted_jq
+        } 2>&1
+    ) || rc=$?
+    record_resolve_check \
+        "fail-closed-runner-os-unset" "${rc}" "fail:2" "${out}" \
+        "RUNNER_OS is unset"
+
+    # --- ACCEPT: live, host-adaptive end-to-end wiring proof (13) ---
+    #
+    # Maps this machine's own `uname -s` to the RUNNER_OS value a real
+    # GitHub Actions runner of that OS would set, then calls
+    # resolve_trusted_jq() with GITHUB_ACTIONS=true against whatever jq
+    # is genuinely first on PATH. This script's own TOOLING CHOICE
+    # comment already treats a present, working `jq` as a precondition
+    # for running ANY self-test (every fixture above depends on it via
+    # evaluate_needs()) — this check additionally requires that jq sit in
+    # a directory this script currently trusts for the host's own OS,
+    # which is true for both the `apt`-installed `/usr/bin/jq` on Linux
+    # and the Homebrew-installed `/opt/homebrew/bin/jq` /
+    # `/usr/local/bin/jq` on macOS — the two package managers this repo's
+    # own CI and documented developer workflow assume. Scoped to
+    # Linux/macOS deliberately (see trusted_jq_dirs_for's own doc
+    # comment on why Windows is unmodeled: no windows-latest job ever
+    # invokes this script).
+    local host_os runner_os
+    host_os=$(uname -s)
+    case "${host_os}" in
+        Darwin) runner_os="macOS" ;;
+        Linux) runner_os="Linux" ;;
+        *) runner_os="" ;;
+    esac
+
+    rc=0
+    out=$(
+        {
+            export GITHUB_ACTIONS=true
+            export RUNNER_OS="${runner_os}"
+            resolve_trusted_jq
+        } 2>&1
+    ) || rc=$?
+    record_resolve_check \
+        "accept-real-host-jq-in-trusted-dir (uname=${host_os}, RUNNER_OS=${runner_os:-<unmapped>})" \
+        "${rc}" "pass" "${out}"
+
+    echo
+    echo "${jq_trust_total}/${EXPECTED_JQ_TRUST_CHECKS} jq-trust checks run," \
+         "${jq_trust_mismatches} mismatch(es)."
+
+    if [ "${jq_trust_mismatches}" -ne 0 ]; then
+        echo "FAIL: ${jq_trust_mismatches} jq-trust check(s) disagreed with" \
+             "resolve_trusted_jq()."
+        return 1
+    fi
+
+    if [ "${jq_trust_total}" != "${EXPECTED_JQ_TRUST_CHECKS}" ]; then
+        echo "SELF-TEST-FIXTURE-COUNT: expected ${EXPECTED_JQ_TRUST_CHECKS}" \
+             "jq-trust checks, got ${jq_trust_total}. A check was added or" \
+             "removed without updating EXPECTED_JQ_TRUST_CHECKS."
+        return 1
+    fi
+
+    echo "PASS: all jq-trust checks matched their expected outcome."
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -719,8 +1056,19 @@ run_self_test() {
 
 main() {
     if [ "${1:-}" = "--self-test" ]; then
-        run_self_test
-        exit $?
+        # Both suites always run (never short-circuited) so a developer
+        # sees every failure in one pass rather than fixing one suite at
+        # a time; the combined exit reflects EITHER suite failing (S-626-1
+        # CI-BREAK-1 — see run_jq_trust_self_test's module comment for why
+        # this second suite exists alongside the original decision-fixture
+        # one above it).
+        local decision_rc=0 jq_trust_rc=0
+        run_self_test || decision_rc=$?
+        run_jq_trust_self_test || jq_trust_rc=$?
+        if [ "${decision_rc}" -ne 0 ] || [ "${jq_trust_rc}" -ne 0 ]; then
+            exit 1
+        fi
+        exit 0
     fi
 
     if [ "${1:-}" = "--print-allowed-skips" ]; then
