@@ -6556,11 +6556,41 @@ fn extract_job_display_name(job_block: &str) -> Option<String> {
 /// check results" and instruct keeping job names unique across all
 /// workflows
 /// (<https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches>,
-/// verified 2026-08-09 — see DEC-246 Q5). Every existing pin in this file
-/// reads `ci.yml` alone (via `read_ci_yml`/`extract_job_block`) — a job
-/// named `CI Gate` declared in ANY OTHER workflow file is outside every one
-/// of those pins BY CONSTRUCTION, structurally the same blind spot as the
-/// workflow-level `defaults:` vector found in round 11 (see
+/// verified 2026-08-09 — see DEC-246 Q5).
+///
+/// **PREMISE LABEL CORRECTED (S-626-1 research pass, 2026-08-10, Q-D):** the
+/// specific claim that a duplicate `CI Gate` check NAME yields a false
+/// green has been carried since DEC-246 as though established; it must be
+/// labelled **INFERRED — neither verified nor refuted**, not established
+/// fact. What IS confirmed (CONFIRM, primary, per the docs quoted above):
+/// the check name alone is the identity, and the declaring workflow file is
+/// not part of it. What resolution TWO check runs sharing that name
+/// actually get (all-must-pass / last-writer-wins / something else) is
+/// INCONCLUSIVE on primary sources. The leading hypothesis is
+/// **last-writer-wins** (most-recently-updated check run governs the
+/// required-check state), supported only by: a GitHub staff member's
+/// personal blog (Ken Muse, "Creating GitHub Checks",
+/// SEMI-AUTHORITATIVE SECONDARY, not documentation — "If multiple Checks
+/// exist with the same name, only the most recently updated one will be
+/// used for the Status"), and the REST Checks API's `filter=latest`
+/// affordance on "List check runs for a Git reference" (an inference from
+/// an API design choice, not a documented statement about branch
+/// protection resolution). **Precision that must not be lost:** the docs
+/// sentence "[i]f a check and a commit status have the same name, both must
+/// pass when that name is required" concerns a check run vs. a commit
+/// status — two different API objects — and is NOT evidence about two check
+/// runs sharing a name; do not cite it as such. See
+/// `.factory/research/gh-actions-open-semantics-2026-08-10.md` §Q-D.
+///
+/// **This guard is kept regardless of that label.** It is cheap, fully
+/// decidable from the repository alone, needs no live experiment, and
+/// prevents a state GitHub's own documentation instructs maintainers not to
+/// create in the first place ("ambiguous status check results"). Every
+/// existing pin in this file reads `ci.yml` alone (via
+/// `read_ci_yml`/`extract_job_block`) — a job named `CI Gate` declared in
+/// ANY OTHER workflow file is outside every one of those pins BY
+/// CONSTRUCTION, structurally the same blind spot as the workflow-level
+/// `defaults:` vector found in round 11 (see
 /// `common::yaml::extract_job_block`'s doc comment for that precedent).
 ///
 /// This test enumerates every `.github/workflows/*.yml`/`*.yaml` file via
@@ -6638,11 +6668,39 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
 /// contributes" item 1): `ci-gate.needs` includes two matrix jobs, `clippy`
 /// and `test`. What `needs.<job>.result` reports when a matrix job expands
 /// to ZERO legs is UNDOCUMENTED by GitHub — tracked as the open drift item
-/// `ZERO-LEG-MATRIX-RESULT-UNDOCUMENTED`, with community reports split
-/// between `skipped` (safe) and `success` (a silent false green), and
-/// GitHub's own docs silent on matrix-parent -> `needs.result` aggregation
-/// entirely. DEC-246 established that case is currently UNREACHABLE in
-/// this file: both matrix jobs use STATIC LITERAL `os:` lists
+/// `ZERO-LEG-MATRIX-RESULT-UNDOCUMENTED`. GitHub's own docs are silent on
+/// matrix-parent -> `needs.result` aggregation entirely.
+///
+/// **CORRECTED CLAIM (S-626-1 research pass, 2026-08-10, Q-A) — REFUTE of
+/// the prior "community reports split" characterization:** an earlier
+/// revision of this docstring stated community reports were "split between
+/// `skipped` (safe) and `success` (a silent false green)". That
+/// characterization does not hold up: no report claiming either outcome for
+/// an actual zero-leg job was found. The two mechanisms that DO exist are
+/// different and neither produces a zero-leg job: (1) a dynamic
+/// `fromJSON()` matrix evaluating to an empty list HARD-ERRORS at strategy
+/// evaluation, before any step runs (`orgs/community#27096`, 2021-06-10,
+/// SECONDARY, no staff reply: `"Matrix vector 'cfg' does not contain any
+/// values"`) — that is fail-CLOSED, not a false green, though whether a
+/// strategy-evaluation-stage error maps to `failure` in `needs` (as opposed
+/// to a step-stage failure) is itself UNVERIFIED, a different lifecycle
+/// stage GitHub does not document; (2) the apparent "success" half traced
+/// to `orgs/community#9141` is, read verbatim, about a *per-step `if:`
+/// workaround* (copying the job-level condition onto every step) that
+/// makes every leg still expand and every step skip, legitimately
+/// concluding `success` — ordinary documented semantics for a job whose
+/// steps all skip, not evidence about a zero-leg matrix at all. So it is
+/// not established that a zero-leg job state is reachable by ANY
+/// construction; property (1) below (no `${{ }}`/`fromJSON` in `os:`) is
+/// kept as defense-in-depth against that unmapped lifecycle edge — a real
+/// but modest justification — not because a "might report `success`"
+/// false-green claim the evidence does not support. Retiring the guard on
+/// the strength of one five-year-old, staff-unconfirmed forum thread would
+/// repeat this cluster's founding mistake in the opposite direction.
+/// See `.factory/research/gh-actions-open-semantics-2026-08-10.md` §Q-A.
+///
+/// DEC-246 established that the reachability question is currently
+/// UNREACHABLE in this file: both matrix jobs use STATIC LITERAL `os:` lists
 /// (`[ubuntu-latest, windows-latest]` and `[ubuntu-latest, macos-latest,
 /// windows-latest]`). The zero-leg case becomes reachable if a future edit
 /// converts one of these to a DYNAMIC matrix (e.g. `fromJSON(...)`) — that
@@ -6657,10 +6715,23 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
 /// combinations from an already-expanded static list, and a fully-excluded
 /// matrix (every generated combination removed) is a second, independent
 /// path to the same undocumented zero-leg question — orthogonal to
-/// `fromJSON`/`${{ }}` dynamism. Whether GitHub permits a fully-excluded
-/// matrix at all (rejects it at parse/schedule time) or lets it through to
-/// produce zero legs is **UNVERIFIED** here; this docstring does not
-/// resolve that by inference, and neither does the test below. Today
+/// `fromJSON`/`${{ }}` dynamism.
+///
+/// **STRENGTHENED (S-626-1 research pass, 2026-08-10, Q-B) — supersedes the
+/// "UNVERIFIED" note this replaces:** an all-excluding `exclude:` is NOT
+/// rejected at parse time. `orgs/community#179993` (2025-11-19, SECONDARY,
+/// single report, bot-only reply, no staff confirmation), "Matrix exclude
+/// produces an empty matrix.entry instead of skipping the job", reports the
+/// job runs ONCE with matrix variables empty rather than expanding to zero
+/// legs — a degenerate run that CAN conclude `success` having done nothing.
+/// That is precisely the false-green shape this property exists to prevent,
+/// and it is better-evidenced now than "UNVERIFIED" reflected. (One
+/// unasserted secondary mitigation: `clippy`/`test` both use
+/// `runs-on: ${{ matrix.os }}`, and with matrix variables empty `runs-on`
+/// evaluates to the empty string — what that actually does on a real
+/// runner is not established here and is NOT relied on as a safety
+/// property.) See
+/// `.factory/research/gh-actions-open-semantics-2026-08-10.md` §Q-B. Today
 /// neither matrix job declares an `exclude:` key at all (verified, and
 /// pinned by the assertion below) — the `exclude:` vector is CLOSED BY
 /// SOURCE PROPERTY, not by an argument about what `exclude:` can or cannot
