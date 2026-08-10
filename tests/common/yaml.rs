@@ -56,26 +56,76 @@ pub fn extract_job_block<'a>(yaml: &'a str, job_name: &str) -> Option<&'a str> {
     // Job headers in GitHub Actions YAML are at two-space indent: "  <id>:\n"
     let needle = format!("  {job_name}:\n");
 
-    // S-626-1 pass-59 (ADV-P58-LOW-001): bound the anchor search to the
-    // region AT OR AFTER the top-level `jobs:` key, mirroring the same
-    // bound `tests/ci_gate_completeness.rs::list_all_ci_yml_job_names`
-    // already uses for an identical reason. Without this bound, a job id
-    // that happens to equal a top-level 2-space mapping key living
-    // elsewhere in the file — most plausibly one of `on:`'s trigger names
-    // (`push`, `pull_request`, `schedule`, `release`, conventionally
-    // written as 2-space children of `on:`), or `env:`/`permissions:`/
+    // S-626-1 pass-59 (ADV-P58-LOW-001), corrected pass-60
+    // (ADV-P60-LOW-001): bound the anchor search to the `jobs:` mapping
+    // itself, mirroring the same start bound
+    // `tests/ci_gate_completeness.rs::list_all_ci_yml_job_names` already
+    // uses for an identical reason. Without a start bound, a job id that
+    // happens to equal a top-level 2-space mapping key living elsewhere
+    // in the file — most plausibly one of `on:`'s trigger names (`push`,
+    // `pull_request`, `schedule`, `release`, conventionally written as
+    // 2-space children of `on:`), or `env:`/`permissions:`/
     // `concurrency:` depending on layout — anchors TWICE (once under its
     // unrelated parent, once under the real `jobs:` map) and hard-fails
     // the ambiguity panic below on ORDINARY, perfectly valid YAML: a job
     // legitimately named `push` is ambiguous with `on.push` only to a
     // whole-file substring scan, not to a real YAML parser (two mapping
     // keys with the same text under DIFFERENT parents are not a
-    // collision). A file with no detectable `jobs:` key at all falls back
-    // to searching the whole file (`unwrap_or(0)`) — matching this
-    // function's pre-existing return-`None`-on-no-match contract for that
-    // edge case rather than treating it as ambiguous or panicking.
-    let search_region_start = yaml.find("\njobs:\n").map(|idx| idx + 1).unwrap_or(0);
-    let search_region = &yaml[search_region_start..];
+    // collision).
+    //
+    // The pass-59 version only bounded the START of the search (`yaml.
+    // find("\njobs:\n")`), which left two gaps (S-626-1 pass-60,
+    // ADV-P60-LOW-001):
+    //   (a) `jobs:` declared BEFORE an unrelated same-named sibling key
+    //       (e.g. an unconventional file that writes `jobs:` ahead of
+    //       `on:` — legal YAML; mapping key order carries no semantic
+    //       meaning) reopened the identical collision from the OTHER
+    //       direction, since nothing bounded the search region's END —
+    //       it ran to end-of-file regardless.
+    //   (b) `yaml.find("\njobs:\n")` requires a LITERAL preceding `\n`
+    //       byte, so a file where `jobs:` is the very first line (byte
+    //       offset 0, nothing before it to match against) went
+    //       undetected entirely, silently falling all the way through
+    //       to `unwrap_or(0)` — i.e. no bound in either direction, not
+    //       the "excluded by construction" guarantee the panic message
+    //       below used to claim.
+    // Both are fixed together: `jobs:` is now detected at column 0
+    // whether or not a `\n` precedes it, and the search region's END is
+    // bounded to the next column-0, non-blank, non-comment line — the
+    // next sibling top-level key, wherever `jobs:` sits in the file.
+    let jobs_key_len = "jobs:\n".len();
+    let jobs_line_start = if yaml.starts_with("jobs:\n") {
+        Some(0)
+    } else {
+        yaml.find("\njobs:\n").map(|idx| idx + 1)
+    };
+
+    let (search_region_start, search_region_end) = match jobs_line_start {
+        Some(start) => {
+            let after_jobs_key = &yaml[start + jobs_key_len..];
+            let mut consumed = 0usize;
+            let mut rel_end = after_jobs_key.len();
+            for line in after_jobs_key.split_inclusive('\n') {
+                let content = line.strip_suffix('\n').unwrap_or(line);
+                let is_sibling_top_level_key =
+                    !content.is_empty() && !content.starts_with(' ') && !content.starts_with('#');
+                if is_sibling_top_level_key {
+                    rel_end = consumed;
+                    break;
+                }
+                consumed += line.len();
+            }
+            (start, start + jobs_key_len + rel_end)
+        }
+        // No `jobs:` key detected at column 0 anywhere in the file: fall
+        // back to scanning the whole document, matching this function's
+        // pre-existing return-`None`-on-no-match contract for that edge
+        // case. Unlike the bounded branch above, this offers NO
+        // protection against a job id colliding with an unrelated
+        // top-level key — see the softened panic message below.
+        None => (0, yaml.len()),
+    };
+    let search_region = &yaml[search_region_start..search_region_end];
 
     let anchored_starts: Vec<usize> = search_region
         .match_indices(needle.as_str())
@@ -88,19 +138,24 @@ pub fn extract_job_block<'a>(yaml: &'a str, job_name: &str) -> Option<&'a str> {
         [only] => *only,
         multiple => panic!(
             "extract_job_block: job id `{job_name}` anchors to {} separate \
-             line-start locations at or after the top-level `jobs:` key in \
-             the supplied YAML text (byte offsets {multiple:?}) — refusing \
-             to silently take the first match. This is either a genuine \
-             duplicate job id (invalid YAML — GitHub Actions and \
-             actionlint both reject duplicate mapping keys at parse time) \
+             line-start locations within the `jobs:` mapping in the \
+             supplied YAML text (byte offsets {multiple:?}) — refusing \
+             to silently take the first match. Most likely causes: a \
+             genuine duplicate job id (invalid YAML — GitHub Actions and \
+             actionlint both reject duplicate mapping keys at parse time), \
              or a coincidental two-space-indented `{job_name}:` line \
              appearing elsewhere UNDER `jobs:` (e.g. inside a block \
-             scalar, a `with:` value, or a comment) — a collision with an \
-             unrelated sibling top-level key (`on:`'s `push`/`pull_request`/\
-             `schedule`/`release` triggers, or `env:`/`permissions:`/\
-             `concurrency:`) is excluded by construction, since the search \
-             is bounded to start at `jobs:`. Investigate the source before \
-             relying on this extraction.",
+             scalar, a `with:` value, or a comment). A collision with an \
+             unrelated sibling top-level key declared BEFORE or AFTER \
+             `jobs:` (`on:`'s `push`/`pull_request`/`schedule`/`release` \
+             triggers, or `env:`/`permissions:`/`concurrency:`) is bounded \
+             out on both sides WHEN this function successfully locates the \
+             `jobs:` key — if it did not (e.g. an unusual `jobs:` key \
+             spelling this bare-substring search does not recognize), the \
+             search silently reverts to scanning the whole file and this \
+             exclusion does not hold. Check the offending byte offsets \
+             against the source directly rather than assume either cause \
+             from this message alone.",
             multiple.len(),
         ),
     };

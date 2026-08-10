@@ -4146,15 +4146,31 @@ const PINNED_CI_GATE_SELF_TEST_RUN_LINE: &str = "bash scripts/check-ci-gate.sh -
 const PINNED_CI_GATE_SELF_TEST_STEP_KEYS: &[&str] = &["name", "run"];
 
 /// Locate the SOLE step in `lines` whose `name:` value is EXACTLY
-/// `step_name` (matched as the literal line `      - name: {step_name}`,
-/// 6-space step-marker indent), returning its line index. `Err` if zero
-/// or more than one step matches.
+/// `step_name` (matched as the trimmed line `- name: {step_name}` —
+/// INDENT-AGNOSTIC: the match is against `l.trim_start()`, so this finds
+/// the step regardless of what indentation its `- name: ...` marker
+/// actually sits at, not only the conventional 6-space step-marker
+/// indent), returning its line index. `Err` if zero or more than one
+/// step matches.
 ///
 /// Shared by `extract_and_normalize_step_run_line_by_name` and
 /// `extract_step_key_set_by_name` — factored out (S-626-1 pass-59,
 /// ADV-P58-MED-001) so the duplicate-step-name rejection lives in exactly
 /// one place rather than being reimplemented (and potentially
 /// re-forgotten) at each new by-name step accessor.
+///
+/// **DOC CORRECTION (S-626-1 pass-60, ADV-P60-LOW-003):** this doc
+/// comment and both `Err` messages below previously claimed the match
+/// was against "the literal line `      - name: {step_name}`, 6-space
+/// step-marker indent" — that overstated it. The code has always been
+/// indent-agnostic (`l.trim_start() == name_needle`); the 6-space
+/// figure described this file's one conventional step indent, not an
+/// enforced requirement. This was a misleading-message defect, not a
+/// false green: the function's actual behavior is STRICTER than the
+/// old wording implied (it matches at ANY indent, so an unconventionally-
+/// indented decoy or real step is still found, not silently missed),
+/// but the old wording would have sent a debugger looking for an
+/// indent-related cause that was never the issue.
 fn find_sole_step_by_name(lines: &[&str], step_name: &str) -> Result<usize, String> {
     let name_needle = format!("- name: {step_name}");
     let matches: Vec<usize> = lines
@@ -4165,16 +4181,18 @@ fn find_sole_step_by_name(lines: &[&str], step_name: &str) -> Result<usize, Stri
         .collect();
     match matches.as_slice() {
         [] => Err(format!(
-            "has no step with `name: {step_name}` at all (checked for the \
-             exact line `      - name: {step_name}`)."
+            "has no step with `name: {step_name}` at all (checked, at \
+             any indent, for a line whose trimmed text is exactly \
+             `- name: {step_name}`)."
         )),
         [only] => Ok(*only),
         multiple => Err(format!(
-            "has {} steps named `name: {step_name}` (checked for the \
-             exact line `      - name: {step_name}`) — this checker \
-             requires exactly one so a single pinned literal \
-             unambiguously covers it. A decoy step sharing the real \
-             step's name, inserted anywhere in the job block, would \
+            "has {} steps named `name: {step_name}` (checked, at any \
+             indent, for a line whose trimmed text is exactly \
+             `- name: {step_name}`) — this checker requires exactly one \
+             so a single pinned literal unambiguously covers it. A \
+             decoy step sharing the real step's name, inserted anywhere \
+             in the job block regardless of its own indentation, would \
              otherwise silently win a first-match lookup instead of \
              being flagged as ambiguous.",
             multiple.len()
@@ -6433,24 +6451,49 @@ fn extract_job_display_name(job_block: &str) -> Option<String> {
         if extract_key_name_at_indent(line, 4).as_deref() != Some("name") {
             continue;
         }
-        // S-626-1 pass-59 (ADV-P57-INFO-004): strip a leading `- `
-        // sequence marker before the bare `strip_prefix("name:")` re-read
-        // below, mirroring `extract_key_name_at_indent`'s own marker-
-        // stripping step. Without this, a 4-space step-SEQUENCE-style
-        // line (`    - name: ...`) — latent today (no file in this repo
-        // uses it; `jobs.<id>` must be a YAML MAPPING per the GitHub
-        // Actions schema, so a job whose value is a sequence is rejected
-        // by GitHub's own parser before this checker would ever see it
-        // run) — was detected as declaring `name` by the marker-aware key
-        // matcher above, but this un-stripped re-read did not recognize
-        // the same `- ` prefix and hard-panicked with a MISLEADING
-        // "quoted key spelling" diagnosis on a line that has neither.
-        // Fixed for robustness against unrelated YAML mistakes in a
-        // sibling workflow (a false-red here would block an unrelated
-        // PR), not because this construct is a reachable Guard A bypass.
-        let trimmed = line.trim_start();
-        let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed);
-        let after_key = trimmed.strip_prefix("name:").unwrap_or_else(|| {
+        // S-626-1 pass-60 (ADV-P60-HIGH-002): a job-level key can never be
+        // a YAML sequence entry — `jobs.<id>` is a mapping, and its own
+        // keys (`name:`, `runs-on:`, `steps:`, ...) are plain mapping
+        // keys, never `- `-prefixed list items. A `- ` marker at this
+        // indent belongs to a SEQUENCE living under an earlier job-level
+        // key — in practice, `steps:` written at the SAME 4-space indent
+        // as the job's own keys, which is ordinary, `actionlint`-clean
+        // YAML (a block sequence may sit at its parent mapping key's
+        // indent, not strictly deeper). `extract_key_name_at_indent`
+        // above deliberately strips a leading `- ` marker so it can ALSO
+        // extract a STEP's first key (see that function's own doc
+        // comment) — which means a 4-space `    - name: Checkout` step
+        // line is indistinguishable from a genuine job-level `name:`
+        // line to that one call alone. The prior revision of this
+        // function leaned into that ambiguity instead of resolving it:
+        // it stripped the SAME marker before its own value re-read
+        // below, so it silently substituted the step's name
+        // (`"Checkout"`) for the job's and returned early — the job's
+        // real, later `name: CI Gate` line was never reached. Verified
+        // directly: a sibling-workflow job with exactly this shape
+        // (4-space `steps:` children, no job-level `name:` before them,
+        // a real `name: CI Gate` after) made Guard A's sibling-duplicate
+        // check return `Some("Checkout")` instead of `Some("CI Gate")`
+        // — 27 passed, 0 failed, silently missing the exact collision
+        // this guard exists to detect.
+        //
+        // The prior doc comment on this branch claimed the reachable
+        // shape was latent because "`jobs.<id>` must be a YAML MAPPING
+        // … a job whose value is a sequence is rejected by GitHub's own
+        // parser" — that is true but answers a different question. The
+        // actual reachable shape is NOT a sequence-valued `jobs.<id>`;
+        // it is this ordinary `steps:`-at-4-space-indent style, which
+        // GitHub accepts every day. Fixed: skip any 4-space line that is
+        // itself a sequence entry, so this loop only ever considers
+        // genuine job-level mapping keys — and the marker strip is
+        // dropped from the value re-read below, so a genuinely
+        // unparseable spelling (a quoted key, `name :` with a space
+        // before the colon, ...) still panics loudly rather than being
+        // silently misread.
+        if line.trim_start().starts_with("- ") {
+            continue;
+        }
+        let after_key = line.trim_start().strip_prefix("name:").unwrap_or_else(|| {
             panic!(
                 "FAIL (S-626-1 Guard A, ADV-P56-HIGH-002): a job-level \
                  `name:` key was detected via the quote/whitespace-aware \
@@ -6664,6 +6707,26 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
     }
 }
 
+/// PINNED count of `ci-gate.needs` members that carry a build matrix
+/// (today: `clippy`, `test`). S-626-1 pass-59 (ADV-P57-HIGH-001): an
+/// exact-arity pin, not a mere non-empty check — see
+/// `test_matrix_os_lists_remain_static_literals`'s assertion for why a
+/// non-empty check alone cannot detect losing ONE of several matrix
+/// jobs. Update in the SAME change as any deliberate addition/removal
+/// of a build-matrix job.
+///
+/// S-626-1 pass-60 (ADV-P60-LOW-002): this constant declaration used to
+/// sit BETWEEN Guard B's ~130-line rationale docstring and the
+/// `#[test] fn` it explains — which meant that entire docstring was
+/// actually the rustdoc of THIS `usize` constant, not of the test, and
+/// the test itself had no doc comment of its own (a later pass-60
+/// change to the block above this one, still calling it "the docstring
+/// of Guard B", repeated the same misattribution rather than
+/// correcting it). Moved above the docstring so rustdoc attaches
+/// correctly: this short paragraph documents the constant, and Guard
+/// B's full rationale below documents the test.
+const PINNED_MATRIX_NEEDS_MEMBER_COUNT: usize = 2;
+
 /// S-626-1 Guard B (DEC-246 §Q4 + "New material this reconstruction
 /// contributes" item 1): `ci-gate.needs` includes two matrix jobs, `clippy`
 /// and `test`. What `needs.<job>.result` reports when a matrix job expands
@@ -6751,15 +6814,6 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
 /// See the module-level "KNOWN LIMITATION SHARED BY BOTH GUARDS" note above
 /// this section — this test is line-based and shares the round-16
 /// node-property residual like every other pin in this file.
-///
-/// PINNED count of `ci-gate.needs` members that carry a build matrix
-/// (today: `clippy`, `test`). S-626-1 pass-59 (ADV-P57-HIGH-001): an
-/// exact-arity pin, not a mere non-empty check — see the assertion below
-/// for why a non-empty check alone cannot detect losing ONE of several
-/// matrix jobs. Update in the SAME change as any deliberate
-/// addition/removal of a build-matrix job.
-const PINNED_MATRIX_NEEDS_MEMBER_COUNT: usize = 2;
-
 #[test]
 fn test_matrix_os_lists_remain_static_literals() {
     let ci = read_ci_yml();
@@ -7050,8 +7104,9 @@ const EXPECTED_GUARD_TEST_COUNT: usize = 27;
 #[test]
 fn test_this_file_test_count_matches_expected_denominator() {
     let source = include_str!("ci_gate_completeness.rs");
-    let actual = source
-        .lines()
+    let lines: Vec<&str> = source.lines().collect();
+    let actual = lines
+        .iter()
         .filter(|l| l.trim().starts_with("#[test]"))
         .count();
     assert_eq!(
@@ -7067,5 +7122,106 @@ fn test_this_file_test_count_matches_expected_denominator() {
          EXPECTED_GUARD_TEST_COUNT in the SAME change. If it is not \
          deliberate, some `#[test]` fn was lost — find out which one \
          before changing this constant."
+    );
+
+    // S-626-1 pass-60 (ADV-P60-HIGH-001): the assertion above pins the
+    // TEXTUAL count of `#[test]` attributes — it says nothing about
+    // whether every one of those attributes still actually RUNS. This
+    // doc comment previously claimed (since pass-59) that the two
+    // documented evasions below were resolved "on the Rust side only;
+    // see this test's assertions below" — but until this pass, no such
+    // assertion existed; the function body ended at the `assert_eq!`
+    // above. The two assertions that follow are that missing
+    // enforcement, added in the SAME change as this correction so the
+    // doc comment's claim is finally backed by code, not just prose.
+    //
+    //   - `#[ignore]`: the attribute count above stays unmoved (the
+    //     line still starts with `#[test]`), but `cargo test` reports
+    //     the binary's overall result as `ok` regardless (e.g. "26
+    //     passed; 1 ignored"), and `ci.yml`'s POL-11 canary only
+    //     requires a NON-ZERO passed count from this binary — satisfied
+    //     by the remaining tests. Guarded by the zero-`#[ignore]`
+    //     assertion immediately below.
+    //   - `#[cfg(...)]` with a predicate false on every platform this
+    //     repo actually builds for: the gated `#[test]` fn does not
+    //     exist in the compiled binary AT ALL on any of those
+    //     platforms, yet its textual attribute is still present in
+    //     `include_str!`'s source, so `actual` above is unaffected.
+    //     Guarded by the allowlist assertion below, which accepts only
+    //     the one legitimate form used in this file today,
+    //     `#[cfg(unix)]` (the tests that shell out to bash and
+    //     therefore cannot exist on Windows — see
+    //     `list_all_ci_yml_job_names`'s doc comment for the "gating a
+    //     test also orphans its helpers" lesson from PR #671 review
+    //     round 15, which this allowlist must be kept consistent
+    //     with).
+    let ignore_lines: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim().starts_with("#[ignore"))
+        .map(|(i, _)| i + 1) // 1-based line numbers for the diagnostic.
+        .collect();
+    assert!(
+        ignore_lines.is_empty(),
+        "FAIL (S-626-1 pass-60, ADV-P60-HIGH-001): found `#[ignore]` \
+         attribute(s) at line(s) {ignore_lines:?} in this file. The \
+         `actual == EXPECTED_GUARD_TEST_COUNT` assertion above counts \
+         `#[test]` ATTRIBUTES textually — an `#[ignore]`d test still \
+         carries that attribute, so the count does not move, but the \
+         test never runs. `cargo test` still reports an overall `ok` \
+         result for this binary (e.g. \"26 passed; 1 ignored\"), and \
+         `ci.yml`'s POL-11 zero-test-floor canary only requires a \
+         NON-ZERO passed count — satisfied by the remaining tests. \
+         Remove the `#[ignore]` attribute, or if a test genuinely must \
+         be disabled, that decision needs its own explicit review, not \
+         a silent addition that leaves this guard green."
+    );
+
+    // ADV-P60-HIGH-001, second gap: a `#[cfg(...)]` predicate false on
+    // every platform this repo builds for removes the gated `#[test]`
+    // fn from the compiled binary entirely — invisible to both the
+    // count above and the `#[ignore]` scan above (no `#[ignore]`
+    // attribute is present; the fn is simply absent from that
+    // platform's build). This scan requires that ANY `#[cfg(...)]`
+    // line directly preceding a `#[test]` line be byte-for-byte one of
+    // the allowlisted forms below — reject-don't-parse, the same
+    // discipline this file uses elsewhere (e.g.
+    // `extract_and_normalize_if_expr`) rather than attempt to evaluate
+    // arbitrary `cfg` predicate syntax.
+    const ALLOWED_TEST_CFG_GATES: &[&str] = &["#[cfg(unix)]"];
+    let bad_cfg_gates: Vec<(usize, String)> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim().starts_with("#[test]"))
+        .filter_map(|(i, _)| {
+            if i == 0 {
+                return None; // No line above index 0 to inspect.
+            }
+            let prev = lines[i - 1].trim();
+            if prev.starts_with("#[cfg(") && !ALLOWED_TEST_CFG_GATES.contains(&prev) {
+                Some((i + 1, prev.to_string())) // 1-based `#[test]` line number.
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        bad_cfg_gates.is_empty(),
+        "FAIL (S-626-1 pass-60, ADV-P60-HIGH-001): found `#[test]` fn(s) \
+         whose immediately preceding line is a `#[cfg(...)]` attribute \
+         NOT in the allowlist {ALLOWED_TEST_CFG_GATES:?}: {bad_cfg_gates:?} \
+         (line number, offending attribute). A `#[cfg(...)]` predicate \
+         false on every platform this repo builds for \
+         (`ubuntu-latest`/`windows-latest`/`macos-latest`, per the \
+         `test` job's matrix) removes the gated `#[test]` fn from the \
+         compiled binary ENTIRELY on every one of those platforms — the \
+         textual `#[test]` count above does not move (the attribute is \
+         still present in source), and there is no `#[ignore]` \
+         attribute for the scan above to catch either. If this is a \
+         deliberate, reviewed new platform-gated test, add its exact \
+         `#[cfg(...)]` spelling to ALLOWED_TEST_CFG_GATES in the SAME \
+         change — and confirm any helper that test alone uses is \
+         gated the same way (PR #671 review round 15's \"gating a test \
+         also orphans its helpers\" lesson)."
     );
 }
