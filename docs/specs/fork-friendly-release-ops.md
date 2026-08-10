@@ -42,6 +42,7 @@ in both repos, so syncs are conflict-free.
 | `HOMEBREW_TAP_REPO` | `owner/homebrew-name` tap repo to publish formulas to; also enables the homebrew jobs | unset |
 | `RELEASE_GAP_FILL_ENABLED` | `'true'` enables the daily gap-fill schedule | unset |
 | `SYNC_UPSTREAM_REPO` | `owner/repo` to merge from on a schedule (forks only) | unset |
+| `ATTESTATIONS_ENABLED` | `'true'` enables the `attest` job in `release.yml` (GitHub Artifact Attestation / SLSA build provenance for the release archives; publishes the workflow's commit SHA to the public Rekor transparency log). Requires `id-token: write`; unavailable on GHES and on private forks without GitHub Enterprise Cloud | unset |
 | `GITLEAKS_DISABLED` | `'true'` disables the gitleaks secret-scan job in `ci.yml`; for forks that cannot obtain a gitleaks org/commercial license or prefer an alternative scanner | unset |
 
 This is the same fail-safe pattern as `vars.JR_E2E_ENABLED`
