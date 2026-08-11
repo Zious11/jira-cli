@@ -519,6 +519,34 @@ fn job_declares_job_level_key(job_block: &str, key: &str) -> bool {
 /// wrong under tree membership.
 ///
 /// RED GATE: `ci-gate` does not exist in ci.yml.  This test FAILS on develop.
+///
+/// # S-CIGATE-3 finding fix (ADV-SC3-P1-LOW-002, quoting-fidelity
+/// completeness, 2026-08-11)
+///
+/// All three `matches!` checks below now additionally require
+/// `style == ScalarStyle::Plain`, closing a gap the fresh-context
+/// adversarial review flagged: pre-migration, these were whole-block
+/// substring checks (`gate_block.contains("runs-on: ubuntu-latest")`), so
+/// `runs-on: "ubuntu-latest"` (double-quoted), `name: 'CI Gate'`
+/// (single-quoted), or a block-scalar `runs-on: >-\n  ubuntu-latest` all
+/// FAILED the old check — GitHub Actions resolves all these forms
+/// identically, but the pre-migration checker was byte-literal and did not
+/// know that. The tree-based rewrite's `text == "..."` comparison alone
+/// would have silently ACCEPTED all three re-quoted/re-folded forms (the
+/// real parser resolves them to the same `text`), which is a real, if
+/// narrow, loosening versus the pre-migration behavior even though it is
+/// immaterial to `ci-gate`'s actual runtime semantics (chosen here to keep
+/// every migrated pin in this file consistently strict — see AC-004 in
+/// `extract_and_normalize_if_expr`'s doc comment for the same rationale
+/// applied everywhere else) — rather than record `name:`/`runs-on:` here
+/// as a deliberate exemption alongside the documented NOT-PINNED set
+/// (`uses:` VALUES / `with:` block CONTENTS / `name:` VALUES generally,
+/// per the CLAUDE.md SCOPE SUMMARY), the style conjunct is added to all
+/// three so the mandate is not silently partial for this specific test.
+/// This job's own `if:` value is SEPARATELY, more precisely style-pinned
+/// by `PINNED_GATE_IF_EXPR`/`extract_and_normalize_if_expr` (M2-m) below —
+/// the style check added here is defense-in-depth on this test's own
+/// independent lookup, not the operative enforcement point for `if:`.
 #[test]
 fn test_ci_gate_job_exists_with_required_metadata() {
     let ci = read_ci_yml();
@@ -536,12 +564,12 @@ fn test_ci_gate_job_exists_with_required_metadata() {
     // string "CI Gate".  If omitted, the context would be the key "ci-gate".
     let name_is_ci_gate = matches!(
         job.value_of("name"),
-        Some(Value::Scalar { text, .. }) if text == "CI Gate"
+        Some(Value::Scalar { text, style, .. }) if text == "CI Gate" && *style == ScalarStyle::Plain
     );
     assert!(
         name_is_ci_gate,
-        "FAIL (RED GATE): The `ci-gate` job block does not have \
-         `name: CI Gate` (found job-level `name:` value {:?}).\n\
+        "FAIL (RED GATE): The `ci-gate` job block does not have a plain \
+         (unquoted) `name: CI Gate` (found job-level `name:` value {:?}).\n\
          Required: set `name: CI Gate` so the branch-protection context string \
          is human-readable (EC-003).\n\
          Current ci-gate block:\n{gate_block}",
@@ -552,12 +580,13 @@ fn test_ci_gate_job_exists_with_required_metadata() {
     // inspects upstream results; ubuntu-latest is the correct runner.
     let runs_on_ubuntu = matches!(
         job.value_of("runs-on"),
-        Some(Value::Scalar { text, .. }) if text == "ubuntu-latest"
+        Some(Value::Scalar { text, style, .. }) if text == "ubuntu-latest" && *style == ScalarStyle::Plain
     );
     assert!(
         runs_on_ubuntu,
-        "FAIL (RED GATE): The `ci-gate` job block does not have \
-         `runs-on: ubuntu-latest` (found job-level `runs-on:` value {:?}).\n\
+        "FAIL (RED GATE): The `ci-gate` job block does not have a plain \
+         (unquoted) `runs-on: ubuntu-latest` (found job-level `runs-on:` \
+         value {:?}).\n\
          Current ci-gate block:\n{gate_block}",
         job.value_of("runs-on")
     );
@@ -567,12 +596,13 @@ fn test_ci_gate_job_exists_with_required_metadata() {
     // upstream would silently permit merge (EC-001).
     let has_always_if = matches!(
         job.value_of("if"),
-        Some(Value::Scalar { text, .. }) if text.contains("always()")
+        Some(Value::Scalar { text, style, .. }) if text.contains("always()") && *style == ScalarStyle::Plain
     );
     assert!(
         has_always_if,
-        "FAIL (RED GATE): The `ci-gate` job block does not have a \
-         job-level `if:` value containing `always()` (found {:?}).\n\
+        "FAIL (RED GATE): The `ci-gate` job block does not have a plain \
+         (unquoted) job-level `if:` value containing `always()` (found \
+         {:?}).\n\
          Required: `if: ${{{{ always() }}}}` at the job level (load-bearing — \
          without it a failed upstream SKIPS ci-gate, which GitHub branch \
          protection evaluates as SUCCESS).\n\
@@ -3567,6 +3597,47 @@ fn test_spec_guard_contains_check_ci_gate_self_test_step() {
 /// and AC-008 directly and ARE proven RED now).
 ///
 /// Anchoring: assertion is made only within the `mutants` job block.
+///
+/// # S-CIGATE-3 finding fix (ADV-SC3-P1-MED-003, fresh-context adversarial
+/// review, 2026-08-11)
+///
+/// This test was NOT touched by the S-CIGATE-3 migration and was left
+/// behind on the two line-based primitives that migration exists to
+/// eliminate: the job-level `if:` check matched only the bare `if:`
+/// spelling via `l.trim_start().starts_with("if:")`, and the step-level
+/// check hard-coded an 8-space indent AND the bare spelling via
+/// `l.starts_with("        if:")` — both the `POSITIONAL-ASSUMPTION-AXIS`
+/// and the spelling-variant axis this whole story exists to close.
+///
+/// **Verified working bypass (RED-proven this session against an
+/// in-memory copy of the real `mutants` block — the tracked `ci.yml` was
+/// never modified):** adding `        "if": false` (quoted spelling, 8
+/// spaces) as a sibling of `continue-on-error: true` on the "Run mutation
+/// tests on PR diff" step left `step_if_lines.len() == 1` and
+/// `step_if_lines[0].contains("always()")` both still true — the smuggled
+/// key was invisible to the old checker, and mutation testing would
+/// silently never run (the step's own `if: false` short-circuits it)
+/// while this test, and the rest of the suite, stayed green. The same
+/// bypass generalizes: any of the three alternate `if:` spellings
+/// (`"if":`, `'if':`, `if :`) at the natural 8-space indent, OR a bare
+/// `if:` smuggled onto an entirely NEW step at a self-chosen indent (a
+/// list entry may pick its own content indent independently of its
+/// siblings — tested at both 6 and 10 spaces), each defeated the old
+/// checker identically.
+///
+/// **Fix:** both checks are rewritten on [`WfDoc::parse_single_job`] +
+/// tree membership, mirroring `job_declares_job_level_key` (job-level) and
+/// the `has_step_level_if` pattern already used by
+/// `test_ci_gate_pass_fail_semantics_are_structurally_placed`'s M2-d
+/// (step-level): the job-level guard now reuses
+/// `extract_and_normalize_if_expr` (already AC-004 quoting-fidelity
+/// compliant — rejects any non-`ScalarStyle::Plain` value outright); the
+/// step-level guard counts `job.steps[i].keys` membership (immune to both
+/// spelling and indent by construction — there is no indent literal or
+/// enumerated spelling list left to be incomplete), then reads the sole
+/// matching step's `if:` value via `Step::value_of` and requires
+/// `ScalarStyle::Plain` (AC-004 mandate applied to this newly-introduced
+/// value pin) plus no YAML tag before trusting its text.
 #[test]
 fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
     let ci = read_ci_yml();
@@ -3577,11 +3648,20 @@ fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
     // Job-level if: unchanged — PR-only scope, the exact fact
     // `scripts/check-ci-gate.sh`'s `ALLOWED_SKIPS` allowlist is built to
     // tolerate (mutants reports `skipped` on push BECAUSE of this guard).
-    assert!(
-        mutants_block.lines().any(|l| {
-            let t = l.trim_start();
-            t.starts_with("if:") && t.contains("github.event_name == 'pull_request'")
-        }),
+    //
+    // Tree-based via `extract_and_normalize_if_expr` (S-CIGATE-3 finding
+    // fix, ADV-SC3-P1-MED-003): immune to spelling/indent variance and
+    // enforces the AC-004 `ScalarStyle::Plain` mandate on the value itself.
+    let actual_job_if_expr =
+        extract_and_normalize_if_expr(mutants_block).unwrap_or_else(|reason| {
+            panic!(
+                "FAIL (S-CIGATE-2 AC-006): `mutants`'s job-level `if:` {reason}\n\
+             Current mutants block:\n{mutants_block}"
+            )
+        });
+    assert_eq!(
+        actual_job_if_expr.as_deref(),
+        Some("github.event_name == 'pull_request'"),
         "FAIL (S-CIGATE-2 AC-006): `mutants`'s job-level `if: \
          github.event_name == 'pull_request'` guard is missing or was \
          changed. Option C leaves the `mutants` job entirely UNCHANGED — \
@@ -3622,38 +3702,89 @@ fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
         );
     }
 
-    // Exactly one step-level `if:` (8-space indent) must exist in the
-    // block — the pre-existing `if: always()` on `Check kill rate`. A NEW
-    // step-level `if:` on any of the other five steps would be the
-    // rejected Option B's signature edit (moving PR-only gating from job
-    // level down to individual steps).
-    let step_if_lines: Vec<&str> = mutants_block
-        .lines()
-        .filter(|l| l.starts_with("        if:"))
+    // Exactly one step-level `if:` must exist in the block — the
+    // pre-existing `if: always()` on `Check kill rate`. A NEW step-level
+    // `if:` on any of the other five steps would be the rejected Option
+    // B's signature edit (moving PR-only gating from job level down to
+    // individual steps).
+    //
+    // S-CIGATE-3 finding fix (ADV-SC3-P1-MED-003): rewritten on
+    // `WfDoc::parse_single_job` + `Job::steps[i].keys` tree membership,
+    // mirroring `test_ci_gate_pass_fail_semantics_are_structurally_placed`'s
+    // M2-d `has_step_level_if` pattern. Unlike the deleted
+    // `l.starts_with("        if:")` scan, this has no indent literal to
+    // hard-code and no enumerated spelling list to be incomplete — a step's
+    // `if:` key (however spelled, however indented, on any step including
+    // one smuggled in as an entirely new list entry) is found by walking
+    // the parsed tree, not by re-deriving a column/text-prefix guess.
+    let job = WfDoc::parse_single_job(mutants_block);
+    let steps_with_if: Vec<&Step> = job
+        .steps
+        .iter()
+        .filter(|s| s.keys.iter().any(|k| k == "if"))
         .collect();
 
     assert_eq!(
-        step_if_lines.len(),
+        steps_with_if.len(),
         1,
         "FAIL (S-CIGATE-2 AC-006): expected exactly one step-level `if:` \
          in `mutants` (the pre-existing `if: always()` on `Check kill \
-         rate`). Found {}: {:?}\n\
+         rate`), found {} (resolved by tree membership under \
+         `Job::steps` — immune to `if:` key-spelling and indent variance, \
+         and to a smuggled `if:` on a brand-new step).\n\
          A NEW step-level `if:` on any of the other five steps (Harden the \
          runner, checkout, install-action, rust-cache, Run mutation tests \
-         on PR diff) would be the rejected Option B's signature edit — \
-         Option C requires `mutants` to remain entirely unchanged.\n\
+         on PR diff), or on an entirely new step, would be the rejected \
+         Option B's signature edit — Option C requires `mutants` to remain \
+         entirely unchanged.\n\
          Current mutants block:\n{mutants_block}",
-        step_if_lines.len(),
-        step_if_lines
+        steps_with_if.len(),
     );
 
-    assert!(
-        step_if_lines[0].contains("always()"),
-        "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in `mutants` \
-         no longer reads `if: always()` (found: {:?}).\n\
-         Current mutants block:\n{mutants_block}",
-        step_if_lines[0]
-    );
+    // AC-004 quoting-fidelity mandate applied to this newly-introduced
+    // value pin: the sole step-level `if:` value must be a plain
+    // (unquoted, single-physical-line, untagged) scalar reading
+    // `always()` — a re-quoted or re-tagged form is rejected outright
+    // rather than resolved and trusted, matching every other rewritten
+    // pin in this file (see `extract_and_normalize_if_expr`'s doc comment
+    // for the full AC-004 rationale).
+    match steps_with_if[0].value_of("if") {
+        Some(Value::Scalar {
+            text, style, tag, ..
+        }) => {
+            assert!(
+                tag.is_none(),
+                "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in \
+                 `mutants` carries a YAML tag ({tag:?}) — a node property \
+                 on the value is rejected outright rather than resolved \
+                 and trusted (S-CIGATE-3 AC-007).\n\
+                 Current mutants block:\n{mutants_block}"
+            );
+            assert_eq!(
+                *style,
+                ScalarStyle::Plain,
+                "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in \
+                 `mutants` is written in a non-plain YAML scalar style \
+                 ({style:?}) — S-CIGATE-3 AC-004 treats a quoted or \
+                 block-scalar `if:` value as a DIFFERENT, unpinned form \
+                 even when its resolved text is identical to the plain \
+                 pin.\n\
+                 Current mutants block:\n{mutants_block}"
+            );
+            assert!(
+                text.contains("always()"),
+                "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in \
+                 `mutants` no longer reads `if: always()` (found: \
+                 {text:?}).\n\
+                 Current mutants block:\n{mutants_block}"
+            );
+        }
+        other => panic!(
+            "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in \
+             `mutants` is not a plain scalar value (found: {other:?}).\n\
+             Current mutants block:\n{mutants_block}"
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4520,7 +4651,79 @@ fn extract_and_normalize_step_run_line_by_name(
 /// here — a follow-up story to replace line-based extraction with a real
 /// YAML parser is tracked separately and is NOT opened by this round):
 ///
-///   SCOPE SUMMARY (read this before the detail below):
+/// # S-CIGATE-3 SUPERSEDES MUCH OF THE FOLLOWING (2026-08-11, ADV-SC3-P1-MED-002)
+///
+/// Everything below this note is the round-16 historical record, kept
+/// verbatim per this repo's "do not delete historical record" convention —
+/// it is NOT current fact. A fresh-context adversarial review of the
+/// S-CIGATE-3 migration found this section had gone stale in three
+/// specific, harmful ways (a reviewer reading it in isolation would
+/// conclude work is still open that has in fact landed, or would
+/// re-litigate an already-closed question): read this note FIRST.
+///
+///   1. **The "follow-up story… tracked separately" this section keeps
+///      promising has LANDED, not merely been re-promised.** `ci.yml` is
+///      now parsed once with a real YAML 1.2 parser
+///      (`saphyr-parser` 0.0.11's low-level event stream, via
+///      `tests/common/wf.rs`'s `WfDoc`/`Job`/`Step`/`Value` model) and
+///      every structural assertion in this file queries the parsed tree —
+///      not `str::lines()`/indent arithmetic. `extract_key_name_at_indent`
+///      and `collect_mapping_key_set`, the two primitives every finding
+///      below is actually about, are DELETED from this file (grep
+///      confirms zero remaining call sites; every surviving occurrence of
+///      either name left in this file, including several above, is inside
+///      a doc comment narrating this pre-migration history, not a live
+///      function call). Byte-for-byte scalar pins are RETAINED as a
+///      second layer, now sourced from parsed `Event::Scalar` values with
+///      an added `ScalarStyle::Plain` assertion (AC-004) so a re-quoted
+///      form is not silently accepted — see `extract_and_normalize_if_expr`'s
+///      doc comment for the full design.
+///   2. **The round-16 node-property residual this section's "NOT
+///      ENFORCED" bullet and its "NO AUTOMATED CHECK… CODE REVIEW IS THE
+///      CONTROL" sentence describe is now CLOSED FOR `ci-gate`
+///      specifically — verified by opening the enforcing test, not taken
+///      on report.** `tests/common/wf.rs::find_key_node_properties` walks
+///      the parsed event stream for any mapping key carrying an anchor or
+///      tag; it is called exactly once in this file, at Assertion 12
+///      (`M2-q`, AC-007) inside `test_ci_gate_pass_fail_semantics_are_
+///      structurally_placed`, asserted empty against the `ci-gate` job
+///      block. Both round-16 reproduction forms (`&x shell: cat {0}` and
+///      `!!str shell: cat {0}`) were re-proven RED this session against a
+///      temporary, untracked copy of the gate step (the tracked `ci.yml`
+///      was never modified) and confirmed caught post-fix.
+///      **Scope correction, so this claim is not overstated either:**
+///      `find_key_node_properties` is `ci-gate`-scoped only — it is not
+///      called against `mutants`, `msrv`, `spec-guard`, or any other job's
+///      block. Outside `ci-gate`, a node-propertied key that is ALREADY a
+///      legitimate member of a pinned set (e.g. `&x run: …` on an
+///      existing step) is not independently detected by those other
+///      jobs' checks, though a *new* anchored/tagged key at any job is
+///      still caught by the ordinary tree-based key-SET comparisons those
+///      checks already make (per item 2's own explanation two paragraphs
+///      up in the pre-existing text below) — the real parser resolves
+///      `&x shell: …` to a genuine `shell` key regardless of the anchor,
+///      so a key-set pin still sees it and still fails. `ci-gate` is the
+///      one job this scoping matters for: it is the sole required
+///      branch-protection check, so the narrower, harder-to-detect case
+///      (anchor on an already-pinned key, silent under a pure key-set
+///      diff) is closed exactly where the pass/fail decision actually
+///      lives.
+///   3. **The Guard B (matrix-staticity) cross-references elsewhere in
+///      this file that call it "line-based" / "shares the round-16
+///      node-property residual" are themselves stale** — see the
+///      correction at that guard's own test function, which is fully
+///      migrated onto `job_level_nested_value`/`job_level_nested_sequence_
+///      items`/`job_level_nested_keys`.
+///
+///   Everything else below — `uses:` VALUES on the decision path, `with:`
+///   block CONTENTS, `name:` VALUES, and human judgment on
+///   `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`/other pin-literal updates — is
+///   still accurately unenforced; S-CIGATE-3 did not touch any of those,
+///   and nothing above should be read as claiming otherwise.
+///
+///   SCOPE SUMMARY (round-16 original; **[SUPERSEDED, S-CIGATE-3 — see
+///   the note at the top of this "RESIDUAL RISK" section]**, kept
+///   verbatim below):
 ///   Enforced: decision semantics (behavioral subprocess tests) · assertion
 ///   shapes (set-equality, default-deny given faithful extraction) · value
 ///   substitution (byte pins that fail loud via `Err`) · non-LF line
@@ -4533,6 +4736,18 @@ fn extract_and_normalize_step_run_line_by_name(
 ///   hand-crafted YAML visible in a diff, unlike the original defect,
 ///   which was silent. Durable fix: a real YAML parser over the parsed
 ///   tree (follow-up story, not opened here).
+///
+///   CURRENT SCOPE SUMMARY (S-CIGATE-3, 2026-08-11): Enforced — everything
+///   the round-16 line above claims, PLUS the node-property class for
+///   `ci-gate` specifically (M2-q/`find_key_node_properties`, verified
+///   above). NOT enforced — `uses:` VALUES on the decision path; `with:`
+///   block CONTENTS; `name:` VALUES; human judgment on pin-literal
+///   updates; the node-property class for jobs OTHER than `ci-gate`
+///   (`mutants`/`msrv`/`spec-guard`/etc. — narrowly, only for an anchor/tag
+///   on a key that is ALREADY a legitimate pinned member; a NEW anchored
+///   key is still caught by those jobs' ordinary key-set pins). Durable
+///   fix — LANDED, not a follow-up: `WfDoc` (`tests/common/wf.rs`), built
+///   on `saphyr-parser` 0.0.11's event stream.
 ///
 ///   ENFORCED (verified by attack against this file's own tests, not by
 ///   reading an assertion and trusting its shape):
@@ -4566,7 +4781,14 @@ fn extract_and_normalize_step_run_line_by_name(
 ///     the next item.
 ///
 ///   NOT ENFORCED — say this plainly, not "mitigated":
-///   - This file's line-based LEXER layer (`extract_key_name_at_indent`
+///   - **[SUPERSEDED, S-CIGATE-3 — see item 1 in the note at the top of
+///     this "RESIDUAL RISK" section.]** `extract_key_name_at_indent` no
+///     longer exists in this file; it and everything built on it were
+///     deleted and replaced by `WfDoc`'s event-stream tree walk. This
+///     bullet is kept verbatim as the historical description of the
+///     defect that migration fixed, not as a description of this file's
+///     current extraction mechanism. This file's line-based LEXER layer
+///     (`extract_key_name_at_indent`
 ///     and everything built on it) under-reports on YAML that a real
 ///     parser reads differently than a naive line-by-line scan. The
 ///     line-break class (round 14) was ONE member; a SECOND, DISTINCT
@@ -4641,6 +4863,17 @@ fn extract_and_normalize_step_run_line_by_name(
 ///   repository already relies on for everything this file does not pin
 ///   (see "NOT PINNED" above), stated plainly rather than implied.
 ///
+///   **[SUPERSEDED for `ci-gate` — see the S-CIGATE-3 note at the top of
+///   this "RESIDUAL RISK" section, item 2.]** This sentence is now false
+///   as a blanket claim: `test_ci_gate_pass_fail_semantics_are_structurally_
+///   placed`'s M2-q assertion (`find_key_node_properties`) IS an automated
+///   check that catches the exact `&x shell: cat {0}` / `!!str shell: cat
+///   {0}` bypass this paragraph describes, scoped to `ci-gate`. Kept
+///   verbatim below rather than deleted (historical record); it remains
+///   literally true only for jobs OTHER than `ci-gate` (see the scope
+///   correction above) and for the unrelated items this section's closing
+///   paragraph lists (`uses:` values, pin-literal judgment).
+///
 ///   THE DURABLE FIX (tracked as a follow-up story, NOT opened by this
 ///   round): parse `ci.yml` ONCE with a real YAML parser — an off-the-
 ///   shelf Rust crate (`saphyr`/`yaml-rust2`) or a PyYAML shell-out
@@ -4658,6 +4891,15 @@ fn extract_and_normalize_step_run_line_by_name(
 ///   understands the anchors that defeat this file's lexer). Record this
 ///   as the follow-up's specific direction so a future reader does not
 ///   re-litigate the same two choices rounds 11-16 already worked through.
+///
+///   **[LANDED, not merely "tracked" — S-CIGATE-3, 2026-08-11. See the
+///   note at the top of this "RESIDUAL RISK" section, item 1.]** This is
+///   no longer an open follow-up: `tests/common/wf.rs`'s `WfDoc` does
+///   exactly what this paragraph specifies, off-the-shelf `saphyr-parser`
+///   0.0.11 (not a PyYAML shell-out), asserted over the parsed tree with
+///   byte-for-byte scalar pins retained as the second layer this paragraph
+///   describes. Kept verbatim below as the design rationale that was
+///   actually followed, not as an open item.
 ///
 /// CORRECTED (PR #671 review round 12; RULE ITSELF CORRECTED round 13 —
 /// see below): an earlier limitation note here speculated that every
@@ -6315,6 +6557,30 @@ fn test_allowed_skips_has_exactly_three_code_level_references() {
 // of gap closes structurally for Guard A's own extractors, not just for
 // the specific `&x`/`!!str shell:` reproduction case.
 //
+// CORRECTED (S-CIGATE-3, ADV-SC3-P1-MED-002, 2026-08-11 — verified by
+// reading the test body, not taken on report): the paragraph immediately
+// below this one (kept for historical record, struck through in effect
+// by this correction) claimed Guard B was "UNCHANGED by pass D and still
+// inherits the line-based residual… tracked as a follow-up S-CIGATE-3
+// pass, not closed by this comment." That is FALSE as of this revision —
+// `test_matrix_os_lists_remain_static_literals` (Guard B) IS fully
+// migrated, in pass C (which preceded, and was independent of, Guard A's
+// pass-D migration referenced above), onto `job_level_nested_value` /
+// `job_level_nested_sequence_items` / `job_level_nested_keys` — see that
+// test's own "S-CIGATE-3 pass C" doc comment a few dozen lines below,
+// which is accurate and was simply never cross-referenced back up here
+// when it landed. Guard B inherits the SAME closure Guard A does: a real
+// parser resolves `strategy.matrix.os`/`strategy.matrix` by tree
+// membership, immune to a node property on any key along that path, for
+// the same reason `read_mapping` closes it for Guard A. There is no
+// remaining follow-up pass for Guard B's own extractors; do not
+// re-schedule migrating them.
+//
+// The paragraph below is retained verbatim as the historical record of
+// what was believed true at the time it was written, per this repo's
+// "do not delete historical record" convention — it is superseded by the
+// correction immediately above, not current fact:
+//
 // Guard B (matrix staticity, below) is UNCHANGED by pass D and still
 // inherits the line-based residual exactly as documented originally — it
 // is tracked as a follow-up S-CIGATE-3 pass (durable YAML-parser rewrite),
@@ -6556,9 +6822,16 @@ fn extract_job_display_name(job: &Job) -> Option<String> {
 /// bookkeeping rather than removed outright.
 ///
 /// See the module-level "KNOWN LIMITATION" note above this section — that
-/// note now documents the split between Guard A (this test, migrated,
-/// closed by construction) and Guard B (matrix staticity, still
-/// line-based, unaffected by this pass).
+/// note documents Guard A (this test, migrated in pass D, closed by
+/// construction). **Correction (S-CIGATE-3, ADV-SC3-P1-MED-002,
+/// 2026-08-11):** Guard B (matrix staticity,
+/// `test_matrix_os_lists_remain_static_literals`) is NOT "still
+/// line-based, unaffected by this pass" — it was independently migrated
+/// in pass C (which predates this pass-D test) onto
+/// `job_level_nested_value`/`job_level_nested_sequence_items`/
+/// `job_level_nested_keys` and is equally closed by construction. See the
+/// module-level note's own correction, immediately above its historical
+/// paragraph, for the full account.
 #[test]
 fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
     for path in list_workflow_files() {
@@ -6728,9 +7001,14 @@ const PINNED_MATRIX_NEEDS_MEMBER_COUNT: usize = 2;
 /// it must be resolved (see `ZERO-LEG-MATRIX-RESULT-UNDOCUMENTED` above)
 /// before that change lands, not inferred.
 ///
-/// See the module-level "KNOWN LIMITATION SHARED BY BOTH GUARDS" note above
-/// this section — this test is line-based and shares the round-16
-/// node-property residual like every other pin in this file.
+/// See the module-level "KNOWN LIMITATION" note above this section.
+/// **Correction (S-CIGATE-3, ADV-SC3-P1-MED-002, 2026-08-11):** this test
+/// is NOT line-based and does NOT share the round-16 node-property
+/// residual — see the "S-CIGATE-3 pass C" doc comment a few lines below,
+/// inside this function's body, for the actual (tree-based) extraction
+/// this test now uses. The sentence this replaces was accurate when
+/// written and went stale when the pass-C migration below landed without
+/// this cross-reference being updated in the same change.
 #[test]
 fn test_matrix_os_lists_remain_static_literals() {
     let ci = read_ci_yml();
