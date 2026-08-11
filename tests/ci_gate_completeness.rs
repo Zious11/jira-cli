@@ -3220,8 +3220,43 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
     });
     let job = WfDoc::parse_single_job(msrv_block);
 
+    // The `dtolnay/rust-toolchain` step, found by its OWN `uses:` value
+    // prefix via tree membership — S-CIGATE-3 fix-burst-6 (ADV-SC3-P4-MED-001
+    // "related instance"). `first_step_mapping_child_value(msrv_block,
+    // "with", "toolchain")` (the pre-fix-burst-6 form) returns the FIRST
+    // step whose `with:` mapping happens to contain a `toolchain` child,
+    // without verifying that step is genuinely the `dtolnay/rust-toolchain`
+    // action — a decoy step (any `uses:`) placed earlier in `steps:` with
+    // its own `with: {toolchain: "1.85.0"}` would satisfy the old lookup
+    // even if the REAL `dtolnay/rust-toolchain` step's `with.toolchain` were
+    // removed entirely (which would silently fail the toolchain install and
+    // let CI fall back to whatever `rustup` happens to select). Anchoring on
+    // the step's own `uses:` value prefix, then resolving `with.toolchain`
+    // via `step_mapping_child_value_for_step` (byte-span identity, not a
+    // re-scan), closes this the same way as the `RUSTUP_TOOLCHAIN` fix
+    // below.
+    let dtolnay_step = job.steps.iter().find(|s| {
+        matches!(
+            s.value_of("uses"),
+            Some(Value::Scalar { text, .. }) if text.starts_with("dtolnay/rust-toolchain")
+        )
+    });
+    let Some(dtolnay_step) = dtolnay_step else {
+        panic!(
+            "FAIL (S-626-1 AC-3 / S-CIGATE-3 fix-burst-6): no step in the \
+             `msrv` job has a `uses:` value starting with \
+             \"dtolnay/rust-toolchain\".\n\
+             Current msrv job block:\n{msrv_block}"
+        );
+    };
+
     // toolchain: "1.85.0" on the dtolnay/rust-toolchain step's `with:` block.
-    match common::wf::first_step_mapping_child_value(msrv_block, "with", "toolchain") {
+    match common::wf::step_mapping_child_value_for_step(
+        msrv_block,
+        dtolnay_step,
+        "with",
+        "toolchain",
+    ) {
         Some(Value::Scalar { text, style, .. }) => {
             assert_eq!(
                 text, "1.85.0",
@@ -3291,14 +3326,43 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
         );
     }
 
-    // F-02 (round 19, re-derived S-CIGATE-3 pass C): `RUSTUP_TOOLCHAIN`
-    // must be an `env:` override on THIS SAME step, not merely present
-    // anywhere in the `msrv` job block. `step_mapping_child_value` anchors
-    // on `step_anchor_key = "run"` — safe here because exactly ONE step in
-    // this job has a `run:` key at all (`cargo_check_step` above is that
-    // step), so anchoring on `"run"` cannot select the wrong step the way
-    // anchoring on `"uses"` would for the `toolchain` check above.
-    match common::wf::step_mapping_child_value(msrv_block, "run", "env", "RUSTUP_TOOLCHAIN") {
+    // F-02 (round 19, re-derived S-CIGATE-3 pass C; STRENGTHENED
+    // fix-burst-6, ADV-SC3-P4-MED-001): `RUSTUP_TOOLCHAIN` must be an
+    // `env:` override on THIS SAME step (`cargo_check_step`, already
+    // resolved above by its own `run:` VALUE), not merely present on SOME
+    // step that happens to have a `run:` key at all.
+    //
+    // The prior form of this check —
+    // `step_mapping_child_value(msrv_block, "run", "env",
+    // "RUSTUP_TOOLCHAIN")` — anchored on `step_anchor_key = "run"`, i.e.
+    // "the first step in `steps:` that has a `run:` key present", and its
+    // own doc comment claimed this was safe because "exactly ONE step in
+    // this job has a `run:` key at all". That precondition was never
+    // actually asserted anywhere, so it silently stopped holding the
+    // moment a second `run:`-bearing step existed: a decoy step (e.g.
+    // `- name: Show MSRV toolchain` with its own `run:` + `env:
+    // {RUSTUP_TOOLCHAIN: "1.85.0"}`) inserted BEFORE `cargo_check_step`,
+    // combined with deleting `cargo_check_step`'s own `env:` block
+    // entirely, satisfied the old lookup while `cargo check` silently ran
+    // under `rust-toolchain.toml`'s `channel = "stable"` — verbatim the
+    // S-626-1 false-green this whole test exists to prevent. Confirmed by
+    // a RED proof against a decoy copy of `ci.yml` (never the tracked
+    // file): the pre-fix-burst-6 lookup returned
+    // `RUSTUP_TOOLCHAIN="1.85.0"` even though `cargo_check_step` itself
+    // carried no `env:` key at all.
+    //
+    // `step_mapping_child_value_for_step` closes this by resolving
+    // `env.RUSTUP_TOOLCHAIN` against `cargo_check_step`'s own byte SPAN —
+    // a unique source-text position — rather than re-scanning `steps:` for
+    // "the first step with some other key present". It is therefore
+    // provably anchored to the exact step already identified above, with
+    // no "exactly one" precondition left to silently violate.
+    match common::wf::step_mapping_child_value_for_step(
+        msrv_block,
+        cargo_check_step,
+        "env",
+        "RUSTUP_TOOLCHAIN",
+    ) {
         Some(Value::Scalar { text, style, .. }) => {
             assert_eq!(
                 text, "1.85.0",
@@ -3318,8 +3382,11 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
         }
         other => panic!(
             "FAIL (S-626-1 AC-3 / F-02): `RUSTUP_TOOLCHAIN: \"1.85.0\"` is \
-             not on the SAME step as `cargo check --all-features --locked` \
-             (found {other:?} instead).\n\
+             not an `env:` child of THE `cargo check --all-features \
+             --locked` step itself (found {other:?} instead) — this check \
+             is anchored to that exact step's own byte span, not to \
+             \"some step with a `run:` key\", so a decoy step elsewhere in \
+             `steps:` cannot satisfy it.\n\
              `RUSTUP_TOOLCHAIN` outranks `rust-toolchain.toml` at PROCESS \
              level — it must be an `env:` override on the `cargo check` \
              step itself. Setting it on any other step (e.g. the \

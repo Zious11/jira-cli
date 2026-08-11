@@ -1599,6 +1599,119 @@ pub fn first_step_mapping_child_value(
     None
 }
 
+/// Resolve the [`Value`] of ONE named child (`child_key`) of the mapping
+/// value of `mapping_key`, within the EXACT step `step` — identified by its
+/// own byte [`Step::span`], not by re-scanning `job_block` for "the first
+/// step carrying some other key". Sibling of [`step_mapping_child_value`]
+/// (anchored by a same-step OTHER key's mere PRESENCE) and
+/// [`first_step_mapping_child_value`] (anchored by the first step whose
+/// `mapping_key` mapping happens to CONTAIN `child_key`) — this is the
+/// strictest of the three: the caller has already unambiguously identified
+/// `step` (e.g. via `job.steps.iter().find(|s| s.value_of("run") == ...)`,
+/// exactly as `dtolnay/rust-toolchain`'s `uses:` prefix or the `cargo check`
+/// step's exact `run:` text already do), and this function guarantees the
+/// lookup happens on THAT step, not merely a step sharing one of its keys.
+///
+/// # Why this exists (S-CIGATE-3 fix-burst-6, ADV-SC3-P4-MED-001 / F-02)
+///
+/// `step_mapping_child_value`'s `step_anchor_key` design silently assumes
+/// "exactly one step in this job has `step_anchor_key` at all" — a
+/// precondition nothing enforced. For the `msrv` job's `cargo check` step,
+/// anchoring on `step_anchor_key = "run"` matches the FIRST step with ANY
+/// `run:` key, not specifically the step whose `run:` VALUE is `cargo check
+/// --all-features --locked`. A decoy step inserted earlier in `steps:` with
+/// its own `run:` + `env: {RUSTUP_TOOLCHAIN: "1.85.0"}` — while the REAL
+/// `cargo check` step's `env:` block is deleted entirely — satisfies the old
+/// lookup and leaves `test_verify_msrv_job_pins_toolchain_and_rustup_
+/// toolchain_env` green while `cargo check` silently runs under
+/// `rust-toolchain.toml`'s `channel = "stable"`, verbatim the S-626-1
+/// false-green this test exists to prevent. This function closes the gap by
+/// re-locating, inside `steps:`, the step whose OWN byte span equals
+/// `step.span` — spans are unique source-text positions, so this can only
+/// ever match the step the caller already resolved.
+///
+/// Returns `None` if no step's span matches `step.span` (a caller error —
+/// `step` did not come from parsing this same `job_block` text), that step
+/// has no `mapping_key`, `mapping_key`'s value there is not itself a
+/// mapping, or that mapping has no `child_key`.
+///
+/// # Panics
+///
+/// Same malformed-YAML-panics contract as [`WfDoc::parse`]. Additionally
+/// panics if MORE THAN ONE step in `job_block` shares `step.span` — byte
+/// spans are unique positions in one source text, so this should be
+/// structurally impossible unless `job_block` is not the same text `step`
+/// was parsed from (a caller error worth surfacing loudly rather than
+/// silently picking one).
+#[must_use]
+pub fn step_mapping_child_value_for_step(
+    job_block: &str,
+    step: &Step,
+    mapping_key: &str,
+    child_key: &str,
+) -> Option<Value> {
+    let table = char_byte_table(job_block);
+    let events = parse_job_block_events(job_block, "step_mapping_child_value_for_step");
+    let body = job_body_entries(&events)?;
+    let steps_entry = find_unique_entry(&body, "steps", "step_mapping_child_value_for_step")?;
+    if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
+        return None;
+    }
+    let (items, _) = read_sequence(&events, steps_entry.value_start);
+
+    let byte_of = |char_idx: usize| -> usize {
+        *table.get(char_idx).unwrap_or_else(|| {
+            panic!(
+                "wf.rs: step_mapping_child_value_for_step: char index \
+                 {char_idx} out of range for a table of {} entries — this \
+                 indicates a bug in this module's event-index bookkeeping, \
+                 not malformed input",
+                table.len().saturating_sub(1)
+            )
+        })
+    };
+
+    let mut matched: Vec<usize> = Vec::new();
+    for (item_start, item_end) in items {
+        let start_byte = byte_of(events[item_start].1.start.index());
+        let end_byte = byte_of(events[item_end - 1].1.end.index());
+        if (start_byte..end_byte) == step.span {
+            matched.push(item_start);
+        }
+    }
+
+    let item_start = match matched.len() {
+        0 => return None,
+        1 => matched[0],
+        n => panic!(
+            "wf.rs: step_mapping_child_value_for_step: {n} steps in this \
+             job block share byte span {:?} — `step` most likely did not \
+             come from parsing this same `job_block` text.",
+            step.span
+        ),
+    };
+
+    if !matches!(events[item_start].0, Event::MappingStart(..)) {
+        return None;
+    }
+    let (step_entries, _) = read_mapping(&events, item_start);
+    let mapping_entry = find_unique_entry(
+        &step_entries,
+        mapping_key,
+        "step_mapping_child_value_for_step",
+    )?;
+    if !matches!(events[mapping_entry.value_start].0, Event::MappingStart(..)) {
+        return None;
+    }
+    let (child_entries, _) = read_mapping(&events, mapping_entry.value_start);
+    let child = find_unique_entry(
+        &child_entries,
+        child_key,
+        "step_mapping_child_value_for_step",
+    )?;
+    Some(resolve_value(&events, child.value_start))
+}
+
 // ---------------------------------------------------------------------------
 // S-CIGATE-3 pass F additions (FINAL migration pass)
 //
@@ -2125,7 +2238,8 @@ mod tests {
 
     // -----------------------------------------------------------------
     // Fixed-denominator self-check (S-CIGATE-3 fix-burst-4,
-    // ADV-SC3-P2-LOW-005)
+    // ADV-SC3-P2-LOW-005; enforcement assertions ported fix-burst-6,
+    // ADV-SC3-P4-LOW-001)
     //
     // `tests/ci_gate_completeness.rs::EXPECTED_GUARD_TEST_COUNT` (see that
     // constant's own doc comment) exists because POL-11's `test` job
@@ -2144,25 +2258,53 @@ mod tests {
     // test(s) that would have caught it moved NO counter anywhere prior
     // to this pass — every other file in this story's documented review
     // scope had a tripwire; this one, despite being the most
-    // security-relevant of the four, did not. This mirrors
-    // `EXPECTED_GUARD_TEST_COUNT`'s own pattern exactly (including its
-    // "counts `#[test]` ATTRIBUTES, not enforcement" limitation — see
-    // that constant's doc comment for the `#[ignore]`/`#[cfg(...)]`
-    // evasions this same-shaped check does not close here either;
-    // extending that enforcement is out of scope for this pass, which
-    // only needed to close the "no counter moves at all" gap).
+    // security-relevant of the four, did not.
     //
     // UPDATE THIS CONSTANT in the SAME change whenever a `#[test]` fn is
     // added to or removed from THIS file. A mismatch is a signal to look
     // at what changed, not something to silence by "fixing" the number
     // without checking why it moved.
+    //
+    // CORRECTION (fix-burst-6, ADV-SC3-P4-LOW-001): this function
+    // previously stopped at the `assert_eq!` below and deferred porting
+    // its sibling's `#[ignore]`/`#[cfg(...)]` enforcement assertions
+    // (`tests/ci_gate_completeness.rs::test_this_file_test_count_
+    // matches_expected_denominator`, ADV-P60-HIGH-001) as "out of scope
+    // for this pass, which only needed to close the 'no counter moves at
+    // all' gap". That rationale was WRONG, not merely incomplete: under
+    // `#[ignore]` (or a never-true `#[cfg(...)]`), the `#[test]` line
+    // stays present in source either way, so `actual` above never moves
+    // regardless — there was never a scenario where silencing a test this
+    // way would have moved `EXPECTED_WF_TEST_COUNT` and gone undetected
+    // by a counter this file does not have; the gap was always in
+    // ENFORCEMENT, exactly as it was for the sibling constant. Checked
+    // which of this file's invariants would actually become exploitable
+    // if their sole covering test were silenced this way: every guard
+    // built on [`find_unique_entry`] is independently caught elsewhere —
+    // a weakened duplicate-key tolerance still lengthens the relevant
+    // non-deduplicated key vector and fails a `PINNED_*` key-set
+    // assertion in `tests/ci_gate_completeness.rs` — EXCEPT
+    // [`assert_single_document`], whose four `#[test]`s
+    // (`test_wfdoc_parse_panics_on_second_yaml_document`,
+    // `test_find_key_node_properties_panics_on_multi_document_stream`,
+    // and the two `should_panic` siblings covering `WfDoc::parse`'s and
+    // `find_key_node_properties`'s call sites) are its ONLY regression
+    // coverage in this codebase; silencing them via `#[ignore]` or a
+    // never-true `#[cfg(...)]` has no independent catcher. Both
+    // assertions below are ported verbatim (adapted for `source =
+    // include_str!("wf.rs")` and this file's own, currently EMPTY,
+    // `#[cfg(...)]` allowlist — STRICTER than the sibling's
+    // `#[cfg(unix)]` allowance, since this file has no platform-gated
+    // test today; see `ALLOWED_TEST_CFG_GATES` below) from
+    // `tests/ci_gate_completeness.rs`'s ADV-P60-HIGH-001 fix.
     const EXPECTED_WF_TEST_COUNT: usize = 20;
 
     #[test]
     fn test_wf_rs_test_count_matches_expected_denominator() {
         let source = include_str!("wf.rs");
-        let actual = source
-            .lines()
+        let lines: Vec<&str> = source.lines().collect();
+        let actual = lines
+            .iter()
             .filter(|l| l.trim().starts_with("#[test]"))
             .count();
         assert_eq!(
@@ -2182,6 +2324,81 @@ mod tests {
              EXPECTED_WF_TEST_COUNT in the SAME change. If it is not \
              deliberate, some `#[test]` fn was lost — find out which one \
              before changing this constant."
+        );
+
+        // ADV-SC3-P4-LOW-001 (ported from ADV-P60-HIGH-001): the
+        // assertion above pins the TEXTUAL count of `#[test]` attributes
+        // — it says nothing about whether every one of those attributes
+        // still actually RUNS. `#[ignore]` leaves the `#[test]` line (and
+        // therefore `actual` above) untouched while `cargo test` still
+        // reports the binary's overall result as `ok`, satisfied by the
+        // remaining tests.
+        let ignore_lines: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim().starts_with("#[ignore"))
+            .map(|(i, _)| i + 1) // 1-based line numbers for the diagnostic.
+            .collect();
+        assert!(
+            ignore_lines.is_empty(),
+            "FAIL (ADV-SC3-P4-LOW-001, ported from ADV-P60-HIGH-001): \
+             found `#[ignore]` attribute(s) at line(s) {ignore_lines:?} in \
+             tests/common/wf.rs. The `actual == EXPECTED_WF_TEST_COUNT` \
+             assertion above counts `#[test]` ATTRIBUTES textually — an \
+             `#[ignore]`d test still carries that attribute, so the count \
+             does not move, but the test never runs. `cargo test` still \
+             reports an overall `ok` result for this binary, and \
+             `ci.yml`'s POL-11 zero-test-floor canary only requires a \
+             NON-ZERO passed count — satisfied by the remaining tests. \
+             Remove the `#[ignore]` attribute, or if a test genuinely must \
+             be disabled, that decision needs its own explicit review, not \
+             a silent addition that leaves this guard green."
+        );
+
+        // ADV-SC3-P4-LOW-001, second gap (ported from ADV-P60-HIGH-001):
+        // a `#[cfg(...)]` predicate false on every platform this repo
+        // builds for removes the gated `#[test]` fn from the compiled
+        // binary entirely — invisible to both the count above and the
+        // `#[ignore]` scan above. This file's allowlist is EMPTY: unlike
+        // `tests/ci_gate_completeness.rs` (which legitimately gates four
+        // bash-shelling-out tests behind `#[cfg(unix)]`), no `#[test]` fn
+        // in `tests/common/wf.rs` is platform-gated today — see the grep
+        // pin above this test's own doc comment. Reject-don't-parse, same
+        // discipline as `extract_and_normalize_if_expr`.
+        const ALLOWED_TEST_CFG_GATES: &[&str] = &[];
+        let bad_cfg_gates: Vec<(usize, String)> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim().starts_with("#[test]"))
+            .filter_map(|(i, _)| {
+                if i == 0 {
+                    return None; // No line above index 0 to inspect.
+                }
+                let prev = lines[i - 1].trim();
+                if prev.starts_with("#[cfg(") && !ALLOWED_TEST_CFG_GATES.contains(&prev) {
+                    Some((i + 1, prev.to_string())) // 1-based `#[test]` line number.
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            bad_cfg_gates.is_empty(),
+            "FAIL (ADV-SC3-P4-LOW-001, ported from ADV-P60-HIGH-001): \
+             found `#[test]` fn(s) in tests/common/wf.rs whose immediately \
+             preceding line is a `#[cfg(...)]` attribute NOT in the \
+             (currently EMPTY) allowlist {ALLOWED_TEST_CFG_GATES:?}: \
+             {bad_cfg_gates:?} (line number, offending attribute). A \
+             `#[cfg(...)]` predicate false on every platform this repo \
+             builds for removes the gated `#[test]` fn from the compiled \
+             binary ENTIRELY on every one of those platforms — the \
+             textual `#[test]` count above does not move, and there is no \
+             `#[ignore]` attribute for the scan above to catch either. If \
+             this is a deliberate, reviewed new platform-gated test, add \
+             its exact `#[cfg(...)]` spelling to ALLOWED_TEST_CFG_GATES in \
+             the SAME change — and confirm any helper that test alone \
+             uses is gated the same way (PR #671 review round 15's \
+             \"gating a test also orphans its helpers\" lesson)."
         );
     }
 }
