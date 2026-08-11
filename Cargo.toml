@@ -63,9 +63,12 @@ glob = "0.3"
 # sha1: compute batch-path prefixes in mutation-kill tests (PG-F4-10)
 sha1 = { version = "^0.11" }
 # saphyr-parser: event-stream-only YAML parsing for tests/ci_gate_completeness.rs (S-CIGATE-3).
-# Exact-version pin (not a caret range) — MSRV 1.85.0 is this crate's exact floor with zero
-# headroom against this repo's rust-version = "1.85"; an unreviewed transitive bump could
-# silently break the msrv CI job on an unrelated PR. See CLAUDE.md ci-gate bullet / AC-006.
+# Exact-version pin (not a caret range) — 0.0.x carries no semver guarantee by convention,
+# so a 0.0.x bump can be breaking; the exact pin forces any upgrade through a reviewed
+# Cargo.toml diff rather than a silent `cargo update`. (Note: this crate's own MSRV happens
+# to be exactly 1.85.0 against this repo's rust-version = "1.85", zero headroom — but that is
+# NOT enforced by the msrv CI job, since it's a dev-dependency and that job's `cargo check`
+# scope is lib + bins only, not --all-targets.) See CLAUDE.md ci-gate bullet / AC-006.
 saphyr-parser = "=0.0.11"
 
 [profile.release]
