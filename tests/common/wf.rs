@@ -176,8 +176,12 @@ pub struct Job {
     /// The byte range in the original source text this job's block occupies.
     ///
     /// Deliberately mirrors the OLD line-based `extract_job_block`'s
-    /// contract for equivalence purposes (see
-    /// `tests/wf_model_equivalence.rs`): the range starts at byte 0 of the
+    /// contract for equivalence purposes (verified during the S-CIGATE-3
+    /// migration against the now-deleted line-based scanner via a scratch
+    /// harness, not a tracked test file; this module's own `#[cfg(test)]
+    /// mod tests` below is the permanent regression coverage for the
+    /// span-correctness properties this field depends on): the range
+    /// starts at byte 0 of the
     /// physical line containing this job's key (i.e. it includes the job
     /// key's leading indentation, recovered via `Marker::col()` — see module
     /// docs), and ends at the start of the next sibling job's line, or at
@@ -266,6 +270,7 @@ impl WfDoc {
             .unwrap_or_else(|e| {
                 panic!("wf.rs: failed to parse workflow YAML as valid YAML 1.2: {e}")
             });
+        assert_single_document(&events, "WfDoc::parse");
 
         let table = char_byte_table(yaml);
         let byte_of = |char_idx: usize| -> usize {
@@ -297,7 +302,7 @@ impl WfDoc {
         let root_keys: Vec<String> = root_entries.iter().map(|e| e.key.clone()).collect();
 
         let mut jobs = Vec::new();
-        if let Some(jobs_entry) = root_entries.iter().find(|e| e.key == "jobs") {
+        if let Some(jobs_entry) = find_unique_entry(&root_entries, "jobs", "WfDoc::parse") {
             if matches!(events[jobs_entry.value_start].0, Event::MappingStart(..)) {
                 let (job_entries, _) = read_mapping(&events, jobs_entry.value_start);
                 let job_count = job_entries.len();
@@ -360,6 +365,125 @@ fn char_byte_table(s: &str) -> Vec<usize> {
 /// than re-scanning the source text for the preceding `\n`.
 fn line_start_char_idx(span: &Span) -> usize {
     span.start.index() - span.start.col()
+}
+
+/// Assert that `events` — collected from ONE `Parser::new_from_str` call —
+/// represents EXACTLY one YAML document, i.e. exactly one
+/// `Event::DocumentStart`. Panics, naming the actual count, otherwise.
+///
+/// # Why this exists (S-CIGATE-3 fix-burst-3, ADV-SC3-P1-LOW-001)
+///
+/// `saphyr_parser::Parser` iterates every document in a `---`-separated
+/// YAML STREAM, not just the first — this is correct, spec-compliant
+/// behavior for a general-purpose YAML parser. Every parse entry point in
+/// this module, however, hunts for the first `Event::MappingStart` (or the
+/// first `Event::DocumentStart`, for this very check) and builds its
+/// structure from that alone; nothing in this module was ever designed to
+/// handle a multi-document stream. Before this assertion existed, a `---`
+/// appended to `.github/workflows/ci.yml` followed by a second document
+/// containing e.g. `defaults: run: shell: cat {0}` was silently invisible
+/// to every guard built on [`WfDoc::root_keys`] — a real, if previously
+/// unenumerated, regression versus the pre-S-CIGATE-3 line-based scanner,
+/// which read every physical line in the file regardless of `---`
+/// boundaries and would have seen the smuggled `defaults:` key. Verified
+/// directly: `WfDoc::parse` on such a stream returned `root_keys ==
+/// ["jobs"]` only, with zero indication the input actually had two
+/// documents, before this function existed.
+///
+/// Called at the START of every parse entry point in this module,
+/// immediately after collecting the event stream — before any structural
+/// lookup runs — so a multi-document stream fails loudly and immediately
+/// rather than silently proceeding against document 1 alone.
+fn assert_single_document(events: &[(Event<'_>, Span)], caller: &str) {
+    let doc_start_count = events
+        .iter()
+        .filter(|(ev, _)| matches!(ev, Event::DocumentStart(..)))
+        .count();
+    assert_eq!(
+        doc_start_count, 1,
+        "wf.rs: {caller}: expected exactly one YAML document in the parsed \
+         stream, found {doc_start_count} — a multi-document stream \
+         (`---`-separated) is not supported by this module: every \
+         structural lookup built on this event list would silently see \
+         only the FIRST document, discarding the rest. Split the extra \
+         document(s) into their own file, or extend this module to handle \
+         a multi-document stream explicitly, rather than parsing one and \
+         silently ignoring the others."
+    );
+}
+
+/// Look up the single entry in `entries` whose key text equals `key`.
+///
+/// # Why this exists (S-CIGATE-3 fix-burst-3, ADV-SC3-P1-MED-004)
+///
+/// [`read_mapping`]'s own doc comment states plainly that a duplicate
+/// mapping key is left entirely to the CALLER to judge — the event stream
+/// never collapses one. Every lookup in this module that used to resolve
+/// ONE named child of a mapping via `entries.iter().find(...)` silently
+/// returned the FIRST match on a duplicate — the same "silently pick a
+/// winner" shape the four scalar-pin call sites in
+/// `tests/ci_gate_completeness.rs` (`extract_and_normalize_if_expr`,
+/// `parse_needs_set`, `extract_and_normalize_sole_needs_line`,
+/// `extract_and_normalize_sole_needs_json_line`) already refuse to do for
+/// a SCALAR value's key. This function gives every MAPPING-CHILD lookup in
+/// this module the same refusal, mirroring their exact wording. Verified
+/// bypass this closes: a second root-level `env:` block appended to
+/// `ci.yml` (containing e.g. a smuggled `BASH_ENV`) was silently invisible
+/// to `extract_workflow_env_key_set` (via `root_level_nested_keys` →
+/// `descend_as_mappings`), because the un-fixed `.find` picked the FIRST
+/// `env:` and never looked at the second; the same shape applied to a
+/// duplicate root `jobs:` key hiding an entire second job map from
+/// [`WfDoc::parse`].
+///
+/// # Panics
+///
+/// Panics if `entries` contains more than one entry with key text `key`,
+/// naming the duplicated key and the caller.
+fn find_unique_entry<'a>(entries: &'a [MapEntry], key: &str, caller: &str) -> Option<&'a MapEntry> {
+    let matches: Vec<&MapEntry> = entries.iter().filter(|e| e.key == key).collect();
+    assert!(
+        matches.len() <= 1,
+        "wf.rs: {caller}: mapping has {} occurrences of the `{key}:` key at \
+         this level — this is invalid YAML (a duplicate mapping key) that \
+         GitHub Actions and actionlint both reject at parse time, but this \
+         checker refuses to silently pick a winner rather than rely on \
+         that external validation. Remove the duplicate `{key}:` key.",
+        matches.len(),
+    );
+    matches.into_iter().next()
+}
+
+/// Assert that `entries` — a mapping's own complete direct entries, as
+/// returned by [`read_mapping`] or [`descend_as_mappings`] — contain no two
+/// entries with the same key text. Panics naming the duplicated key
+/// otherwise.
+///
+/// Sibling of [`find_unique_entry`] (which checks for a duplicate of ONE
+/// named key while navigating toward it): this checks an entire resolved
+/// mapping level at once, for callers (like [`root_level_nested_keys`])
+/// that hand the FULL key set of a resolved mapping back to their own
+/// caller — a duplicate INSIDE that final level (e.g. two `CARGO_TERM_COLOR:`
+/// children of one `env:` block) would otherwise silently survive into a
+/// caller's "complete key set" with no indication of the problem.
+///
+/// # Panics
+///
+/// Panics on the first duplicate key found, naming it and `caller`.
+fn assert_no_duplicate_keys(entries: &[MapEntry], caller: &str) {
+    let mut seen: Vec<&str> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let key = entry.key.as_str();
+        assert!(
+            !seen.contains(&key),
+            "wf.rs: {caller}: mapping has more than one `{key}:` key at \
+             this level — this is invalid YAML (a duplicate mapping key) \
+             that GitHub Actions and actionlint both reject at parse \
+             time, but this checker refuses to silently pick a winner \
+             rather than rely on that external validation. Remove the \
+             duplicate `{key}:` key."
+        );
+        seen.push(key);
+    }
 }
 
 /// One direct entry of a YAML block or flow mapping, as read by
@@ -532,14 +656,40 @@ fn extract_steps(
 
 /// Build one [`Step`] from a `steps:` sequence item spanning event indices
 /// `[item_start, item_end)`.
+///
+/// # Diagnostic-panic byte lookup (S-CIGATE-3 fix-burst-3, ADV-SC3-P1-INFO-001)
+///
+/// `Step::span`'s byte bounds are resolved through a local `byte_of`
+/// closure — the same pattern [`WfDoc::parse`] uses for `Job::span` — rather
+/// than raw `table[...]` indexing. `Step::span` currently has no consumer
+/// in this codebase (unlike `Job::span`, which anchors
+/// [`super::yaml::extract_job_block`]), so this is preventative: kept as
+/// public API surface for a future caller rather than dropped, on the
+/// theory that a later pass wanting step-level byte anchoring (mirroring
+/// today's job-level one) should not have to re-derive this field from
+/// scratch. If an out-of-range char index ever DOES occur here, a bare
+/// `table[...]` index panic reports only a generic Rust "index out of
+/// bounds" with no indication of which module or computation caused it;
+/// this closure instead names the module, the offending index, and the
+/// table's size, exactly like `WfDoc::parse`'s own `byte_of`.
 fn build_step(
     events: &[(Event<'_>, Span)],
     item_start: usize,
     item_end: usize,
     table: &[usize],
 ) -> Step {
-    let start_byte = table[events[item_start].1.start.index()];
-    let end_byte = table[events[item_end - 1].1.end.index()];
+    let byte_of = |char_idx: usize| -> usize {
+        *table.get(char_idx).unwrap_or_else(|| {
+            panic!(
+                "wf.rs: build_step: char index {char_idx} out of range for \
+                 a table of {} entries — this indicates a bug in this \
+                 module's event-index bookkeeping, not malformed input",
+                table.len().saturating_sub(1)
+            )
+        })
+    };
+    let start_byte = byte_of(events[item_start].1.start.index());
+    let end_byte = byte_of(events[item_end - 1].1.end.index());
     let span = start_byte..end_byte;
 
     if !matches!(events[item_start].0, Event::MappingStart(..)) {
@@ -639,6 +789,7 @@ pub fn find_key_node_properties(yaml: &str) -> Vec<KeyNodeProperty> {
     let events: Vec<(Event<'_>, Span)> = Parser::new_from_str(yaml)
         .collect::<Result<Vec<_>, ScanError>>()
         .unwrap_or_else(|e| panic!("wf.rs: failed to parse workflow YAML as valid YAML 1.2: {e}"));
+    assert_single_document(&events, "find_key_node_properties");
 
     let Some(root_start) = events
         .iter()
@@ -736,6 +887,7 @@ impl WfDoc {
                     "wf.rs: parse_single_job: failed to parse job block YAML as valid YAML 1.2: {e}"
                 )
             });
+        assert_single_document(&events, "parse_single_job");
         let table = char_byte_table(job_block);
 
         let Some(root_start) = events
@@ -815,6 +967,7 @@ pub fn job_level_value_span(job_block: &str, key: &str) -> Option<Range<usize>> 
                 "wf.rs: job_level_value_span: failed to parse job block YAML as valid YAML 1.2: {e}"
             )
         });
+    assert_single_document(&events, "job_level_value_span");
     let table = char_byte_table(job_block);
 
     let root_start = events
@@ -866,6 +1019,7 @@ pub fn step_mapping_child_keys(
         .unwrap_or_else(|e| {
             panic!("wf.rs: step_mapping_child_keys: failed to parse job block YAML as valid YAML 1.2: {e}")
         });
+    assert_single_document(&events, "step_mapping_child_keys");
 
     let root_start = events
         .iter()
@@ -926,6 +1080,7 @@ pub fn step_mapping_child_value(
         .unwrap_or_else(|e| {
             panic!("wf.rs: step_mapping_child_value: failed to parse job block YAML as valid YAML 1.2: {e}")
         });
+    assert_single_document(&events, "step_mapping_child_value");
 
     let root_start = events
         .iter()
@@ -984,11 +1139,13 @@ pub fn step_mapping_child_value(
 /// `job_block` into its raw event stream, panicking (same contract as
 /// [`WfDoc::parse`]) if it is not well-formed YAML 1.2.
 fn parse_job_block_events<'a>(job_block: &'a str, caller: &str) -> Vec<(Event<'a>, Span)> {
-    Parser::new_from_str(job_block)
+    let events = Parser::new_from_str(job_block)
         .collect::<Result<Vec<_>, ScanError>>()
         .unwrap_or_else(|e| {
             panic!("wf.rs: {caller}: failed to parse job block YAML as valid YAML 1.2: {e}")
-        })
+        });
+    assert_single_document(&events, caller);
+    events
 }
 
 /// This job's own direct mapping entries (its single root entry's body), as
@@ -1018,13 +1175,22 @@ fn descend_as_mappings(
     path: &[&str],
 ) -> Option<Vec<MapEntry>> {
     for segment in path {
-        let target = entries.iter().find(|e| e.key == *segment)?;
+        let target = find_unique_entry(&entries, segment, "descend_as_mappings")?;
         if !matches!(events[target.value_start].0, Event::MappingStart(..)) {
             return None;
         }
         let (next_entries, _) = read_mapping(events, target.value_start);
         entries = next_entries;
     }
+    // The FINAL resolved level's own key set is what several callers
+    // (`root_level_nested_keys`, `job_level_nested_keys`, and the trailing
+    // `.find(last[0])` in `job_level_nested_value`/
+    // `job_level_nested_sequence_items`) hand back as a caller's "complete
+    // key set" or use for one more lookup — a duplicate key WITHIN this
+    // final level (not merely along the navigation path checked above)
+    // must be caught here too, or it would silently survive into that
+    // "complete" set. See `assert_no_duplicate_keys`'s doc comment.
+    assert_no_duplicate_keys(&entries, "descend_as_mappings");
     Some(entries)
 }
 
@@ -1289,6 +1455,7 @@ pub fn root_level_nested_keys(yaml: &str, path: &[&str]) -> Option<Vec<String>> 
                  as valid YAML 1.2: {e}"
             )
         });
+    assert_single_document(&events, "root_level_nested_keys");
 
     let root_start = events
         .iter()
@@ -1296,4 +1463,423 @@ pub fn root_level_nested_keys(yaml: &str, path: &[&str]) -> Option<Vec<String>> 
     let (root_entries, _) = read_mapping(&events, root_start);
     let entries = descend_as_mappings(&events, root_entries, path)?;
     Some(entries.iter().map(|e| e.key.clone()).collect())
+}
+
+// ---------------------------------------------------------------------------
+// S-CIGATE-3 fix-burst-3 additions
+//
+// Unit tests for this module, added in response to a fresh-context
+// adversarial review (ADV-SC3-P1-MED-001) that found this file — the single
+// choke point every structural guard in `tests/ci_gate_completeness.rs`
+// parses through — had zero direct test coverage of its own. These are
+// PERMANENT regression tests, not throwaway RED-proof scratch work (that
+// scratch harness, used to confirm the ADV-SC3-P1-MED-004 and
+// ADV-SC3-P1-LOW-001 findings were real bugs before fixing them, was
+// deleted after use — see this pass's commit message for the RED/GREEN
+// transcript).
+//
+// Where these tests run: `tests/common/` is compiled as a submodule into
+// every one of the ~59 integration test binaries under `tests/` that
+// declare `mod common;` (each such binary is its OWN separate crate, built
+// with the test harness, so `cfg(test)` is active for the WHOLE crate, not
+// just the root file). A `#[cfg(test)] mod tests` living inside
+// `tests/common/wf.rs` is therefore compiled into, and its `#[test]`
+// functions run as part of, EVERY one of those ~59 binaries — confirmed
+// empirically (see this pass's completion report for the exact command and
+// observed pass count across a sample of binaries, plus the full-suite
+// aggregate). This is unusual compared to a typical Rust crate (where a
+// shared test-only module usually lives behind a single binary), but not a
+// bug: `tests/common/wf.rs` has private (`char_byte_table`,
+// `line_start_char_idx`, `read_mapping`, `read_sequence`, `skip_node`,
+// `find_unique_entry`, `assert_no_duplicate_keys`,
+// `assert_single_document`) items this suite must exercise directly, and
+// Rust's privacy rules mean only a `#[cfg(test)] mod tests` NESTED inside
+// this same file (as a child module, which can see its ancestor's private
+// items) can reach them — a separate `tests/wf_model.rs` integration test
+// could only reach this module's `pub` surface, not these private
+// primitives, so that fallback (mentioned in this pass's task brief) was
+// not needed here.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use saphyr_parser::Marker;
+
+    fn events_for(yaml: &str) -> Vec<(Event<'_>, Span)> {
+        Parser::new_from_str(yaml)
+            .collect::<Result<Vec<_>, ScanError>>()
+            .expect("test fixture must be well-formed YAML 1.2")
+    }
+
+    // -----------------------------------------------------------------
+    // char_byte_table / line_start_char_idx — multi-byte characters
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_char_byte_table_ascii_only_is_identity() {
+        let table = char_byte_table("abc");
+        assert_eq!(table, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_char_byte_table_multibyte_characters_diverge_from_char_index() {
+        // 'é' = 2 bytes, '€' = 3 bytes, 'x' = 1 byte.
+        let s = "é€x";
+        let table = char_byte_table(s);
+        assert_eq!(table, vec![0, 2, 5, 6]);
+        // From char 1 onward, char index and byte index have diverged —
+        // exactly the trap `Marker::index()` (a CHAR index) sets for any
+        // caller that forgets to route it through this table before
+        // slicing a `&str` (which is BYTE-indexed).
+        assert_ne!(table[1], 1);
+        assert_ne!(table[2], 2);
+        assert_eq!(s.len(), 6);
+    }
+
+    #[test]
+    fn test_line_start_char_idx_recovers_via_col_not_rescan() {
+        // A marker at char index 10, column 4 (0-indexed — 4 chars into
+        // its physical line) implies the line itself starts at char
+        // index 6. `line_start_char_idx` must compute this via
+        // `index() - col()`, not by re-scanning for a preceding `\n`.
+        let span = Span::new(Marker::new(10, 3, 4), Marker::new(13, 3, 7));
+        assert_eq!(line_start_char_idx(&span), 6);
+    }
+
+    /// Positions a multi-byte run of characters (café/☕/§/≥/→, 2-3 bytes
+    /// each) BEFORE a job boundary AND inside a job block's step name, so
+    /// this test only passes if `char_byte_table`/`line_start_char_idx`
+    /// correctly resolve BYTE offsets (not char offsets) at both
+    /// positions — a wrong offset would either panic (non-char-boundary
+    /// `&str` slice) or silently return the wrong text.
+    #[test]
+    fn test_wfdoc_parse_job_spans_correct_across_multibyte_content() {
+        let yaml = concat!(
+            "name: CI\n",
+            "jobs:\n",
+            "  alpha:\n",
+            "    name: \"café ☕ § ≥ → multi-byte\"\n",
+            "    steps:\n",
+            "      - name: emit ★ symbol\n",
+            "        run: echo ok\n",
+            "  beta:\n",
+            "    name: second job\n",
+        );
+        let doc = WfDoc::parse(yaml);
+        assert_eq!(doc.jobs.len(), 2);
+
+        let alpha = &doc.jobs[0];
+        let beta = &doc.jobs[1];
+
+        // "at a span boundary": beta's span START is the byte offset
+        // immediately following ALL of alpha's accumulated multi-byte
+        // content — this is where char/byte divergence has compounded
+        // the most.
+        assert_eq!(&yaml[beta.span.clone()], "  beta:\n    name: second job\n");
+        assert_eq!(
+            &yaml[alpha.span.clone()],
+            concat!(
+                "  alpha:\n",
+                "    name: \"café ☕ § ≥ → multi-byte\"\n",
+                "    steps:\n",
+                "      - name: emit ★ symbol\n",
+                "        run: echo ok\n",
+            )
+        );
+
+        // "inside a job block": the step name itself carries multi-byte
+        // content and must round-trip exactly. `Step::span` is NOT
+        // line-snapped the way `Job::span` is (see `Step::span`'s own doc
+        // comment) — it runs from the step mapping's first event's span
+        // start (which, for a block-sequence item that is itself a
+        // mapping, lands right after the `- ` marker, at the first key) to
+        // the last event's span end (which, per this parser's own Span
+        // convention, extends through trailing whitespace up to the start
+        // of the next sibling's content). The byte-correctness property
+        // under test is that this multi-byte content round-trips exactly,
+        // char-boundary-safe, at all — not any particular trimming.
+        assert_eq!(alpha.steps.len(), 1);
+        assert_eq!(alpha.steps[0].name.as_deref(), Some("emit ★ symbol"));
+        assert_eq!(
+            &yaml[alpha.steps[0].span.clone()],
+            "name: emit ★ symbol\n        run: echo ok\n  "
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // read_mapping / read_sequence / skip_node on nested structures
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_read_mapping_and_read_sequence_on_nested_structures() {
+        // a:
+        //   b:
+        //     - 1
+        //     - c: 2
+        //       d: [3, 4]
+        //   e: 5
+        let yaml = "a:\n  b:\n    - 1\n    - c: 2\n      d: [3, 4]\n  e: 5\n";
+        let events = events_for(yaml);
+        let root_start = events
+            .iter()
+            .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))
+            .unwrap();
+
+        let (root_entries, _root_end) = read_mapping(&events, root_start);
+        assert_eq!(root_entries.len(), 1);
+        assert_eq!(root_entries[0].key, "a");
+
+        assert!(matches!(
+            events[root_entries[0].value_start].0,
+            Event::MappingStart(..)
+        ));
+        let (a_entries, _a_end) = read_mapping(&events, root_entries[0].value_start);
+        assert_eq!(a_entries.len(), 2);
+        assert_eq!(a_entries[0].key, "b");
+        assert_eq!(a_entries[1].key, "e");
+
+        // "b"'s value is a block sequence with 2 items: a bare scalar,
+        // then a nested mapping.
+        assert!(matches!(
+            events[a_entries[0].value_start].0,
+            Event::SequenceStart(..)
+        ));
+        let (b_items, b_seq_end) = read_sequence(&events, a_entries[0].value_start);
+        assert_eq!(b_items.len(), 2);
+
+        let (item0_start, item0_end) = b_items[0];
+        assert!(matches!(events[item0_start].0, Event::Scalar(..)));
+        // skip_node's Scalar branch must advance by exactly one event.
+        assert_eq!(item0_end, item0_start + 1);
+
+        let (item1_start, item1_end) = b_items[1];
+        assert!(matches!(events[item1_start].0, Event::MappingStart(..)));
+        let (c_entries, c_end) = read_mapping(&events, item1_start);
+        assert_eq!(c_entries.len(), 2);
+        assert_eq!(c_entries[0].key, "c");
+        assert_eq!(c_entries[1].key, "d");
+        // read_mapping's own reported end must agree with skip_node's
+        // (used internally by read_sequence to advance past this item).
+        assert_eq!(c_end, item1_end);
+
+        // "d"'s value is a nested FLOW sequence — skip_node must recurse
+        // through it correctly (not stop early) for item1_end to be
+        // correct.
+        assert!(matches!(
+            events[c_entries[1].value_start].0,
+            Event::SequenceStart(..)
+        ));
+        let (d_items, d_end) = read_sequence(&events, c_entries[1].value_start);
+        assert_eq!(d_items.len(), 2);
+        // `d_end` is one event BEFORE `item1_end`: "d" is the LAST key of
+        // item1's own mapping, so after `skip_node` advances past "d"'s
+        // value (this nested flow sequence), `read_mapping`'s loop still
+        // has to consume item1's own `MappingEnd` event before returning
+        // `item1_end`.
+        assert_eq!(d_end, item1_end - 1);
+
+        // `b_seq_end` is one event PAST `item1_end`: item1 is the LAST
+        // item of "b"'s own sequence, so after `skip_node` advances past
+        // item1's own closing event, `read_sequence`'s loop still has to
+        // consume "b"'s own `SequenceEnd` event before returning.
+        assert_eq!(b_seq_end, item1_end + 1);
+    }
+
+    #[test]
+    fn test_skip_node_advances_past_alias() {
+        let yaml = "anchor: &x foo\nuses_it: *x\n";
+        let events = events_for(yaml);
+        let root_start = events
+            .iter()
+            .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))
+            .unwrap();
+        let (entries, _end) = read_mapping(&events, root_start);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].key, "uses_it");
+        assert!(matches!(events[entries[1].value_start].0, Event::Alias(_)));
+        // skip_node's Alias branch must advance by exactly one event, the
+        // same as its Scalar branch.
+        assert_eq!(
+            skip_node(&events, entries[1].value_start),
+            entries[1].value_start + 1
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // WfDoc::parse vs WfDoc::parse_single_job scoping equivalence
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_parse_single_job_matches_whole_document_parse_for_same_job() {
+        let yaml = concat!(
+            "jobs:\n",
+            "  build:\n",
+            "    runs-on: ubuntu-latest\n",
+            "    needs: [a, b]\n",
+            "    steps:\n",
+            "      - name: one\n",
+            "        run: echo 1\n",
+            "      - name: two\n",
+            "        run: echo 2\n",
+        );
+        let doc = WfDoc::parse(yaml);
+        assert_eq!(doc.jobs.len(), 1);
+        let job_from_doc = &doc.jobs[0];
+        let job_block = &yaml[job_from_doc.span.clone()];
+
+        let job_single = WfDoc::parse_single_job(job_block);
+
+        assert_eq!(job_from_doc.id, job_single.id);
+        assert_eq!(job_from_doc.keys, job_single.keys);
+        // `Value::Scalar`'s `start_line`/`end_line` are ABSOLUTE line
+        // numbers within whatever string was actually parsed —
+        // deliberately so (see the field's own doc comment). Parsing the
+        // WHOLE document vs. just this job's sliced-out `job_block` gives
+        // the SAME scalar a DIFFERENT absolute line number by construction
+        // (the job starts on line 1 of `job_block` but not of `yaml`), so
+        // line numbers are excluded from this equivalence check — only
+        // `text`/`style`/`tag` (the parts that are actually supposed to
+        // be scope-independent) are compared.
+        assert_eq!(
+            job_from_doc
+                .values
+                .iter()
+                .map(value_text_style_tag)
+                .collect::<Vec<_>>(),
+            job_single
+                .values
+                .iter()
+                .map(value_text_style_tag)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(job_from_doc.steps.len(), job_single.steps.len());
+        for (from_doc, single) in job_from_doc.steps.iter().zip(job_single.steps.iter()) {
+            assert_eq!(from_doc.name, single.name);
+            assert_eq!(from_doc.keys, single.keys);
+            assert_eq!(
+                from_doc
+                    .values
+                    .iter()
+                    .map(value_text_style_tag)
+                    .collect::<Vec<_>>(),
+                single
+                    .values
+                    .iter()
+                    .map(value_text_style_tag)
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    /// Reduce a [`Value`] to the parts that are scope-independent (i.e. the
+    /// same regardless of whether it was parsed as part of the whole
+    /// document or a sliced-out single job block) — everything except
+    /// `Value::Scalar`'s `start_line`/`end_line`. See
+    /// `test_parse_single_job_matches_whole_document_parse_for_same_job`'s
+    /// own comment for why line numbers are deliberately excluded here.
+    fn value_text_style_tag(v: &Value) -> (Option<&str>, Option<ScalarStyle>, Option<&str>) {
+        match v {
+            Value::Scalar {
+                text, style, tag, ..
+            } => (Some(text.as_str()), Some(*style), tag.as_deref()),
+            Value::Alias => (None, None, Some("<alias>")),
+            Value::Other => (None, None, Some("<other>")),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "expected exactly one root entry")]
+    fn test_parse_single_job_panics_on_multi_entry_root() {
+        let yaml = "a:\n  runs-on: ubuntu-latest\nb:\n  runs-on: ubuntu-latest\n";
+        let _ = WfDoc::parse_single_job(yaml);
+    }
+
+    // -----------------------------------------------------------------
+    // Duplicate-key behavior (ADV-SC3-P1-MED-004)
+    // -----------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "refuses to silently pick a winner")]
+    fn test_wfdoc_parse_panics_on_duplicate_root_jobs_key() {
+        // The exact malicious fixture from ADV-SC3-P1-MED-004: a second
+        // root-level `jobs:` map smuggling in an extra job. Before the
+        // fix, `WfDoc::parse` silently saw only the FIRST `jobs:` map.
+        let yaml =
+            "jobs:\n  x:\n    runs-on: ubuntu-latest\njobs:\n  evil:\n    runs-on: ubuntu-latest\n";
+        let _ = WfDoc::parse(yaml);
+    }
+
+    #[test]
+    #[should_panic(expected = "refuses to silently pick a winner")]
+    fn test_root_level_nested_keys_panics_on_duplicate_root_env_block() {
+        // The exact malicious fixture from ADV-SC3-P1-MED-004: a second
+        // root-level `env:` block smuggling in `BASH_ENV`. Before the
+        // fix, `root_level_nested_keys` silently returned only the FIRST
+        // `env:` block's keys.
+        let yaml = "env:\n  CARGO_TERM_COLOR: always\njobs:\n  x:\n    runs-on: ubuntu-latest\nenv:\n  BASH_ENV: /tmp/shim.sh\n";
+        let _ = root_level_nested_keys(yaml, &["env"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "refuses to silently pick a winner")]
+    fn test_descend_as_mappings_panics_on_duplicate_key_within_final_level() {
+        // A duplicate key WITHIN the final resolved level itself (not
+        // along the navigation path) — two `CARGO_TERM_COLOR:` children
+        // of one `env:` block.
+        let yaml = "env:\n  CARGO_TERM_COLOR: always\n  CARGO_TERM_COLOR: never\n";
+        let _ = root_level_nested_keys(yaml, &["env"]);
+    }
+
+    #[test]
+    fn test_root_level_nested_keys_succeeds_with_no_duplicates() {
+        let yaml = "env:\n  CARGO_TERM_COLOR: always\njobs:\n  x:\n    runs-on: ubuntu-latest\n";
+        let keys = root_level_nested_keys(yaml, &["env"]).unwrap();
+        assert_eq!(keys, vec!["CARGO_TERM_COLOR".to_string()]);
+    }
+
+    // -----------------------------------------------------------------
+    // Single-document behavior (ADV-SC3-P1-LOW-001)
+    // -----------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "expected exactly one YAML document")]
+    fn test_wfdoc_parse_panics_on_second_yaml_document() {
+        // The exact malicious fixture from ADV-SC3-P1-LOW-001: a second
+        // `---`-separated document smuggling in a workflow-level
+        // `defaults: run: shell:` override. Before the fix, `WfDoc::parse`
+        // silently discarded this second document entirely.
+        let yaml =
+            "jobs:\n  x:\n    runs-on: ubuntu-latest\n---\ndefaults:\n  run:\n    shell: cat {0}\n";
+        let _ = WfDoc::parse(yaml);
+    }
+
+    #[test]
+    fn test_wfdoc_parse_accepts_single_explicit_document_marker() {
+        // A single leading `---` (explicit document start) is ONE
+        // document, not two — must not be mistaken for a multi-document
+        // stream.
+        let yaml = "---\njobs:\n  x:\n    runs-on: ubuntu-latest\n";
+        let doc = WfDoc::parse(yaml);
+        assert_eq!(doc.jobs.len(), 1);
+        assert_eq!(doc.jobs[0].id, "x");
+    }
+
+    #[test]
+    fn test_wfdoc_parse_accepts_single_implicit_document() {
+        let yaml = "jobs:\n  x:\n    runs-on: ubuntu-latest\n";
+        let doc = WfDoc::parse(yaml);
+        assert_eq!(doc.jobs.len(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // find_key_node_properties single-document guard (shares the
+    // assert_single_document plumbing with WfDoc::parse; regression-pin
+    // that the guard fires on this entry point too, not just WfDoc::parse)
+    // -----------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "expected exactly one YAML document")]
+    fn test_find_key_node_properties_panics_on_multi_document_stream() {
+        let yaml = "jobs:\n  x:\n    runs-on: ubuntu-latest\n---\nother: 1\n";
+        let _ = find_key_node_properties(yaml);
+    }
 }

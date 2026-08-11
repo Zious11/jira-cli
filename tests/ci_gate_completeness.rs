@@ -3167,6 +3167,44 @@ fn test_ci_yml_workflow_level_env_key_set_is_pinned() {
     );
 }
 
+/// S-CIGATE-3 fix-burst-3 (ADV-SC3-P1-MED-004): the document root's own
+/// COMPLETE key set, pinned as one sorted list — see
+/// `PINNED_WORKFLOW_ROOT_KEYS`'s own doc comment for why this closes an
+/// adjacent gap next to the two single-key checks above (`defaults:`
+/// absence, `env:` presence) rather than duplicating either of them.
+#[test]
+fn test_ci_yml_workflow_root_key_set_is_pinned() {
+    let ci = read_ci_yml();
+    let doc = WfDoc::parse(&ci);
+    let mut actual_root_keys = doc.root_keys.clone();
+    actual_root_keys.sort();
+
+    let mut expected: Vec<String> = PINNED_WORKFLOW_ROOT_KEYS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    expected.sort();
+
+    assert_eq!(
+        actual_root_keys, expected,
+        "FAIL (S-CIGATE-3 fix-burst-3, ADV-SC3-P1-MED-004): the document \
+         ROOT's key set ({actual_root_keys:?}) does not match the pinned, \
+         human-reviewed set ({expected:?}). This checks the workflow's \
+         top-level keys as a COMPLETE set, not one name at a time — an \
+         added, removed, or renamed root key (not merely `defaults:` or \
+         `env:` specifically, which the two tests above already name) now \
+         fails this test. If this is a deliberate, reviewed change to \
+         `.github/workflows/ci.yml`'s top-level shape, update \
+         PINNED_WORKFLOW_ROOT_KEYS in the SAME change. Note: `root_keys` \
+         is deliberately NOT deduplicated (see `WfDoc::root_keys`'s own \
+         doc comment) — a genuinely DUPLICATED root key (e.g. two \
+         `env:` blocks) is caught separately, by `descend_as_mappings`'s \
+         duplicate-key panic in `tests/common/wf.rs`, not by this \
+         equality check, which would otherwise just see the same key \
+         name twice with no signal anything is wrong."
+    );
+}
+
 /// PR #671 review round 14, CRITICAL: `read_ci_yml()` normalizes `\r\n` to
 /// `\n`, but every extractor in this file (`extract_key_name_at_indent`,
 /// `extract_job_level_key_set`, `extract_gate_step_key_sets`,
@@ -4741,6 +4779,29 @@ const PINNED_GATE_ENV_KEYS: &[&str] = &["NEEDS_JSON"];
 /// `BASH_ENV`-sourcing mechanism, this time affecting every job in the
 /// file rather than one gate step.
 const PINNED_WORKFLOW_ENV_KEYS: &[&str] = &["CARGO_TERM_COLOR"];
+
+/// S-CIGATE-3 fix-burst-3 (ADV-SC3-P1-MED-004): the document ROOT's own
+/// complete key set — `name`, `on`, `env`, `jobs` — pinned as a complete
+/// set for the same reason `PINNED_WORKFLOW_ENV_KEYS` pins `env:`'s
+/// children one level down: `WfDoc::root_keys` is deliberately NOT
+/// deduplicated (see that field's own doc comment) and this file's other
+/// document-root checks (`test_ci_yml_has_no_workflow_level_shell_
+/// override`'s `defaults:` absence check,
+/// `test_ci_yml_workflow_level_env_key_set_is_pinned`'s `env:` presence
+/// check) each name ONE root key at a time — an open enumeration that a
+/// smuggled sibling root key nobody thought to name explicitly (e.g. a
+/// second `permissions:` block, or any future root-level construct this
+/// suite has not yet been taught to check for by name) could slip past
+/// entirely. Asserting the FULL root key set as one complete, sorted,
+/// human-reviewed list closes that adjacent gap in one assertion: any
+/// ADDED, REMOVED, or RENAMED root key — not merely `defaults:`/`env:`
+/// specifically — now fails this test. `descend_as_mappings`'s own
+/// duplicate-key panic (`tests/common/wf.rs`) is the complementary half:
+/// this const catches an unexpected DISTINCT root key; that panic catches
+/// a genuinely DUPLICATED one (e.g. a second `env:` block), which
+/// `root_keys`'s deliberate non-deduplication would otherwise let sit in
+/// this list twice with no signal that anything is wrong.
+const PINNED_WORKFLOW_ROOT_KEYS: &[&str] = &["env", "jobs", "name", "on"];
 
 /// **DELETED (S-CIGATE-3 pass F, FINAL migration pass):** `collect_mapping_
 /// key_set` used to live here — a line-based scanner collecting a mapping
@@ -6835,7 +6896,15 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// to look at what changed (a legitimate addition/removal vs. an
 /// accidental deletion), not something to silence by "fixing" the number
 /// without checking why it moved.
-const EXPECTED_GUARD_TEST_COUNT: usize = 27;
+/// S-CIGATE-3 fix-burst-3 (ADV-SC3-P1-MED-004): bumped 27 -> 28 for the one
+/// new `#[test] fn test_ci_yml_workflow_root_key_set_is_pinned` added in
+/// this pass (`PINNED_WORKFLOW_ROOT_KEYS`'s own doc comment explains why).
+/// No other `#[test]` fn was added to or removed from THIS file in this
+/// pass — the other new tests from this pass live in `tests/common/wf.rs`'s
+/// own `#[cfg(test)] mod tests`, which `include_str!("ci_gate_completeness.rs")`
+/// below does not see (by design — see this pass's completion report for
+/// why those tests could not live here instead).
+const EXPECTED_GUARD_TEST_COUNT: usize = 28;
 
 /// Coverage note (S-626-1 pass-57, `DENOMINATOR-GUARD-USES-EXACT-LINE-MATCH`):
 /// counts lines whose TRIMMED text STARTS WITH the literal `#[test]`, not

@@ -42,7 +42,12 @@
 ///
 /// Behavioral deltas from the pre-S-CIGATE-3 line-based implementation
 /// (verified byte-for-byte equivalent on the current `.github/workflows/*`
-/// fleet — see `tests/wf_model_equivalence.rs`):
+/// fleet during the S-CIGATE-3 migration passes; that equivalence check was
+/// a scratch harness against the now-deleted line-based scanner, not a
+/// tracked test file — see `tests/common/wf.rs`'s own `#[cfg(test)] mod
+/// tests` for this module's PERMANENT regression coverage, including the
+/// span/multi-byte, nested-structure, duplicate-key, and single-document
+/// behaviors this function's correctness depends on):
 ///
 /// - **Malformed YAML now panics loudly** (naming the underlying
 ///   `saphyr_parser::ScanError`) instead of silently returning `Some`/`None`
