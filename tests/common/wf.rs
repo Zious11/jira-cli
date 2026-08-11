@@ -203,17 +203,48 @@ pub struct Job {
 
 impl Job {
     /// This job's resolved [`Value`] for its direct key `key`, if present.
-    /// When `keys` contains `key` more than once (a duplicate mapping key —
-    /// itself invalid YAML that GitHub Actions/`actionlint` reject at parse
-    /// time; see `read_mapping`'s doc comment), returns the FIRST
-    /// occurrence, mirroring every other first-match convention in this
-    /// module.
+    ///
+    /// # Panics (S-CIGATE-3, ADV-SC3-P6-LOW-002)
+    ///
+    /// Panics if `key` appears more than once among this job's own direct
+    /// keys, naming the job id, the duplicated key, and the occurrence
+    /// count. Before this fix, this function was the module's ONE
+    /// remaining silent-first-match mapping-child lookup — its own doc
+    /// comment claimed to be "mirroring every other first-match convention
+    /// in this module", but [`find_unique_entry`]'s doc comment (see its
+    /// "Coverage correction" paragraph) states every OTHER mapping-child
+    /// lookup in this module was converted away from first-match
+    /// specifically because a duplicate key silently resolving to its
+    /// first occurrence reopens the exact S-626-1 MSRV false-green class
+    /// this module exists to prevent — there was no remaining convention
+    /// left to mirror, and the claim that "a duplicate mapping key is
+    /// itself invalid YAML GitHub Actions/`actionlint` reject at parse
+    /// time" is precisely the external validation this module's other
+    /// lookups (and `find_unique_entry` itself) explicitly refuse to rely
+    /// on. This function now applies the same refusal [`Job::keys`] and
+    /// [`Step::keys`] remain available directly for any caller that
+    /// legitimately wants the raw, non-deduplicated list instead.
     #[must_use]
     pub fn value_of(&self, key: &str) -> Option<&Value> {
-        self.keys
+        let matches: Vec<usize> = self
+            .keys
             .iter()
-            .position(|k| k == key)
-            .map(|i| &self.values[i])
+            .enumerate()
+            .filter(|(_, k)| k.as_str() == key)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            matches.len() <= 1,
+            "wf.rs: Job::value_of: job `{}` has {} occurrences of the \
+             `{key}:` key at its own (job) level — this is invalid YAML (a \
+             duplicate mapping key) that GitHub Actions and actionlint both \
+             reject at parse time, but this checker refuses to silently \
+             pick a winner rather than rely on that external validation. \
+             Remove the duplicate `{key}:` key.",
+            self.id,
+            matches.len(),
+        );
+        matches.first().map(|&i| &self.values[i])
     }
 }
 
@@ -261,13 +292,34 @@ pub struct Step {
 
 impl Step {
     /// This step's resolved [`Value`] for its direct key `key`, if present.
-    /// Same first-match-on-duplicate convention as [`Job::value_of`].
+    ///
+    /// # Panics
+    ///
+    /// Same duplicate-key-refusal contract as [`Job::value_of`] — see that
+    /// function's doc comment for the full rationale (S-CIGATE-3,
+    /// ADV-SC3-P6-LOW-002). Names the step's own `name:` value (or
+    /// `<unnamed>` if it has none) rather than a job id.
     #[must_use]
     pub fn value_of(&self, key: &str) -> Option<&Value> {
-        self.keys
+        let matches: Vec<usize> = self
+            .keys
             .iter()
-            .position(|k| k == key)
-            .map(|i| &self.values[i])
+            .enumerate()
+            .filter(|(_, k)| k.as_str() == key)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            matches.len() <= 1,
+            "wf.rs: Step::value_of: step `{}` has {} occurrences of the \
+             `{key}:` key at its own (step) level — this is invalid YAML \
+             (a duplicate mapping key) that GitHub Actions and actionlint \
+             both reject at parse time, but this checker refuses to \
+             silently pick a winner rather than rely on that external \
+             validation. Remove the duplicate `{key}:` key.",
+            self.name.as_deref().unwrap_or("<unnamed>"),
+            matches.len(),
+        );
+        matches.first().map(|&i| &self.values[i])
     }
 }
 
@@ -1353,11 +1405,23 @@ pub fn step_mapping_child_value(
 // paths (`strategy.matrix.os`, `strategy.matrix.exclude`) that neither
 // `Job::value_of` (one level only) nor the step-scoped
 // `step_mapping_child_*` functions (anchored inside a `steps:` sequence
-// item) can reach, plus a step accessor (`first_step_mapping_child_value`)
-// that does not require a `step_anchor_key` disambiguator — needed because
-// the `msrv` job has FOUR steps sharing a `uses:` key, only one of which
-// has the `with.toolchain` child pass B's anchored
-// `step_mapping_child_value` would need to disambiguate correctly.
+// item) can reach.
+//
+// **DELETED (S-CIGATE-3, ADV-SC3-P5-MED-001):** this pass originally also
+// added a step accessor, `first_step_mapping_child_value`, that did NOT
+// require a `step_anchor_key` disambiguator — added because the `msrv` job
+// has FOUR steps sharing a `uses:` key, only one of which has the
+// `with.toolchain` child pass B's anchored `step_mapping_child_value` would
+// need to disambiguate correctly. "No disambiguator needed" turned out to
+// be exactly the ambiguity gap fix-burst-7 closed: a decoy step sharing the
+// real step's anchor key silently won this function's own unchecked
+// first-match, the same shape `find_unique_entry`'s coverage-correction
+// paragraph (above) documents for the mapping-child case. Replaced by
+// [`step_mapping_child_value_for_step`] plus `ci_gate_completeness.rs`'s
+// `find_sole_step_by` — the caller must now resolve the target step
+// unambiguously (`Err` on zero or more than one match) BEFORE this module
+// ever looks at its children, rather than this module silently picking a
+// winner on the caller's behalf.
 // ---------------------------------------------------------------------------
 
 /// Shared first step for every job-level-path accessor below: parse
@@ -2249,6 +2313,54 @@ mod tests {
     // `tests/ci_gate_completeness.rs`'s ADV-P60-HIGH-001 fix.
     const EXPECTED_WF_TEST_COUNT: usize = 20;
 
+    /// Collect the line indices (0-based, into `lines`) of every
+    /// `#[cfg(...)]` attribute in the CONTIGUOUS attribute/doc block
+    /// surrounding a `#[test]` line at `lines[test_idx]` — both the block
+    /// immediately BEFORE it and the block immediately AFTER it, up to
+    /// (not including) the `fn` line.
+    ///
+    /// Mirrors `tests/ci_gate_completeness.rs`'s identically-named helper,
+    /// added there for the same reason (S-CIGATE-3, ADV-SC3-P6-LOW-002):
+    /// this file's own `bad_cfg_gates` scan below shared the sibling
+    /// guard's exact position assumption — inspecting only `lines[test_idx
+    /// - 1]`, the single line immediately above `#[test]` — before this
+    /// fix, even though `ALLOWED_TEST_CFG_GATES` here is currently empty
+    /// (no `#[test]` fn in this file is platform-gated today).
+    ///
+    /// Kept as a separate copy rather than a shared function, matching
+    /// this codebase's existing reject-don't-parse duplication convention
+    /// (the same relationship `extract_and_normalize_if_expr` has to
+    /// `extract_and_normalize_sole_run_line`). `tests/common/wf.rs` and
+    /// `tests/ci_gate_completeness.rs` are compiled into separate crates,
+    /// and this particular copy is private to its own local test module.
+    fn attribute_window_around_test_line(lines: &[&str], test_idx: usize) -> Vec<usize> {
+        let mut window = Vec::new();
+
+        let mut i = test_idx;
+        while i > 0 {
+            let prev = lines[i - 1].trim();
+            if prev.starts_with("#[") || prev.starts_with("///") || prev.starts_with("//") {
+                window.push(i - 1);
+                i -= 1;
+            } else {
+                break;
+            }
+        }
+
+        let mut j = test_idx + 1;
+        while j < lines.len() {
+            let cur = lines[j].trim();
+            if cur.starts_with("#[") {
+                window.push(j);
+                j += 1;
+            } else {
+                break;
+            }
+        }
+
+        window
+    }
+
     #[test]
     fn test_wf_rs_test_count_matches_expected_denominator() {
         let source = include_str!("wf.rs");
@@ -2315,29 +2427,46 @@ mod tests {
         // in `tests/common/wf.rs` is platform-gated today — see the grep
         // pin above this test's own doc comment. Reject-don't-parse, same
         // discipline as `extract_and_normalize_if_expr`.
+        //
+        // CORRECTED (S-CIGATE-3, ADV-SC3-P6-LOW-002; ported from the
+        // sibling fix in `tests/ci_gate_completeness.rs`): this scan
+        // previously inspected ONLY `lines[i - 1]`, the single line
+        // immediately above `#[test]`. Rust's outer attributes are
+        // order-independent, so a `#[cfg(...)]` placed AFTER `#[test]`
+        // (or separated from it by a doc comment) evaded that
+        // single-line-lookback check while leaving this file's own
+        // 20/20-green suite unaffected. See
+        // `attribute_window_around_test_line`'s own doc comment for the
+        // full rationale and both reproductions.
         const ALLOWED_TEST_CFG_GATES: &[&str] = &[];
         let bad_cfg_gates: Vec<(usize, String)> = lines
             .iter()
             .enumerate()
             .filter(|(_, l)| l.trim().starts_with("#[test]"))
-            .filter_map(|(i, _)| {
-                if i == 0 {
-                    return None; // No line above index 0 to inspect.
-                }
-                let prev = lines[i - 1].trim();
-                if prev.starts_with("#[cfg(") && !ALLOWED_TEST_CFG_GATES.contains(&prev) {
-                    Some((i + 1, prev.to_string())) // 1-based `#[test]` line number.
-                } else {
-                    None
-                }
+            .flat_map(|(i, _)| {
+                attribute_window_around_test_line(&lines, i)
+                    .into_iter()
+                    .filter_map(|idx| {
+                        let candidate = lines[idx].trim();
+                        if candidate.starts_with("#[cfg(")
+                            && !ALLOWED_TEST_CFG_GATES.contains(&candidate)
+                        {
+                            Some((idx + 1, candidate.to_string())) // 1-based line number.
+                        } else {
+                            None
+                        }
+                    })
             })
             .collect();
         assert!(
             bad_cfg_gates.is_empty(),
-            "FAIL (ADV-SC3-P4-LOW-001, ported from ADV-P60-HIGH-001): \
-             found `#[test]` fn(s) in tests/common/wf.rs whose immediately \
-             preceding line is a `#[cfg(...)]` attribute NOT in the \
-             (currently EMPTY) allowlist {ALLOWED_TEST_CFG_GATES:?}: \
+            "FAIL (S-CIGATE-3, ADV-SC3-P6-LOW-002; supersedes \
+             ADV-SC3-P4-LOW-001/ADV-P60-HIGH-001): found `#[test]` fn(s) \
+             in tests/common/wf.rs with a `#[cfg(...)]` attribute \
+             somewhere in their surrounding attribute/doc block (before \
+             OR after `#[test]`, not merely the single line immediately \
+             above it) that is NOT in the (currently EMPTY) allowlist \
+             {ALLOWED_TEST_CFG_GATES:?}: \
              {bad_cfg_gates:?} (line number, offending attribute). A \
              `#[cfg(...)]` predicate false on every platform this repo \
              builds for removes the gated `#[test]` fn from the compiled \

@@ -1418,6 +1418,308 @@ fn test_always_run_jobs_have_pinned_complete_job_key_sets() {
 }
 
 // ---------------------------------------------------------------------------
+// S-CIGATE-3 pass 6 (ADV-SC3-P6-MED-001) — class sweep, fourth and final
+// layer: "the correctly-selected step is never asserted to RUN AT ALL"
+// ---------------------------------------------------------------------------
+//
+// Three prior passes each closed the SELECTION half of this shape at one
+// layer and left the RUNS-AT-ALL half open: pass 3 required exactly one
+// step to match by NAME (`find_sole_step_by_name`); pass 4 required exactly
+// one step to have a `run:` KEY; pass 5 required exactly one step to match
+// the `run:` VALUE (`find_sole_step_by` — the class sweep of the SELECTION
+// layer, closing three separate raw `.find()` call sites in the SAME
+// change). None of the four asked whether the correctly, unambiguously
+// selected step is itself DISABLED. Concrete bypass, reproduced this pass
+// against a temporary, untracked copy of `ci.yml` (the tracked file was
+// never modified):
+//
+// ```yaml
+//       - run: cargo check --all-features --locked
+//         if: false
+//         env:
+//           RUSTUP_TOOLCHAIN: "1.85.0"
+// ```
+//
+// `find_sole_step_by` still matches exactly one step (`if:` does not change
+// the `run:` value it predicates on); `step_mapping_child_value_for_step`
+// still span-resolves that same, now-permanently-skipped step correctly;
+// both assertions in `test_verify_msrv_job_pins_toolchain_and_rustup_
+// toolchain_env` pass. `test_always_run_jobs_have_no_continue_on_error`
+// bans only that one literal key, not `if:`. `test_ci_gate_needs_jobs_
+// have_no_job_level_if` checks `Job::keys` (the JOB's own direct keys),
+// not any `Step::keys` — a step-level `if:` is invisible to it by
+// construction. `PINNED_ALWAYS_RUN_JOB_KEY_SETS` (immediately above) pins
+// `{name, runs-on, steps, timeout-minutes}` at the JOB level and never
+// inspects `steps`'s own CONTENTS. RED-proven: the full suite stayed
+// green with the `if: false` line present; `msrv` would report `success`;
+// MSRV would never be validated — the exact S-626-1 false-green this
+// story exists to prevent, reopened one level below where every prior
+// pass looked.
+//
+// FIX (this pass): the SAME idiom already proven against `ci-gate`
+// (`PINNED_GATE_STEP_KEY_SETS`/`extract_gate_step_key_sets` — a COMPLETE,
+// ordered, per-step key-set pin) is extended to every OTHER always-run job
+// whose steps were not yet covered by an equivalent pin:
+//   - The five NON-matrix always-run jobs (`msrv`, `fmt`, `deny`,
+//     `check-signing-workflow-injection`, `spec-guard`) get a COMPLETE
+//     per-step pin covering EVERY step, via `PINNED_ALWAYS_RUN_STEP_KEY_
+//     SETS` below and `test_always_run_jobs_have_pinned_complete_step_key_
+//     sets`. A step-level `if:`, `continue-on-error:`, or `shell:` added
+//     to ANY step in ANY of these five jobs now changes that step's key
+//     set and fails this test — not merely the one step a prior pass
+//     happened to already have a narrower pin for.
+//   - `test` and `clippy` are MATRIX jobs (`ubuntu-latest`/`windows-
+//     latest`/`macos-latest`) and are DELIBERATELY EXCLUDED from the
+//     complete-per-step pin above — same rationale as the pre-existing
+//     ADV-P51 module-level scope note (above `PINNED_TEST_GUARD_STEP_
+//     KEYS`): a matrix job may legitimately need an OS-conditional step
+//     in the future (e.g. a Windows-only setup step), and a blanket
+//     step-level pin across EVERY step in a matrix job would foreclose
+//     that. `test`'s own guard-bearing step (the POL-11 zero-test-floor
+//     step) already has a narrower, by-name pin
+//     (`PINNED_TEST_GUARD_STEP_KEYS`/`test_test_job_guard_step_key_set_
+//     and_env_are_pinned`) that fully closes this pass's finding for
+//     `test` specifically. `clippy`'s equivalent guard-bearing step (the
+//     one `run:` step carrying the actual `-D warnings` lint gate) had NO
+//     such pin before this pass — closed below by
+//     `PINNED_CLIPPY_GUARD_STEP_KEYS`/
+//     `test_clippy_job_guard_step_key_set_is_pinned`, selecting the step
+//     by its `run:` VALUE (via `find_sole_step_by`, the same ambiguity-
+//     checked accessor `msrv`'s two step lookups use) rather than by
+//     `name:`, since this step currently has no `name:` key of its own.
+//   - `mutants` is DELIBERATELY EXCLUDED from this whole section — it is
+//     not an always-run job (`if: github.event_name == 'pull_request'`,
+//     tracked separately by `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`), and its
+//     own step-level `if:` COUNT is separately pinned elsewhere in this
+//     file (see the module comment on `mutants`'s own step-count guard).
+//     `ci-gate` itself already has the ORIGINAL, most complete form of
+//     this pin (`PINNED_GATE_STEP_KEY_SETS`, M2-l) and is not repeated
+//     here. `coverage`/`security` are not `ci-gate.needs` members
+//     (advisory by design) and are out of scope for the same reason
+//     `test_ci_gate_needs_jobs_have_no_job_level_if` already excludes
+//     them.
+
+/// PINNED, human-reviewed COMPLETE per-step key sets, in step order, for
+/// every step of each of the five NON-matrix always-run `ci-gate.needs`
+/// jobs. Sibling of `PINNED_GATE_STEP_KEY_SETS` (which pins `ci-gate`'s own
+/// steps this same way) and `PINNED_ALWAYS_RUN_JOB_KEY_SETS` (which pins
+/// these same jobs' KEYS one level up — JOB-level, not per-step). See the
+/// module comment immediately above this constant for the concrete `if:
+/// false` bypass this closes and why `test`/`clippy` (matrix jobs) and
+/// `mutants`/`ci-gate` (out of scope for other, already-documented reasons)
+/// are not listed here.
+const PINNED_ALWAYS_RUN_STEP_KEY_SETS: &[(&str, &[&[&str]])] = &[
+    (
+        "check-signing-workflow-injection",
+        &[
+            &["name", "uses", "with"], // Harden the runner (Audit all outbound calls)
+            &["uses"],                 // actions/checkout
+            &["name", "run"],          // Run injection guard (YAML-aware)
+            &["name", "run"],          // Run injection guard negative fixture self-test
+        ],
+    ),
+    (
+        "deny",
+        &[
+            &["name", "uses", "with"], // Harden the runner (Audit all outbound calls)
+            &["uses"],                 // actions/checkout
+            &["uses"],                 // EmbarkStudios/cargo-deny-action
+        ],
+    ),
+    (
+        "fmt",
+        &[
+            &["name", "uses", "with"], // Harden the runner (Audit all outbound calls)
+            &["uses"],                 // actions/checkout
+            &["run"],                  // cargo fmt --all -- --check
+        ],
+    ),
+    (
+        "msrv",
+        &[
+            &["name", "uses", "with"], // Harden the runner (Audit all outbound calls)
+            &["uses"],                 // actions/checkout
+            &["uses", "with"],         // dtolnay/rust-toolchain
+            &["uses"],                 // Swatinem/rust-cache
+            &["env", "run"],           // cargo check --all-features --locked
+        ],
+    ),
+    (
+        "spec-guard",
+        &[
+            &["name", "uses", "with"], // Harden the runner (Audit all outbound calls)
+            &["uses"],                 // actions/checkout
+            &["name", "run"],          // Fetch factory-artifacts branch
+            &["name", "run"],          // check-spec-counts (DRIFT-001)
+            &["name", "run"],          // check-bc-no-numeric-test-counts (PG-365-1)
+            &["name", "run"],          // check-bc-cumulative-counts self-test (fixture suite)
+            &["name", "run"],          // check-bc-cumulative-counts (DRIFT-002)
+            &["name", "run"],          // check-cargo-mutants-policy-citations self-test (Guard 2)
+            &["name", "run"],          // check-cargo-mutants-policy-citations (Guard 2, DEC-150)
+            &["name", "run"],          // check-bc-citation-symbols self-test (BC-CITE-001)
+            &["name", "run"],          // check-bc-citation-symbols (BC-CITE-001)
+            &["name", "run"],          // check-ci-gate self-test (fixture suite, S-CIGATE-2)
+        ],
+    ),
+];
+
+/// S-CIGATE-3, ADV-SC3-P6-MED-001. RED proof (this session): appended
+/// `if: false` directly below the `msrv` job's `cargo check` step's `run:`
+/// line in a temporary, untracked copy of `ci.yml`. Confirmed the CURRENT
+/// suite (pre-fix) passed 29/29 against that reproduction — including
+/// `test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env`, which
+/// still resolves and validates `RUSTUP_TOOLCHAIN` on the (now-disabled)
+/// step correctly, and `test_always_run_jobs_have_pinned_complete_job_key_
+/// sets`, which is JOB-level and does not see a step-level key at all.
+/// GREEN proof: with this test added, the same reproduction fails here
+/// specifically, naming `msrv` and reporting the mismatched step key set
+/// (`["env", "if", "run"]` vs. the pinned `["env", "run"]`). Separately
+/// confirmed a `shell: cat {{0}}` addition to a `spec-guard` step (the same
+/// custom-shell-template-override vector rounds 11/14 proved against
+/// `ci-gate`) is caught the same way. Both verified this session; the
+/// tracked `.github/workflows/ci.yml` was never modified.
+#[test]
+fn test_always_run_jobs_have_pinned_complete_step_key_sets() {
+    let ci = read_ci_yml();
+    let matrix_jobs = matrix_needs_members(&ci);
+    let non_matrix_always_run: Vec<String> = always_run_needs_members(&ci)
+        .into_iter()
+        .filter(|j| !matrix_jobs.contains(j))
+        .collect();
+
+    for job_name in &non_matrix_always_run {
+        let job_block = extract_job_block(&ci, job_name).unwrap_or_else(|| {
+            panic!(
+                "FAIL: job `{job_name}` (listed in ci-gate.needs) was not found \
+                 in ci.yml. Either the job was renamed or removed — update \
+                 ci-gate.needs and this test together."
+            )
+        });
+
+        let Some((_, pinned_step_sets)) = PINNED_ALWAYS_RUN_STEP_KEY_SETS
+            .iter()
+            .find(|(name, _)| *name == job_name.as_str())
+        else {
+            panic!(
+                "FAIL (S-CIGATE-3, ADV-SC3-P6-MED-001): job `{job_name}` is a \
+                 non-matrix member of `ci-gate.needs` that must run \
+                 unconditionally, but has NO entry in \
+                 `PINNED_ALWAYS_RUN_STEP_KEY_SETS`. A newly-added always-run, \
+                 non-matrix job's per-step key sets (including a step-level \
+                 `if:`, which can silently skip that step while the job still \
+                 reports `success` — see this section's own module comment) \
+                 are unpinned until a human reviews and adds them here. Add a \
+                 `(\"{job_name}\", &[...])` entry with its current, reviewed \
+                 per-step key sets, in step order, in the SAME change.\n\
+                 Current `{job_name}` block:\n{job_block}"
+            );
+        };
+
+        let expected: Vec<Vec<String>> = pinned_step_sets
+            .iter()
+            .map(|set| {
+                let mut v: Vec<String> = set.iter().map(|s| s.to_string()).collect();
+                v.sort();
+                v
+            })
+            .collect();
+        let actual = extract_gate_step_key_sets(job_block);
+
+        assert_eq!(
+            actual, expected,
+            "FAIL (S-CIGATE-3, ADV-SC3-P6-MED-001): job `{job_name}`'s \
+             per-step key sets ({actual:?}) do not match the pinned, \
+             human-reviewed sets ({expected:?}). Any added, removed, or \
+             renamed key on ANY step — most importantly a step-level `if:` \
+             (silently skips that one step; the job still concludes \
+             `success` and `ci-gate` goes green with that step's real work \
+             never having run), `continue-on-error:`, or `shell:` (can \
+             redirect the step's `run:` body through a custom shell \
+             template, e.g. `shell: cat {{0}}`) — or any added/removed/\
+             reordered step, changes this. If this is a deliberate, \
+             reviewed change, update PINNED_ALWAYS_RUN_STEP_KEY_SETS in the \
+             SAME change.\n\
+             Current `{job_name}` block:\n{job_block}"
+        );
+    }
+}
+
+/// S-CIGATE-3, ADV-SC3-P6-MED-001. The `clippy` job's lint-gate step's
+/// COMPLETE key set — mirrors `PINNED_TEST_GUARD_STEP_KEYS`'s idiom for the
+/// `test` job's POL-11 guard step (see the module-level scope note above
+/// this whole section for why `clippy`, a matrix job, gets a per-step pin
+/// on only this ONE step rather than the complete-job pin the five
+/// non-matrix jobs get). This step currently carries no `name:` key of its
+/// own — `test_clippy_job_guard_step_key_set_is_pinned` below selects it by
+/// its `run:` VALUE instead, via `find_sole_step_by` (the same
+/// ambiguity-checked accessor `msrv`'s two step lookups already use). An
+/// added `if:` on this step silently skips `cargo clippy` entirely while
+/// `clippy` still reports `success`.
+const PINNED_CLIPPY_GUARD_STEP_KEYS: &[&str] = &["run"];
+
+/// S-CIGATE-3, ADV-SC3-P6-MED-001. RED proof (this session): added `if:
+/// false` to the `clippy` job's lint-gate step in a temporary, untracked
+/// copy of `ci.yml`. Confirmed the pre-fix suite passed 29/29 against that
+/// reproduction (`find_sole_step_by` still selects the step correctly by
+/// its `run:` value; nothing previously asserted it actually runs). GREEN
+/// proof: with this test added, the same reproduction fails here, naming
+/// `clippy` and reporting the mismatched key set (`["if", "run"]` vs. the
+/// pinned `["run"]`). Both verified this session; the tracked
+/// `.github/workflows/ci.yml` was never modified.
+#[test]
+fn test_clippy_job_guard_step_key_set_is_pinned() {
+    let ci = read_ci_yml();
+    let clippy_block = extract_job_block(&ci, "clippy").unwrap_or_else(|| {
+        panic!("FAIL: `.github/workflows/ci.yml` does not contain a `clippy:` job.")
+    });
+    let job = WfDoc::parse_single_job(clippy_block);
+
+    let guard_step = find_sole_step_by(
+        &job.steps,
+        "with a `run:` value of exactly \"cargo clippy --all --all-features \
+         --tests -- -D warnings\"",
+        |s| {
+            matches!(
+                s.value_of("run"),
+                Some(Value::Scalar { text, .. })
+                    if text == "cargo clippy --all --all-features --tests -- -D warnings"
+            )
+        },
+    )
+    .unwrap_or_else(|reason| {
+        panic!(
+            "FAIL (S-CIGATE-3, ADV-SC3-P6-MED-001): the `clippy` job \
+             {reason}\n\
+             Current clippy job block:\n{clippy_block}"
+        );
+    });
+
+    let mut expected: Vec<String> = PINNED_CLIPPY_GUARD_STEP_KEYS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    expected.sort();
+    let mut actual = guard_step.keys.clone();
+    actual.sort();
+
+    assert_eq!(
+        actual, expected,
+        "FAIL (S-CIGATE-3, ADV-SC3-P6-MED-001): the `clippy` job's lint-gate \
+         step's key set ({actual:?}) does not match the pinned, \
+         human-reviewed set ({PINNED_CLIPPY_GUARD_STEP_KEYS:?}). An added \
+         `if:` makes the step SKIP silently (job concludes `success`, \
+         `ci-gate` goes green with `cargo clippy` never having run); \
+         `continue-on-error:` neutralizes a genuine lint failure; `shell: \
+         cat {{0}}` replaces the run line's script body entirely (the same \
+         custom-shell-template override this file's other step-key-set \
+         pins already guard against elsewhere). If this is a deliberate, \
+         reviewed change, update `PINNED_CLIPPY_GUARD_STEP_KEYS` in the \
+         same commit.\n\
+         Current clippy job block:\n{clippy_block}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // M2 — pass/fail semantics are structurally placed correctly
 // ---------------------------------------------------------------------------
 
@@ -7249,6 +7551,17 @@ fn list_job_ids_in_workflow(content: &str, path: &Path) -> Vec<String> {
 /// at 3/6/8-space indent (in addition to the file's native 4-space
 /// convention) — all resolve identically via [`WfDoc::parse`], closing the
 /// `POSITIONAL-ASSUMPTION-AXIS` drift item for this guard by construction.
+///
+/// **Duplicate `name:` backstop (S-CIGATE-3, ADV-SC3-P6-LOW-002):** a job
+/// declaring TWO `name:` keys — invalid YAML, but a real bypass vector
+/// against this specific guard, which exists to catch a duplicate CHECK
+/// NAME across sibling workflow files — is no longer this function's own
+/// concern: `Job::value_of` itself now panics on a duplicate key rather
+/// than silently resolving to the first occurrence (see its doc comment).
+/// Before that fix, `job.value_of("name")` below would have silently
+/// returned whichever `name:` came first, which could hide a smuggled
+/// second `name: CI Gate` behind a benign-looking first `name: something
+/// else`.
 fn extract_job_display_name(job: &Job) -> Option<String> {
     match job.value_of("name") {
         None => None,
@@ -7709,7 +8022,83 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// two other findings fixed in the same pass (ADV-SC3-P3-MED-001,
 /// ADV-SC3-P3-LOW-001) changed existing functions' bodies/signatures and
 /// one existing test's assertions, not the `#[test]` count.
-const EXPECTED_GUARD_TEST_COUNT: usize = 29;
+///
+/// S-CIGATE-3 pass 6 (ADV-SC3-P6-MED-001): bumped 29 -> 31 for the two new
+/// `#[test]` fns `test_always_run_jobs_have_pinned_complete_step_key_sets`
+/// and `test_clippy_job_guard_step_key_set_is_pinned` added in this pass
+/// (see the module comment above `PINNED_ALWAYS_RUN_STEP_KEY_SETS` for the
+/// class-sweep rationale — closing the "a correctly-selected step is never
+/// asserted to RUN AT ALL" gap on every non-matrix always-run job plus
+/// `clippy`'s lint-gate step). No other `#[test]` fn was added to or
+/// removed from THIS file in this pass; the three other findings fixed in
+/// the same pass (ADV-SC3-P6-LOW-001, -LOW-002, -LOW-003) changed existing
+/// functions' bodies/doc comments, not the `#[test]` count.
+const EXPECTED_GUARD_TEST_COUNT: usize = 31;
+
+/// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
+/// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
+/// line at `lines[test_idx]` — both the block immediately BEFORE it and the
+/// block immediately AFTER it, up to (not including) the `fn` line.
+///
+/// # Why "surrounding", not just "the single line immediately above"
+/// (S-CIGATE-3, ADV-SC3-P6-LOW-002)
+///
+/// Rust's outer attributes are order-independent — `#[test]` and
+/// `#[cfg(...)]` may be written in either order relative to each other, and
+/// a doc comment may sit between them. The scan this function replaces
+/// looked ONLY at `lines[test_idx - 1]` (the single line immediately above
+/// `#[test]`), which both of these reproductions evade, each leaving the
+/// fully-green 29/29 suite silently blind to the gated test:
+///
+/// ```text
+/// #[test]
+/// #[cfg(target_os = "haiku")]
+/// fn test_ci_gate_pass_fail_semantics_are_structurally_placed() { … }
+/// ```
+///
+/// ```text
+/// #[cfg(target_os = "haiku")]
+/// /// any doc line
+/// #[test]
+/// fn test_ci_gate_pass_fail_semantics_are_structurally_placed() { … }
+/// ```
+///
+/// This function instead walks BOTH directions from `test_idx`: BACKWARD
+/// while a line is an outer attribute (`#[...]`) or doc comment
+/// (`///`/`//`), collecting every line visited and stopping at the first
+/// line that is neither; and FORWARD while a line is an outer attribute,
+/// collecting every line visited and stopping at (not including) the `fn`
+/// line. Either direction can legally hold `#[cfg(...)]`; every line
+/// visited in either direction is returned to the caller for allowlist
+/// checking, regardless of which side of `#[test]` the governing
+/// `#[cfg(...)]` sits on.
+fn attribute_window_around_test_line(lines: &[&str], test_idx: usize) -> Vec<usize> {
+    let mut window = Vec::new();
+
+    let mut i = test_idx;
+    while i > 0 {
+        let prev = lines[i - 1].trim();
+        if prev.starts_with("#[") || prev.starts_with("///") || prev.starts_with("//") {
+            window.push(i - 1);
+            i -= 1;
+        } else {
+            break;
+        }
+    }
+
+    let mut j = test_idx + 1;
+    while j < lines.len() {
+        let cur = lines[j].trim();
+        if cur.starts_with("#[") {
+            window.push(j);
+            j += 1;
+        } else {
+            break;
+        }
+    }
+
+    window
+}
 
 /// Coverage note (S-626-1 pass-57, `DENOMINATOR-GUARD-USES-EXACT-LINE-MATCH`):
 /// counts lines whose TRIMMED text STARTS WITH the literal `#[test]`, not
@@ -7822,7 +8211,14 @@ fn test_this_file_test_count_matches_expected_denominator() {
     //     `list_all_ci_yml_job_names`'s doc comment for the "gating a
     //     test also orphans its helpers" lesson from PR #671 review
     //     round 15, which this allowlist must be kept consistent
-    //     with).
+    //     with). That allowlist assertion scans the CONTIGUOUS
+    //     attribute/doc block surrounding `#[test]` — both directions,
+    //     not merely the single line immediately above it — see
+    //     `attribute_window_around_test_line`'s own doc comment
+    //     (S-CIGATE-3, ADV-SC3-P6-LOW-002) for why: Rust's outer
+    //     attributes are order-independent, so `#[cfg(...)]` may
+    //     legally appear either before OR after `#[test]`, with or
+    //     without an intervening doc comment.
     let ignore_lines: Vec<usize> = lines
         .iter()
         .enumerate()
@@ -7850,36 +8246,58 @@ fn test_this_file_test_count_matches_expected_denominator() {
     // fn from the compiled binary entirely — invisible to both the
     // count above and the `#[ignore]` scan above (no `#[ignore]`
     // attribute is present; the fn is simply absent from that
-    // platform's build). This scan requires that ANY `#[cfg(...)]`
-    // line directly preceding a `#[test]` line be byte-for-byte one of
-    // the allowlisted forms below — reject-don't-parse, the same
+    // platform's build). This scan requires that every `#[cfg(...)]`
+    // line found anywhere in the CONTIGUOUS attribute/doc block
+    // surrounding a `#[test]` line — both immediately before it
+    // (walking upward through attributes and doc comments) and
+    // immediately after it up to the `fn` line — be byte-for-byte one
+    // of the allowlisted forms below — reject-don't-parse, the same
     // discipline this file uses elsewhere (e.g.
     // `extract_and_normalize_if_expr`) rather than attempt to evaluate
     // arbitrary `cfg` predicate syntax.
+    //
+    // CORRECTED (S-CIGATE-3, ADV-SC3-P6-LOW-002): this scan previously
+    // inspected ONLY `lines[i - 1]`, the single line immediately above
+    // `#[test]` — a position assumption in the one guard that protects
+    // every other guard in this file (M2-a..q live in the test this
+    // very denominator check exists to keep from being silently
+    // removed). Rust's outer attributes are order-independent, so both
+    // `#[test]\n#[cfg(target_os = "haiku")]\nfn foo()` (the `#[cfg]`
+    // AFTER `#[test]`) and `#[cfg(target_os = "haiku")]\n/// doc\n#[test]\nfn foo()`
+    // (a doc comment between the `#[cfg]` and `#[test]`) evaded the old
+    // single-line-lookback check while leaving the full suite green.
+    // See `attribute_window_around_test_line`'s own doc comment for the
+    // fix and both reproductions verbatim.
     const ALLOWED_TEST_CFG_GATES: &[&str] = &["#[cfg(unix)]"];
     let bad_cfg_gates: Vec<(usize, String)> = lines
         .iter()
         .enumerate()
         .filter(|(_, l)| l.trim().starts_with("#[test]"))
-        .filter_map(|(i, _)| {
-            if i == 0 {
-                return None; // No line above index 0 to inspect.
-            }
-            let prev = lines[i - 1].trim();
-            if prev.starts_with("#[cfg(") && !ALLOWED_TEST_CFG_GATES.contains(&prev) {
-                Some((i + 1, prev.to_string())) // 1-based `#[test]` line number.
-            } else {
-                None
-            }
+        .flat_map(|(i, _)| {
+            attribute_window_around_test_line(&lines, i)
+                .into_iter()
+                .filter_map(|idx| {
+                    let candidate = lines[idx].trim();
+                    if candidate.starts_with("#[cfg(")
+                        && !ALLOWED_TEST_CFG_GATES.contains(&candidate)
+                    {
+                        Some((idx + 1, candidate.to_string())) // 1-based line number.
+                    } else {
+                        None
+                    }
+                })
         })
         .collect();
     assert!(
         bad_cfg_gates.is_empty(),
-        "FAIL (S-626-1 pass-60, ADV-P60-HIGH-001): found `#[test]` fn(s) \
-         whose immediately preceding line is a `#[cfg(...)]` attribute \
-         NOT in the allowlist {ALLOWED_TEST_CFG_GATES:?}: {bad_cfg_gates:?} \
-         (line number, offending attribute). A `#[cfg(...)]` predicate \
-         false on every platform this repo builds for \
+        "FAIL (S-CIGATE-3, ADV-SC3-P6-LOW-002; supersedes S-626-1 \
+         pass-60, ADV-P60-HIGH-001): found `#[test]` fn(s) with a \
+         `#[cfg(...)]` attribute somewhere in their surrounding \
+         attribute/doc block (before OR after `#[test]`, not merely the \
+         single line immediately above it) that is NOT in the allowlist \
+         {ALLOWED_TEST_CFG_GATES:?}: {bad_cfg_gates:?} (line number, \
+         offending attribute). A `#[cfg(...)]` predicate false on every \
+         platform this repo builds for \
          (`ubuntu-latest`/`windows-latest`/`macos-latest`, per the \
          `test` job's matrix) removes the gated `#[test]` fn from the \
          compiled binary ENTIRELY on every one of those platforms — the \
