@@ -3164,8 +3164,8 @@ fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
 /// matching substring in an unrelated job (e.g. `coverage`, which pins a
 /// different dtolnay toolchain) cannot produce a false positive.
 ///
-/// # S-CIGATE-3 pass C: rewritten on `WfDoc::parse_single_job` +
-/// `first_step_mapping_child_value` / `step_mapping_child_value`
+/// # S-CIGATE-3 pass C, fix-burst-6, fix-burst-7: two-step TREE-MEMBERSHIP
+/// resolution, both steps ambiguity-checked
 ///
 /// Every check below used to be either a whole-job-block `str::contains`
 /// substring test (loose — matches anywhere, including the WRONG step) or,
@@ -3176,28 +3176,35 @@ fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
 /// history above, now superseded by this rewrite rather than deleted, so
 /// the reasoning that motivated it remains legible).
 ///
-/// This rewrite finds the "cargo check" step and the "dtolnay/rust-
-/// toolchain" step by TREE MEMBERSHIP instead:
-///   - The `toolchain: "1.85.0"` check uses
-///     [`first_step_mapping_child_value`] rather than the STEP-ANCHORED
-///     [`step_mapping_child_value`] (S-CIGATE-3 pass B) — the `msrv` job
-///     has FOUR steps that all carry a `uses:` key (harden-runner,
-///     checkout, dtolnay/rust-toolchain, Swatinem/rust-cache), so
-///     anchoring on `step_anchor_key = "uses"` would match the WRONG step
-///     (harden-runner, source-order-first, whose own `with:` has
-///     `egress-policy` but no `toolchain`) and return `None` for the whole
-///     job rather than continuing to the step that actually has it — see
-///     that function's own doc comment for the full rationale.
-///   - The `cargo check --all-features --locked` run-line check finds the
-///     step directly via [`Job::steps`]/[`Step::value_of`] — no anchor
-///     string, no byte-offset slicing.
-///   - The F-02 SAME-STEP placement check for `RUSTUP_TOOLCHAIN` reuses
-///     pass B's [`step_mapping_child_value`] anchored on
-///     `step_anchor_key = "run"`, which is SAFE here (unlike `"uses"`
-///     above) because exactly ONE step in the `msrv` job has a `run:` key
-///     at all — the placement guarantee (RUSTUP_TOOLCHAIN must be on the
-///     SAME step as the `run:` line) falls out of that anchor by
-///     construction, with no separate slice-and-compare step needed.
+/// The current body resolves the "dtolnay/rust-toolchain" step and the
+/// "cargo check" step in TWO stages, both stages ambiguity-checked end to
+/// end (fix-burst-7, ADV-SC3-P5-MED-001 — the class-sweep fix; see
+/// `find_sole_step_by`'s own doc comment for the full history, including
+/// two earlier point-fixes of the same underlying "exactly one" shape that
+/// each left a sibling instance reachable):
+///   1. **Selection** — `find_sole_step_by` picks the ONE step matching a
+///      predicate (`Err`, naming the count, on zero or more than one
+///      match): the dtolnay step by its `uses:` value starting with
+///      `"dtolnay/rust-toolchain@"` (`@`-anchored at the version-pin
+///      boundary, not a bare-prefix `starts_with` that would also match a
+///      same-org decoy action name), and the cargo-check step by its
+///      `run:` value being exactly `"cargo check --all-features
+///      --locked"`. This replaces a raw, unchecked
+///      `job.steps.iter().find(...)` for BOTH steps — the msrv job has
+///      FOUR steps that all carry a `uses:` key (harden-runner, checkout,
+///      dtolnay/rust-toolchain, Swatinem/rust-cache), so an anchor as weak
+///      as "has a `uses:` key at all" was never viable in the first place,
+///      and a decoy step sharing either target step's own selector text
+///      is now flagged as ambiguous rather than silently resolved to
+///      whichever comes first in `steps:`.
+///   2. **Child-value resolution** — once a step is uniquely resolved,
+///      `step_mapping_child_value_for_step` reads `with.toolchain` (on the
+///      dtolnay step) or `env.RUSTUP_TOOLCHAIN` (on the cargo-check step)
+///      by that EXACT step's own byte [`Step::span`] — a unique
+///      source-text position, immune to a decoy step sharing some OTHER
+///      key (the flaw `step_mapping_child_value`'s `step_anchor_key`
+///      design had, and the reason this dedicated function exists — see
+///      its own doc comment).
 ///
 /// AC-004 quoting fidelity: `toolchain: "1.85.0"` and
 /// `RUSTUP_TOOLCHAIN: "1.85.0"` are asserted as `ScalarStyle::DoubleQuoted`
@@ -3235,20 +3242,43 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
     // via `step_mapping_child_value_for_step` (byte-span identity, not a
     // re-scan), closes this the same way as the `RUSTUP_TOOLCHAIN` fix
     // below.
-    let dtolnay_step = job.steps.iter().find(|s| {
-        matches!(
-            s.value_of("uses"),
-            Some(Value::Scalar { text, .. }) if text.starts_with("dtolnay/rust-toolchain")
-        )
-    });
-    let Some(dtolnay_step) = dtolnay_step else {
+    //
+    // # S-CIGATE-3 fix-burst-7 (ADV-SC3-P5-MED-001): OUTER selection is now
+    // ambiguity-checked too, and the prefix is `@`-anchored
+    //
+    // This selection step — which step even IS "the dtolnay/rust-toolchain
+    // step" in the first place — was itself still a raw, unchecked
+    // `job.steps.iter().find(...)` until this pass: fix-burst-6 relocated
+    // the "exactly one" precondition from "one step has `run:`" to "one
+    // step has `uses:` starting with `dtolnay/rust-toolchain`", but never
+    // asserted it, so `step_mapping_child_value_for_step` (byte-span
+    // identity) below faithfully anchored on whichever step `.find()`
+    // picked — including a decoy `uses: dtolnay/rust-toolchain-anything@…`
+    // step inserted earlier in `steps:`. Now routed through
+    // `find_sole_step_by`, which errors (naming the count) on zero or more
+    // than one match instead of silently preferring the first. The prefix
+    // itself is also now anchored at the `@` version-pin boundary
+    // (`"dtolnay/rust-toolchain@"`, not the bare `"dtolnay/rust-toolchain"`
+    // substring) — the un-anchored form matched any `uses:` value merely
+    // starting with that text, including a same-org decoy action name like
+    // `dtolnay/rust-toolchain-anything@<sha>`.
+    let dtolnay_step = find_sole_step_by(
+        &job.steps,
+        "with a `uses:` value starting with \"dtolnay/rust-toolchain@\"",
+        |s| {
+            matches!(
+                s.value_of("uses"),
+                Some(Value::Scalar { text, .. }) if text.starts_with("dtolnay/rust-toolchain@")
+            )
+        },
+    )
+    .unwrap_or_else(|reason| {
         panic!(
-            "FAIL (S-626-1 AC-3 / S-CIGATE-3 fix-burst-6): no step in the \
-             `msrv` job has a `uses:` value starting with \
-             \"dtolnay/rust-toolchain\".\n\
+            "FAIL (S-626-1 AC-3 / S-CIGATE-3 fix-burst-6/7): the `msrv` job \
+             {reason}\n\
              Current msrv job block:\n{msrv_block}"
         );
-    };
+    });
 
     // toolchain: "1.85.0" on the dtolnay/rust-toolchain step's `with:` block.
     match common::wf::step_mapping_child_value_for_step(
@@ -3296,25 +3326,54 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
 
     // The `cargo check --all-features --locked` step, found by its OWN
     // `run:` value via tree membership — not a byte-offset anchor + slice.
-    let cargo_check_step = job.steps.iter().find(|s| {
-        matches!(
-            s.value_of("run"),
-            Some(Value::Scalar { text, .. }) if text == "cargo check --all-features --locked"
-        )
-    });
-    let Some(cargo_check_step) = cargo_check_step else {
+    //
+    // # S-CIGATE-3 fix-burst-7 (ADV-SC3-P5-MED-001, the finding's PRIMARY
+    // concrete bypass): OUTER selection is now ambiguity-checked
+    //
+    // This was the exact site the fix-burst-5/6 doc comments (below, on the
+    // `RUSTUP_TOOLCHAIN` check) claimed had "no 'exactly one' precondition
+    // left to silently violate" — true of `step_mapping_child_value_for_
+    // step`'s byte-span anchoring, but NOT of the selection immediately
+    // above it: `job.steps.iter().find(...)` picked the SOURCE-ORDER-FIRST
+    // step with `run: cargo check --all-features --locked`, unchecked for
+    // a second match. Concrete bypass (RED-proven this pass — see this
+    // pass's completion report): insert a decoy step with the identical
+    // `run:` text immediately before the real one, give the decoy its own
+    // `env: {RUSTUP_TOOLCHAIN: "1.85.0"}`, and delete the real step's
+    // `env:` block entirely. `.find()` returned the decoy; `step_mapping_
+    // child_value_for_step` then faithfully resolved the DECOY's
+    // `RUSTUP_TOOLCHAIN` (byte-span identity works perfectly — it was
+    // never the problem), so both assertions passed while the real `cargo
+    // check` step ran with no override at all, silently falling back to
+    // `rust-toolchain.toml`'s `channel = "stable"` — verbatim the S-626-1
+    // false-green this whole test exists to prevent. Now routed through
+    // `find_sole_step_by`, which errors (naming the count) on zero or more
+    // than one match instead of silently preferring the first.
+    let cargo_check_step = find_sole_step_by(
+        &job.steps,
+        "with a `run:` value of exactly \"cargo check --all-features --locked\"",
+        |s| {
+            matches!(
+                s.value_of("run"),
+                Some(Value::Scalar { text, .. }) if text == "cargo check --all-features --locked"
+            )
+        },
+    )
+    .unwrap_or_else(|reason| {
         panic!(
-            "FAIL (S-626-1 AC-3): no step in the `msrv` job has a `run:` \
-             value of exactly `cargo check --all-features --locked`.\n\
+            "FAIL (S-626-1 AC-3 / S-CIGATE-3 fix-burst-7): the `msrv` job \
+             {reason}\n\
              Required: without `--locked`, `cargo check` is free to \
              re-resolve other and transitive dependencies against \
              `Cargo.toml` at check time, decoupling the MSRV check from \
              the exact dependency graph the rest of CI (and users) \
              actually build against — a silent drift vector with no other \
-             test or CI signal to catch it.\n\
+             test or CI signal to catch it. A second step sharing the \
+             identical `run:` text (a decoy) is flagged as ambiguous \
+             rather than silently resolved to whichever came first.\n\
              Current msrv job block:\n{msrv_block}"
         );
-    };
+    });
     if let Some(Value::Scalar { style, .. }) = cargo_check_step.value_of("run") {
         assert_eq!(
             *style,
@@ -3354,9 +3413,25 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
     // `step_mapping_child_value_for_step` closes this by resolving
     // `env.RUSTUP_TOOLCHAIN` against `cargo_check_step`'s own byte SPAN —
     // a unique source-text position — rather than re-scanning `steps:` for
-    // "the first step with some other key present". It is therefore
-    // provably anchored to the exact step already identified above, with
-    // no "exactly one" precondition left to silently violate.
+    // "the first step with some other key present". GIVEN an already-
+    // resolved `cargo_check_step`, that byte-span anchoring has no
+    // "exactly one" precondition left to silently violate — span identity
+    // is provably unique by construction.
+    //
+    // # Correction (S-CIGATE-3 fix-burst-7, ADV-SC3-P5-MED-001)
+    //
+    // The paragraph above was true only of `step_mapping_child_value_for_
+    // step`'s OWN anchoring, not of the check as a whole: it did not
+    // account for HOW `cargo_check_step` itself gets resolved in the first
+    // place. Until this pass, that resolution — the `job.steps.iter()
+    // .find(...)` immediately above this comment block — was itself an
+    // unchecked first-match, i.e. exactly the same "exactly one"
+    // precondition, one step earlier, silently unenforced. See that
+    // selection's own comment for the concrete bypass this closed. Only
+    // now, with `find_sole_step_by` guarding that outer selection too, is
+    // the "no 'exactly one' precondition left to silently violate" claim
+    // accurate end-to-end rather than for `step_mapping_child_value_for_
+    // step` alone.
     match common::wf::step_mapping_child_value_for_step(
         msrv_block,
         cargo_check_step,
@@ -3569,19 +3644,45 @@ fn test_ci_yml_workflow_root_key_set_is_pinned() {
     );
 }
 
-/// PR #671 review round 14, CRITICAL: `read_ci_yml()` normalizes `\r\n` to
-/// `\n`, but every extractor in this file (`extract_key_name_at_indent`,
-/// `extract_job_level_key_set`, `extract_gate_step_key_sets`,
-/// `collect_mapping_key_set`, and both workflow-level env-key-set tests)
-/// then operates on `str::lines()`, which splits ONLY on `\n`. YAML's own
-/// line-break character set (YAML 1.1 `b-char`, which PyYAML implements)
-/// is larger: CR (U+000D) alone, NEL (U+0085), LINE SEPARATOR (U+2028),
-/// and PARAGRAPH SEPARATOR (U+2029) are all valid YAML line breaks that
-/// end a LOGICAL line for a real parser but do NOT split a `str::lines()`
-/// iteration on their own. A key placed after one of these, on the same
-/// PHYSICAL text line as a preceding key, is therefore invisible to EVERY
-/// line-based check in this file simultaneously — not one extractor's
-/// bug, a property of the whole file-reading strategy.
+/// # Why this test must survive the S-CIGATE-3 real-parser rewrite
+/// (retention reason, stated up front — S-CIGATE-3, ADV-SC3-P5-LOW-003)
+///
+/// **This test is RETAINED, UNCONDITIONALLY, as an independent layer — it
+/// is NOT subsumed by `tests/common/wf.rs`'s `saphyr-parser`-backed
+/// rewrite, which replaced the line-based lexer every OTHER structural
+/// check in this file used to depend on.** The reason is a genuine
+/// YAML-1.2-vs-YAML-1.1 divergence, not leftover caution: `saphyr-parser`
+/// implements YAML 1.2, under which only `\n` and a lone `\r` are
+/// recognized line breaks (its own line-break classification,
+/// `char_traits.rs`'s `is_break`, matches exactly those two characters).
+/// NEL (U+0085), LINE SEPARATOR (U+2028), and PARAGRAPH SEPARATOR
+/// (U+2029) are YAML-1.1-only line breaks — PyYAML (the parser this
+/// test's exploits below were originally verified against, and the
+/// reference this project treats as authoritative for "what a real YAML
+/// parser does") recognizes all four; `saphyr-parser` correctly does
+/// NOT treat the latter three as ending a logical line at all. Of the
+/// four characters this test scans for, the real parser therefore
+/// natively subsumes exactly ONE (lone CR) — the other THREE remain
+/// invisible to `saphyr-parser` the same way they were invisible to the
+/// line-based lexer this story replaced. Deleting this test on the
+/// assumption "we have a real parser now, so this byte scan is
+/// redundant" would silently reopen two-thirds of the gap it exists to
+/// close — exactly the deletion this test, and this doc comment, exist to
+/// prevent.
+///
+/// # Original motivation (PR #671 review round 14, CRITICAL) — historical
+///
+/// Before the S-CIGATE-3 rewrite, `read_ci_yml()` normalized `\r\n` to
+/// `\n`, but every structural check in this file then operated on
+/// `str::lines()`, which splits ONLY on `\n`. YAML's own line-break
+/// character set (YAML 1.1 `b-char`, which PyYAML implements) is larger:
+/// CR (U+000D) alone, NEL (U+0085), LINE SEPARATOR (U+2028), and
+/// PARAGRAPH SEPARATOR (U+2029) all end a LOGICAL line for a real
+/// YAML-1.1 parser but do NOT split a `str::lines()` iteration on their
+/// own. A key placed after one of these, on the same PHYSICAL text line
+/// as a preceding key, was therefore invisible to every line-based check
+/// in the file simultaneously — not one extractor's bug, a property of
+/// the whole pre-S-CIGATE-3 file-reading strategy.
 ///
 /// Reproduced, each a genuine one-line diff, PyYAML- AND Ruby-Psych/
 /// libyaml-confirmed legal (independent implementations agreeing rules
@@ -3589,68 +3690,54 @@ fn test_ci_yml_workflow_root_key_set_is_pinned() {
 /// `.gitattributes`' `text eol=lf` normalizes CRLF pairs but does NOT
 /// strip a lone CR or the three multi-byte Unicode line breaks —
 /// confirmed to survive a real `git add`/commit:
-///   1. `CARGO_TERM_COLOR: always<CR>  BASH_ENV: /tmp/shim.sh` reopens
-///      round 12's workflow-env CRITICAL, for every job in the file.
-///   2. `name: CI<CR>defaults: {{run: {{shell: "cat {{0}}"}}}}` reopens
-///      round 11's workflow-level `defaults:` CRITICAL.
+///   1. `CARGO_TERM_COLOR: always<CR>  BASH_ENV: /tmp/shim.sh` reopened
+///      the workflow-env CRITICAL, for every job in the file.
+///   2. `name: CI<CR>defaults: {{run: {{shell: "cat {{0}}"}}}}` reopened
+///      the workflow-level `defaults:` CRITICAL.
 ///   3. Appending `<CR>        shell: cat {{0}}` to the gate step's
-///      `name:` line defeats `PINNED_GATE_STEP_KEY_SETS` — the step-key-
-///      set pin confirmed default-deny against fourteen constructions in
-///      round 12, but only over the lines `str::lines()` actually
-///      produced; PyYAML sees this step's keys as `["env", "name", "run",
-///      "shell"]` with `shell: "cat {{0}}"`, the real GitHub runner would
-///      accept that override, and the gate would `cat` its own decision
-///      script instead of running it — while this suite stayed 16/16
-///      green throughout, because every extractor's line splitting hid
-///      the smuggled key from view.
+///      `name:` line defeated the gate step's key-set pin — over the
+///      lines `str::lines()` actually produced, PyYAML sees this step's
+///      keys as `["env", "name", "run", "shell"]` with `shell: "cat
+///      {{0}}"`, the real GitHub runner would accept that override, and
+///      the gate would `cat` its own decision script instead of running
+///      it — while the pre-S-CIGATE-3 suite stayed fully green
+///      throughout, because line splitting hid the smuggled key from
+///      every check.
 ///
-/// THIS CLOSES THE CLASS BY CONSTRUCTION, NOT BY ENUMERATION (PR #671
-/// review round 14, reviewer-confirmed framing): this test asserts the
-/// raw bytes of `ci.yml` contain none of the four characters above.
-/// Unlike most checks in this file, it needs no position assumption (it
-/// scans the WHOLE file, not a line at an expected indent), no presence
-/// assumption (it does not first have to LOCATE a target key before
-/// checking it), and its extractor is trivial (`char_indices()` over the
-/// raw bytes has nothing to silently under-report) — the same shape as
-/// M2-j (`!contains("continue-on-error")`), the one check the round-13
-/// corrected rule certifies as safe by construction rather than as an
-/// accident of what happened to get tested. It is NOT, however, a
-/// general fix for line-based extraction, and it does not make
-/// `str::lines()`-based checks correct for cases beyond these four
-/// specific characters — that remains a real limitation of this file's
-/// design. The durable fix is parsing `ci.yml` ONCE with a real,
-/// off-the-shelf YAML parser (the same category of tool `actionlint` and
-/// GitHub's own `actions/runner` already use) and asserting over the
-/// PARSED TREE for every structural check in this suite, keeping today's
-/// byte-for-byte scalar pins (the run line, `if:` expressions,
-/// `NEEDS_JSON:`) as a second assertion layered on parsed VALUES rather
-/// than raw text. NAMING THE OPTION PRECISELY (round 14 correction of a
-/// round-11 mischaracterization): round 11's design note rejected
-/// "re-deriving YAML block-mapping semantics" as impractical, which is
-/// correct — hand-rolling a general block-mapping parser was, and
-/// remains, the wrong call — but the conclusion it drew from that was
-/// "hand-roll a narrower slice" (the job/step key-set pins, the `if:`/
-/// run-line reject-don't-parse normalizers, and now this byte scan).
-/// USING A REAL PARSER was always the third option, distinct from both
-/// "hand-roll a full parser" (rejected, correctly) and "hand-roll a
-/// narrower slice" (what this file actually does). That rewrite is out
-/// of scope for this round and is tracked as a follow-up story in that
-/// specific direction — it is not implied closed by this test.
-/// S-626-1 pass-55 (ADV-P55-LOW-002): originally scoped to `ci.yml` alone.
-/// Guard A (`test_no_sibling_workflow_declares_a_job_named_ci_gate`) and
-/// its helpers (`list_job_ids_in_workflow`, `extract_job_display_name`)
-/// now also line-scan every sibling `.github/workflows/*.yml`/`*.yaml`
-/// file — each of those extractors shares the exact same `str::lines()`-
-/// only line-splitting this test exists to guard, but until this fix, no
-/// byte-level scan covered them: a lone CR (or NEL / LINE SEPARATOR /
-/// PARAGRAPH SEPARATOR) smuggled into a sibling workflow file could hide a
-/// `name: CI Gate` job-key from `extract_job_display_name`'s line-based
-/// scan the same way round 14 showed it could hide a key from `ci.yml`'s
-/// own extractors — with no test anywhere in this file able to catch it.
-/// Extended (cheaper than a second, separate test, and `list_workflow_
-/// files` is already a directory walk this file performs elsewhere) to
-/// scan every file `list_workflow_files` enumerates, `ci.yml` included,
-/// rather than leave sibling files as a documented-but-unguarded gap.
+/// # This test closes the class by construction, not by enumeration (PR
+/// #671 review round 14, reviewer-confirmed framing) — for its one
+/// member (line breaks) specifically
+///
+/// This test asserts the raw bytes of `ci.yml` (and every sibling
+/// workflow file, see below) contain none of the four characters above.
+/// It needs no position assumption (it scans the WHOLE file, not a line
+/// at an expected indent), no presence assumption (it does not first have
+/// to LOCATE a target key before checking it), and its extractor is
+/// trivial (`char_indices()` over the raw bytes has nothing to silently
+/// under-report). It must NOT be read as covering the lexer layer
+/// generally, then or now — it is complete for exactly the "non-LF YAML
+/// line break" defect class, and the S-CIGATE-3 real-parser rewrite
+/// separately closes most (not all — see the retention reason above)
+/// structural gaps a line-based lexer could have, as its own gap.
+/// S-626-1 pass-55 (ADV-P55-LOW-002): originally scoped to `ci.yml` alone,
+/// extended to scan every sibling `.github/workflows/*.yml`/`*.yaml` file
+/// `list_workflow_files` enumerates (cheaper than a second, separate test,
+/// and `list_workflow_files` is already a directory walk this file
+/// performs elsewhere). At the time, Guard A's helpers
+/// (`list_job_ids_in_workflow`, `extract_job_display_name`) were
+/// themselves still line-based, sharing the exact `str::lines()`-only
+/// splitting this test exists to guard — a lone CR (or NEL / LINE
+/// SEPARATOR / PARAGRAPH SEPARATOR) smuggled into a sibling workflow file
+/// could hide a `name: CI Gate` job-key from Guard A's own scan the same
+/// way round 14 showed it could hide a key from `ci.yml`'s extractors.
+/// **Correction (S-CIGATE-3):** both helpers are now `WfDoc::parse`-backed
+/// (a real parser), same as every other structural check in this file —
+/// but the retention reason at the top of this doc comment applies to
+/// them identically: `saphyr-parser` natively subsumes lone CR but not
+/// NEL/LINE SEPARATOR/PARAGRAPH SEPARATOR, so this byte-level scan of
+/// sibling files remains load-bearing for those three characters even
+/// though its ORIGINAL motivation (Guard A's helpers being line-based) no
+/// longer holds.
 #[test]
 fn test_ci_yml_contains_no_non_lf_yaml_line_breaks() {
     const FORBIDDEN: &[(char, &str)] = &[
@@ -4735,6 +4822,59 @@ fn find_sole_step_by_name<'a>(steps: &'a [Step], step_name: &str) -> Result<&'a 
              not only as its first (sequence-marker) key — would \
              otherwise silently win a first-match lookup instead of \
              being flagged as ambiguous.",
+            multiple.len()
+        )),
+    }
+}
+
+/// Select the SOLE step in `steps` matching `predicate` — the generic form
+/// of [`find_sole_step_by_name`], for a caller that anchors a step by
+/// something other than its own `name:` value. `Err` on zero or more than
+/// one match, naming the count exactly like `find_sole_step_by_name`.
+///
+/// # Why this exists (S-CIGATE-3 fix-burst-7, ADV-SC3-P5-MED-001 — third
+/// appearance of the same defect class)
+///
+/// This is the THIRD time this exact shape has needed fixing in this
+/// story: pass 3 found a decoy `test`-job step matched by NAME
+/// (`find_sole_step_by_name` was the fix); pass 4 found the `msrv` job's
+/// `with.toolchain` lookup anchored to the first step with a `run:` KEY
+/// present at all (byte-span anchoring via `step_mapping_child_value_for_
+/// step` was the fix); pass 5 (this one) found that fix's OWN outer
+/// selection step — `job.steps.iter().find(|s| ...)`, locating the
+/// `dtolnay/rust-toolchain` step and the `cargo check` step in the first
+/// place, BEFORE `step_mapping_child_value_for_step` ever anchors on their
+/// span — was still a raw, unchecked first-match: fix-burst-6 relocated
+/// the "exactly one" precondition from "one step has `run:`" to "one step
+/// has `run:` == `cargo check --all-features --locked`", but never
+/// asserted it, so `step_mapping_child_value_for_step` faithfully resolved
+/// whichever step `.find()` happened to pick — including a decoy inserted
+/// earlier in `steps:` with the same `run:` text and its own `env:
+/// {RUSTUP_TOOLCHAIN: "1.85.0"}`, while the REAL step's `env:` block is
+/// deleted entirely. Point-fixing a fourth time would leave the same shape
+/// reachable at the next construction (this project's precedent for a
+/// recurring defect class — DEC-243, DEC-244, DEC-255 — is a class sweep,
+/// not a point fix): every step-selection predicate in this file now
+/// routes through this one ambiguity-checked accessor instead of a raw
+/// `.find()`.
+fn find_sole_step_by<'a, F>(
+    steps: &'a [Step],
+    description: &str,
+    predicate: F,
+) -> Result<&'a Step, String>
+where
+    F: Fn(&Step) -> bool,
+{
+    let matches: Vec<&Step> = steps.iter().filter(|s| predicate(s)).collect();
+    match matches.as_slice() {
+        [] => Err(format!("has no step {description}.")),
+        [only] => Ok(only),
+        multiple => Err(format!(
+            "has {} steps {description} — this checker requires exactly \
+             one so a single pinned literal unambiguously covers it. A \
+             decoy step matching the same predicate would otherwise \
+             silently win a first-match lookup instead of being flagged \
+             as ambiguous.",
             multiple.len()
         )),
     }

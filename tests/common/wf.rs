@@ -233,9 +233,29 @@ pub struct Step {
     /// not itself a mapping).
     pub values: Vec<Value>,
     /// The byte range in the original source text this step entry occupies
-    /// (from its first event's span start to its last event's span end — NOT
-    /// line-snapped the way [`Job::span`] is, since no caller depends on
-    /// step-level line anchoring yet).
+    /// (from its first event's span start to its last event's span end).
+    ///
+    /// # Load-bearing consumer (S-CIGATE-3 fix-burst-6,
+    /// ADV-SC3-P4-MED-001): [`step_mapping_child_value_for_step`]
+    ///
+    /// This field is `step_mapping_child_value_for_step`'s SOLE identity
+    /// key for resolving a caller-supplied `&Step` back to its own entry
+    /// inside a freshly re-parsed `job_block` — the guard used, among
+    /// other call sites, by `ci_gate_completeness.rs`'s `msrv`-job
+    /// toolchain/`RUSTUP_TOOLCHAIN` checks (S-626-1 AC-3). It is
+    /// deliberately NOT line-snapped the way [`Job::span`] is: line-
+    /// snapping would round two DIFFERENT steps that happen to start on
+    /// the same physical line (impossible in valid block-sequence YAML,
+    /// but not a distinction span identity should depend on getting right
+    /// by accident) — or, more relevantly, would desync this field from
+    /// the exact byte-span identity formula `step_mapping_child_value_for_
+    /// step` independently recomputes from the SAME `job_block` text when
+    /// it re-parses it (see that function's own `byte_of`/`matched` logic)
+    /// — from that consumer's expectations, silently breaking the guard
+    /// with a confusing false-red (a legitimate step failing to resolve)
+    /// rather than a loud one. Do NOT line-snap this field "for
+    /// consistency with `Job::span`" without first updating that
+    /// consumer's own span-recomputation to match.
     pub span: Range<usize>,
 }
 
@@ -464,17 +484,19 @@ fn assert_single_document(events: &[(Event<'_>, Span)], caller: &str) {
 /// [`descend_as_mappings`]'s per-segment walk) while leaving TWELVE other
 /// `entries.iter().find(|e| e.key == ...)` sites in this same module doing
 /// the exact silent-first-match thing this function exists to refuse —
-/// including, concretely, `first_step_mapping_child_value`'s `with:`/`env:`
-/// lookups, which meant a duplicated `toolchain:` or `RUSTUP_TOOLCHAIN:`
-/// key inside the `msrv` job's own YAML could resolve to its FIRST
-/// occurrence with no panic at all — verbatim the S-626-1 MSRV false-green
-/// this whole module exists to prevent, reopened one layer down. Every
-/// mapping-child lookup in this module — [`extract_steps`], [`build_step`],
-/// [`job_level_value_span`], [`step_mapping_child_keys`],
-/// [`step_mapping_child_value`], [`job_level_nested_value`],
-/// [`job_level_nested_sequence_items`], and
-/// [`first_step_mapping_child_value`], in addition to the original two —
-/// now routes through this function; grep for `.find(|e| e.key` (or
+/// including, concretely, the (since-deleted, S-CIGATE-3 fix-burst-7 —
+/// zero remaining callers; see `step_mapping_child_value_for_step`'s doc
+/// comment for what replaced it) `first_step_mapping_child_value`'s
+/// `with:`/`env:` lookups, which meant a duplicated `toolchain:` or
+/// `RUSTUP_TOOLCHAIN:` key inside the `msrv` job's own YAML could resolve
+/// to its FIRST occurrence with no panic at all — verbatim the S-626-1
+/// MSRV false-green this whole module exists to prevent, reopened one
+/// layer down. Every mapping-child lookup in this module — at the time,
+/// [`extract_steps`], [`build_step`], [`job_level_value_span`],
+/// [`step_mapping_child_keys`], [`step_mapping_child_value`],
+/// [`job_level_nested_value`], [`job_level_nested_sequence_items`], and
+/// `first_step_mapping_child_value` (since deleted), in addition to the
+/// original two — now routes through this function; grep for `.find(|e| e.key` (or
 /// `.find(|e| e\.key` as a regex) in this file returns zero matches as of
 /// this pass. If that grep ever returns a hit again, this doc comment's
 /// coverage claim is false again and the offending site needs the same fix
@@ -706,17 +728,17 @@ fn extract_steps(
 ///
 /// `Step::span`'s byte bounds are resolved through a local `byte_of`
 /// closure — the same pattern [`WfDoc::parse`] uses for `Job::span` — rather
-/// than raw `table[...]` indexing. `Step::span` currently has no consumer
-/// in this codebase (unlike `Job::span`, which anchors
-/// [`super::yaml::extract_job_block`]), so this is preventative: kept as
-/// public API surface for a future caller rather than dropped, on the
-/// theory that a later pass wanting step-level byte anchoring (mirroring
-/// today's job-level one) should not have to re-derive this field from
-/// scratch. If an out-of-range char index ever DOES occur here, a bare
-/// `table[...]` index panic reports only a generic Rust "index out of
-/// bounds" with no indication of which module or computation caused it;
-/// this closure instead names the module, the offending index, and the
-/// table's size, exactly like `WfDoc::parse`'s own `byte_of`.
+/// than raw `table[...]` indexing. **Correction (S-CIGATE-3 fix-burst-6,
+/// ADV-SC3-P4-MED-001):** `Step::span` is no longer without a consumer —
+/// [`step_mapping_child_value_for_step`] uses it as its sole identity key
+/// for re-locating a caller-resolved `&Step` inside a freshly re-parsed
+/// `job_block` (see that function's own doc comment, and [`Step::span`]'s
+/// field doc, for the full rationale and why this field must NOT be
+/// line-snapped the way `Job::span` is). This closure's diagnostic
+/// specificity — naming the module, the offending index, and the table's
+/// size on an out-of-range char index, rather than a bare `table[...]`
+/// index panic's generic Rust "index out of bounds" — matters more now
+/// that a real caller depends on this field's correctness, not less.
 fn build_step(
     events: &[(Event<'_>, Span)],
     item_start: usize,
@@ -1524,93 +1546,21 @@ pub fn job_level_nested_sequence_items(job_block: &str, path: &[&str]) -> Option
 }
 
 /// Resolve the [`Value`] of ONE named child (`child_key`) of the mapping
-/// value of `mapping_key`, within the FIRST step (in source order) whose
-/// own `mapping_key` mapping actually CONTAINS `child_key`.
-///
-/// # Why this is a separate function from `step_mapping_child_value`
-/// (S-CIGATE-3 pass B)
-///
-/// `step_mapping_child_value`'s `step_anchor_key` design assumes a single,
-/// stable OTHER key uniquely identifies the step of interest — true for the
-/// `ci-gate` gate step (only one step in that job has a `run:` key at all),
-/// but not true in general. Motivating caller:
-/// `tests/ci_gate_completeness.rs::test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env`
-/// — the `msrv` job has FOUR steps that all carry a `uses:` key, only one
-/// of which has a `with.toolchain` child. Anchoring on
-/// `step_anchor_key = "uses"` would match the WRONG step
-/// (`step-security/harden-runner`, source-order-first, whose own `with:`
-/// has `egress-policy` but no `toolchain`) and — per
-/// `step_mapping_child_value`'s own `?`-early-return-on-missing-child
-/// behavior — return `None` for the whole job rather than continuing to the
-/// step that actually has it. This function instead scans every step,
-/// SKIPPING (not aborting on) a step whose `mapping_key` mapping exists but
-/// lacks `child_key`.
-///
-/// Returns `None` if no step has a `mapping_key` mapping containing
-/// `child_key`.
-///
-/// # Panics
-///
-/// Same malformed-YAML-panics contract as [`WfDoc::parse`].
-#[must_use]
-pub fn first_step_mapping_child_value(
-    job_block: &str,
-    mapping_key: &str,
-    child_key: &str,
-) -> Option<Value> {
-    let events = parse_job_block_events(job_block, "first_step_mapping_child_value");
-
-    let root_start = events
-        .iter()
-        .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))?;
-    let (root_entries, _) = read_mapping(&events, root_start);
-    let entry = root_entries.first()?;
-    if !matches!(events[entry.value_start].0, Event::MappingStart(..)) {
-        return None;
-    }
-    let (body_entries, _) = read_mapping(&events, entry.value_start);
-    let steps_entry = find_unique_entry(&body_entries, "steps", "first_step_mapping_child_value")?;
-    if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
-        return None;
-    }
-    let (items, _) = read_sequence(&events, steps_entry.value_start);
-
-    for (item_start, _item_end) in items {
-        if !matches!(events[item_start].0, Event::MappingStart(..)) {
-            continue;
-        }
-        let (step_entries, _) = read_mapping(&events, item_start);
-        let Some(mapping_entry) =
-            find_unique_entry(&step_entries, mapping_key, "first_step_mapping_child_value")
-        else {
-            continue;
-        };
-        if !matches!(events[mapping_entry.value_start].0, Event::MappingStart(..)) {
-            continue;
-        }
-        let (child_entries, _) = read_mapping(&events, mapping_entry.value_start);
-        let Some(child) =
-            find_unique_entry(&child_entries, child_key, "first_step_mapping_child_value")
-        else {
-            continue;
-        };
-        return Some(resolve_value(&events, child.value_start));
-    }
-    None
-}
-
-/// Resolve the [`Value`] of ONE named child (`child_key`) of the mapping
 /// value of `mapping_key`, within the EXACT step `step` — identified by its
 /// own byte [`Step::span`], not by re-scanning `job_block` for "the first
 /// step carrying some other key". Sibling of [`step_mapping_child_value`]
-/// (anchored by a same-step OTHER key's mere PRESENCE) and
-/// [`first_step_mapping_child_value`] (anchored by the first step whose
-/// `mapping_key` mapping happens to CONTAIN `child_key`) — this is the
-/// strictest of the three: the caller has already unambiguously identified
-/// `step` (e.g. via `job.steps.iter().find(|s| s.value_of("run") == ...)`,
-/// exactly as `dtolnay/rust-toolchain`'s `uses:` prefix or the `cargo check`
-/// step's exact `run:` text already do), and this function guarantees the
-/// lookup happens on THAT step, not merely a step sharing one of its keys.
+/// (anchored by a same-step OTHER key's mere PRESENCE, first-match) — this
+/// is the stricter of the two: the caller must have ALREADY unambiguously
+/// identified `step` through an ambiguity-checked selection (e.g. an
+/// `Err`-on-zero-or-more-than-one helper such as `ci_gate_completeness.rs`'s
+/// `find_sole_step_by`/`find_sole_step_by_name` — NOT a raw, unchecked
+/// `job.steps.iter().find(...)`, which silently prefers whichever step
+/// happens to come first on a decoy match; see `find_sole_step_by`'s own
+/// doc comment, S-CIGATE-3 fix-burst-7/ADV-SC3-P5-MED-001, for the concrete
+/// bypass an unchecked outer `.find()` left open even with THIS function
+/// correctly anchoring on the resolved step's byte span), and this function
+/// guarantees the lookup happens on THAT step, not merely a step sharing
+/// one of its keys.
 ///
 /// # Why this exists (S-CIGATE-3 fix-burst-6, ADV-SC3-P4-MED-001 / F-02)
 ///
