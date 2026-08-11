@@ -2251,6 +2251,103 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // find_key_node_properties DETECTION path (M-1, adversarial finding,
+    // S-CIGATE-3 close-out). Before this pass, this function's ONLY
+    // consumer was `tests/ci_gate_completeness.rs`'s M2-q assertion
+    // (`assert!(find_key_node_properties(gate_block).is_empty(), …)`)
+    // against the real `ci-gate` job block, which has no node properties
+    // — that assertion passes VACUOUSLY and says nothing about whether
+    // the function can actually detect one. The only test above touching
+    // this function exercises its multi-document PANIC path, never its
+    // detection path. A mutation that made `key_has_anchor` always
+    // `false`, made `key_tag` always `None`, or made
+    // `collect_key_node_properties`/`recurse_into_value_for_node_
+    // properties` stop recursing would leave every existing test green
+    // while silently reopening the round-16 anchor/tag bypass this
+    // function exists to close. These tests call the function directly
+    // and assert it DETECTS node properties on a key — positive
+    // regression coverage, not merely absence-on-clean-input coverage.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_find_key_node_properties_detects_anchor_on_mapping_key() {
+        // `&x` attaches to the KEY node `b`, not the value `c` — exactly
+        // the round-16 `&x shell: cat {0}` shape, one level of nesting
+        // down from the document root.
+        let yaml = "a:\n  &x b: c\n";
+        let found = find_key_node_properties(yaml);
+        assert_eq!(
+            found,
+            vec![KeyNodeProperty {
+                key: "b".to_string(),
+                has_anchor: true,
+                tag: None,
+            }],
+            "expected a single detected node property on key \"b\", got {found:?}"
+        );
+    }
+
+    #[test]
+    fn test_find_key_node_properties_detects_tag_on_mapping_key() {
+        // `!!str` attaches to the KEY node `b` — the round-16
+        // `!!str shell: cat {0}` shape.
+        let yaml = "a:\n  !!str b: c\n";
+        let found = find_key_node_properties(yaml);
+        assert_eq!(
+            found,
+            vec![KeyNodeProperty {
+                key: "b".to_string(),
+                has_anchor: false,
+                tag: Some("tag:yaml.org,2002:str".to_string()),
+            }],
+            "expected a single detected node property on key \"b\", got {found:?}"
+        );
+    }
+
+    #[test]
+    fn test_find_key_node_properties_detects_anchor_nested_two_levels_deep() {
+        // Proves `collect_key_node_properties` /
+        // `recurse_into_value_for_node_properties` actually DESCEND: the
+        // node-propertied key here is two mapping levels below the
+        // document root (`a` -> `b` -> `&x c`), not directly under the
+        // root the way the two tests above are. A mutation that stopped
+        // recursion after the first level (or dropped the sequence-descent
+        // arm) would still catch a top-level node property but miss this
+        // one — this test is what distinguishes "recurses" from "checks
+        // only the mapping it started at".
+        let yaml = "a:\n  b:\n    &x c: d\n";
+        let found = find_key_node_properties(yaml);
+        assert_eq!(
+            found,
+            vec![KeyNodeProperty {
+                key: "c".to_string(),
+                has_anchor: true,
+                tag: None,
+            }],
+            "expected the nested node property on key \"c\" to be found by \
+             recursing into the value, got {found:?}"
+        );
+    }
+
+    #[test]
+    fn test_find_key_node_properties_clean_mapping_returns_empty() {
+        // Control: a mapping with NO node properties anywhere in its tree
+        // must return an empty vec. This guards against a mutation that
+        // makes the function report EVERY key (or every key past some
+        // depth) as node-propertied, which the three detection tests
+        // above alone would not catch — they only assert on the presence
+        // of the one deliberately-propertied key, not on the absence of
+        // spurious entries for the rest of the document.
+        let yaml = "a:\n  b: c\n  d:\n    e: f\n    g:\n      - h\n      - i: j\n";
+        let found = find_key_node_properties(yaml);
+        assert_eq!(
+            found,
+            Vec::<KeyNodeProperty>::new(),
+            "expected no node properties on a clean mapping, got {found:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------
     // Fixed-denominator self-check (S-CIGATE-3 fix-burst-4,
     // ADV-SC3-P2-LOW-005; enforcement assertions ported fix-burst-6,
     // ADV-SC3-P4-LOW-001)
@@ -2311,7 +2408,7 @@ mod tests {
     // `#[cfg(unix)]` allowance, since this file has no platform-gated
     // test today; see `ALLOWED_TEST_CFG_GATES` below) from
     // `tests/ci_gate_completeness.rs`'s ADV-P60-HIGH-001 fix.
-    const EXPECTED_WF_TEST_COUNT: usize = 20;
+    const EXPECTED_WF_TEST_COUNT: usize = 24;
 
     /// Collect the line indices (0-based, into `lines`) of every
     /// `#[cfg(...)]` attribute in the CONTIGUOUS attribute/doc block
