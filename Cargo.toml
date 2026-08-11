@@ -62,6 +62,11 @@ scopeguard = "1"
 glob = "0.3"
 # sha1: compute batch-path prefixes in mutation-kill tests (PG-F4-10)
 sha1 = { version = "^0.11" }
+# saphyr-parser: event-stream-only YAML parsing for tests/ci_gate_completeness.rs (S-CIGATE-3).
+# Exact-version pin (not a caret range) — MSRV 1.85.0 is this crate's exact floor with zero
+# headroom against this repo's rust-version = "1.85"; an unreviewed transitive bump could
+# silently break the msrv CI job on an unrelated PR. See CLAUDE.md ci-gate bullet / AC-006.
+saphyr-parser = "=0.0.11"
 
 [profile.release]
 opt-level = 3
