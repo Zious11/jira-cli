@@ -1126,6 +1126,138 @@ pub fn step_mapping_child_keys(
     None
 }
 
+/// Resolve the sorted, complete key set of the mapping VALUE of key `key`,
+/// within the SOLE step whose OWN `name:` value is EXACTLY `step_name`,
+/// inside `job_block`. Sibling of [`step_mapping_child_keys`], but selects
+/// the step by NAME (tree-unique — `Err` on zero or more than one match)
+/// rather than by "the first step that happens to carry `step_anchor_key`".
+///
+/// # S-CIGATE-3 fix-burst-5 (ADV-SC3-P3-MED-001)
+///
+/// Added for `ci_gate_completeness.rs`'s `extract_test_guard_env_key_set`,
+/// which used to call [`step_mapping_child_keys`] with `step_anchor_key =
+/// "run"` — that anchors on "the FIRST step in the job's `steps:` sequence
+/// that carries a `run:` key", not specifically the `test` job's named
+/// POL-11 guard step. A DECOY step inserted before the real one — sharing
+/// the real step's `name:` value, and carrying its own `run:` AND `env:`
+/// keys (so it satisfies `PINNED_TEST_GUARD_ENV_KEYS` too) — silently wins
+/// that anchor-based lookup while the real step (disabled via `if: false`,
+/// or simply the second of two identically-named steps) goes unexamined.
+/// This function instead requires the step to be identified UNAMBIGUOUSLY
+/// by its own `name:` value first — mirroring
+/// `ci_gate_completeness.rs::find_sole_step_by_name`'s ambiguity contract
+/// (`Err` on zero or more than one match) — before ever looking at `key`'s
+/// children, so a same-named decoy is flagged as ambiguity rather than
+/// silently outranking (or being silently outranked by) the real step.
+///
+/// Returns `Err` if the job has no `steps:` sequence, or zero or more than
+/// one step has this `name:` value. Returns `Ok(Vec::new())` if the
+/// (uniquely resolved) step has no `key`, or `key`'s value there is not
+/// itself a mapping — mirrors `step_mapping_child_keys`'s `None`-becomes-
+/// empty convention already relied on at existing call sites via
+/// `.unwrap_or_default()`, since "the step exists but has no `env:`
+/// block" is a legitimate (if perhaps unexpected) state, not a structural
+/// parse failure the caller should be forced to handle separately from
+/// "the block is empty".
+pub fn step_mapping_child_keys_by_step_name(
+    job_block: &str,
+    step_name: &str,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    let events: Vec<(Event<'_>, Span)> = Parser::new_from_str(job_block)
+        .collect::<Result<Vec<_>, ScanError>>()
+        .unwrap_or_else(|e| {
+            panic!(
+                "wf.rs: step_mapping_child_keys_by_step_name: failed to parse \
+                 job block YAML as valid YAML 1.2: {e}"
+            )
+        });
+    assert_single_document(&events, "step_mapping_child_keys_by_step_name");
+
+    let root_start = events
+        .iter()
+        .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))
+        .ok_or_else(|| "job block has no top-level mapping".to_string())?;
+    let (root_entries, _) = read_mapping(&events, root_start);
+    let entry = root_entries
+        .first()
+        .ok_or_else(|| "job block's top-level mapping is empty".to_string())?;
+    if !matches!(events[entry.value_start].0, Event::MappingStart(..)) {
+        return Err("job block's single entry's value is not a mapping".to_string());
+    }
+    let (body_entries, _) = read_mapping(&events, entry.value_start);
+    let Some(steps_entry) = find_unique_entry(
+        &body_entries,
+        "steps",
+        "step_mapping_child_keys_by_step_name",
+    ) else {
+        return Err("job has no `steps:` key at all".to_string());
+    };
+    if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
+        return Err("job's `steps:` value is not a sequence".to_string());
+    }
+    let (items, _) = read_sequence(&events, steps_entry.value_start);
+
+    // Collect every step whose OWN `name:` value resolves to exactly
+    // `step_name` — not a first-match `.find()`.
+    let mut matched_step_entries: Vec<Vec<MapEntry>> = Vec::new();
+    for (item_start, _item_end) in &items {
+        if !matches!(events[*item_start].0, Event::MappingStart(..)) {
+            continue;
+        }
+        let (step_entries, _) = read_mapping(&events, *item_start);
+        let is_match = find_unique_entry(
+            &step_entries,
+            "name",
+            "step_mapping_child_keys_by_step_name",
+        )
+        .is_some_and(|name_entry| {
+            matches!(
+                &events[name_entry.value_start].0,
+                Event::Scalar(text, ..) if text.as_ref() == step_name
+            )
+        });
+        if is_match {
+            matched_step_entries.push(step_entries);
+        }
+    }
+
+    let step_entries = match matched_step_entries.len() {
+        0 => {
+            return Err(format!(
+                "has no step with `name: {step_name}` at all (checked every \
+                 step's own `name:` value, wherever it appears in that \
+                 step's mapping, via the parsed event-stream model — tree \
+                 membership, not a line-position or first-`{key}`-carrying-\
+                 step scan)."
+            ));
+        }
+        1 => &matched_step_entries[0],
+        n => {
+            return Err(format!(
+                "has {n} steps named `name: {step_name}` — this checker \
+                 requires exactly one so a single pinned literal \
+                 unambiguously covers it. A decoy step sharing the real \
+                 step's `name:` VALUE (and, potentially, its own `{key}:` \
+                 children) would otherwise silently win or lose a \
+                 first-match lookup instead of being flagged as ambiguous."
+            ));
+        }
+    };
+
+    let Some(target) = find_unique_entry(step_entries, key, "step_mapping_child_keys_by_step_name")
+    else {
+        return Ok(Vec::new());
+    };
+    if !matches!(events[target.value_start].0, Event::MappingStart(..)) {
+        return Ok(Vec::new());
+    }
+    let (child_entries, _) = read_mapping(&events, target.value_start);
+    let mut keys: Vec<String> = child_entries.iter().map(|e| e.key.clone()).collect();
+    keys.sort();
+    Ok(keys)
+}
+
 /// Resolve the [`Value`] of ONE named child (`child_key`) of the mapping
 /// value of `mapping_key`, within the step whose own keys include
 /// `step_anchor_key`, inside `job_block`. Sibling of

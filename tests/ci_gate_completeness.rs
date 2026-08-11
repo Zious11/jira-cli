@@ -1255,6 +1255,168 @@ fn test_ci_gate_needs_jobs_have_no_job_level_if() {
     }
 }
 
+/// PINNED, human-reviewed COMPLETE job-level key set for every
+/// `ci-gate.needs` member that must run unconditionally (every member
+/// except `mutants`, per [`always_run_needs_members`]) — S-CIGATE-3
+/// fix-burst-5 (ADV-SC3-P3-HIGH-001).
+///
+/// `PINNED_GATE_JOB_KEYS`/M2-k already pins this shape for `ci-gate`
+/// itself; this table extends the SAME idiom to every OTHER always-run
+/// job, closing a gap that previously existed for every one of them
+/// (including `msrv`, which — per ADV-SC3-P3-HIGH-001's own report — had
+/// NO key-set pin of any kind before this table, not even a narrower one).
+///
+/// Concretely, this closes `jobs.<job_id>.defaults.run.shell`: a
+/// documented GitHub Actions key applying to every `run:` step in that
+/// job unless a step overrides it with its own `shell:`. Inserting
+/// ```yaml
+///     defaults:
+///       run:
+///         shell: cat {0}
+/// ```
+/// as a job-level sibling of `spec-guard`'s `timeout-minutes: 5` (verified
+/// as a concrete RED-proof reproduction against a temporary, untracked
+/// copy of `ci.yml` this session — the tracked file was never modified)
+/// makes every one of `spec-guard`'s nine steps — none of which declares
+/// its own step-level `shell:` — `cat` its `run:` body instead of
+/// executing it, INCLUDING `bash scripts/check-ci-gate.sh --self-test`,
+/// the entire 13-fixture self-test suite. `spec-guard` still reports
+/// `success` (`cat` exits 0), and `ci-gate` goes green. Every check that
+/// existed before this table passed against that reproduction: the
+/// self-test's byte-pinned run line and step key set
+/// (`PINNED_CI_GATE_SELF_TEST_RUN_LINE`/`_STEP_KEYS`) are both scoped to
+/// the STEP, not the job, so a job-level `defaults:` is invisible to
+/// them; `test_always_run_jobs_have_no_continue_on_error` bans only that
+/// one literal; `test_ci_gate_needs_jobs_have_no_job_level_if` bans only
+/// `if`; `test_ci_yml_has_no_workflow_level_shell_override` and
+/// `test_ci_yml_workflow_root_key_set_is_pinned` are both scoped to the
+/// WORKFLOW root (`WfDoc::root_keys`), not any individual job.
+///
+/// **Verification note (fails OPEN toward accuracy, not overclaiming):**
+/// whether `defaults.run.shell: cat {0}` is actually ACCEPTED and applied
+/// by a live GitHub Actions runner in exactly this way is UNVERIFIED by
+/// this session — the same status rounds 11/14 recorded for their own
+/// `shell: cat {0}` payloads (confirmed against PyYAML/Ruby Psych parsing
+/// and GitHub's documented custom-shell-template syntax, never executed
+/// against a real runner). This table closes the STRUCTURAL gap (the
+/// absence of any pin on these jobs' key sets) regardless of that
+/// open question.
+///
+/// **Scope — why ALL seven always-run jobs, not just the five with an
+/// unguarded `run:` step:** of the seven, only `fmt`, `clippy`, `msrv`,
+/// `spec-guard`, and `check-signing-workflow-injection` are concretely
+/// exposed to the `defaults.run.shell` vector specifically (none of their
+/// steps sets its own `shell:`). `test` is NOT exposed to that specific
+/// vector — its POL-11 guard step already carries an explicit
+/// step-level `shell: bash` (pinned separately by
+/// `PINNED_TEST_GUARD_STEP_KEYS`), which GitHub Actions' documented
+/// precedence has override any job-level `defaults.run.shell`. `deny` is
+/// not exposed EITHER, for an even simpler reason: it has no `run:` step
+/// at all (`Deny (licenses + vulnerabilities)` is two `uses:` steps only)
+/// — there is nothing for a job-level shell override to redirect. Both
+/// are included in this table anyway: a COMPLETE key-set pin is strictly
+/// more general than a `defaults`-specific check (it also catches an
+/// unrelated smuggled key on either job — an `env:` block, a second
+/// `if:`, anything not yet imagined), and per this fix's own mandate
+/// ("closes the whole class, not just `defaults`"), narrowing the table
+/// to only the five concretely-exposed jobs would leave that broader
+/// protection un-added for `test`/`deny` for no real savings — the pins
+/// are simple 4-5-entry sorted lists, not appreciably more churn-prone
+/// than `PINNED_GATE_JOB_KEYS` already is for `ci-gate`. This is a
+/// DELIBERATE scope choice, not an accidental one: `test`/`deny`'s
+/// inclusion in this table is defense-in-depth against a DIFFERENT,
+/// unrelated smuggled key — not a claim that they are exposed to the
+/// `defaults.run.shell` vector this fix's RED proof concretely
+/// reproduced.
+const PINNED_ALWAYS_RUN_JOB_KEY_SETS: &[(&str, &[&str])] = &[
+    (
+        "check-signing-workflow-injection",
+        &["name", "runs-on", "steps", "timeout-minutes"],
+    ),
+    (
+        "clippy",
+        &["name", "runs-on", "steps", "strategy", "timeout-minutes"],
+    ),
+    ("deny", &["name", "runs-on", "steps", "timeout-minutes"]),
+    ("fmt", &["name", "runs-on", "steps", "timeout-minutes"]),
+    ("msrv", &["name", "runs-on", "steps", "timeout-minutes"]),
+    (
+        "spec-guard",
+        &["name", "runs-on", "steps", "timeout-minutes"],
+    ),
+    (
+        "test",
+        &["name", "runs-on", "steps", "strategy", "timeout-minutes"],
+    ),
+];
+
+/// S-CIGATE-3 fix-burst-5 (ADV-SC3-P3-HIGH-001). RED proof (this
+/// session): spliced `defaults:\n      run:\n        shell: cat {0}` in as
+/// a job-level sibling of `spec-guard`'s `timeout-minutes: 5` in a
+/// temporary, untracked copy of `ci.yml` — before this test existed, the
+/// full 48-test suite (including `test_spec_guard_contains_check_ci_gate_
+/// self_test_step`, whose byte-pinned run-line/step-key checks are scoped
+/// to the self-test STEP, not the job) stayed green against that
+/// reproduction. GREEN proof: with this test added, the same
+/// reproduction fails here specifically, naming `spec-guard` and its
+/// added `defaults` key. Both verified this session; the tracked
+/// `.github/workflows/ci.yml` was never modified — see this test's own
+/// completion report for exact commands run.
+#[test]
+fn test_always_run_jobs_have_pinned_complete_job_key_sets() {
+    let ci = read_ci_yml();
+    let required_jobs = always_run_needs_members(&ci);
+
+    for job_name in &required_jobs {
+        let job_block = extract_job_block(&ci, job_name).unwrap_or_else(|| {
+            panic!(
+                "FAIL: job `{job_name}` (listed in ci-gate.needs) was not found \
+                 in ci.yml.  Either the job was renamed or removed — update \
+                 ci-gate.needs and this test together."
+            )
+        });
+
+        let Some((_, pinned_keys)) = PINNED_ALWAYS_RUN_JOB_KEY_SETS
+            .iter()
+            .find(|(name, _)| *name == job_name.as_str())
+        else {
+            panic!(
+                "FAIL (ADV-SC3-P3-HIGH-001): job `{job_name}` is a member of \
+                 `ci-gate.needs` that must run unconditionally (per \
+                 `always_run_needs_members`), but has NO entry in \
+                 `PINNED_ALWAYS_RUN_JOB_KEY_SETS`. A newly-added always-run \
+                 job's job-level key set (including a job-level `defaults:` \
+                 that could redirect every one of its `run:` steps' \
+                 interpreter — see this constant's own doc comment) is \
+                 unpinned until a human reviews and adds it here. Add a \
+                 `(\"{job_name}\", &[...])` entry with its current, \
+                 reviewed key set in the SAME change.\n\
+                 Current `{job_name}` block:\n{job_block}"
+            );
+        };
+
+        let mut expected_keys: Vec<String> = pinned_keys.iter().map(|s| s.to_string()).collect();
+        expected_keys.sort();
+        let actual_keys = extract_job_level_key_set(job_block);
+
+        assert_eq!(
+            actual_keys, expected_keys,
+            "FAIL (ADV-SC3-P3-HIGH-001): job `{job_name}`'s complete \
+             job-level key set ({actual_keys:?}) does not match the \
+             pinned, human-reviewed set ({expected_keys:?}). Any added, \
+             removed, or renamed job-level key changes this set — most \
+             importantly a job-level `defaults:` key, which can redirect \
+             EVERY `run:` step in this job through a custom shell template \
+             (e.g. `shell: cat {{0}}`, which `cat`s the run line's script \
+             body instead of executing it) unless that step declares its \
+             own step-level `shell:` override. If this is a deliberate, \
+             reviewed change, update PINNED_ALWAYS_RUN_JOB_KEY_SETS in the \
+             SAME change.\n\
+             Current `{job_name}` block:\n{job_block}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M2 — pass/fail semantics are structurally placed correctly
 // ---------------------------------------------------------------------------
@@ -1442,30 +1604,41 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     // `test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json`
     // (AC-001) — kept here too so this test's own M2 structural-placement
     // story remains self-contained.)
+    // # S-CIGATE-3 fix-burst-5 (ADV-SC3-P3-LOW-001): rewritten on
+    // `Job::steps`/`Step::keys`
+    //
+    // Same closure as M2-d immediately above, applied to `run:` instead of
+    // `if:`: whether ANY step carries a `run:` key is now resolved by tree
+    // membership under `Job::steps` (`WfDoc::parse_single_job`), not a
+    // `str::lines()` scan for a line whose trimmed text starts with
+    // `"run:"`. This closes the round-12 benign-false-red the old
+    // comment below documented (a step whose `run:` key is reordered to be
+    // the sequence-marker-adjacent FIRST key, e.g. `      - run: ...`,
+    // defeated the line-based `trim_start().starts_with("run:")` pattern
+    // because it never strips the leading `- ` marker) — key ORDER within
+    // a step's own mapping is irrelevant to `Step::keys` membership, so
+    // there is no reordering left that could produce that false-red. This
+    // also corrects the module-level claim (this file's header comment)
+    // that "every structural assertion in this file queries the parsed
+    // tree — not `str::lines()`/indent arithmetic" — this was the second
+    // of two live counterexamples to that claim (the other being AC-001's
+    // job-level `if: always()` check below), both closed in this pass.
     // -----------------------------------------------------------------------
-    let has_run_step = gate_block
-        .lines()
-        .any(|l| l.trim_start().starts_with("run:"));
+    let has_run_step = job.steps.iter().any(|s| s.keys.iter().any(|k| k == "run"));
 
     assert!(
         has_run_step,
-        "FAIL (M2-g): The `ci-gate` job block contains no `run:` step \
-         matching this check's pattern (`run:` as the first non-whitespace \
-         text on its own line).\n\
+        "FAIL (M2-g): The `ci-gate` job block contains no step carrying a \
+         `run:` key (resolved by tree membership under `Job::steps` — \
+         immune to both key-spelling and key-ORDER variance; a step whose \
+         `run:` key is not its first key is found identically to one \
+         where it is).\n\
          The gate must have a `run:` step that actually invokes \
          `scripts/check-ci-gate.sh` and fails the job via that script's \
          exit code.\n\
          Without a `run:` step the job trivially succeeds for every upstream \
-         result. NOTE (PR #671 review round 12, benign-false-red message \
-         fix): if a `run:` step genuinely exists but its KEYS were \
-         reordered so `run:` is now the step's FIRST key (the one on the \
-         same line as the YAML sequence marker, e.g. `      - run: ...` \
-         instead of `      - name: ...` followed by `run:` later), this \
-         check's `trim_start()`-based pattern does not strip the leading \
-         `- ` marker and so does not recognize it — `run:` is not \
-         missing, it is in an unrecognized POSITION. See M2-l below (step \
-         key SETS, order-independent) for the check that still passes in \
-         that case, confirming the step itself is intact.\n\
+         result. NOTE: M2-l below (step key SETS, order-independent) is a \
+         second, independent confirmation that the step itself is intact.\n\
          Current ci-gate block:\n{gate_block}"
     );
 
@@ -2569,23 +2742,30 @@ const PINNED_TEST_GUARD_ENV_KEYS: &[&str] = &["CARGO_TERM_COLOR"];
 /// needle, so the old code would have silently returned only the REAL
 /// step's keys while a same-named decoy sat unexamined a few lines away.
 /// `Step::name` finds a step's `name:` key anywhere in its own mapping,
-/// regardless of position, so a decoy step of that shape now resolves to
-/// a distinct `Job::steps` entry whose `.name` ALSO matches the target
-/// string, making it visible to a caller that checks for ambiguity — an
-/// unconditional strengthening, not exercised by today's `ci.yml` but no
-/// longer silently missed if it appeared.
-fn extract_test_guard_step_keys(job_block: &str) -> Vec<String> {
+/// regardless of position — closing that specific gap.
+///
+/// # Correction (S-CIGATE-3 fix-burst-5, ADV-SC3-P3-MED-001)
+///
+/// The paragraph above, and this function's ORIGINAL implementation,
+/// still used a raw `job.steps.iter().find(...)` — first-match, not
+/// ambiguity-checked — despite the doc comment above claiming a decoy
+/// step is made "visible to a caller that checks for ambiguity": this
+/// call site was not such a caller. Concrete bypass: insert a DECOY step
+/// carrying the identical `name:` value (and its own `run:`/`env:` keys,
+/// matching `PINNED_TEST_GUARD_ENV_KEYS`) immediately BEFORE the real
+/// step, and add `if: ${{ false }}` to the real step — `.find()` returns
+/// the decoy, whose key set matches the pin, while the real (disabled)
+/// step goes unexamined and `cargo test` never runs. This function now
+/// routes through [`find_sole_step_by_name`] — the SAME ambiguity-
+/// checked lookup [`extract_step_key_set_by_name`] already used —
+/// returning `Err` on zero or more than one match instead of silently
+/// picking the first.
+fn extract_test_guard_step_keys(job_block: &str) -> Result<Vec<String>, String> {
     let job = WfDoc::parse_single_job(job_block);
-    let Some(step) = job
-        .steps
-        .iter()
-        .find(|s| s.name.as_deref() == Some("Run tests (zero-test floor, POL-11)"))
-    else {
-        return Vec::new();
-    };
+    let step = find_sole_step_by_name(&job.steps, "Run tests (zero-test floor, POL-11)")?;
     let mut keys = step.keys.clone();
     keys.sort();
-    keys
+    Ok(keys)
 }
 
 /// Extract the sorted, complete key set of the `env:` block belonging to
@@ -2594,22 +2774,38 @@ fn extract_test_guard_step_keys(job_block: &str) -> Vec<String> {
 ///
 /// # S-CIGATE-3 pass E: rewritten on `step_mapping_child_keys`
 ///
-/// Reuses the SAME idiom pass B built for `extract_gate_env_key_set`
+/// Reused the SAME idiom pass B built for `extract_gate_env_key_set`
 /// (`step_mapping_child_keys(job_block, "run", "env")`) rather than a
-/// parallel implementation: within the `test` job, exactly one step
-/// carries a `run:` key — the guard step itself (the other three steps
-/// are `uses:`-only: harden-runner, checkout, rust-cache) — so anchoring
-/// on `"run"` unambiguously identifies the same step
-/// `extract_test_guard_step_keys` locates by name. Like
-/// `extract_gate_env_key_set`, this is order-independent BY CONSTRUCTION
-/// (`env:` may legally appear before OR after `run:` on the step). The
-/// old code's own doc comment flagged the reverse case as an open
-/// limitation ("this extractor scans only `env:` lines preceding `run:`
-/// within this step") — that limitation is closed here, not merely
-/// documented, and the `POSITIONAL-ASSUMPTION-AXIS` gap the old
-/// `extract_key_name_at_indent(l, 10)`-based scanner had is gone with it.
-fn extract_test_guard_env_key_set(job_block: &str) -> Vec<String> {
-    common::wf::step_mapping_child_keys(job_block, "run", "env").unwrap_or_default()
+/// parallel implementation: anchoring on "the step that carries a `run:`
+/// key" rather than a line-position scan closed the
+/// `POSITIONAL-ASSUMPTION-AXIS` gap the old `extract_key_name_at_indent(l,
+/// 10)`-based scanner had, and is order-independent BY CONSTRUCTION
+/// (`env:` may legally appear before OR after `run:` on the step).
+///
+/// # Correction (S-CIGATE-3 fix-burst-5, ADV-SC3-P3-MED-001)
+///
+/// `step_mapping_child_keys(job_block, "run", "env")` anchors on the
+/// FIRST step in the job's `steps:` sequence that carries a `run:` key —
+/// within TODAY's `test` job that happens to be the same step
+/// `extract_test_guard_step_keys` locates by name (the other three steps
+/// are `uses:`-only), but nothing tied the two lookups together. A DECOY
+/// step inserted BEFORE the real POL-11 step, sharing its `name:` value
+/// AND carrying its own `run:` and `env: {CARGO_TERM_COLOR: never}` keys
+/// (satisfying `PINNED_TEST_GUARD_ENV_KEYS` too), silently wins this
+/// anchor-based lookup — the SAME class of bypass
+/// `extract_test_guard_step_keys` had, one function over. This now routes
+/// through [`common::wf::step_mapping_child_keys_by_step_name`], which
+/// resolves the step by its own `name:` value with the same ambiguity
+/// contract as [`find_sole_step_by_name`] (`Err` on zero or more than one
+/// match), so it is anchored on the exact SAME step
+/// `extract_test_guard_step_keys` resolves — not merely one that happens
+/// to coincide with it today.
+fn extract_test_guard_env_key_set(job_block: &str) -> Result<Vec<String>, String> {
+    common::wf::step_mapping_child_keys_by_step_name(
+        job_block,
+        "Run tests (zero-test floor, POL-11)",
+        "env",
+    )
 }
 
 /// ADV-P51-HIGH-001/HIGH-002/MED-002. RED proof (S-626-1 ADV-P51 fix
@@ -2631,17 +2827,23 @@ fn test_test_job_guard_step_key_set_and_env_are_pinned() {
         .map(|s| s.to_string())
         .collect();
     expected_step_keys.sort();
-    let actual_step_keys = extract_test_guard_step_keys(test_block);
-    assert!(
-        !actual_step_keys.is_empty(),
-        "FAIL (ADV-P51-HIGH-001/HIGH-002): could not locate the `test` \
-         job's POL-11 guard step at all (expected a step whose own `name:` \
-         value, found anywhere in that step's mapping, is exactly `Run \
-         tests (zero-test floor, POL-11)`). Either the step's `name:` \
-         value changed, or its structure was otherwise rewritten — update \
-         `extract_test_guard_step_keys` if this is a deliberate rename.\n\
-         Current test job block:\n{test_block}"
-    );
+    // S-CIGATE-3 fix-burst-5 (ADV-SC3-P3-MED-001): `extract_test_guard_
+    // step_keys` now returns `Result` — `Err` means either zero or MORE
+    // THAN ONE step named `Run tests (zero-test floor, POL-11)` (the
+    // latter is the decoy-step bypass this fix closes; a first-match
+    // `.find()` used to silently prefer whichever of the two came first).
+    let actual_step_keys = extract_test_guard_step_keys(test_block).unwrap_or_else(|reason| {
+        panic!(
+            "FAIL (ADV-P51-HIGH-001/HIGH-002, S-CIGATE-3 fix-burst-5): \
+                 the `test` job {reason}\n\
+                 Either the step's `name:` value changed, its structure \
+                 was otherwise rewritten, or a same-named DECOY step is \
+                 present — update `extract_test_guard_step_keys` if this \
+                 is a deliberate rename, or remove the decoy if it is \
+                 not.\n\
+                 Current test job block:\n{test_block}"
+        )
+    });
     assert_eq!(
         actual_step_keys, expected_step_keys,
         "FAIL (ADV-P51-HIGH-001/HIGH-002): the `test` job's POL-11 guard \
@@ -2664,17 +2866,30 @@ fn test_test_job_guard_step_key_set_and_env_are_pinned() {
         .map(|s| s.to_string())
         .collect();
     expected_env_keys.sort();
-    let actual_env_keys = extract_test_guard_env_key_set(test_block);
+    // S-CIGATE-3 fix-burst-5 (ADV-SC3-P3-MED-001): `extract_test_guard_
+    // env_key_set` now returns `Result` for the same reason as above —
+    // it is anchored on the SAME name-resolved step, not "the first step
+    // that happens to carry a `run:` key".
+    let actual_env_keys = extract_test_guard_env_key_set(test_block).unwrap_or_else(|reason| {
+        panic!(
+            "FAIL (ADV-P51-MED-002, S-CIGATE-3 fix-burst-5): the \
+                 `test` job {reason}\n\
+                 Either the step's `name:` value changed, its structure \
+                 was otherwise rewritten, or a same-named DECOY step is \
+                 present — update `extract_test_guard_env_key_set` if \
+                 this is a deliberate rename, or remove the decoy if it \
+                 is not.\n\
+                 Current test job block:\n{test_block}"
+        )
+    });
     assert!(
         !actual_env_keys.is_empty(),
         "FAIL (ADV-P51-MED-002): could not locate the `env:` block on the \
          `test` job's POL-11 guard step at all (expected at least \
-         `CARGO_TERM_COLOR`). `extract_test_guard_env_key_set` locates the \
-         step that owns both a `run:` key and an `env:` key by tree \
-         membership (order-independent — `env:` may legally appear before \
-         OR after `run:`), so this means the step was renamed/restructured \
-         in some other way — update `extract_test_guard_env_key_set` if \
-         this is deliberate.\n\
+         `CARGO_TERM_COLOR`). The step itself was found unambiguously by \
+         name, but it has no `env:` key (or `env:`'s value is not a \
+         mapping) — update `extract_test_guard_env_key_set` if this is \
+         deliberate.\n\
          Current test job block:\n{test_block}"
     );
     assert_eq!(
@@ -3477,11 +3692,33 @@ fn test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json() {
 
     // The job-level `if: always()` must remain — Option C does not change
     // this pre-existing S-CIGATE-1 invariant, only the step body.
+    //
+    // # S-CIGATE-3 fix-burst-5 (ADV-SC3-P3-LOW-001): rewritten on
+    // `Job::keys`/`Job::value_of`
+    //
+    // The old form (`gate_block.lines().any(|l| { let t = l.trim();
+    // t.starts_with("if:") && t.contains("always()") })`) was the one
+    // remaining line-based key-detection primitive this story's rewrite
+    // deleted everywhere else — it duplicated the presence half of what
+    // `extract_and_normalize_if_expr` already establishes correctly via
+    // tree membership, with none of that function's spelling/indent/
+    // node-property immunity. `Job::value_of("if")` resolves the key by
+    // tree membership (same guarantee as M2-a's `has_job_level_if` above),
+    // and `Value::Scalar { text, .. }.contains("always()")` inspects the
+    // PARSED, already-resolved scalar text (not a raw source line), so a
+    // re-quoted `if: "${{ always() }}"` or a node-property-prefixed key
+    // are both still found. This was the first of two live counterexamples
+    // to this file's header claim that "every structural assertion in
+    // this file queries the parsed tree — not `str::lines()`/indent
+    // arithmetic" (the second was M2-g's `has_run_step`, fixed the same
+    // way above) — both closed in this pass, making that claim true
+    // rather than merely aspirational.
+    let job = WfDoc::parse_single_job(gate_block);
+    let job_level_if_contains_always = job
+        .value_of("if")
+        .is_some_and(|v| matches!(v, Value::Scalar { text, .. } if text.contains("always()")));
     assert!(
-        gate_block.lines().any(|l| {
-            let t = l.trim();
-            t.starts_with("if:") && t.contains("always()")
-        }),
+        job_level_if_contains_always,
         "FAIL (S-CIGATE-2 AC-001): The `ci-gate` job-level `if: always()` \
          is missing. Option C retains `if: ${{{{ always() }}}}` at job \
          level — only the step body is replaced with an invocation of \
@@ -4730,6 +4967,27 @@ fn extract_and_normalize_step_run_line_by_name(
 ///      an added `ScalarStyle::Plain` assertion (AC-004) so a re-quoted
 ///      form is not silently accepted — see `extract_and_normalize_if_expr`'s
 ///      doc comment for the full design.
+///
+///      **Correction (S-CIGATE-3 fix-burst-5, ADV-SC3-P3-LOW-001):** the
+///      "every structural assertion… queries the parsed tree" sentence
+///      above was FALSE as stated when first written — two live
+///      `assert!`s still built their condition on `gate_block.lines()`:
+///      M2-g's `has_run_step` (`gate_block.lines().any(|l|
+///      l.trim_start().starts_with("run:"))`) and AC-001's job-level
+///      `if: always()` check inside
+///      `test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json`
+///      (`gate_block.lines().any(|l| { let t = l.trim(); t.starts_with("if:")
+///      && t.contains("always()") })`). Neither was a live BYPASS — both
+///      are presence assertions independently backstopped by tree-based
+///      pins (M2-l's `PINNED_GATE_STEP_KEY_SETS` for the run-step case;
+///      M2-a/M2-m for the job-level `if:` case) and both fail CLOSED under
+///      a quoted spelling (`"if":`/`'if':` would not match `starts_with("if:")`,
+///      producing a false RED, never a false GREEN) — so this was a stale
+///      claim, not a reopened finding. Both are now rewritten on
+///      `Job::keys`/`Job::value_of`/`Step::keys` (`has_run_step` iterates
+///      `job.steps.iter().any(|s| s.keys.iter().any(|k| k == "run"))`; the
+///      AC-001 check reads `job.value_of("if")`'s resolved `Value::Scalar`
+///      text), making the sentence above true in fact, not only in intent.
 ///   2. **The round-16 node-property residual this section's "NOT
 ///      ENFORCED" bullet and its "NO AUTOMATED CHECK… CODE REVIEW IS THE
 ///      CONTROL" sentence describe is now CLOSED FOR `ci-gate`
@@ -7234,7 +7492,17 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// own `#[cfg(test)] mod tests`, which `include_str!("ci_gate_completeness.rs")`
 /// below does not see (by design — see this pass's completion report for
 /// why those tests could not live here instead).
-const EXPECTED_GUARD_TEST_COUNT: usize = 28;
+///
+/// S-CIGATE-3 fix-burst-5 (ADV-SC3-P3-HIGH-001): bumped 28 -> 29 for the
+/// one new `#[test] fn test_always_run_jobs_have_pinned_complete_job_key_
+/// sets` added in this pass (`PINNED_ALWAYS_RUN_JOB_KEY_SETS`'s own doc
+/// comment explains why — it closes the job-level `defaults:` shell-
+/// override gap on every always-run job besides `ci-gate`). No other
+/// `#[test]` fn was added to or removed from THIS file in this pass; the
+/// two other findings fixed in the same pass (ADV-SC3-P3-MED-001,
+/// ADV-SC3-P3-LOW-001) changed existing functions' bodies/signatures and
+/// one existing test's assertions, not the `#[test]` count.
+const EXPECTED_GUARD_TEST_COUNT: usize = 29;
 
 /// Coverage note (S-626-1 pass-57, `DENOMINATOR-GUARD-USES-EXACT-LINE-MATCH`):
 /// counts lines whose TRIMMED text STARTS WITH the literal `#[test]`, not
