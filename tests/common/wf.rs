@@ -66,6 +66,13 @@
 use saphyr_parser::{Event, Parser, ScanError, Span};
 use std::ops::Range;
 
+/// Re-exported so callers that need to inspect a [`Value::Scalar`]'s
+/// quoting style (e.g. to preserve today's byte-pin strictness — see
+/// `Value`'s own doc comment) don't need a second, separate
+/// `saphyr_parser` import line for a type this module's own public API
+/// already embeds.
+pub use saphyr_parser::ScalarStyle;
+
 /// A parsed GitHub Actions workflow document.
 ///
 /// Exposes root-level keys directly (not only `jobs`) because some existing
@@ -85,6 +92,60 @@ pub struct WfDoc {
     /// Empty if the document has no top-level `jobs:` key, or if `jobs:`'s
     /// value is not itself a mapping.
     pub jobs: Vec<Job>,
+}
+
+/// The resolved value of a mapping entry, as returned by [`Job::value_of`]
+/// and [`Step::value_of`].
+///
+/// Added by S-CIGATE-3 pass D (`extract_job_display_name`'s rewrite):
+/// `Job`/`Step`'s `keys: Vec<String>` exposes KEY presence only, not the
+/// VALUE — and `extract_job_display_name` needs a job's `name:` value, not
+/// just to know it has one. Deliberately general rather than a one-off
+/// `Job::name_value()` accessor: a later S-CIGATE-3 pass rewriting the
+/// gate-block byte pins (`extract_and_normalize_if_expr`,
+/// `extract_and_normalize_sole_run_line`, and siblings) will need the exact
+/// same shape — a scalar's resolved text AND its YAML style
+/// (`Plain`/`SingleQuoted`/`DoubleQuoted`/...), so that a re-quoted
+/// `if: "${{ always() }}"` still fails a pin built for the plain
+/// `if: ${{ always() }}` spelling (this story's AC-004 quoting-fidelity
+/// mandate). Building that as a generic primitive here, rather than
+/// reinventing it per pin, is why this exists in `wf.rs` and not inline in
+/// `ci_gate_completeness.rs`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    /// A scalar node (`key: value`), covering ALL YAML scalar styles —
+    /// plain, single/double-quoted, and the two block-scalar forms
+    /// (`Literal`/`Folded`, `|`/`>`). Unlike the old line-based checkers
+    /// this module replaces, no special-casing is needed here for block
+    /// scalars or quote-escape sequences: `saphyr-parser` already resolves
+    /// `text` to the real rendered value (dedented/folded/unescaped as the
+    /// YAML 1.2 spec requires — see module docs on "Block scalars come
+    /// back dedented").
+    Scalar {
+        /// The scalar's fully-resolved text.
+        text: String,
+        /// The YAML style this scalar was written in.
+        style: ScalarStyle,
+        /// The scalar's tag (e.g. `!!str`), if any, as `handle` + `suffix`
+        /// concatenated (e.g. `"tag:yaml.org,2002:str"`). A tag does not
+        /// change `text`'s value — `saphyr-parser` already resolved it —
+        /// this is exposed only for a caller that needs to reject a
+        /// specific tag form outright, the way `ci_gate_completeness.rs`'s
+        /// round-16 node-property guards do for mapping KEYS.
+        tag: Option<String>,
+    },
+    /// A YAML alias (`*name`) reference. This module does NOT resolve an
+    /// alias to its anchor's value — that requires a document-wide
+    /// anchor-id -> value table this module does not build (see module
+    /// docs: "Aliases are not resolved"). A caller that cannot safely
+    /// proceed without the real value should reject this variant outright
+    /// rather than guess at it.
+    Alias,
+    /// Any other node kind (a nested mapping or sequence value). None of
+    /// this story's guards need to read into one; callers that do should
+    /// extend this module rather than fall back to string-scanning around
+    /// it.
+    Other,
 }
 
 /// One entry (`<job_id>: { ... }`) under `jobs:`.
@@ -108,9 +169,28 @@ pub struct Job {
     /// This job's own direct mapping keys (`name`, `if`, `needs`,
     /// `runs-on`, `steps`, `env`, ...), in source order. Not deduplicated.
     pub keys: Vec<String>,
+    /// Parallel to `keys` — `values[i]` is the resolved [`Value`] of
+    /// `keys[i]`. Use [`Job::value_of`] rather than indexing this directly.
+    pub values: Vec<Value>,
     /// This job's `steps:` sequence, if it has one and it is a sequence.
     /// Empty otherwise (no `steps:` key, or its value is not a sequence).
     pub steps: Vec<Step>,
+}
+
+impl Job {
+    /// This job's resolved [`Value`] for its direct key `key`, if present.
+    /// When `keys` contains `key` more than once (a duplicate mapping key —
+    /// itself invalid YAML that GitHub Actions/`actionlint` reject at parse
+    /// time; see `read_mapping`'s doc comment), returns the FIRST
+    /// occurrence, mirroring every other first-match convention in this
+    /// module.
+    #[must_use]
+    pub fn value_of(&self, key: &str) -> Option<&Value> {
+        self.keys
+            .iter()
+            .position(|k| k == key)
+            .map(|i| &self.values[i])
+    }
 }
 
 /// One entry of a job's `steps:` sequence.
@@ -123,11 +203,28 @@ pub struct Step {
     /// `shell`, `with`, `if`, ...), in source order. Not deduplicated. Empty
     /// if the step entry is not itself a mapping (malformed workflow).
     pub keys: Vec<String>,
+    /// Parallel to `keys` — `values[i]` is the resolved [`Value`] of
+    /// `keys[i]`. Use [`Step::value_of`] rather than indexing this
+    /// directly. Empty whenever `keys` is (i.e. whenever the step entry is
+    /// not itself a mapping).
+    pub values: Vec<Value>,
     /// The byte range in the original source text this step entry occupies
     /// (from its first event's span start to its last event's span end — NOT
     /// line-snapped the way [`Job::span`] is, since no caller depends on
     /// step-level line anchoring yet).
     pub span: Range<usize>,
+}
+
+impl Step {
+    /// This step's resolved [`Value`] for its direct key `key`, if present.
+    /// Same first-match-on-duplicate convention as [`Job::value_of`].
+    #[must_use]
+    pub fn value_of(&self, key: &str) -> Option<&Value> {
+        self.keys
+            .iter()
+            .position(|k| k == key)
+            .map(|i| &self.values[i])
+    }
 }
 
 impl WfDoc {
@@ -192,21 +289,26 @@ impl WfDoc {
                         yaml.len()
                     };
 
-                    let (keys, steps) =
+                    let (keys, values, steps) =
                         if matches!(events[entry.value_start].0, Event::MappingStart(..)) {
                             let (body_entries, _) = read_mapping(&events, entry.value_start);
                             let keys: Vec<String> =
                                 body_entries.iter().map(|e| e.key.clone()).collect();
+                            let values: Vec<Value> = body_entries
+                                .iter()
+                                .map(|e| resolve_value(&events, e.value_start))
+                                .collect();
                             let steps = extract_steps(&events, &body_entries, &table);
-                            (keys, steps)
+                            (keys, values, steps)
                         } else {
-                            (Vec::new(), Vec::new())
+                            (Vec::new(), Vec::new(), Vec::new())
                         };
 
                     jobs.push(Job {
                         id: entry.key.clone(),
                         span: start_byte..end_byte,
                         keys,
+                        values,
                         steps,
                     });
                 }
@@ -347,6 +449,20 @@ fn read_sequence(events: &[(Event<'_>, Span)], start: usize) -> (Vec<(usize, usi
     }
 }
 
+/// Resolve the [`Value`] of a mapping entry's value node, which starts at
+/// `events[value_start]`.
+fn resolve_value(events: &[(Event<'_>, Span)], value_start: usize) -> Value {
+    match &events[value_start].0 {
+        Event::Scalar(text, style, _anchor_id, tag) => Value::Scalar {
+            text: text.to_string(),
+            style: *style,
+            tag: tag.as_ref().map(|t| format!("{}{}", t.handle, t.suffix)),
+        },
+        Event::Alias(_) => Value::Alias,
+        _ => Value::Other,
+    }
+}
+
 /// Build a job's `steps:` list, if it has a `steps:` key whose value is a
 /// sequence.
 fn extract_steps(
@@ -386,12 +502,17 @@ fn build_step(
         return Step {
             name: None,
             keys: Vec::new(),
+            values: Vec::new(),
             span,
         };
     }
 
     let (entries, _) = read_mapping(events, item_start);
     let keys: Vec<String> = entries.iter().map(|e| e.key.clone()).collect();
+    let values: Vec<Value> = entries
+        .iter()
+        .map(|e| resolve_value(events, e.value_start))
+        .collect();
     let name = entries.iter().find(|e| e.key == "name").and_then(|e| {
         if let Event::Scalar(text, ..) = &events[e.value_start].0 {
             Some(text.to_string())
@@ -400,5 +521,10 @@ fn build_step(
         }
     });
 
-    Step { name, keys, span }
+    Step {
+        name,
+        keys,
+        values,
+        span,
+    }
 }

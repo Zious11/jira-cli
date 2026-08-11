@@ -159,6 +159,7 @@ fn read_ci_yml() -> String {
 
 #[allow(dead_code)]
 mod common;
+use common::wf::{Job, Value, WfDoc};
 use common::yaml::extract_job_block;
 
 /// Parse the `needs:` value from a job block.
@@ -6278,19 +6279,33 @@ fn test_allowed_skips_has_exactly_three_code_level_references() {
 // (2026-08-09), specifically §"Sibling-workflow frontier" (Guard A) and
 // the "New material this reconstruction contributes" item 1 (Guard B).
 //
-// KNOWN LIMITATION SHARED BY BOTH GUARDS BELOW (round-16 residual, restated
-// here rather than assumed known): every extractor in this file, including
-// the two new ones added for these guards, is LINE-BASED. A YAML NODE
-// PROPERTY (an anchor `&name` or a tag `!tag`/`!!tag`) prefixing a mapping
-// key on the same physical line defeats line-based key detection with zero
-// non-LF bytes involved and zero line breaks — `extract_key_name_at_indent`
-// stops at the space after `&x`/`!!str`, sees no colon, and returns `None`.
-// Neither guard below closes that residual; both inherit it exactly as
-// every other set-equality pin in this file does. It is tracked as
-// follow-up story S-CIGATE-3 (durable YAML-parser rewrite) — see
-// `CLAUDE.md`'s CI Gate section, "Round 16", for the full record. Do not
-// read either guard below as covering the line-based-lexer-vs-real-parser
-// gap generally; neither does.
+// KNOWN LIMITATION, NOW SPLIT BETWEEN THE TWO GUARDS BELOW (round-16
+// residual, restated here rather than assumed known — UPDATED by
+// S-CIGATE-3 pass D): originally, every extractor backing both guards was
+// LINE-BASED, and a YAML NODE PROPERTY (an anchor `&name` or a tag
+// `!tag`/`!!tag`) prefixing a mapping key on the same physical line
+// defeated line-based key detection with zero non-LF bytes involved and
+// zero line breaks — `extract_key_name_at_indent` stops at the space after
+// `&x`/`!!str`, sees no colon, and returns `None`.
+//
+// Guard A (`list_job_ids_in_workflow`, `extract_job_display_name`,
+// `test_no_sibling_workflow_declares_a_job_named_ci_gate`) was migrated
+// onto `tests/common/wf.rs`'s `saphyr-parser` event-stream model in
+// S-CIGATE-3 pass D and no longer inherits this residual: a real parser
+// identifies a mapping key by its resolved text regardless of any
+// anchor/tag prefixing it on the same line (see `tests/common/wf.rs`'s
+// `read_mapping`, which matches on `Event::Scalar` text only) — the class
+// of gap closes structurally for Guard A's own extractors, not just for
+// the specific `&x`/`!!str shell:` reproduction case.
+//
+// Guard B (matrix staticity, below) is UNCHANGED by pass D and still
+// inherits the line-based residual exactly as documented originally — it
+// is tracked as a follow-up S-CIGATE-3 pass (durable YAML-parser rewrite),
+// not closed by this comment. See `CLAUDE.md`'s CI Gate section, "Round
+// 16", for the full record. Do not read Guard A's migration as having
+// closed the line-based-lexer-vs-real-parser gap generally across this
+// whole file; it has not — only Guard A's own two helper functions and its
+// test are affected.
 
 /// Read an arbitrary workflow YAML file, applying the same normalization as
 /// `read_ci_yml` (CRLF -> LF, strip a leading BOM) so downstream line-based
@@ -6352,243 +6367,114 @@ fn list_workflow_files() -> Vec<std::path::PathBuf> {
 /// make Guard A a silent no-op for a file that may genuinely define a job
 /// this checker never got a chance to inspect — the same closed-
 /// enumeration blind spot the U1 finding closed one level up for
-/// `ci-gate.needs`. Panics loudly instead, naming the file. Both the
-/// `jobs:` key itself (0-indent) and each job id under it (2-indent) are
-/// detected via `collect_mapping_key_set` — the same quote/whitespace-
-/// aware, comment-and-blank-line-tolerant primitive
-/// `list_all_ci_yml_job_names` above now also uses — rather than the
-/// original bespoke `strip_prefix("  ").and_then(|s| s.strip_suffix(':'))`
-/// scan, which required the job-id line to END with `:` and was blind to
-/// a flow-style job entry (e.g. `gate: {name: CI Gate, ...}`) for the same
-/// reason ADV-P55-MED-002 fixed in `list_all_ci_yml_job_names`.
+/// `ci-gate.needs`. Panics loudly instead, naming the file.
+///
+/// S-CIGATE-3 pass D: reimplemented on top of [`WfDoc::parse`] instead of
+/// `collect_mapping_key_set`/`extract_key_name_at_indent`. The old
+/// implementation's own doc comment cited a real, fixed gap (job ids
+/// spelled as a flow-style entry) — that class of gap, and its sibling
+/// `POSITIONAL-ASSUMPTION-AXIS` drift item (a job body indented at
+/// anything other than 4 spaces), are both closed BY CONSTRUCTION here:
+/// `WfDoc::parse` identifies `jobs:`'s children by tree membership, not by
+/// a re-derived indent-column literal or a `:`-suffix line scan, so there
+/// is no indent assumption or key-spelling lexer gap left to reproduce.
+/// Verified across both axes (4 key spellings × 3/4/6/8-space job-body
+/// indents) against local fixtures per this story's AC-008 — see this
+/// pass's completion report, not a persisted test (`EXPECTED_GUARD_TEST_COUNT`
+/// is frozen; this file's test count does not change for an internal
+/// helper rewrite).
 fn list_job_ids_in_workflow(content: &str, path: &Path) -> Vec<String> {
     if content.trim().is_empty() {
         return Vec::new();
     }
 
-    let lines: Vec<&str> = content.lines().collect();
-    let Some(jobs_line_idx) = lines
-        .iter()
-        .position(|l| extract_key_name_at_indent(l, 0).as_deref() == Some("jobs"))
-    else {
+    let doc = WfDoc::parse(content);
+    if !doc.root_keys.iter().any(|k| k == "jobs") {
         panic!(
             "FAIL (S-626-1 pass-54, ADV-P54-MED-002): {} has non-empty \
-             content but no detectable top-level `jobs:` key (checked via \
-             the same quote/whitespace-aware matcher used everywhere else \
-             in this file). A malformed or unusually-formatted sibling \
-             workflow file that genuinely defines jobs would otherwise \
-             silently sit outside Guard A's coverage entirely — the exact \
-             closed-enumeration shape the U1 finding closed one level up \
-             for `ci-gate.needs`. If this file legitimately has no \
-             `jobs:` key at all (e.g. a reusable-workflow fragment with \
-             only top-level metadata), narrow this panic; do not silently \
-             return an empty Vec for a file with real content.",
+             content but no detectable top-level `jobs:` key (checked \
+             against a real saphyr-parser event-stream parse of the whole \
+             document — see WfDoc::root_keys). A malformed or unusually- \
+             formatted sibling workflow file that genuinely defines jobs \
+             would otherwise silently sit outside Guard A's coverage \
+             entirely — the exact closed-enumeration shape the U1 finding \
+             closed one level up for `ci-gate.needs`. If this file \
+             legitimately has no `jobs:` key at all (e.g. a \
+             reusable-workflow fragment with only top-level metadata), \
+             narrow this panic; do not silently return an empty Vec for a \
+             file with real content.",
             path.display()
         );
-    };
+    }
 
-    collect_mapping_key_set(&lines, jobs_line_idx + 1, 2)
+    doc.jobs.iter().map(|j| j.id.clone()).collect()
 }
 
-/// Extract a job block's job-level `name:` value (4-space indent), trimmed
-/// and with one layer of matching surrounding quotes stripped. A trailing
-/// YAML comment on the same line is stripped before the quote check, same
-/// convention `extract_job_block` already uses for job-key lines. Returns
-/// `None` if the job block has no job-level `name:` key at all (GitHub then
-/// displays the job id itself as the check name).
+/// Extract a job's job-level `name:` display value from its parsed
+/// [`Job`]. Returns `None` if the job has no job-level `name:` key at all
+/// (GitHub then displays the job id itself as the check name).
 ///
-/// Anchored on `extract_key_name_at_indent(line, 4)` so a step-level
-/// `      - name: ...` line (6-space indent, one level deeper) is never
-/// mistaken for the job's own `name:` — the same indent discipline
-/// `extract_job_level_key_set` already relies on for job-level keys
-/// generally.
+/// S-CIGATE-3 pass D: reimplemented on top of [`Job::value_of`] instead of
+/// a line-by-line re-scan of a `job_block: &str` slice. The two prior
+/// entire classes of fail-open gap this function used to guard against by
+/// hand no longer exist to guard against:
 ///
-/// S-626-1 pass-56 (ADV-P56-HIGH-002 + ADV-P55-MED-003): two distinct
-/// fail-open gaps closed together, both diagnosed as the same root cause
-/// as ADV-P56-HIGH-001 below — detect the key with the quote/whitespace-
-/// aware matcher, then re-read the VALUE with a bare, non-quote-aware
-/// re-parse, silently swallowing the mismatch:
-///   1. (HIGH-002) `line.trim_start().strip_prefix("name:")?` used `?` to
-///      propagate a `None` up through the WHOLE function on ANY line whose
-///      bare re-read didn't match — including a quoted key spelling
-///      (`"name":` / `'name':`) or `name :` (space before colon), both of
-///      which `extract_key_name_at_indent` above already recognizes as
-///      declaring `name`. That `None` is indistinguishable from "this job
-///      declares no `name:` key at all", silently letting a job spelled
-///      that way escape Guard A's sibling-workflow check entirely. Fixed:
-///      `unwrap_or_else` now panics loudly instead, naming the offending
-///      line — this function refuses to guess at a value it detected the
-///      KEY for but cannot safely re-parse.
-///   2. (MED-003) even once the value is reached, comparing its raw SOURCE
-///      bytes against a plain-scalar constant like `"CI Gate"` silently
-///      misses two YAML forms that render to the identical string: a
-///      block-scalar (`name: >-` with the text on continuation lines this
-///      function does not read) and a double-quoted scalar containing a
-///      backslash escape (`"\x43I Gate"` — this function does not
-///      interpret YAML escape sequences). Reject-don't-parse, the same
-///      discipline `extract_and_normalize_if_expr` uses for its `${{ }}`
-///      wrapper: panic rather than guess at folding/escape rules this
-///      checker was never built to interpret.
+/// - **Key spelling / indent position** (S-626-1 pass-56/59, ADV-P56-HIGH-002,
+///   ADV-P57-HIGH-001): `Job::keys`/`Job::values` come from [`WfDoc::parse`]
+///   walking the real mapping tree — a quoted key (`"name":`/`'name':`),
+///   `name :` (space before colon), or a job body indented at anything
+///   other than 4 spaces are all just "the mapping has a key literally
+///   named `name`" to a real parser. There is no separate "detect the key"
+///   vs. "re-read the value" step left to silently disagree with each
+///   other, and no indent literal to hard-code and get wrong.
+/// - **Value form** (S-626-1 pass-55/59, ADV-P55-MED-003, ADV-P57-LOW-001):
+///   `saphyr-parser` already resolves a scalar's rendered text regardless
+///   of its YAML style — block-scalar folding (`>`/`|`), quote-escape
+///   sequences (`"\x43I Gate"`), and a tag prefix (`!!str CI Gate`) are all
+///   just `Value::Scalar { text: "CI Gate", .. }` at this layer (see
+///   `tests/common/wf.rs::Value`'s doc comment) — there is no folding or
+///   escape-decoding left for this function to refuse to guess at.
 ///
-/// S-626-1 pass-59 (ADV-P57-HIGH-001): a third gap, one step EARLIER than
-/// either of the two above — this function's `extract_key_name_at_indent
-/// (line, 4)` scan silently finds nothing at all (not a wrong VALUE, no
-/// KEY detected in the first place) when the job body is written at any
-/// indent other than 4 spaces, which is legal, `actionlint`-clean YAML.
-/// Verified: a sibling-workflow job with `name: CI Gate` at 6-space
-/// indent returned `None` here — indistinguishable from "declares no
-/// name" — leaving Guard A's `Some("CI Gate")` comparison silently
-/// unable to catch the exact duplicate-check-name collision it exists to
-/// detect. See `assert_job_block_uses_4_space_child_indent`'s doc comment
-/// for the shared root-cause analysis (also applied to
-/// `matrix_needs_members`).
-fn extract_job_display_name(job_block: &str) -> Option<String> {
-    assert_job_block_uses_4_space_child_indent(
-        job_block,
-        "S-626-1 Guard A, ADV-P57-HIGH-001 (extract_job_display_name)",
-    );
-    for line in job_block.lines() {
-        if extract_key_name_at_indent(line, 4).as_deref() != Some("name") {
-            continue;
-        }
-        // S-626-1 pass-60 (ADV-P60-HIGH-002): a job-level key can never be
-        // a YAML sequence entry — `jobs.<id>` is a mapping, and its own
-        // keys (`name:`, `runs-on:`, `steps:`, ...) are plain mapping
-        // keys, never `- `-prefixed list items. A `- ` marker at this
-        // indent belongs to a SEQUENCE living under an earlier job-level
-        // key — in practice, `steps:` written at the SAME 4-space indent
-        // as the job's own keys, which is ordinary, `actionlint`-clean
-        // YAML (a block sequence may sit at its parent mapping key's
-        // indent, not strictly deeper). `extract_key_name_at_indent`
-        // above deliberately strips a leading `- ` marker so it can ALSO
-        // extract a STEP's first key (see that function's own doc
-        // comment) — which means a 4-space `    - name: Checkout` step
-        // line is indistinguishable from a genuine job-level `name:`
-        // line to that one call alone. The prior revision of this
-        // function leaned into that ambiguity instead of resolving it:
-        // it stripped the SAME marker before its own value re-read
-        // below, so it silently substituted the step's name
-        // (`"Checkout"`) for the job's and returned early — the job's
-        // real, later `name: CI Gate` line was never reached. Verified
-        // directly: a sibling-workflow job with exactly this shape
-        // (4-space `steps:` children, no job-level `name:` before them,
-        // a real `name: CI Gate` after) made Guard A's sibling-duplicate
-        // check return `Some("Checkout")` instead of `Some("CI Gate")`
-        // — 27 passed, 0 failed, silently missing the exact collision
-        // this guard exists to detect.
-        //
-        // The prior doc comment on this branch claimed the reachable
-        // shape was latent because "`jobs.<id>` must be a YAML MAPPING
-        // … a job whose value is a sequence is rejected by GitHub's own
-        // parser" — that is true but answers a different question. The
-        // actual reachable shape is NOT a sequence-valued `jobs.<id>`;
-        // it is this ordinary `steps:`-at-4-space-indent style, which
-        // GitHub accepts every day. Fixed: skip any 4-space line that is
-        // itself a sequence entry, so this loop only ever considers
-        // genuine job-level mapping keys — and the marker strip is
-        // dropped from the value re-read below, so a genuinely
-        // unparseable spelling (a quoted key, `name :` with a space
-        // before the colon, ...) still panics loudly rather than being
-        // silently misread.
-        if line.trim_start().starts_with("- ") {
-            continue;
-        }
-        let after_key = line.trim_start().strip_prefix("name:").unwrap_or_else(|| {
-            panic!(
-                "FAIL (S-626-1 Guard A, ADV-P56-HIGH-002): a job-level \
-                 `name:` key was detected via the quote/whitespace-aware \
-                 matcher at 4-space indent, but this function's own \
-                 value-extraction re-read (a bare `strip_prefix(\"name:\")`) \
-                 could not parse the same line — most likely a quoted key \
-                 spelling (`\"name\":` / `'name':`) or `name :` (space \
-                 before colon), which `extract_key_name_at_indent` \
-                 recognizes but this bare re-read does not. Silently \
-                 returning `None` here would be indistinguishable from \
-                 \"this job declares no name\" and would let a job spelled \
-                 this way escape Guard A's sibling-workflow check \
-                 entirely.\n\
-                 Offending line: {line:?}"
-            )
-        });
-        let value = after_key.trim();
-        let value = value.split('#').next().unwrap_or(value).trim();
-
-        if value.starts_with('>') || value.starts_with('|') {
-            panic!(
-                "FAIL (S-626-1 Guard A, ADV-P55-MED-003): a job-level \
-                 `name:` value uses a YAML block-scalar form (\"{value}\") \
-                 — the real rendered name lives on continuation lines this \
-                 checker does not read, so it cannot be safely compared \
-                 against a plain-scalar constant like `\"CI Gate\"`. This \
-                 checker refuses to guess at block-scalar folding rules \
-                 rather than risk silently missing a spelling of the exact \
-                 same rendered name Guard A exists to catch.\n\
-                 Offending line: {line:?}"
-            );
-        }
-
-        // S-626-1 pass-59 (ADV-P57-LOW-001): a value beginning with `*`
-        // (an alias reference), `&` (an anchor declaration — usually
-        // paired with a `*`-referenced value elsewhere), or `!` (an
-        // explicit YAML tag, e.g. `!!str`) is a node-property form this
-        // checker cannot resolve from this one line alone: an alias's
-        // real text lives at its `&anchor` definition elsewhere in the
-        // file, and a tag does not change the scalar's rendered text but
-        // this checker does not interpret tag semantics to know that.
-        // Verified (PyYAML AND Ruby Psych, independent implementations):
-        // `name: *nm` (with `x-tpl: &nm CI Gate` declared elsewhere) and
-        // `name: !!str CI Gate` both render to the plain string `CI
-        // Gate` — exactly the duplicate-check-name collision Guard A
-        // exists to catch — while comparing the literal text `"*nm"` or
-        // `"!!str CI Gate"` against `"CI Gate"` would silently miss it.
-        // Same class this file's CLAUDE.md documents as "round 16 —
-        // UNGUARDED, code review is the control": this checker refuses to
-        // guess at anchor/alias/tag resolution rather than risk silently
-        // missing a spelling of the identical rendered name.
-        if value.starts_with('*') || value.starts_with('&') || value.starts_with('!') {
-            panic!(
-                "FAIL (S-626-1 Guard A, ADV-P57-LOW-001): a job-level \
-                 `name:` value uses a YAML alias/anchor/tag form \
-                 (\"{value}\") — an alias (`*name`), anchor (`&name`), or \
-                 explicit tag (`!tag`/`!!str`) renders to a string this \
-                 checker cannot resolve from this line alone (an alias's \
-                 real text lives at its `&anchor` definition elsewhere in \
-                 the file; a tag does not change the scalar's rendered \
-                 text, but this checker does not interpret tag semantics \
-                 to know that). This checker refuses to guess at \
-                 anchor/alias/tag resolution rather than risk silently \
-                 missing a spelling of the exact same rendered name Guard \
-                 A exists to catch.\n\
-                 Offending line: {line:?}"
-            );
-        }
-
-        for quote in ['"', '\''] {
-            if let Some(stripped) = value.strip_prefix(quote) {
-                if let Some(stripped) = stripped.strip_suffix(quote) {
-                    if quote == '"' && stripped.contains('\\') {
-                        panic!(
-                            "FAIL (S-626-1 Guard A, ADV-P55-MED-003): a \
-                             job-level `name:` value is a double-quoted \
-                             YAML scalar containing a backslash escape \
-                             (\"{stripped}\") — this checker treats \
-                             double-quoted values as opaque, unescaped \
-                             text and does not interpret YAML escape \
-                             sequences (`\\\"`, `\\x43`, `\\n`, ...), so it \
-                             cannot safely compare this against a \
-                             plain-scalar constant like `\"CI Gate\"` \
-                             without risking a silent miss on an escaped \
-                             spelling of the identical rendered name.\n\
-                             Offending line: {line:?}"
-                        );
-                    }
-                    return Some(stripped.to_string());
-                }
-            }
-        }
-        return Some(value.to_string());
+/// The one case this function still explicitly rejects rather than guess
+/// at is a `name:` value that is a YAML **alias** (`*anchor`) reference:
+/// resolving it to its `&anchor` definition's text requires a document-wide
+/// anchor table `tests/common/wf.rs` deliberately does not build (see that
+/// module's doc comment, "Aliases are not resolved") — this is now the ONLY
+/// remaining "reject, don't guess" case, down from four.
+///
+/// Verified across both AC-008 axes against local fixtures (not persisted
+/// as new tests — `EXPECTED_GUARD_TEST_COUNT` is frozen for this pass):
+/// (a) 4 key spellings (`name:`/`"name":`/`'name':`/`name :`) for both the
+/// job id under `jobs:` and the job's own `name:` key, and (b) job bodies
+/// at 3/6/8-space indent (in addition to the file's native 4-space
+/// convention) — all resolve identically via [`WfDoc::parse`], closing the
+/// `POSITIONAL-ASSUMPTION-AXIS` drift item for this guard by construction.
+fn extract_job_display_name(job: &Job) -> Option<String> {
+    match job.value_of("name") {
+        None => None,
+        Some(Value::Scalar { text, .. }) => Some(text.clone()),
+        Some(Value::Alias) => panic!(
+            "FAIL (S-626-1 Guard A, ADV-P57-LOW-001): job `{}`'s `name:` \
+             value is a YAML alias (`*anchor`) reference. This checker \
+             does not resolve an alias to its `&anchor` definition's value \
+             (see tests/common/wf.rs's module docs, \"Aliases are not \
+             resolved\" — that requires a document-wide anchor table this \
+             codebase deliberately does not build), so it cannot safely \
+             compare the alias against a plain-scalar constant like \
+             \"CI Gate\" without risking a silent miss on the exact \
+             duplicate-check-name collision Guard A exists to catch. \
+             Resolve manually: find this alias's `&anchor` definition \
+             elsewhere in the workflow file and compare its text by hand.",
+            job.id
+        ),
+        Some(Value::Other) => panic!(
+            "FAIL: job `{}`'s `name:` value is a nested mapping or \
+             sequence — not valid GitHub Actions YAML for a job's display \
+             name. Investigate this workflow file directly; this checker \
+             refuses to guess at what GitHub would render for it.",
+            job.id
+        ),
     }
-    None
 }
 
 /// S-626-1 Guard A (DEC-246 §"Sibling-workflow frontier"): branch
@@ -6639,13 +6525,23 @@ fn extract_job_display_name(job_block: &str) -> Option<String> {
 /// This test enumerates every `.github/workflows/*.yml`/`*.yaml` file via
 /// `list_workflow_files` (glob-based, not a hardcoded list — see that
 /// function's doc comment) and asserts that no workflow file OTHER than
-/// `ci.yml` declares a job whose `name:` value, after trimming and
-/// unquoting, equals `CI Gate` case-sensitively (GitHub check names are
-/// case-sensitive).
+/// `ci.yml` declares a job whose resolved `name:` value equals `CI Gate`
+/// case-sensitively (GitHub check names are case-sensitive).
 ///
-/// See the module-level "KNOWN LIMITATION SHARED BY BOTH GUARDS" note above
-/// this section — this test is line-based and shares the round-16
-/// node-property residual like every other pin in this file.
+/// S-CIGATE-3 pass D: `list_job_ids_in_workflow` and
+/// `extract_job_display_name` are both now backed by a single
+/// `WfDoc::parse` of `content` per file (see their own doc comments) —
+/// this test's own "two extractors disagree about job existence" defensive
+/// check below is accordingly reframed from "two structurally different
+/// extractors" to "two independent parses of identical content", which is
+/// a much stronger invariant (a real parser is deterministic on fixed
+/// input) but kept as cheap insurance against a bug in this file's own
+/// bookkeeping rather than removed outright.
+///
+/// See the module-level "KNOWN LIMITATION" note above this section — that
+/// note now documents the split between Guard A (this test, migrated,
+/// closed by construction) and Guard B (matrix staticity, still
+/// line-based, unaffected by this pass).
 #[test]
 fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
     for path in list_workflow_files() {
@@ -6654,34 +6550,38 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
         }
 
         let content = read_workflow_file(&path);
-        for job_id in list_job_ids_in_workflow(&content, &path) {
-            // S-626-1 pass-55, ADV-P55-MED-001: `list_job_ids_in_workflow`
-            // detected `job_id` under `jobs:`, but `extract_job_block`
-            // could not anchor to it — its needle requires an EXACT
-            // `  {job_id}:\n` line with no trailing comment (e.g. a
-            // legitimate `  gate:  # comment` job-key spelling, the exact
-            // shape `extract_job_block`'s own doc comment cites as its
-            // motivating example). Two extractors in this file
-            // disagreeing about whether a job exists is a precondition
-            // violation this check refuses to silently paper over by
-            // skipping the job — that silent skip is exactly how a job
-            // spelled with a `name: CI Gate` and a trailing-comment job
-            // key would escape Guard A entirely.
-            let Some(job_block) = extract_job_block(&content, &job_id) else {
+        let job_ids = list_job_ids_in_workflow(&content, &path);
+        let doc = WfDoc::parse(&content);
+
+        for job_id in &job_ids {
+            // S-626-1 pass-55, ADV-P55-MED-001 (reframed, S-CIGATE-3 pass
+            // D): `list_job_ids_in_workflow` detected `job_id` under
+            // `jobs:` via its own `WfDoc::parse(content)` call; this
+            // second, independent `WfDoc::parse(&content)` over the exact
+            // same string must therefore also contain a `Job` with this
+            // id — a real parser is deterministic, so this is a
+            // same-process, same-input invariant, not a coincidence
+            // between two different algorithms the way it was pre-rewrite.
+            // Kept as a defensive check (cheap, and it would be the first
+            // signal of a genuine bug in this file's own bookkeeping —
+            // e.g. `content` mutating between the two calls) rather than
+            // removed as "now unreachable in practice".
+            let Some(job) = doc.jobs.iter().find(|j| &j.id == job_id) else {
                 panic!(
-                    "FAIL (S-626-1 Guard A, ADV-P55-MED-001): {} — \
-                     `list_job_ids_in_workflow` detected job id `{job_id}` \
-                     under `jobs:`, but `extract_job_block` could not \
-                     anchor to it. This checker refuses to silently skip \
-                     a job two of its own extractors disagree about the \
-                     existence of — investigate the job-key line's exact \
-                     spelling (a trailing comment, quoting, or unusual \
-                     whitespace are the likely causes) rather than treat \
-                     this as \"nothing to check\".",
+                    "FAIL (S-626-1 Guard A, ADV-P55-MED-001, reframed \
+                     S-CIGATE-3 pass D): {} — `list_job_ids_in_workflow` \
+                     detected job id `{job_id}` under `jobs:`, but a fresh \
+                     `WfDoc::parse` of the SAME `content` string has no \
+                     matching job. Two parses of identical content \
+                     disagreeing indicates a bug in this test file's own \
+                     bookkeeping (e.g. `content` was mutated between the \
+                     two calls) — investigate this checker, not the \
+                     workflow file, before treating this as \"nothing to \
+                     check\".",
                     path.display()
                 );
             };
-            if extract_job_display_name(job_block).as_deref() == Some("CI Gate") {
+            if extract_job_display_name(job).as_deref() == Some("CI Gate") {
                 panic!(
                     "FAIL (S-626-1 Guard A, DEC-246 Sibling-workflow frontier): \
                      {} declares job `{job_id}` with `name: CI Gate` — the SAME \
