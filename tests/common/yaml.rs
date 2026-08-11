@@ -60,14 +60,24 @@
 ///   tell a job named e.g. `push` apart from an unrelated `on.push` trigger
 ///   key living under a different parent — to a real parser, two mapping
 ///   keys with the same text under DIFFERENT parents were never a
-///   collision, so there is nothing left to disambiguate. A genuine
-///   duplicate job id (two `jobs:` entries with the same key — itself
-///   invalid YAML, which GitHub Actions and `actionlint` both reject at
-///   parse time) is no longer specially detected here either: `WfDoc::parse`
-///   surfaces duplicate keys as separate events rather than collapsing them
-///   (see `tests/common/wf.rs` module docs), and this function takes the
-///   FIRST matching `Job` in source order. No caller in this codebase
-///   currently constructs — or depends on detecting — a duplicate job id.
+///   collision, so there is nothing left to disambiguate.
+/// - **A genuine duplicate job id (two `jobs:` entries with the same key)
+///   now panics loudly, one layer up in [`crate::common::wf::WfDoc::parse`]
+///   itself (S-CIGATE-3 fix-burst-4, ADV-SC3-P2-MED-002), not silently here.**
+///   `WfDoc::parse` surfaces duplicate keys as separate events rather than
+///   collapsing them (see `tests/common/wf.rs` module docs), and asserts
+///   the `jobs:` mapping's own entries contain no duplicate key (via
+///   `assert_no_duplicate_keys`) before this function's `.iter().find(...)`
+///   ever runs — so by the time this function's FIRST-match selection
+///   executes, `doc.jobs` is already guaranteed to contain at most one
+///   entry per job id; the `.find` here is a plain lookup on an
+///   already-deduplicated list, not a silent tie-breaker. This closes a
+///   real, verified bypass: a decoy second `ci-gate:` block appended after
+///   the real one (same job id, inert `steps:`) previously passed every
+///   pin in `tests/ci_gate_completeness.rs` untouched, because this
+///   function's `.find` picked the FIRST (real) block and nothing in this
+///   module's pre-fix-burst-4 call graph ever inspected whether a second
+///   one existed.
 /// - **A real, if currently unobservable, correctness improvement:** the old
 ///   scanner's end-of-block detection stopped at the first
 ///   `\n  <word>:`-shaped line, so a 2-space-indented line INSIDE a block

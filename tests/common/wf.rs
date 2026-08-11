@@ -305,6 +305,7 @@ impl WfDoc {
         if let Some(jobs_entry) = find_unique_entry(&root_entries, "jobs", "WfDoc::parse") {
             if matches!(events[jobs_entry.value_start].0, Event::MappingStart(..)) {
                 let (job_entries, _) = read_mapping(&events, jobs_entry.value_start);
+                assert_no_duplicate_keys(&job_entries, "WfDoc::parse (jobs:)");
                 let job_count = job_entries.len();
                 for (idx, entry) in job_entries.iter().enumerate() {
                     let start_byte = byte_of(line_start_char_idx(&entry.key_span));
@@ -368,8 +369,9 @@ fn line_start_char_idx(span: &Span) -> usize {
 }
 
 /// Assert that `events` — collected from ONE `Parser::new_from_str` call —
-/// represents EXACTLY one YAML document, i.e. exactly one
-/// `Event::DocumentStart`. Panics, naming the actual count, otherwise.
+/// represents AT MOST one YAML document, i.e. zero or one
+/// `Event::DocumentStart`. Panics, naming the actual count, if there is
+/// MORE than one.
 ///
 /// # Why this exists (S-CIGATE-3 fix-burst-3, ADV-SC3-P1-LOW-001)
 ///
@@ -394,14 +396,33 @@ fn line_start_char_idx(span: &Span) -> usize {
 /// immediately after collecting the event stream — before any structural
 /// lookup runs — so a multi-document stream fails loudly and immediately
 /// rather than silently proceeding against document 1 alone.
+///
+/// # Zero documents is not a bug (S-CIGATE-3 fix-burst-4, ADV-SC3-P2-LOW-001)
+///
+/// A comment-only or whitespace-only YAML stream produces `StreamStart,
+/// StreamEnd` with ZERO `Event::DocumentStart` events — this is
+/// well-formed YAML, not malformed input, and [`WfDoc::parse`]'s own doc
+/// comment already documents the empty-root case as "[n]ot a
+/// malformed-YAML case — just an empty result". The original version of
+/// this function asserted `doc_start_count == 1` exactly, so a
+/// comment-only stream panicked here with a message blaming a
+/// `---`-separated multi-document stream — the opposite of what actually
+/// happened, and a real contradiction with `WfDoc::parse`'s own contract.
+/// The check is therefore an upper bound (`<= 1`), not an equality: every
+/// caller of this function already handles the "no top-level mapping"
+/// case correctly on its own path (an `Option`-returning `?` early-return,
+/// or — for [`WfDoc::parse_single_job`] specifically — its own
+/// purpose-built "job_block has no top-level mapping at all" panic with an
+/// accurate message), so there is nothing left for THIS function to reject
+/// once the "more than one document" case is ruled out.
 fn assert_single_document(events: &[(Event<'_>, Span)], caller: &str) {
     let doc_start_count = events
         .iter()
         .filter(|(ev, _)| matches!(ev, Event::DocumentStart(..)))
         .count();
-    assert_eq!(
-        doc_start_count, 1,
-        "wf.rs: {caller}: expected exactly one YAML document in the parsed \
+    assert!(
+        doc_start_count <= 1,
+        "wf.rs: {caller}: expected at most one YAML document in the parsed \
          stream, found {doc_start_count} — a multi-document stream \
          (`---`-separated) is not supported by this module: every \
          structural lookup built on this event list would silently see \
@@ -426,14 +447,38 @@ fn assert_single_document(events: &[(Event<'_>, Span)], caller: &str) {
 /// `parse_needs_set`, `extract_and_normalize_sole_needs_line`,
 /// `extract_and_normalize_sole_needs_json_line`) already refuse to do for
 /// a SCALAR value's key. This function gives every MAPPING-CHILD lookup in
-/// this module the same refusal, mirroring their exact wording. Verified
-/// bypass this closes: a second root-level `env:` block appended to
-/// `ci.yml` (containing e.g. a smuggled `BASH_ENV`) was silently invisible
-/// to `extract_workflow_env_key_set` (via `root_level_nested_keys` →
+/// this module the same refusal. Verified bypass this closes: a second
+/// root-level `env:` block appended to `ci.yml` (containing e.g. a
+/// smuggled `BASH_ENV`) was silently invisible to
+/// `extract_workflow_env_key_set` (via `root_level_nested_keys` →
 /// `descend_as_mappings`), because the un-fixed `.find` picked the FIRST
 /// `env:` and never looked at the second; the same shape applied to a
 /// duplicate root `jobs:` key hiding an entire second job map from
 /// [`WfDoc::parse`].
+///
+/// # Coverage correction (S-CIGATE-3 fix-burst-4, ADV-SC3-P2-MED-001)
+///
+/// The paragraph above was true in INTENT from the moment this function
+/// was added, but NOT in fact until this pass: fix-burst-3 wired only TWO
+/// call sites through this function ([`WfDoc::parse`]'s `jobs:` lookup and
+/// [`descend_as_mappings`]'s per-segment walk) while leaving TWELVE other
+/// `entries.iter().find(|e| e.key == ...)` sites in this same module doing
+/// the exact silent-first-match thing this function exists to refuse —
+/// including, concretely, `first_step_mapping_child_value`'s `with:`/`env:`
+/// lookups, which meant a duplicated `toolchain:` or `RUSTUP_TOOLCHAIN:`
+/// key inside the `msrv` job's own YAML could resolve to its FIRST
+/// occurrence with no panic at all — verbatim the S-626-1 MSRV false-green
+/// this whole module exists to prevent, reopened one layer down. Every
+/// mapping-child lookup in this module — [`extract_steps`], [`build_step`],
+/// [`job_level_value_span`], [`step_mapping_child_keys`],
+/// [`step_mapping_child_value`], [`job_level_nested_value`],
+/// [`job_level_nested_sequence_items`], and
+/// [`first_step_mapping_child_value`], in addition to the original two —
+/// now routes through this function; grep for `.find(|e| e.key` (or
+/// `.find(|e| e\.key` as a regex) in this file returns zero matches as of
+/// this pass. If that grep ever returns a hit again, this doc comment's
+/// coverage claim is false again and the offending site needs the same fix
+/// applied here, not a doc-comment correction alone.
 ///
 /// # Panics
 ///
@@ -641,7 +686,7 @@ fn extract_steps(
     job_body_entries: &[MapEntry],
     table: &[usize],
 ) -> Vec<Step> {
-    let Some(steps_entry) = job_body_entries.iter().find(|e| e.key == "steps") else {
+    let Some(steps_entry) = find_unique_entry(job_body_entries, "steps", "extract_steps") else {
         return Vec::new();
     };
     if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
@@ -710,7 +755,7 @@ fn build_step(
         .iter()
         .map(|e| resolve_value(events, e.value_start))
         .collect();
-    let name = entries.iter().find(|e| e.key == "name").and_then(|e| {
+    let name = find_unique_entry(&entries, "name", "build_step").and_then(|e| {
         if let Event::Scalar(text, ..) = &events[e.value_start].0 {
             Some(text.to_string())
         } else {
@@ -772,14 +817,39 @@ pub struct KeyNodeProperty {
 /// sees regardless of the anchor, so a pinned set that doesn't expect
 /// `"shell"` there fails to match by ITS OWN TEXT alone, no node-property
 /// awareness required. What a plain `Vec<String>` key-set comparison CANNOT
-/// see is a node property attached to a key that is ALREADY a legitimate,
+/// see is a node property attached to a KEY that is ALREADY a legitimate,
 /// expected member of the pinned set — e.g. `&x run: some-other-command`:
 /// the key set stays exactly `{"env","name","run"}`, textually identical to
-/// the pin, while the value has silently gained an anchor a later alias
-/// elsewhere in the same document (GitHub shipped anchor/alias support to
-/// production Actions 2025-09-18) could reference. This function closes
-/// that residual gap by scanning for the node property itself, independent
-/// of whether the key's SET membership also happens to be correct.
+/// the pin, while the *key* scalar `run` has silently gained an anchor a
+/// later alias elsewhere in the same document (GitHub shipped anchor/alias
+/// support to production Actions 2025-09-18) could reference. This
+/// function closes that residual gap by scanning for the node property
+/// itself, independent of whether the key's SET membership also happens to
+/// be correct.
+///
+/// # Scope correction (S-CIGATE-3 fix-burst-4, ADV-SC3-P2-LOW-004): KEY
+/// anchors and tags only, not VALUE anchors
+///
+/// In `&x run: some-other-command`, `&x` attaches to the KEY node `run`
+/// (YAML node properties bind to the node immediately following them —
+/// here that's the key scalar, not the value scalar), which is exactly
+/// what [`MapEntry::key_has_anchor`]/`key_tag` capture and this function
+/// scans for. A DIFFERENT construct — `run: &x some-other-command`, an
+/// anchor on the VALUE — is NOT covered by this function, nor by anything
+/// else in this module: [`resolve_value`] deliberately captures a value
+/// scalar's `tag` (see [`Value::Scalar::tag`]) but discards its
+/// `anchor_id` entirely, so a VALUE-side anchor on an already-pinned
+/// scalar (e.g. `run: &x cargo check --all-features --locked`) is
+/// currently invisible to every byte-pin assertion in
+/// `tests/ci_gate_completeness.rs` that reads a `Value::Scalar`'s `text`/
+/// `style`/`tag` — an anchor alone does not change the resolved `text` a
+/// pin compares against, and a later `*x` alias appearing in a PINNED
+/// slot is independently hard-rejected as `Value::Alias` by every pin
+/// function's own match arms, but this is a real, if currently
+/// unexploited, asymmetry between what this doc comment's KEY-anchor
+/// guarantee implies and what the VALUE side actually has. Not fixed in
+/// this pass — see `ADV-SC3-P2-LOW-004` for the full analysis of why no
+/// live exploit was constructible from this gap alone.
 ///
 /// # Panics
 ///
@@ -980,7 +1050,7 @@ pub fn job_level_value_span(job_block: &str, key: &str) -> Option<Range<usize>> 
     }
     let (body_entries, _) = read_mapping(&events, entry.value_start);
 
-    let target = body_entries.iter().find(|e| e.key == key)?;
+    let target = find_unique_entry(&body_entries, key, "job_level_value_span")?;
     match &events[target.value_start].0 {
         Event::MappingStart(..) | Event::SequenceStart(..) => {
             let value_end = skip_node(&events, target.value_start);
@@ -1030,7 +1100,7 @@ pub fn step_mapping_child_keys(
         return None;
     }
     let (body_entries, _) = read_mapping(&events, entry.value_start);
-    let steps_entry = body_entries.iter().find(|e| e.key == "steps")?;
+    let steps_entry = find_unique_entry(&body_entries, "steps", "step_mapping_child_keys")?;
     if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
         return None;
     }
@@ -1044,7 +1114,7 @@ pub fn step_mapping_child_keys(
         if !step_entries.iter().any(|e| e.key == step_anchor_key) {
             continue;
         }
-        let target = step_entries.iter().find(|e| e.key == key)?;
+        let target = find_unique_entry(&step_entries, key, "step_mapping_child_keys")?;
         if !matches!(events[target.value_start].0, Event::MappingStart(..)) {
             return None;
         }
@@ -1091,7 +1161,7 @@ pub fn step_mapping_child_value(
         return None;
     }
     let (body_entries, _) = read_mapping(&events, entry.value_start);
-    let steps_entry = body_entries.iter().find(|e| e.key == "steps")?;
+    let steps_entry = find_unique_entry(&body_entries, "steps", "step_mapping_child_value")?;
     if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
         return None;
     }
@@ -1105,12 +1175,13 @@ pub fn step_mapping_child_value(
         if !step_entries.iter().any(|e| e.key == step_anchor_key) {
             continue;
         }
-        let mapping_entry = step_entries.iter().find(|e| e.key == mapping_key)?;
+        let mapping_entry =
+            find_unique_entry(&step_entries, mapping_key, "step_mapping_child_value")?;
         if !matches!(events[mapping_entry.value_start].0, Event::MappingStart(..)) {
             return None;
         }
         let (child_entries, _) = read_mapping(&events, mapping_entry.value_start);
-        let child = child_entries.iter().find(|e| e.key == child_key)?;
+        let child = find_unique_entry(&child_entries, child_key, "step_mapping_child_value")?;
         return Some(resolve_value(&events, child.value_start));
     }
     None
@@ -1229,7 +1300,7 @@ pub fn job_level_nested_value(job_block: &str, path: &[&str]) -> Option<Value> {
     let body = job_body_entries(&events)?;
     let (prefix, last) = path.split_at(path.len() - 1);
     let entries = descend_as_mappings(&events, body, prefix)?;
-    let target = entries.iter().find(|e| e.key == last[0])?;
+    let target = find_unique_entry(&entries, last[0], "job_level_nested_value")?;
     Some(resolve_value(&events, target.value_start))
 }
 
@@ -1298,7 +1369,7 @@ pub fn job_level_nested_sequence_items(job_block: &str, path: &[&str]) -> Option
     let body = job_body_entries(&events)?;
     let (prefix, last) = path.split_at(path.len() - 1);
     let entries = descend_as_mappings(&events, body, prefix)?;
-    let target = entries.iter().find(|e| e.key == last[0])?;
+    let target = find_unique_entry(&entries, last[0], "job_level_nested_sequence_items")?;
     if !matches!(events[target.value_start].0, Event::SequenceStart(..)) {
         return None;
     }
@@ -1366,7 +1437,7 @@ pub fn first_step_mapping_child_value(
         return None;
     }
     let (body_entries, _) = read_mapping(&events, entry.value_start);
-    let steps_entry = body_entries.iter().find(|e| e.key == "steps")?;
+    let steps_entry = find_unique_entry(&body_entries, "steps", "first_step_mapping_child_value")?;
     if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
         return None;
     }
@@ -1377,14 +1448,18 @@ pub fn first_step_mapping_child_value(
             continue;
         }
         let (step_entries, _) = read_mapping(&events, item_start);
-        let Some(mapping_entry) = step_entries.iter().find(|e| e.key == mapping_key) else {
+        let Some(mapping_entry) =
+            find_unique_entry(&step_entries, mapping_key, "first_step_mapping_child_value")
+        else {
             continue;
         };
         if !matches!(events[mapping_entry.value_start].0, Event::MappingStart(..)) {
             continue;
         }
         let (child_entries, _) = read_mapping(&events, mapping_entry.value_start);
-        let Some(child) = child_entries.iter().find(|e| e.key == child_key) else {
+        let Some(child) =
+            find_unique_entry(&child_entries, child_key, "first_step_mapping_child_value")
+        else {
             continue;
         };
         return Some(resolve_value(&events, child.value_start));
@@ -1841,7 +1916,7 @@ mod tests {
     // -----------------------------------------------------------------
 
     #[test]
-    #[should_panic(expected = "expected exactly one YAML document")]
+    #[should_panic(expected = "expected at most one YAML document")]
     fn test_wfdoc_parse_panics_on_second_yaml_document() {
         // The exact malicious fixture from ADV-SC3-P1-LOW-001: a second
         // `---`-separated document smuggling in a workflow-level
@@ -1871,15 +1946,110 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // Zero-document (comment-only / whitespace-only) streams are NOT a
+    // multi-document violation (ADV-SC3-P2-LOW-001). Before the fix,
+    // `assert_single_document`'s `doc_start_count == 1` equality panicked
+    // on a comment-only stream (doc_start_count == 0) with a message
+    // blaming a `---`-separated multi-document stream — the opposite of
+    // what actually happened, and a direct contradiction of
+    // `WfDoc::parse`'s own documented "not malformed, just empty" contract
+    // for a missing top-level mapping.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_wfdoc_parse_accepts_comment_only_stream_as_empty_result() {
+        let yaml = "# just a comment, no content at all\n";
+        let doc = WfDoc::parse(yaml);
+        assert_eq!(doc.root_keys, Vec::<String>::new());
+        assert_eq!(doc.jobs.len(), 0);
+    }
+
+    #[test]
+    fn test_wfdoc_parse_accepts_whitespace_only_stream_as_empty_result() {
+        let doc = WfDoc::parse("   \n\n  \n");
+        assert_eq!(doc.root_keys, Vec::<String>::new());
+        assert_eq!(doc.jobs.len(), 0);
+    }
+
+    #[test]
+    fn test_wfdoc_parse_accepts_empty_string_as_empty_result() {
+        let doc = WfDoc::parse("");
+        assert_eq!(doc.root_keys, Vec::<String>::new());
+        assert_eq!(doc.jobs.len(), 0);
+    }
+
+    // -----------------------------------------------------------------
     // find_key_node_properties single-document guard (shares the
     // assert_single_document plumbing with WfDoc::parse; regression-pin
     // that the guard fires on this entry point too, not just WfDoc::parse)
     // -----------------------------------------------------------------
 
     #[test]
-    #[should_panic(expected = "expected exactly one YAML document")]
+    #[should_panic(expected = "expected at most one YAML document")]
     fn test_find_key_node_properties_panics_on_multi_document_stream() {
         let yaml = "jobs:\n  x:\n    runs-on: ubuntu-latest\n---\nother: 1\n";
         let _ = find_key_node_properties(yaml);
+    }
+
+    // -----------------------------------------------------------------
+    // Fixed-denominator self-check (S-CIGATE-3 fix-burst-4,
+    // ADV-SC3-P2-LOW-005)
+    //
+    // `tests/ci_gate_completeness.rs::EXPECTED_GUARD_TEST_COUNT` (see that
+    // constant's own doc comment) exists because POL-11's `test` job
+    // canary only requires a NON-ZERO passed count from a binary — it
+    // trips on nothing if some number of `#[test]` fns are silently
+    // deleted from a file, as long as at least one remains. Fix burst 3
+    // added 16 tests directly to THIS file (`tests/common/wf.rs`) — the
+    // ONLY regression coverage for `find_unique_entry`,
+    // `assert_no_duplicate_keys`, and `assert_single_document` — and
+    // explicitly exempted them from that counter, since
+    // `include_str!("ci_gate_completeness.rs")` there does not see this
+    // file's own source at all. Because `tests/common/wf.rs` is now the
+    // single choke point every structural guard in
+    // `tests/ci_gate_completeness.rs` parses through, a composite edit
+    // that both weakens a `.find`/assert in this file AND deletes the
+    // test(s) that would have caught it moved NO counter anywhere prior
+    // to this pass — every other file in this story's documented review
+    // scope had a tripwire; this one, despite being the most
+    // security-relevant of the four, did not. This mirrors
+    // `EXPECTED_GUARD_TEST_COUNT`'s own pattern exactly (including its
+    // "counts `#[test]` ATTRIBUTES, not enforcement" limitation — see
+    // that constant's doc comment for the `#[ignore]`/`#[cfg(...)]`
+    // evasions this same-shaped check does not close here either;
+    // extending that enforcement is out of scope for this pass, which
+    // only needed to close the "no counter moves at all" gap).
+    //
+    // UPDATE THIS CONSTANT in the SAME change whenever a `#[test]` fn is
+    // added to or removed from THIS file. A mismatch is a signal to look
+    // at what changed, not something to silence by "fixing" the number
+    // without checking why it moved.
+    const EXPECTED_WF_TEST_COUNT: usize = 20;
+
+    #[test]
+    fn test_wf_rs_test_count_matches_expected_denominator() {
+        let source = include_str!("wf.rs");
+        let actual = source
+            .lines()
+            .filter(|l| l.trim().starts_with("#[test]"))
+            .count();
+        assert_eq!(
+            actual, EXPECTED_WF_TEST_COUNT,
+            "FAIL (S-CIGATE-3 fix-burst-4, ADV-SC3-P2-LOW-005): \
+             tests/common/wf.rs contains {actual} `#[test]` functions, but \
+             EXPECTED_WF_TEST_COUNT pins {EXPECTED_WF_TEST_COUNT}. This \
+             file is the single choke point every structural guard in \
+             tests/ci_gate_completeness.rs parses through, and POL-11's \
+             zero-test-floor canary in `ci.yml :: test` only requires a \
+             NON-ZERO passed count across the whole binary it is compiled \
+             into — it does not know how many tests THIS file is supposed \
+             to contain, so silently deleting tests from here (alongside a \
+             weakened `.find`/assert in the same edit) trips nothing there. \
+             If this mismatch is from a deliberate, reviewed addition or \
+             removal of a `#[test]` fn in this file, update \
+             EXPECTED_WF_TEST_COUNT in the SAME change. If it is not \
+             deliberate, some `#[test]` fn was lost — find out which one \
+             before changing this constant."
+        );
     }
 }

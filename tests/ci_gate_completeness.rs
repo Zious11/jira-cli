@@ -1144,10 +1144,19 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 /// `test_mutants_is_in_ci_gate_needs` test pins that `mutants` remains in
 /// `ci-gate.needs`.
 ///
-/// Job-level `if:` lines are at 4-space indent immediately under the job key
-/// (e.g. `    if: github.event_name == 'pull_request'`).  Step-level `if:`
-/// lines are at 8-space or greater indent (inside `steps:`); those are not
-/// hazardous and are deliberately not checked here.
+/// Job-level `if:` is the job's own DIRECT mapping key (a job-level `if:`
+/// example: `    if: github.event_name == 'pull_request'`, at 4-space
+/// indent in `ci.yml`'s current formatting). Step-level `if:` lives inside
+/// one of the job's `steps:` sequence entries instead; those are not
+/// hazardous and are deliberately not checked here. **Correction
+/// (S-CIGATE-3 pass C):** the distinction below used to be made by INDENT
+/// POSITION (4 spaces vs. 8+) on the theory that job-level and step-level
+/// `if:` lines are reliably distinguishable by column alone in `ci.yml`'s
+/// current formatting; the implementation below no longer does this at
+/// all — see that section's own "S-CIGATE-3 pass C" doc comment for why
+/// tree membership (`Job::keys` vs. `Job::steps[i].keys`) makes indent
+/// position irrelevant, closing the `POSITIONAL-ASSUMPTION-AXIS` drift
+/// item this indent literal used to carry.
 ///
 /// Anchoring: each job's block is extracted via `extract_job_block` before
 /// the assertion is made, so a match in an unrelated job cannot produce a
@@ -1171,9 +1180,18 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 /// detection itself was a bare `line.starts_with("    if:")`, matching
 /// only that one literal spelling and missing `"if":`, `'if':`, and
 /// `if :` (space before colon) — all PyYAML-identical to the bare
-/// spelling. Fixed by routing detection through
-/// `extract_key_name_at_indent`, the same quote/whitespace-aware matcher
-/// used everywhere else in this file.
+/// spelling. Fixed (at the time, S-626-1 pass-55) by routing detection
+/// through `extract_key_name_at_indent`, the same quote/whitespace-aware
+/// matcher used everywhere else in this file at that point. **That
+/// function itself no longer exists.** S-CIGATE-3 pass C superseded this
+/// entire mechanism, not merely patched it further: the implementation
+/// below now resolves a job-level `if:` by TREE MEMBERSHIP
+/// (`WfDoc::parse_single_job` + `Job::keys`), which is immune to key
+/// spelling AND indent position simultaneously, with no line-based matcher
+/// of any kind left in the call path. See that section's own doc comment
+/// (below) for the current mechanism; this paragraph is kept only as a
+/// historical record of the ADV-P55-LOW-001 finding and fix, not as a
+/// description of current behavior.
 #[test]
 fn test_ci_gate_needs_jobs_have_no_job_level_if() {
     let ci = read_ci_yml();
@@ -1276,8 +1294,14 @@ fn test_ci_gate_needs_jobs_have_no_job_level_if() {
 /// skipped silently when needs fail (reopening the skipped-job trap) or the
 /// gate script could stop running on some upstream results.
 ///
-/// Distinction technique: job-level `if:` lines start with exactly 4 spaces
-/// (not 8+) and are not inside a `steps:` block.
+/// Distinction technique (S-CIGATE-3 pass F correction): job-level vs.
+/// step-level `if:` is resolved by TREE MEMBERSHIP, not indent position —
+/// `Job::keys` (via `WfDoc::parse_single_job`, below) contains only the
+/// job's own DIRECT mapping keys, and a step-level `if:` lives inside
+/// `Job::steps[i].keys` instead, a structurally separate field the parser
+/// never conflates with `Job::keys` regardless of how the YAML happens to
+/// be indented in `ci.yml` today. There is no "starts with exactly 4
+/// spaces" indent literal left anywhere in the assertion below.
 #[test]
 fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     let ci = read_ci_yml();
@@ -1685,13 +1709,18 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
         "FAIL (M2-o, PR #671 review round 13): `extract_gate_env_key_set` \
          returned an EMPTY key set for the gate step's `env:` block — \
          either the block is genuinely missing (in which case M2-n above \
-         should already have failed on a missing `NEEDS_JSON:` line), this \
-         function's anchoring logic failed to find it, or (PR #671 review \
-         round 14 SUGGESTION) `env:` was legally reordered to AFTER \
-         `run:` on this step — this function only scans BACKWARD from \
-         `run:`, so a legal-but-reordered `env:` looks identical to a \
-         missing one from here. An empty result here must never be \
-         silently treated as \"no env vars to worry about\".\n\
+         should already have failed on a missing `NEEDS_JSON:` line) or \
+         no step in this job block has BOTH a `run:` key and an `env:` key \
+         (see `step_mapping_child_keys`'s own doc comment for its exact \
+         `None`-vs-empty-`Vec` contract). Unlike the pre-S-CIGATE-3 \
+         version of this function (PR #671 review round 14 SUGGESTION), \
+         this is NOT an order-sensitivity bug: `extract_gate_env_key_set` \
+         is rewritten on `step_mapping_child_keys`, which finds `env:` by \
+         TREE MEMBERSHIP within the run-bearing step's own mapping — a \
+         legal `env:`-after-`run:` reorder on that same step resolves \
+         identically to `env:`-before-`run:`, so reordering is ruled out \
+         as a cause of an empty result here. An empty result here must \
+         never be silently treated as \"no env vars to worry about\".\n\
          Current ci-gate block:\n{gate_block}"
     );
     assert_eq!(
@@ -1759,15 +1788,25 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     // that is ALREADY a legitimate, expected member of a pinned set — e.g.
     // `&x run: some-other-command`: the key set stays exactly
     // `{"env","name","run"}`, textually identical to the pin, while the
-    // VALUE has silently gained an anchor a later `*alias` elsewhere in
-    // the same document (GitHub shipped anchor/alias support to production
-    // Actions 2025-09-18 — a live mechanism, not hypothetical) could
-    // reference. `find_key_node_properties` closes that residual by
-    // scanning for the node property itself, independent of whether SET
-    // membership also happens to be correct — this is the "Additionally
-    // reject any anchor or tag on a pinned key" requirement, applied once
-    // here for the whole `ci-gate` tree rather than duplicated into every
-    // individual pin function above.
+    // KEY scalar `run` has silently gained an anchor (node properties bind
+    // to the node immediately following them — here, the key, not the
+    // value) a later `*alias` elsewhere in the same document (GitHub
+    // shipped anchor/alias support to production Actions 2025-09-18 — a
+    // live mechanism, not hypothetical) could reference.
+    // `find_key_node_properties` closes that residual by scanning for the
+    // node property itself, independent of whether SET membership also
+    // happens to be correct — this is the "Additionally reject any anchor
+    // or tag on a pinned key" requirement, applied once here for the whole
+    // `ci-gate` tree rather than duplicated into every individual pin
+    // function above.
+    //
+    // Scope (S-CIGATE-3 fix-burst-4, ADV-SC3-P2-LOW-004): this covers
+    // node properties on KEYS only, matching `find_key_node_properties`'s
+    // own name and doc comment. A node property on a pinned scalar's VALUE
+    // instead (`run: &x cargo check --all-features --locked`) is a
+    // DIFFERENT construct this assertion does not scan for — see that
+    // function's doc comment for the full analysis of why this residual
+    // exists and why no live exploit was constructible from it alone.
     // -----------------------------------------------------------------------
     let node_properties = common::wf::find_key_node_properties(gate_block);
     let node_property_count = node_properties.len();
@@ -3228,10 +3267,23 @@ fn test_ci_yml_workflow_root_key_set_is_pinned() {
          PINNED_WORKFLOW_ROOT_KEYS in the SAME change. Note: `root_keys` \
          is deliberately NOT deduplicated (see `WfDoc::root_keys`'s own \
          doc comment) — a genuinely DUPLICATED root key (e.g. two \
-         `env:` blocks) is caught separately, by `descend_as_mappings`'s \
-         duplicate-key panic in `tests/common/wf.rs`, not by this \
-         equality check, which would otherwise just see the same key \
-         name twice with no signal anything is wrong."
+         `env:` blocks) is in fact ALSO caught by THIS equality check \
+         itself: `actual_root_keys` is a `Vec<String>`, so a duplicate \
+         key lengthens it by one entry relative to `expected` (the \
+         pinned, unique-by-construction list), and `assert_eq!` on two \
+         `Vec`s of different length fails on that length mismatch alone \
+         — there is no length-blind path here that would let a duplicate \
+         silently collapse into \"the same key name twice with no \
+         signal\". Separately, and independently of this test, a \
+         specific duplicated root key that some OTHER guard descends \
+         into by name (e.g. `env:`, via `root_level_nested_keys` in \
+         `test_ci_yml_workflow_level_env_key_set_is_pinned`) is also \
+         caught there, via `descend_as_mappings`'s duplicate-key panic in \
+         `tests/common/wf.rs` — that is an ADDITIONAL, more specific \
+         catcher for that one key, not the exclusive mechanism, and it \
+         does not cover a duplicated root key nothing else descends into \
+         (e.g. two `on:` blocks), which only this test's own length-\
+         mismatch failure would catch."
     );
 }
 
