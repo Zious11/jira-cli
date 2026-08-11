@@ -1263,51 +1263,57 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     // Assertion 1: The job-level `if:` contains `always()` and does NOT
     // contain `contains(needs`.
     //
-    // "Job-level" means the `if:` key is a direct child of the job block,
-    // indented 4 spaces from the left margin (GitHub Actions YAML
-    // convention) — detected via `extract_key_name_at_indent`, the same
-    // quote/whitespace-aware matcher used throughout this file, rather
-    // than a raw `line.starts_with("    if:")`.
+    // "Job-level" means the `if:` key is a direct child of the job's own
+    // mapping — resolved by TREE MEMBERSHIP via `WfDoc::parse_single_job`
+    // (event-stream backed), not a re-derived indent-column literal.
     //
-    // S-626-1 pass-59 (ADV-P58-LOW-003): the prior manual scan (a
-    // hand-rolled `in_steps` flag plus `line.starts_with("    if:")`) was
-    // absence-shaped and fail-open two ways: (1) a quoted key spelling
-    // (`"if":`/`'if':`) or `if :` (space before colon) — all forms
-    // `extract_key_name_at_indent` already recognizes elsewhere in this
-    // file — made this scan report "no job-level `if:` line" even though
-    // one plainly exists: a MISDIAGNOSIS, since M2-m below (which already
-    // routes through `extract_and_normalize_if_expr`'s quote-aware
-    // detection) would have found and evaluated it correctly, but M2-a
-    // fires FIRST and its wrong diagnosis masked M2-m's accurate one
-    // before this test could ever reach it; (2) the `in_steps` bookkeeping
-    // was needed only because a raw `starts_with` has no notion of indent
-    // depth on its own — an exact-indent matcher removes the need for it
-    // entirely, since a step-level `if:` (8-space indent) never satisfies
-    // `extract_key_name_at_indent(line, 4)` regardless of whether the scan
-    // has "entered steps:" yet.
+    // # S-CIGATE-3 pass F (FINAL): rewritten on `WfDoc::parse_single_job`
+    //
+    // The pre-parser version anchored on `extract_key_name_at_indent(line,
+    // 4)` — a hard-coded job-child indent (`POSITIONAL-ASSUMPTION-AXIS`):
+    // a job whose own direct children are legally indented 3, 6, or 8
+    // spaces instead of 4 was invisible to that scan. `Job::keys` closes
+    // this by construction: a job's direct children are found by tree
+    // membership under its own mapping, not indent arithmetic, so no
+    // indent literal is left to hard-code at all. Also carries forward
+    // every guarantee the pre-parser fix (S-626-1 pass-59, ADV-P58-LOW-003)
+    // already established for the spelling axis — `if:`/`"if":`/`'if':`/
+    // `if :` all resolve to the identical key text under a real parser —
+    // and adds immunity to a node property directly on the key (`&x if:` /
+    // `!!str if:`, the round-16 residual) that `extract_key_name_at_indent`
+    // never had: `read_mapping` resolves a key's TEXT from its
+    // `Event::Scalar`, independent of any anchor/tag riding along on it.
+    // The old `in_steps` bookkeeping problem (a raw `starts_with` has no
+    // notion of indent depth on its own, so it needed separate tracking of
+    // "have we entered `steps:` yet" to avoid confusing a step-level `if:`
+    // for a job-level one) is moot here too: a step-level `if:` lives in
+    // `Job::steps[i].keys`, never in `Job::keys`, so the two can never be
+    // conflated regardless of scan order.
     // -----------------------------------------------------------------------
-    let job_if_line = gate_block
-        .lines()
-        .find(|l| extract_key_name_at_indent(l, 4).as_deref() == Some("if"));
+    let job = WfDoc::parse_single_job(gate_block);
+    let has_job_level_if = job.keys.iter().any(|k| k == "if");
 
     assert!(
-        job_if_line.is_some(),
-        "FAIL (M2-a): The `ci-gate` job block has no job-level `if:` key \
-         at 4-space indent (checked via the same quote/whitespace-aware \
-         matcher used throughout this file — `if:`, `\"if\":`, `'if':`, \
-         and `if :` are all recognized, so this is not merely a bare-\
+        has_job_level_if,
+        "FAIL (M2-a): The `ci-gate` job has no job-level `if:` key \
+         (resolved by tree membership under the job's own mapping — immune \
+         to both key-spelling and indent variance, not merely a bare-\
          spelling presence check).\n\
          Required: `    if: ${{{{ always() }}}}` so that ci-gate runs even when \
          upstream jobs fail.\n\
          Current ci-gate block:\n{gate_block}"
     );
-    let job_if_line = job_if_line.unwrap_or_default();
+
+    let job_if_text = match job.value_of("if") {
+        Some(Value::Scalar { text, .. }) => text.clone(),
+        _ => String::new(),
+    };
 
     assert!(
-        job_if_line.contains("always()"),
+        job_if_text.contains("always()"),
         "FAIL (M2-b): The job-level `if:` in `ci-gate` does not contain \
          `always()`.\n\
-         Found:    {job_if_line}\n\
+         Found:    if: {job_if_text}\n\
          Required: the job-level `if:` must be `always()` so the aggregator \
          runs regardless of upstream results (without this, a failed upstream \
          skips ci-gate and GitHub branch protection evaluates the skip as \
@@ -1316,11 +1322,11 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     );
 
     assert!(
-        !job_if_line.contains("contains(needs"),
+        !job_if_text.contains("contains(needs"),
         "FAIL (M2-c): The job-level `if:` in `ci-gate` contains \
          `contains(needs` — this is the retired inline condition \
          S-CIGATE-2 replaced, not merely a misplaced one.\n\
-         Found:    {job_if_line}\n\
+         Found:    if: {job_if_text}\n\
          Under the shipped fail-closed design, the pass/fail decision does \
          NOT live in any `if:` expression at all — not job-level, and \
          (per M2-d below) not step-level either. It lives entirely inside \
@@ -1348,30 +1354,29 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     // `if:` here would mean some upstream results no longer even reach the
     // script.
     //
-    // S-626-1 pass-59 (ADV-P58-LOW-003): routed through
-    // `extract_key_name_at_indent(l, 8)` rather than a raw
-    // `l.starts_with("        if:")`, for the same quote-awareness reason
-    // as M2-a above (`"if":`/`'if':`/`if :` are all recognized).
+    // # S-CIGATE-3 pass F (FINAL): rewritten on `WfDoc::parse_single_job`/
+    // `Step::keys`
+    //
+    // Same closure as M2-a above, one level deeper: `Job::steps` is built
+    // by walking `steps:`'s sequence directly (tree membership), so this
+    // check is immune to both the spelling and indent axes, and to a node
+    // property on a step's own `if:` key, for the same reasons M2-a is.
     // -----------------------------------------------------------------------
-    let has_step_level_if = gate_block
-        .lines()
-        .any(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("if"));
+    let has_step_level_if = job.steps.iter().any(|s| s.keys.iter().any(|k| k == "if"));
 
     assert!(
         !has_step_level_if,
-        "FAIL (M2-d, S-CIGATE-2): The `ci-gate` job block contains a \
-         step-level `if:` key at 8-space indent (checked via the same \
-         quote/whitespace-aware matcher used throughout this file). Under \
-         Option C, `scripts/check-ci-gate.sh` is invoked unconditionally \
-         and its own exit code IS the pass/fail signal — no step-level \
-         `if:` should gate that invocation (a reintroduced `if:` here \
-         would mean some upstream results never even reach the script). \
+        "FAIL (M2-d, S-CIGATE-2): The `ci-gate` job contains a step-level \
+         `if:` key (resolved by tree membership under `Job::steps` — \
+         immune to both key-spelling and indent variance). Under Option C, \
+         `scripts/check-ci-gate.sh` is invoked unconditionally and its own \
+         exit code IS the pass/fail signal — no step-level `if:` should \
+         gate that invocation (a reintroduced `if:` here would mean some \
+         upstream results never even reach the script). \
          NOTE: M2-l below (the per-step COMPLETE key-set pin,\
          `PINNED_GATE_STEP_KEY_SETS`) is the OPERATIVE default-deny for a \
-         step-level `if:` in ANY form — even a spelling this presence \
-         check does not recognize would still surface there as an \
-         unexpected `if` key on that step; this assertion is a faster, \
-         more specific diagnostic, not the sole backstop.\n\
+         step-level `if:` in ANY form; this assertion is a faster, more \
+         specific diagnostic, not the sole backstop.\n\
          Current ci-gate block:\n{gate_block}"
     );
 
@@ -3071,18 +3076,35 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
 /// {{0}}"}}}}`, a single added line, `actionlint`-clean), quoted
 /// (`"defaults":`), a trailing comment, and a trailing space all left
 /// this exact-equality check blind (15/15 green) while adding the exact
-/// same workflow-level override. Fixed by reusing
+/// same workflow-level override. Fixed (round 12) by reusing
 /// `extract_key_name_at_indent(l, 0)` — the same quote/whitespace-aware
-/// key matcher round 11 already built for job/step-level key sets,
-/// applied here at indent 0 for the workflow's own top-level keys. This
-/// was available in the SAME commit that introduced the exact-equality
-/// form; the new check was written with `==` instead of calling it.
+/// key matcher round 11 already built for job/step-level key sets.
+///
+/// # S-CIGATE-3 pass F (FINAL): rewritten on `WfDoc::parse`'s `root_keys`
+///
+/// `WfDoc::root_keys` (event-stream backed — the document root mapping's
+/// own direct key names, resolved by tree membership) closes the
+/// `POSITIONAL-ASSUMPTION-AXIS` drift item for this guard the same way
+/// `Job::keys` closed it for every job-scoped guard: there is no indent
+/// literal left to hard-code at all (the pre-parser fix above was already
+/// indent-0-correct for THIS file's own convention, but "indent 0" is
+/// itself still a position assumption a re-derived line scan could get
+/// wrong for a hypothetical BOM-prefixed or oddly-formatted sibling file —
+/// tree membership has no such assumption to make). Every key spelling
+/// (`defaults:`/`"defaults":`/`'defaults':`/`defaults :`) resolves
+/// identically for the same reason it does everywhere else in this file: a
+/// real YAML parser treats them as the same key regardless of quoting.
+/// `root_keys` is ALSO immune to a node property directly on the key
+/// (`&x defaults:` / `!!str defaults:`, the round-16 residual) for the
+/// same reason `Job::keys`/`Step::keys` are: `read_mapping` resolves a
+/// key's TEXT from its `Event::Scalar`, independent of any anchor/tag
+/// riding along on the same key — `read_ci_yml()`'s line-based reader
+/// (this test's ancestor at round 11/12) had none of these guarantees.
 #[test]
 fn test_ci_yml_has_no_workflow_level_shell_override() {
     let ci = read_ci_yml();
-    let has_top_level_defaults = ci
-        .lines()
-        .any(|l| extract_key_name_at_indent(l, 0).as_deref() == Some("defaults"));
+    let doc = WfDoc::parse(&ci);
+    let has_top_level_defaults = doc.root_keys.iter().any(|k| k == "defaults");
 
     assert!(
         !has_top_level_defaults,
@@ -4720,43 +4742,19 @@ const PINNED_GATE_ENV_KEYS: &[&str] = &["NEEDS_JSON"];
 /// file rather than one gate step.
 const PINNED_WORKFLOW_ENV_KEYS: &[&str] = &["CARGO_TERM_COLOR"];
 
-/// Collect the sorted key set of a mapping block whose children begin at
-/// `child_indent` spaces, starting the scan at `lines[start..]`.
+/// **DELETED (S-CIGATE-3 pass F, FINAL migration pass):** `collect_mapping_
+/// key_set` used to live here — a line-based scanner collecting a mapping
+/// block's children at a hard-coded `child_indent`, with the round-13
+/// comment-skipping fix described in its own now-deleted doc comment. Its
+/// sole real caller, `extract_workflow_env_key_set`, was rewritten on
+/// `common::wf::root_level_nested_keys` (tree-membership-based, no indent
+/// literal, immune to the exact comment-truncation class round 13 fixed
+/// here by hand). Confirmed before deleting: zero remaining callers in this
+/// file. Deleted together with `extract_key_name_at_indent` immediately
+/// below — see that deletion note for the fuller rationale, since the two
+/// primitives were always a matched pair (this function existed only to
+/// apply that one, repeatedly, over a block's children).
 ///
-/// PR #671 review round 13, CRITICAL fix: the round-12 originals here
-/// used `take_while(|l| trimmed.is_empty() || l.starts_with(indent))` —
-/// which TERMINATES (not skips) on the first line that is neither blank
-/// nor at the exact child indent. A YAML COMMENT is such a line, at ANY
-/// indentation (YAML ignores comment indentation entirely — confirmed
-/// via PyYAML), so a comment inserted between `NEEDS_JSON:` and a
-/// smuggled `BASH_ENV:` sibling stopped the scan at the comment, leaving
-/// `BASH_ENV:` (and anything after it) invisible: the extracted set
-/// still equalled the pin, 16/16 green, while PyYAML confirmed the var
-/// was genuinely set. Fixed by treating a comment line as something to
-/// SKIP OVER, never something that ends the block — real YAML semantics,
-/// which don't recognize "comment indentation" as meaningful at all. The
-/// block ends only at a real (non-blank, non-comment) line that is NOT
-/// indented at least `child_indent` spaces — i.e. back at or above the
-/// mapping key's OWN level.
-fn collect_mapping_key_set(lines: &[&str], start: usize, child_indent: usize) -> Vec<String> {
-    let mut keys: Vec<String> = Vec::new();
-    for l in &lines[start..] {
-        let trimmed = l.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let actual_indent = l.len() - trimmed.len();
-        if actual_indent < child_indent {
-            break;
-        }
-        if let Some(k) = extract_key_name_at_indent(l, child_indent) {
-            keys.push(k);
-        }
-    }
-    keys.sort();
-    keys
-}
-
 /// Extract the sorted, complete key set of the gate step's `env:` block for
 /// comparison against `PINNED_GATE_ENV_KEYS`.
 ///
@@ -4788,20 +4786,39 @@ fn extract_gate_env_key_set(job_block: &str) -> Vec<String> {
 }
 
 /// Extract the sorted, complete key set of the WORKFLOW's own top-level
-/// `env:` block (2-space indent) for comparison against
-/// `PINNED_WORKFLOW_ENV_KEYS`. Reads `ci` (the whole file), not a
-/// `job_block` — see `PINNED_WORKFLOW_ENV_KEYS`'s doc comment for why
-/// this construct is outside every job block by construction.
+/// `env:` block for comparison against `PINNED_WORKFLOW_ENV_KEYS`. Reads
+/// `ci` (the whole file), not a `job_block` — see
+/// `PINNED_WORKFLOW_ENV_KEYS`'s doc comment for why this construct is
+/// outside every job block by construction.
+///
+/// # S-CIGATE-3 pass F (FINAL): rewritten on `root_level_nested_keys`
+/// (event-stream backed, `tests/common/wf.rs`)
+///
+/// Mirrors `extract_gate_env_key_set`'s own pass-B rewrite one level up —
+/// document root instead of a step. The pre-parser version anchored on
+/// `extract_key_name_at_indent(l, 0)` to find the workflow's own `env:`
+/// KEY, then `collect_mapping_key_set(&lines, env_line_idx + 1, 2)` to scan
+/// its CHILDREN at a hard-coded 2-space indent — both are line-position
+/// arithmetic, and round 13's CRITICAL (a YAML comment silently truncating
+/// `collect_mapping_key_set`'s scan before reaching a smuggled sibling key)
+/// applied to this exact call site. `root_level_nested_keys(ci, &["env"])`
+/// finds `env:`'s children by tree membership under the document root's
+/// mapping instead: no indent literal to hard-code (closes
+/// `POSITIONAL-ASSUMPTION-AXIS`), no comment-termination bug to reintroduce
+/// (a YAML parser does not treat a comment as a mapping entry in the first
+/// place — there is no "scan" to truncate), and every key spelling
+/// resolves identically regardless of quoting or a node property on the
+/// key.
+///
+/// Returns an empty `Vec` if the workflow has no top-level `env:` key, or
+/// its value is not itself a mapping — `test_ci_yml_workflow_level_env_
+/// key_set_is_pinned`'s own non-empty assertion is still the operative
+/// "this must not be silently treated as nothing to worry about" backstop,
+/// mirroring `extract_gate_env_key_set`'s contract.
 fn extract_workflow_env_key_set(ci: &str) -> Vec<String> {
-    let lines: Vec<&str> = ci.lines().collect();
-    let Some(env_line_idx) = lines
-        .iter()
-        .position(|l| extract_key_name_at_indent(l, 0).as_deref() == Some("env"))
-    else {
-        return Vec::new();
-    };
-
-    collect_mapping_key_set(&lines, env_line_idx + 1, 2)
+    let mut keys = common::wf::root_level_nested_keys(ci, &["env"]).unwrap_or_default();
+    keys.sort();
+    keys
 }
 
 /// Extract and normalize the SOLE `NEEDS_JSON:` env-child line (10-space
@@ -5055,65 +5072,35 @@ fn extract_and_normalize_sole_needs_line(job_block: &str) -> Result<String, Stri
     }
 }
 
-/// Extract the YAML key name `line` declares, if `line` declares a key at
-/// EXACTLY `indent` spaces of indentation.
+/// **DELETED (S-CIGATE-3 pass F, FINAL migration pass):** `extract_key_
+/// name_at_indent` used to live here — the line-based, hand-rolled
+/// quote/whitespace-aware key matcher every hardcoded-indent guard in this
+/// file was built on (round 11's generalization of round 10's
+/// `line_declares_job_level_key`, hardened across rounds 13/14/16 for BOM,
+/// explicit-key syntax, non-LF line breaks, and — never fully closed by
+/// this function itself — YAML node properties on a key). It, and its
+/// sibling `collect_mapping_key_set` (deleted immediately above), were the
+/// two primitives at the ROOT of the entire round-13/14/16 "lexer disagrees
+/// with a real YAML parser" defect class this whole story exists to close
+/// structurally — every prior S-CIGATE-3 pass (B, C, E) migrated one
+/// cluster of callers off this function onto `common::wf`'s event-stream
+/// model; this pass migrated the two remaining clusters (M2-a/M2-d's
+/// job-level/step-level `if:` presence checks, now `Job::keys`/`Step::keys`
+/// membership; the workflow-root `defaults:`/`env:` guards, now
+/// `WfDoc::root_keys`/`root_level_nested_keys`).
 ///
-/// PR #671 review round 11: a generalization of
-/// `line_declares_job_level_key` (round 10, IMPORTANT 2) from "does this
-/// line declare THIS SPECIFIC key" to "what key, if any, does this line
-/// declare" — needed here to build a COMPLETE key set rather than test
-/// membership of one known name. Carries over the same quoting awareness
-/// (bare, double-quoted, single-quoted, arbitrary whitespace before the
-/// colon) for the same reason: a key-set pin that only recognized bare
-/// spellings would be exactly as blind to a quoted key as round 9's
-/// original outputs guard was.
+/// Confirmed before deleting (grepped for every non-comment call site in
+/// this file): zero remaining callers. Every guard this function used to
+/// back is now immune, by tree-membership construction rather than by
+/// enumerated case-handling, to both axes `POSITIONAL-ASSUMPTION-AXIS` and
+/// `RED-PROOF-NEEDS-SPELLING-VARIANTS` named — an indented-differently job
+/// body and a quoted/tagged/anchored key spelling both resolve to the
+/// identical key text under `saphyr-parser`'s real YAML 1.2 parse, with no
+/// indent literal or quote-form enumeration left in this file to get wrong.
+/// `test_this_file_test_count_matches_expected_denominator`'s guard-test
+/// count is unaffected — deleting a helper function is not deleting a
+/// `#[test]`.
 ///
-/// Additionally strips a leading YAML sequence marker (`- `) if present,
-/// so this same function extracts BOTH a step's own first key (e.g. the
-/// `name` in `      - name: Harden the runner`, at 6-space indent) and an
-/// ordinary mapping key (everything else, at whatever indent the caller
-/// requests) — a list item's first key is textually preceded by the `- `
-/// marker but is otherwise a normal key at that nesting level.
-fn extract_key_name_at_indent(line: &str, indent: usize) -> Option<String> {
-    let padding = " ".repeat(indent);
-    let after_indent = line.strip_prefix(padding.as_str())?;
-    if after_indent.starts_with(' ') {
-        return None; // Deeper than `indent`: not a key at this level.
-    }
-    let after_marker = after_indent.strip_prefix("- ").unwrap_or(after_indent);
-
-    for quote in ['"', '\''] {
-        if let Some(rest) = after_marker.strip_prefix(quote) {
-            if let Some(end) = rest.find(quote) {
-                if rest[end + 1..].trim_start().starts_with(':') {
-                    return Some(rest[..end].to_string());
-                }
-            }
-        }
-    }
-
-    // YAML explicit-key syntax: "? <key>" declares a key with the value
-    // appearing on a SEPARATE following line (": <value>"), so there is
-    // no colon to require on this line at all. Without this branch,
-    // `key_end` below lands on the space after "?" and the bare-key
-    // fallback bails (no colon found on the same line), letting a
-    // `? defaults` / `: {run: {shell: "cat {0}"}}` override slip past
-    // undetected (round-13 IMPORTANT 4).
-    if let Some(explicit_key) = after_marker.strip_prefix("? ") {
-        let key = explicit_key.trim();
-        if !key.is_empty() {
-            return Some(key.to_string());
-        }
-    }
-
-    let key_end = after_marker.find(|c: char| c == ':' || c.is_whitespace())?;
-    if after_marker[key_end..].trim_start().starts_with(':') {
-        Some(after_marker[..key_end].to_string())
-    } else {
-        None
-    }
-}
-
 /// Extract the sorted, complete list of job-level key NAMES in
 /// `job_block`.
 ///

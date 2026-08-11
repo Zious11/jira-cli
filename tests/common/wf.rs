@@ -1225,3 +1225,75 @@ pub fn first_step_mapping_child_value(
     }
     None
 }
+
+// ---------------------------------------------------------------------------
+// S-CIGATE-3 pass F additions (FINAL migration pass)
+//
+// Everything below was added for the WORKFLOW-ROOT-scoped guard cluster in
+// `tests/ci_gate_completeness.rs` (`test_ci_yml_has_no_workflow_level_shell_
+// override`, `test_ci_yml_workflow_level_env_key_set_is_pinned`) — the only
+// two guards in that file that read `.github/workflows/ci.yml` at the
+// DOCUMENT ROOT rather than inside any job block, because the constructs
+// they guard (a top-level `defaults:` override, the workflow's own
+// top-level `env:` block) are siblings of `jobs:` itself and therefore
+// invisible to every job-scoped accessor above by construction — see
+// [`WfDoc::root_keys`]'s own doc comment for the full rationale.
+//
+// This is the FINAL S-CIGATE-3 pass. After this pass, `tests/ci_gate_
+// completeness.rs`'s `extract_key_name_at_indent` and
+// `collect_mapping_key_set` — the two line-based primitives at the root of
+// the entire round-13/14/16 "lexer disagrees with a real parser" defect
+// class this story exists to close — have no remaining callers and are
+// deleted from that file.
+// ---------------------------------------------------------------------------
+
+/// Resolve the complete key set (source order, not deduplicated) of the
+/// mapping found by walking a DOCUMENT-ROOT-level nested mapping PATH —
+/// every segment, including the last, is resolved as a mapping.
+///
+/// Sibling of [`job_level_nested_keys`] (which walks a path from a JOB's
+/// own level, one level lower): this one walks from the document ROOT,
+/// exactly the shape [`WfDoc::root_keys`] itself is built from but for a
+/// NESTED path rather than the root's own direct keys — needed because
+/// `root_keys` alone can confirm the workflow declares an `env:` key, but
+/// says nothing about that key's own CHILDREN (the actual env-var names a
+/// `BASH_ENV` smuggling attempt would add — see
+/// `PINNED_WORKFLOW_ENV_KEYS`'s doc comment in `ci_gate_completeness.rs`).
+///
+/// Motivating caller:
+/// `tests/ci_gate_completeness.rs::extract_workflow_env_key_set` — the
+/// workflow's own top-level `env:` block's key set (a single-segment path,
+/// `&["env"]`).
+///
+/// Returns `None` if any segment (including the last) is missing, or its
+/// value is not itself a mapping — mirrors [`job_level_nested_keys`]'s own
+/// contract exactly, one level higher (document root instead of a job's
+/// body).
+///
+/// # Panics
+///
+/// Panics if `path` is empty (caller error — there is no key to resolve),
+/// or if `yaml` is not well-formed YAML 1.2 (same contract as
+/// [`WfDoc::parse`]).
+#[must_use]
+pub fn root_level_nested_keys(yaml: &str, path: &[&str]) -> Option<Vec<String>> {
+    assert!(
+        !path.is_empty(),
+        "wf.rs: root_level_nested_keys: path must not be empty"
+    );
+    let events: Vec<(Event<'_>, Span)> = Parser::new_from_str(yaml)
+        .collect::<Result<Vec<_>, ScanError>>()
+        .unwrap_or_else(|e| {
+            panic!(
+                "wf.rs: root_level_nested_keys: failed to parse workflow YAML \
+                 as valid YAML 1.2: {e}"
+            )
+        });
+
+    let root_start = events
+        .iter()
+        .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))?;
+    let (root_entries, _) = read_mapping(&events, root_start);
+    let entries = descend_as_mappings(&events, root_entries, path)?;
+    Some(entries.iter().map(|e| e.key.clone()).collect())
+}
