@@ -1203,6 +1203,14 @@ fn test_ci_gate_needs_jobs_have_no_job_level_if() {
     // design and emits `skipped` on push events (ci-gate-safe; see test
     // docstring above).
     let required_jobs = always_run_needs_members(&ci);
+    assert!(
+        !required_jobs.is_empty(),
+        "FAIL: `always_run_needs_members` returned no jobs at all — the \
+         always-run job derivation is broken (or ci.yml itself is \
+         malformed), which would make this test vacuously pass every \
+         job-level `if:` it never saw. Current ci.yml jobs section could \
+         not be parsed."
+    );
 
     for job_name in &required_jobs {
         let job_block = extract_job_block(&ci, job_name).unwrap_or_else(|| {
@@ -1366,6 +1374,14 @@ const PINNED_ALWAYS_RUN_JOB_KEY_SETS: &[(&str, &[&str])] = &[
 fn test_always_run_jobs_have_pinned_complete_job_key_sets() {
     let ci = read_ci_yml();
     let required_jobs = always_run_needs_members(&ci);
+    assert!(
+        !required_jobs.is_empty(),
+        "FAIL: `always_run_needs_members` returned no jobs at all — the \
+         always-run job derivation is broken (or ci.yml itself is \
+         malformed), which would make this test vacuously pass every \
+         job-level key-set pin it never checked. Current ci.yml jobs \
+         section could not be parsed."
+    );
 
     for job_name in &required_jobs {
         let job_block = extract_job_block(&ci, job_name).unwrap_or_else(|| {
@@ -3328,6 +3344,14 @@ fn test_always_run_jobs_have_no_continue_on_error() {
     // maintained literal — see the module-level ADV-P51 scope note above
     // for why `mutants` and `ci-gate` are excluded from this loop.
     let required_jobs = always_run_needs_members(&ci);
+    assert!(
+        !required_jobs.is_empty(),
+        "FAIL: `always_run_needs_members` returned no jobs at all — the \
+         always-run job derivation is broken (or ci.yml itself is \
+         malformed), which would make this test vacuously pass every \
+         `continue-on-error` check it never ran. Current ci.yml jobs \
+         section could not be parsed."
+    );
 
     for job_name in &required_jobs {
         let job_block = extract_job_block(&ci, job_name).unwrap_or_else(|| {

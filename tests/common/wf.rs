@@ -2532,7 +2532,7 @@ mod tests {
         // order-independent, so a `#[cfg(...)]` placed AFTER `#[test]`
         // (or separated from it by a doc comment) evaded that
         // single-line-lookback check while leaving this file's own
-        // 20/20-green suite unaffected. See
+        // 24/24-green suite unaffected. See
         // `attribute_window_around_test_line`'s own doc comment for the
         // full rationale and both reproductions.
         const ALLOWED_TEST_CFG_GATES: &[&str] = &[];
