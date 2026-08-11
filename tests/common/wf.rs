@@ -133,6 +133,26 @@ pub enum Value {
         /// specific tag form outright, the way `ci_gate_completeness.rs`'s
         /// round-16 node-property guards do for mapping KEYS.
         tag: Option<String>,
+        /// The 1-indexed source line the scalar's span STARTS on, via
+        /// `Marker::line()` (confirmed 1-indexed and accurate — see module
+        /// docs; unlike `Marker::col()`/`index()`, no known doc-comment
+        /// inaccuracy applies to `line()`).
+        ///
+        /// Added by S-CIGATE-3 pass B so a caller pinning a scalar's exact
+        /// text byte-for-byte (e.g. `ci-gate`'s `if:`/`run:`/`NEEDS_JSON:`
+        /// values) can still enforce the pre-parser checker's "single
+        /// physical line only" constraint: `saphyr-parser` correctly
+        /// resolves a YAML-folded plain scalar spanning several physical
+        /// source lines down to one space-joined string, which is *new*
+        /// capability the old line-based checker never had — accepting
+        /// such input, even though its resolved text would still
+        /// byte-match a pin, would still be a behavioral loosening versus
+        /// today's hard `Err` on any multi-line continuation, so callers
+        /// compare `start_line == end_line` to keep that exact rejection.
+        start_line: usize,
+        /// The 1-indexed source line the scalar's span ENDS on. See
+        /// `start_line`.
+        end_line: usize,
     },
     /// A YAML alias (`*name`) reference. This module does NOT resolve an
     /// alias to its anchor's value — that requires a document-wide
@@ -354,6 +374,24 @@ struct MapEntry {
     /// [`line_start_char_idx`] needs to recover a job/step's line-anchored
     /// start position.
     key_span: Span,
+    /// Whether the KEY scalar itself carries a YAML anchor (`&x`).
+    ///
+    /// Added by S-CIGATE-3 pass B for the round-16 node-property residual
+    /// (`&x shell: cat {0}` / `!!str shell: cat {0}` — see
+    /// [`super::find_key_node_properties`]): the old line-based
+    /// `extract_key_name_at_indent` stopped parsing at the space after
+    /// `&x`, saw no colon, and returned `None` — invisible to every
+    /// key-set pin built on it. `saphyr-parser`'s event stream resolves
+    /// the KEY correctly regardless (`Scalar("shell", anchor_id=1)`), so
+    /// key-SET membership alone already catches a smuggled key by its own
+    /// presence; this field additionally lets a caller reject a node
+    /// property on a key that is ALREADY a legitimate member of a pinned
+    /// key set (e.g. `&x run: ...`), which a text-only key-set comparison
+    /// cannot see at all.
+    key_has_anchor: bool,
+    /// The KEY scalar's tag (e.g. `!!str`), if any, as `handle` + `suffix`
+    /// concatenated. See `key_has_anchor`.
+    key_tag: Option<String>,
     /// Event index of the first event of this entry's VALUE node.
     value_start: usize,
 }
@@ -380,14 +418,18 @@ fn read_mapping(events: &[(Event<'_>, Span)], start: usize) -> (Vec<MapEntry>, u
     loop {
         match &events[i].0 {
             Event::MappingEnd => return (entries, i + 1),
-            Event::Scalar(text, ..) => {
+            Event::Scalar(text, _style, anchor_id, tag) => {
                 let key = text.to_string();
                 let key_span = events[i].1;
+                let key_has_anchor = *anchor_id != 0;
+                let key_tag = tag.as_ref().map(|t| format!("{}{}", t.handle, t.suffix));
                 let value_start = i + 1;
                 let value_end = skip_node(events, value_start);
                 entries.push(MapEntry {
                     key,
                     key_span,
+                    key_has_anchor,
+                    key_tag,
                     value_start,
                 });
                 i = value_end;
@@ -453,11 +495,16 @@ fn read_sequence(events: &[(Event<'_>, Span)], start: usize) -> (Vec<(usize, usi
 /// `events[value_start]`.
 fn resolve_value(events: &[(Event<'_>, Span)], value_start: usize) -> Value {
     match &events[value_start].0 {
-        Event::Scalar(text, style, _anchor_id, tag) => Value::Scalar {
-            text: text.to_string(),
-            style: *style,
-            tag: tag.as_ref().map(|t| format!("{}{}", t.handle, t.suffix)),
-        },
+        Event::Scalar(text, style, _anchor_id, tag) => {
+            let span = events[value_start].1;
+            Value::Scalar {
+                text: text.to_string(),
+                style: *style,
+                tag: tag.as_ref().map(|t| format!("{}{}", t.handle, t.suffix)),
+                start_line: span.start.line(),
+                end_line: span.end.line(),
+            }
+        }
         Event::Alias(_) => Value::Alias,
         _ => Value::Other,
     }
@@ -527,4 +574,389 @@ fn build_step(
         values,
         span,
     }
+}
+
+// ---------------------------------------------------------------------------
+// S-CIGATE-3 pass B additions
+//
+// Everything below was added for `tests/ci_gate_completeness.rs`'s
+// gate-block scalar/key-set pin migration (find_comment_start,
+// extract_and_normalize_if_expr, extract_and_normalize_sole_run_line and
+// siblings, extract_job_level_key_set, extract_gate_step_key_sets,
+// extract_gate_env_key_set, the PINNED_GATE_* consts, and the G8 test
+// `test_ci_gate_pass_fail_semantics_are_structurally_placed`). Purely
+// additive — no existing `pub` item's signature changed (the one
+// non-additive change, `Value::Scalar` gaining `start_line`/`end_line`
+// fields, is backward compatible with every existing `Value::Scalar { text,
+// .. }` match in this codebase, which already uses `..`).
+// ---------------------------------------------------------------------------
+
+/// A YAML node property (`&anchor` and/or `!tag`) found directly attached to
+/// a mapping KEY scalar anywhere in a parsed document's tree (any depth —
+/// job-level, step-level, `env:`-level, `with:`-level, and beyond).
+///
+/// See [`find_key_node_properties`]'s doc comment for why this exists
+/// alongside (not instead of) tree-based key-SET membership checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyNodeProperty {
+    /// The key's resolved text (e.g. `"shell"` for `&x shell: cat {0}`).
+    pub key: String,
+    /// Whether the key scalar carries a YAML anchor (`&x`).
+    pub has_anchor: bool,
+    /// The key scalar's tag (e.g. `!!str`), if any, as `handle` + `suffix`
+    /// concatenated.
+    pub tag: Option<String>,
+}
+
+/// Walk EVERY mapping key in `yaml`'s parse tree — at any depth, not only
+/// the job/step levels `Job`/`Step` model directly — and return every key
+/// scalar that carries a node property (anchor and/or tag) directly on
+/// itself, in document order.
+///
+/// # Why this is a separate check from key-SET pins (S-CIGATE-3 AC-007,
+/// round-16 residual)
+///
+/// A tree-based key-set comparison (`Job::keys`, `Step::keys`, or
+/// [`step_mapping_child_keys`] below) already catches a NODE-PROPERTIED KEY
+/// THAT IS NEW — `&x shell: cat {0}` adds a real `"shell"` key the parser
+/// sees regardless of the anchor, so a pinned set that doesn't expect
+/// `"shell"` there fails to match by ITS OWN TEXT alone, no node-property
+/// awareness required. What a plain `Vec<String>` key-set comparison CANNOT
+/// see is a node property attached to a key that is ALREADY a legitimate,
+/// expected member of the pinned set — e.g. `&x run: some-other-command`:
+/// the key set stays exactly `{"env","name","run"}`, textually identical to
+/// the pin, while the value has silently gained an anchor a later alias
+/// elsewhere in the same document (GitHub shipped anchor/alias support to
+/// production Actions 2025-09-18) could reference. This function closes
+/// that residual gap by scanning for the node property itself, independent
+/// of whether the key's SET membership also happens to be correct.
+///
+/// # Panics
+///
+/// Same malformed-YAML-panics contract as [`WfDoc::parse`].
+#[must_use]
+pub fn find_key_node_properties(yaml: &str) -> Vec<KeyNodeProperty> {
+    let events: Vec<(Event<'_>, Span)> = Parser::new_from_str(yaml)
+        .collect::<Result<Vec<_>, ScanError>>()
+        .unwrap_or_else(|e| panic!("wf.rs: failed to parse workflow YAML as valid YAML 1.2: {e}"));
+
+    let Some(root_start) = events
+        .iter()
+        .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))
+    else {
+        return Vec::new();
+    };
+
+    let mut found = Vec::new();
+    collect_key_node_properties(&events, root_start, &mut found);
+    found
+}
+
+/// Recursive helper for [`find_key_node_properties`]: records every
+/// node-propertied key directly under the mapping starting at
+/// `events[mapping_start]`, then recurses into every entry's VALUE (mapping
+/// or sequence) to find nested ones too.
+fn collect_key_node_properties(
+    events: &[(Event<'_>, Span)],
+    mapping_start: usize,
+    out: &mut Vec<KeyNodeProperty>,
+) {
+    let (entries, _end) = read_mapping(events, mapping_start);
+    for entry in &entries {
+        if entry.key_has_anchor || entry.key_tag.is_some() {
+            out.push(KeyNodeProperty {
+                key: entry.key.clone(),
+                has_anchor: entry.key_has_anchor,
+                tag: entry.key_tag.clone(),
+            });
+        }
+        recurse_into_value_for_node_properties(events, entry.value_start, out);
+    }
+}
+
+/// Descend into a mapping entry's VALUE node (if it is itself a mapping or
+/// sequence) looking for further node-propertied keys nested inside it.
+fn recurse_into_value_for_node_properties(
+    events: &[(Event<'_>, Span)],
+    value_start: usize,
+    out: &mut Vec<KeyNodeProperty>,
+) {
+    match &events[value_start].0 {
+        Event::MappingStart(..) => collect_key_node_properties(events, value_start, out),
+        Event::SequenceStart(..) => {
+            let (items, _end) = read_sequence(events, value_start);
+            for (item_start, _item_end) in items {
+                recurse_into_value_for_node_properties(events, item_start, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+impl WfDoc {
+    /// Parse a SINGLE job's own block — text starting at `<job_id>:` and
+    /// covering that job's whole mapping, exactly the shape
+    /// [`super::yaml::extract_job_block`] returns — into a standalone
+    /// [`Job`], WITHOUT requiring the `jobs:` wrapper [`WfDoc::parse`]
+    /// expects at the document root.
+    ///
+    /// # Why this exists (S-CIGATE-3 pass B)
+    ///
+    /// `tests/ci_gate_completeness.rs`'s per-job pin functions (e.g.
+    /// `extract_and_normalize_if_expr`) take a `job_block: &str` parameter
+    /// — that shape is FROZEN: two `#[cfg(unix)]` tests
+    /// (`test_ci_gate_decision_matches_job_level_if_for_every_needs_member`,
+    /// `test_ci_gate_decision_is_arity_independent_for_unlisted_skips`) call
+    /// them with `extract_job_block(&ci, job)`'s result for EVERY
+    /// `ci-gate.needs` member, not only `ci-gate` itself, and must need zero
+    /// edits. `WfDoc::parse` cannot be reused directly for a lone job
+    /// block: it looks for a top-level `jobs:` key and a `job_block` slice
+    /// has none — its own root key IS the job id. This function gives those
+    /// pin functions the SAME tree-walked `Job` model (`keys`, `values`,
+    /// `steps`, `value_of`) `WfDoc::parse`'s `.jobs` field already builds
+    /// for the whole-file case, without re-deriving a parallel line-based
+    /// scanner or reindenting `job_block` to synthesize a fake `jobs:`
+    /// wrapper (reindenting every line to fabricate a deeper nesting level
+    /// is exactly the kind of position-dependent trick this story's
+    /// tree-based approach exists to avoid).
+    ///
+    /// # Panics
+    ///
+    /// Same malformed-YAML-panics contract as [`WfDoc::parse`]. Also panics
+    /// if `job_block`'s root mapping does not have EXACTLY ONE entry (a
+    /// `job_block` slice produced by `extract_job_block` always has this
+    /// shape — a hand-constructed multi-entry string passed here indicates
+    /// caller error, not a case to silently guess at).
+    #[must_use]
+    pub fn parse_single_job(job_block: &str) -> Job {
+        let events: Vec<(Event<'_>, Span)> = Parser::new_from_str(job_block)
+            .collect::<Result<Vec<_>, ScanError>>()
+            .unwrap_or_else(|e| {
+                panic!(
+                    "wf.rs: parse_single_job: failed to parse job block YAML as valid YAML 1.2: {e}"
+                )
+            });
+        let table = char_byte_table(job_block);
+
+        let Some(root_start) = events
+            .iter()
+            .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))
+        else {
+            panic!(
+                "wf.rs: parse_single_job: job_block has no top-level mapping at all: {job_block:?}"
+            );
+        };
+        let (root_entries, _root_end) = read_mapping(&events, root_start);
+        if root_entries.len() != 1 {
+            panic!(
+                "wf.rs: parse_single_job: expected exactly one root entry (the \
+                 job id), found {} — job_block should be a single \
+                 `<job_id>: {{...}}` mapping entry, exactly as \
+                 extract_job_block returns it, not: {job_block:?}",
+                root_entries.len()
+            );
+        }
+        let entry = &root_entries[0];
+
+        let (keys, values, steps) =
+            if matches!(events[entry.value_start].0, Event::MappingStart(..)) {
+                let (body_entries, _) = read_mapping(&events, entry.value_start);
+                let keys: Vec<String> = body_entries.iter().map(|e| e.key.clone()).collect();
+                let values: Vec<Value> = body_entries
+                    .iter()
+                    .map(|e| resolve_value(&events, e.value_start))
+                    .collect();
+                let steps = extract_steps(&events, &body_entries, &table);
+                (keys, values, steps)
+            } else {
+                (Vec::new(), Vec::new(), Vec::new())
+            };
+
+        Job {
+            id: entry.key.clone(),
+            span: 0..job_block.len(),
+            keys,
+            values,
+            steps,
+        }
+    }
+}
+
+/// Resolve the byte SPAN (into `job_block`) of the job-level value of key
+/// `key`, PROVIDED that value is itself a mapping or sequence node (for a
+/// scalar/alias value, use [`Job::value_of`] instead — this function exists
+/// specifically for a composite value like `needs: [a, b, c]`, which has no
+/// single `Event::Scalar` to source byte-for-byte pinned text from).
+///
+/// Returns `None` if `job_block`'s job has no `key` at its own (job) level,
+/// or `key`'s value there is a scalar or alias rather than a mapping/
+/// sequence.
+///
+/// # Why span-slicing instead of reconstructing from resolved values
+///
+/// Reconstructing `"[fmt, clippy, ...]"` from a `Vec` of resolved item
+/// scalars would require this function to invent a join separator (`", "`)
+/// that happens to match `ci.yml`'s current formatting — fragile in exactly
+/// the way a real byte-for-byte pin must not be. Slicing `job_block` between
+/// the value node's `SequenceStart`/`MappingStart` span-start and its
+/// matching `SequenceEnd`/`MappingEnd` span-end instead recovers the
+/// LITERAL source text verbatim (verified empirically: for `needs: [fmt,
+/// clippy, ...]`, `SequenceStart`'s span starts at the `[` character and
+/// `SequenceEnd`'s span ends immediately after the `]`) — this is still
+/// tree-membership-derived (the span bounds come from the parsed node, not
+/// a raw substring search), just applied to a composite value instead of a
+/// single scalar's resolved text.
+#[must_use]
+pub fn job_level_value_span(job_block: &str, key: &str) -> Option<Range<usize>> {
+    let events: Vec<(Event<'_>, Span)> = Parser::new_from_str(job_block)
+        .collect::<Result<Vec<_>, ScanError>>()
+        .unwrap_or_else(|e| {
+            panic!(
+                "wf.rs: job_level_value_span: failed to parse job block YAML as valid YAML 1.2: {e}"
+            )
+        });
+    let table = char_byte_table(job_block);
+
+    let root_start = events
+        .iter()
+        .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))?;
+    let (root_entries, _) = read_mapping(&events, root_start);
+    let entry = root_entries.first()?;
+    if !matches!(events[entry.value_start].0, Event::MappingStart(..)) {
+        return None;
+    }
+    let (body_entries, _) = read_mapping(&events, entry.value_start);
+
+    let target = body_entries.iter().find(|e| e.key == key)?;
+    match &events[target.value_start].0 {
+        Event::MappingStart(..) | Event::SequenceStart(..) => {
+            let value_end = skip_node(&events, target.value_start);
+            let start_byte = table[events[target.value_start].1.start.index()];
+            let end_byte = table[events[value_end - 1].1.end.index()];
+            Some(start_byte..end_byte)
+        }
+        _ => None,
+    }
+}
+
+/// Resolve the sorted, complete key set of the mapping VALUE of key `key`,
+/// within the step whose OWN keys include `step_anchor_key` (e.g. `"run"`,
+/// to anchor to the step actually carrying the gate decision), inside
+/// `job_block`.
+///
+/// Unlike the pre-S-CIGATE-3 `extract_gate_env_key_set` (which scanned
+/// BACKWARD from a `run:` line and therefore missed a legal `env:`-after-
+/// `run:` reorder — see that function's own doc comment, round-14
+/// SUGGESTION), this is order-independent BY CONSTRUCTION: it finds "the
+/// step whose own mapping has both `step_anchor_key` and `key`" via tree
+/// membership, not textual proximity, so `env:` may legally appear before
+/// OR after `run:` on the same step without this function's result
+/// changing.
+///
+/// Returns `None` if no step has `step_anchor_key`, that step has no `key`,
+/// or `key`'s value there is not itself a mapping.
+#[must_use]
+pub fn step_mapping_child_keys(
+    job_block: &str,
+    step_anchor_key: &str,
+    key: &str,
+) -> Option<Vec<String>> {
+    let events: Vec<(Event<'_>, Span)> = Parser::new_from_str(job_block)
+        .collect::<Result<Vec<_>, ScanError>>()
+        .unwrap_or_else(|e| {
+            panic!("wf.rs: step_mapping_child_keys: failed to parse job block YAML as valid YAML 1.2: {e}")
+        });
+
+    let root_start = events
+        .iter()
+        .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))?;
+    let (root_entries, _) = read_mapping(&events, root_start);
+    let entry = root_entries.first()?;
+    if !matches!(events[entry.value_start].0, Event::MappingStart(..)) {
+        return None;
+    }
+    let (body_entries, _) = read_mapping(&events, entry.value_start);
+    let steps_entry = body_entries.iter().find(|e| e.key == "steps")?;
+    if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
+        return None;
+    }
+    let (items, _) = read_sequence(&events, steps_entry.value_start);
+
+    for (item_start, _item_end) in items {
+        if !matches!(events[item_start].0, Event::MappingStart(..)) {
+            continue;
+        }
+        let (step_entries, _) = read_mapping(&events, item_start);
+        if !step_entries.iter().any(|e| e.key == step_anchor_key) {
+            continue;
+        }
+        let target = step_entries.iter().find(|e| e.key == key)?;
+        if !matches!(events[target.value_start].0, Event::MappingStart(..)) {
+            return None;
+        }
+        let (child_entries, _) = read_mapping(&events, target.value_start);
+        let mut keys: Vec<String> = child_entries.iter().map(|e| e.key.clone()).collect();
+        keys.sort();
+        return Some(keys);
+    }
+    None
+}
+
+/// Resolve the [`Value`] of ONE named child (`child_key`) of the mapping
+/// value of `mapping_key`, within the step whose own keys include
+/// `step_anchor_key`, inside `job_block`. Sibling of
+/// [`step_mapping_child_keys`] — that function answers "what keys does
+/// this nested mapping have"; this one answers "what is the value of ONE
+/// specific one of them" (e.g. the gate step's `env:` block's
+/// `NEEDS_JSON:` child), including its `ScalarStyle`/tag/line-span for
+/// AC-004 quoting-fidelity byte-pin comparison.
+///
+/// Returns `None` if no step has `step_anchor_key`, that step has no
+/// `mapping_key`, `mapping_key`'s value there is not itself a mapping, or
+/// that mapping has no `child_key`.
+#[must_use]
+pub fn step_mapping_child_value(
+    job_block: &str,
+    step_anchor_key: &str,
+    mapping_key: &str,
+    child_key: &str,
+) -> Option<Value> {
+    let events: Vec<(Event<'_>, Span)> = Parser::new_from_str(job_block)
+        .collect::<Result<Vec<_>, ScanError>>()
+        .unwrap_or_else(|e| {
+            panic!("wf.rs: step_mapping_child_value: failed to parse job block YAML as valid YAML 1.2: {e}")
+        });
+
+    let root_start = events
+        .iter()
+        .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))?;
+    let (root_entries, _) = read_mapping(&events, root_start);
+    let entry = root_entries.first()?;
+    if !matches!(events[entry.value_start].0, Event::MappingStart(..)) {
+        return None;
+    }
+    let (body_entries, _) = read_mapping(&events, entry.value_start);
+    let steps_entry = body_entries.iter().find(|e| e.key == "steps")?;
+    if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
+        return None;
+    }
+    let (items, _) = read_sequence(&events, steps_entry.value_start);
+
+    for (item_start, _item_end) in items {
+        if !matches!(events[item_start].0, Event::MappingStart(..)) {
+            continue;
+        }
+        let (step_entries, _) = read_mapping(&events, item_start);
+        if !step_entries.iter().any(|e| e.key == step_anchor_key) {
+            continue;
+        }
+        let mapping_entry = step_entries.iter().find(|e| e.key == mapping_key)?;
+        if !matches!(events[mapping_entry.value_start].0, Event::MappingStart(..)) {
+            return None;
+        }
+        let (child_entries, _) = read_mapping(&events, mapping_entry.value_start);
+        let child = child_entries.iter().find(|e| e.key == child_key)?;
+        return Some(resolve_value(&events, child.value_start));
+    }
+    None
 }
