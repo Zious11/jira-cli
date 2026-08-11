@@ -171,85 +171,64 @@ use common::yaml::extract_job_block;
 ///   - a
 ///   - b
 /// ```
-/// Returns `None` if no job-level `needs:` line is found in the block.
+/// Returns `None` if no job-level `needs:` key is found in the block.
 ///
-/// S-626-1 pass-55 (ADV-P55-HIGH-001): the original version of this
-/// function applied `line.trim()` to EVERY line in `job_block` and matched
-/// on `trimmed.strip_prefix("needs:")` / `trimmed == "needs:"` — with no
-/// indentation check at all, a `needs:` key nested arbitrarily deep (e.g.
-/// inside a step's `with:` block, or a decoy `env:` value) was
-/// indistinguishable from the job's own job-level `needs:` key. Verified:
-/// planting a decoy `needs: [<all ci-gate.needs members>]` inside the gate
-/// step's `with:` block left the REAL `ci-gate.needs` (a genuinely
-/// different, narrower set) invisible to this function — it returned the
-/// decoy's full membership instead, defeating every one of this function's
-/// six-plus callers from a single read, including
-/// `test_ci_gate_needs_partitions_all_ci_yml_jobs` (the U1 fix). Fixed by
-/// anchoring key detection to `extract_key_name_at_indent(line, 4)` — the
-/// SAME quote/whitespace-aware, depth-exact matcher every other job-level
-/// key check in this file already uses — so a nested decoy is invisible to
-/// this function by construction, not by luck. A SECOND job-level `needs:`
-/// key anywhere in the block is a hard `panic!`, mirroring
-/// `extract_and_normalize_if_expr`'s refusal to silently pick a winner
-/// between two job-level `if:` keys (also invalid YAML — a duplicate
-/// mapping key GitHub Actions/actionlint reject at parse time — but this
-/// checker does not rely on that external validation alone).
+/// # S-CIGATE-3 pass C: rewritten on `WfDoc::parse_single_job` +
+/// `job_level_nested_sequence_items`, event-stream backed
+///
+/// This function used to be the motivating case for S-626-1 pass-55
+/// (ADV-P55-HIGH-001): a line-based `line.trim()` scan with no indentation
+/// check let a `needs:` key nested arbitrarily deep (e.g. inside a step's
+/// `with:` block) masquerade as the job's own job-level `needs:` key, and
+/// the fix — anchoring on `extract_key_name_at_indent(line, 4)` — was
+/// still bound to that ONE hard-coded indent column
+/// (`POSITIONAL-ASSUMPTION-AXIS`, closed by this rewrite per AC-008: a job
+/// whose own direct children are legally indented 3, 6, or 8 spaces
+/// instead of 4 was invisible to that scan). Duplicate-`needs:` detection
+/// is now `job.keys.iter().filter(|k| ...).count()` over
+/// [`WfDoc::parse_single_job`]'s tree-derived, non-deduplicated key list —
+/// TREE MEMBERSHIP, not a line scan, so it is immune by construction to
+/// both the spelling axis (`needs:`/`"needs":`/`'needs':`/`needs :` all
+/// resolve to the identical key text) and the indent axis (a job's direct
+/// children are found by tree structure, not indent arithmetic) at once. A
+/// SECOND job-level `needs:` key anywhere in the block is still a hard
+/// `panic!`, mirroring `extract_and_normalize_if_expr`'s refusal to
+/// silently pick a winner between two job-level `if:` keys (also invalid
+/// YAML — a duplicate mapping key GitHub Actions/actionlint reject at
+/// parse time — but this checker does not rely on that external validation
+/// alone).
+///
+/// The actual VALUE (the set of job names) is resolved via
+/// [`job_level_nested_sequence_items`] with the single-segment path
+/// `&["needs"]` — a SEQUENCE accessor, since `needs: [a, b, c]` is a
+/// sequence node, not a scalar. Unlike the pre-parser checker, block-list
+/// (`- item`) and flow (`[a, b, c]`) forms need no separate handling here:
+/// `read_sequence` (`tests/common/wf.rs`) walks either shape identically by
+/// tree membership. A bare scalar `needs: single_job` (no brackets) still
+/// resolves to `None` — deliberately preserved from the pre-parser
+/// checker's behavior (see `job_level_nested_sequence_items`'s own doc
+/// comment) rather than newly special-cased as a one-item set.
 fn parse_needs_set(job_block: &str) -> Option<HashSet<String>> {
-    let lines: Vec<&str> = job_block.lines().collect();
-    let needs_line_indices: Vec<usize> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| extract_key_name_at_indent(l, 4).as_deref() == Some("needs"))
-        .map(|(i, _)| i)
-        .collect();
+    let job = WfDoc::parse_single_job(job_block);
+    let needs_count = job.keys.iter().filter(|k| k.as_str() == "needs").count();
 
-    if needs_line_indices.len() > 1 {
+    if needs_count > 1 {
         panic!(
-            "FAIL (S-626-1 pass-55, ADV-P55-HIGH-001): job block contains \
-             {} job-level `needs:` keys at 4-space indent — this checker \
-             refuses to silently pick one. This is ALSO invalid YAML (a \
-             duplicate mapping key) that GitHub Actions and actionlint \
-             both reject at parse time, but this checker will not rely on \
-             that external validation alone.\n\
-             Job block:\n{job_block}",
-            needs_line_indices.len()
+            "FAIL (S-626-1 pass-55, ADV-P55-HIGH-001; S-CIGATE-3 pass C): \
+             job block contains {needs_count} job-level `needs:` keys — \
+             this checker refuses to silently pick one. This is ALSO \
+             invalid YAML (a duplicate mapping key) that GitHub Actions \
+             and actionlint both reject at parse time, but this checker \
+             will not rely on that external validation alone.\n\
+             Job block:\n{job_block}"
         );
     }
-
-    let needs_line_idx = needs_line_indices.first().copied()?;
-
-    // Try inline-array form first: `needs: [fmt, clippy, ...]`
-    let trimmed = lines[needs_line_idx].trim();
-    if let Some(rest) = trimmed.strip_prefix("needs:") {
-        let rest = rest.trim();
-        if rest.starts_with('[') && rest.ends_with(']') {
-            // Inline array: strip brackets, split on `,`, trim each item.
-            let inner = &rest[1..rest.len() - 1];
-            let set: HashSet<String> = inner
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            return Some(set);
-        }
+    if needs_count == 0 {
+        return None;
     }
 
-    // Try block-list form: `needs:` on its own line, followed by `  - item`
-    // lines, scanning ONLY from the single job-level `needs:` line found
-    // above (never re-scanning the whole block for a bare `needs:` literal
-    // at any depth).
-    let mut set = HashSet::new();
-    for line in &lines[needs_line_idx + 1..] {
-        let trimmed = line.trim();
-        if let Some(item) = trimmed.strip_prefix("- ") {
-            set.insert(item.trim().to_string());
-        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
-            // Reached a non-list-item non-comment line — end of needs block.
-            break;
-        }
-    }
-
-    if !set.is_empty() { Some(set) } else { None }
+    let items = common::wf::job_level_nested_sequence_items(job_block, &["needs"])?;
+    Some(items.into_iter().collect())
 }
 
 /// List every job name defined anywhere in `.github/workflows/ci.yml`'s
@@ -262,13 +241,22 @@ fn parse_needs_set(job_block: &str) -> Option<HashSet<String>> {
 /// real `toJSON(needs)` payload, so this is the correct (and only
 /// practical) bound on "every job that could possibly need a pin".
 ///
-/// Same 2-space-indent, comment-stripped convention as
-/// `common::yaml::extract_job_block` (kept consistent deliberately — this
-/// file already anchors on that exact shape everywhere else). `jobs:` is
-/// this file's last top-level key (verified: `grep -n '^[a-zA-Z]'
-/// .github/workflows/ci.yml` returns only `name:`, `on:`, `env:`, `jobs:`,
-/// in that order), so scanning to EOF is correct today; the 0-indent
-/// early-return guards against silently mis-scanning if that ever changes.
+/// # S-CIGATE-3 pass C: rewritten on `WfDoc::parse`, event-stream backed
+///
+/// `ci` is parsed once via [`WfDoc::parse`]; `doc.jobs` already IS the
+/// tree-derived, source-order, non-deduplicated list of every entry under
+/// the document's top-level `jobs:` mapping — this function reduces to
+/// mapping each [`Job`]'s `id` field. This closes S-626-1 pass-55's
+/// ADV-P55-MED-002 finding (a flow-style job entry, e.g. `gate: {name: CI
+/// Gate, runs-on: ubuntu-latest}`, does not end with `:` and was invisible
+/// to the old line-based `strip_suffix(':')` scan) BY CONSTRUCTION: a
+/// `MappingStart` event marks a job entry regardless of whether its value
+/// is written in flow or block style — there is no line-ending shape left
+/// to get wrong. The former "jobs: is this file's last top-level key, so
+/// scanning to EOF is safe today" caveat no longer applies either: tree
+/// traversal bounds itself at the `jobs:` mapping's own `MappingEnd` event,
+/// not at end-of-file, so a hypothetical future top-level key AFTER
+/// `jobs:` would not silently get swept in.
 ///
 /// Portable (NOT `#[cfg(unix)]`-gated): pure string parsing, no subprocess.
 /// Originally gated to unix (PR #671 review round 15, CI-caught) because
@@ -290,24 +278,11 @@ fn parse_needs_set(job_block: &str) -> Option<HashSet<String>> {
 /// callers (like this one gained) before assuming a helper's gate should
 /// simply mirror its original caller's.
 fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
-    let Some(jobs_start) = ci.find("\njobs:\n") else {
+    let doc = WfDoc::parse(ci);
+    if !doc.root_keys.iter().any(|k| k == "jobs") {
         panic!("FAIL: `.github/workflows/ci.yml` has no top-level `jobs:` key.");
-    };
-    let jobs_section = &ci[jobs_start + 1..];
-    // S-626-1 pass-55, ADV-P55-MED-002: per-job-id detection previously
-    // required the line to END with `:` (`strip_prefix("  ").and_then(|s|
-    // s.strip_suffix(':'))`) — a flow-style job entry (e.g. `gate: {name:
-    // CI Gate, runs-on: ubuntu-latest}`) does not end with `:` at all and
-    // was invisible to this scan, reopening the exact U1 partition gap
-    // this function's own caller (`test_ci_gate_needs_partitions_all_
-    // ci_yml_jobs`) exists to close, by formatting alone. Routed through
-    // `collect_mapping_key_set` — the same quote/whitespace-aware,
-    // comment-and-blank-line-tolerant primitive `extract_gate_env_key_set`
-    // / `extract_workflow_env_key_set` already use for an identical
-    // "collect this mapping's child key set" shape — rather than
-    // reimplementing key detection a third time.
-    let lines: Vec<&str> = jobs_section.lines().skip(1).collect();
-    collect_mapping_key_set(&lines, 0, 2)
+    }
+    doc.jobs.iter().map(|j| j.id.clone()).collect()
 }
 
 /// Cross-platform-safe (NOT `#[cfg(unix)]`-gated) list of `ci-gate.needs`
@@ -370,64 +345,36 @@ fn always_run_needs_members(ci: &str) -> Vec<String> {
     always_run
 }
 
-/// S-626-1 pass-59 (ADV-P57-HIGH-001 + ADV-P57-MED-001, shared fix — one
-/// root cause, two silent-fail-open call sites): every hardcoded-indent
-/// check in this file (`extract_key_name_at_indent(line, 4)` for job-level
-/// keys, `extract_job_display_name`, `matrix_needs_members`'s `strategy:`
-/// scan, ...) ASSUMES a job's direct children are indented exactly 4
-/// spaces. That assumption is legal, `actionlint`-clean, PyYAML-valid YAML
-/// only by CONVENTION — a job's own children need only be indented
-/// CONSISTENTLY WITH EACH OTHER, not with any other job's indent choice
-/// (the same acknowledged limitation `extract_key_name_at_indent`'s own
-/// doc comment already names). Verified end-to-end (S-626-1 pass-59): a
-/// sibling workflow job body written at 3-, 6-, or 8-space indent left
-/// `extract_key_name_at_indent(l, 4)` returning `None` for EVERY line in
-/// that job's block — not "this job declares no name"/"no strategy", but
-/// "this checker looked at the wrong indent level entirely" — and the
-/// 910b8ab0 class sweep's "key-detect vs. value-reparse swallow" fix does
-/// not help here, because there is no KEY DETECTED to re-read a value
-/// for: the miss happens one step earlier, at indent selection.
+/// **DELETED (S-CIGATE-3 pass C):** `assert_job_block_uses_4_space_child_indent`
+/// used to live here. It existed solely to guard the "a job's direct
+/// children are indented exactly 4 spaces" assumption every hardcoded-indent
+/// line-based check in this file baked in (S-626-1 pass-59,
+/// ADV-P57-HIGH-001/MED-001) — `extract_key_name_at_indent(line, 4)` for
+/// job-level keys, `matrix_needs_members`'s old `strategy:` scan (below),
+/// and others. Under this pass's tree-based rewrite, `matrix_needs_members`
+/// no longer makes ANY indent assumption at all (`Job::keys`, from
+/// [`WfDoc::parse_single_job`], is found by tree membership, not indent
+/// arithmetic) — so the function guarding that assumption became vacuous
+/// for its one remaining call site and was deleted rather than kept as
+/// dead weight.
 ///
-/// This function derives each job block's ACTUAL direct-child indent —
-/// the indentation of the first non-blank, non-comment line after the
-/// job-key line itself — and panics if it is not 4, rather than silently
-/// certifying an unverifiable absence. `assert!`, not a `Result`: every
-/// caller of this function is itself in a "reject, don't parse" context
-/// (a `panic!`/`unwrap_or_else(|| panic!(...))` site), so a bool-returning
-/// helper would just be unwrapped at the call site anyway.
-fn assert_job_block_uses_4_space_child_indent(job_block: &str, caller: &str) {
-    let Some(child_line) = job_block.lines().skip(1).find(|l| {
-        let t = l.trim();
-        !t.is_empty() && !t.starts_with('#')
-    }) else {
-        // No children at all (an empty job block, or a job block that is
-        // ONLY the job-key line) — nothing to verify an indent assumption
-        // against.
-        return;
-    };
-    let indent = child_line.len() - child_line.trim_start().len();
-    assert!(
-        indent == 4,
-        "FAIL ({caller}, S-626-1 pass-59, ADV-P57-HIGH-001/MED-001): this \
-         job block's direct children are indented {indent} spaces, not \
-         the 4-space indent every hardcoded-indent check in this file \
-         assumes. This is legal, `actionlint`-clean, PyYAML-valid YAML (a \
-         job's own children need only be indented CONSISTENTLY WITH EACH \
-         OTHER, not with any other job's indent choice) — but every \
-         `extract_key_name_at_indent(line, 4)` call against this job \
-         block would silently see NO job-level keys at all: not \"this \
-         job declares no name\"/\"no strategy\", but \"this checker looked \
-         at the wrong indent level\". This checker refuses to silently \
-         certify an unverifiable absence — investigate this job's indent \
-         before relying on any indent-4 extraction against it.\n\
-         First child line found: {child_line:?}\n\
-         Job block:\n{job_block}"
-    );
-}
-
+/// **This is a genuine behavioral RELAXATION, being called out explicitly
+/// per this story's mandate, not silently dropped:** the deleted function
+/// used to HARD-FAIL (`assert!`) on a job body indented anything other than
+/// 4 spaces. Nothing in this file asserts that anymore. That is the
+/// CORRECT outcome — indent is now semantically irrelevant to every
+/// rewritten guard, which is the entire point of closing
+/// `POSITIONAL-ASSUMPTION-AXIS` structurally rather than patching it — but
+/// it does mean `.github/workflows/ci.yml` (or a sibling workflow file)
+/// could adopt a 2- or 6-space job body tomorrow and nothing in this test
+/// suite would object, where before this rewrite it would have hard-failed
+/// with a named diagnostic. Confirmed before deleting: the function had
+/// exactly one call site in this file (`matrix_needs_members`, immediately
+/// below) — no other caller depended on it.
+///
 /// Every `ci-gate.needs` member whose job block declares a job-level
-/// `strategy:` key (4-space indent) — i.e. every build-matrix job, derived
-/// from the LIVE `needs:` set rather than a hand-maintained literal.
+/// `strategy:` key — i.e. every build-matrix job, derived from the LIVE
+/// `needs:` set rather than a hand-maintained literal.
 ///
 /// S-626-1 pass-56 (ADV-P56-LOW-002): Guard B's iteration list used to be
 /// the closed-enumeration literal `["clippy", "test"]` — the exact
@@ -449,6 +396,19 @@ fn assert_job_block_uses_4_space_child_indent(job_block: &str, caller: &str) {
 /// `ci-gate.needs` member naming a job that does not actually exist under
 /// `jobs:` is a broken configuration, not "not a matrix job" — panic
 /// loudly instead, matching the Guard A precedent.
+///
+/// # S-CIGATE-3 pass C: `strategy:` presence rewritten on
+/// `WfDoc::parse_single_job`
+///
+/// The old `job_block.lines().any(|l| extract_key_name_at_indent(l,
+/// 4).as_deref() == Some("strategy"))` scan — and the
+/// `assert_job_block_uses_4_space_child_indent` guard that used to run
+/// immediately before it, to at least fail LOUDLY rather than silently
+/// under-report when that indent assumption didn't hold — are both gone.
+/// `job.keys.iter().any(|k| k == "strategy")` over
+/// [`WfDoc::parse_single_job`]'s tree-derived key list finds `strategy:`
+/// by TREE MEMBERSHIP: immune to every spelling variant AND every indent
+/// by construction, so there is no assumption left for a guard to protect.
 fn matrix_needs_members(ci: &str) -> Vec<String> {
     let gate_block = extract_job_block(ci, "ci-gate").unwrap_or_else(|| {
         panic!(
@@ -480,61 +440,36 @@ fn matrix_needs_members(ci: &str) -> Vec<String> {
                      `ci-gate.needs` names a job that does not exist."
                 )
             });
-            assert_job_block_uses_4_space_child_indent(
-                job_block,
-                "S-626-1 Guard B, ADV-P57-HIGH-001 (matrix_needs_members)",
-            );
-            job_block
-                .lines()
-                .any(|l| extract_key_name_at_indent(l, 4).as_deref() == Some("strategy"))
+            let job = WfDoc::parse_single_job(job_block);
+            job.keys.iter().any(|k| k == "strategy")
         })
         .collect();
     matrix_jobs.sort();
     matrix_jobs
 }
 
-/// Does `line` declare the YAML key `key` at a job's direct-child level
-/// (exactly 4-space indent, not 8+)?
+/// Does `job_block`'s JOB itself declare the YAML key `key` at the job's
+/// own direct-child level?
 ///
-/// PR #671 review round 10, IMPORTANT 2: recognizes `key`, `"key"`, and
-/// `'key'` before the `:` (with any amount of whitespace between the key
-/// token and the colon) — PyYAML-confirmed all four spellings
-/// (`outputs:`, `"outputs":`, `'outputs':`, `outputs :`) parse to the
-/// identical key. The original round-9 outputs-content guard matched only
-/// the first, bare spelling — a real job-level `outputs:` block written
-/// in any of the other three left that guard silently blind (the `{}`
-/// premise it protects no longer held, but nothing said so). This
-/// function's job is narrow enough (one literal key name at a time, one
-/// fixed indent depth) that enumerating the recognized forms is tractable
-/// and auditable, unlike `extract_and_normalize_if_expr`'s arbitrary
-/// expression text, which is why that function rejects instead of trying
-/// to enumerate.
+/// # S-CIGATE-3 pass C: rewritten on `WfDoc::parse_single_job`; renamed
+/// from `line_declares_job_level_key`
 ///
-/// The indent check is written as "starts with 4 spaces AND the 5th
-/// character is not a space" rather than the round-9 original's `&&
-/// !l.starts_with("        ")` (8 spaces) — that second clause could never
-/// be false once the first clause (4-space prefix) matched a job-level
-/// key, since no line can simultaneously start with exactly 4 spaces AND
-/// 8 spaces. It read as protection against a deeper indent that it did
-/// not actually provide; this version's clause does.
-///
-/// ACKNOWLEDGED LIMITATION (PR #671 review round 11, small correction 3,
-/// verified independently via PyYAML — a job's own child keys need only
-/// be indented CONSISTENTLY WITH EACH OTHER, not with any other job's
-/// indent choice, so a job written with 6-space (or any other) indent for
-/// ALL its own direct children is valid, `actionlint`-clean YAML): this
-/// function's "exactly 4 spaces" assumption is the SAME file-wide
-/// indentation-depth assumption every other 4/8/10-space-hardcoded check
-/// in this file already makes (`extract_and_normalize_if_expr`'s
-/// job-level `if:` detection, the M2 job/step-level checks, etc.) — this
-/// function does not introduce a new weakness, it inherits an existing,
-/// broader one. Solving it in general (indent-independent job-block
-/// parsing) would touch every such function in this file under a single
-/// unifying re-derivation of "what indent does THIS job actually use,"
-/// which is a larger, dedicated change, not a one-line fix to this
-/// function alone — scoped out of this round for that reason, matching
-/// how review round 11 itself scoped it ("low stakes given the file-wide
-/// 4-space assumption").
+/// The pre-rewrite version of this function took a single `line: &str` and
+/// pattern-matched a hard-coded 4-space indent plus an enumerated list of
+/// quote spellings (`key`, `"key"`, `'key'`) directly against that one
+/// line's text — the same `POSITIONAL-ASSUMPTION-AXIS` shape this story's
+/// AC-008 exists to close. Renamed (from `line_declares_job_level_key`) to
+/// reflect that its signature is no longer line-based: it now takes the
+/// whole `job_block` and asks `job.keys.iter().any(|k| k == key)` over
+/// [`WfDoc::parse_single_job`]'s tree-derived key list, which is immune BY
+/// CONSTRUCTION to both axes at once — every spelling variant resolves to
+/// the identical key text, and there is no indent literal left to hard-code
+/// (a job's direct children are found by tree membership, not by scanning
+/// for a specific leading-whitespace column). PR #671 review round 10,
+/// IMPORTANT 2's original motivation (a real job-level `outputs:` block
+/// spelled `"outputs":`/`'outputs':`/`outputs :` left the old round-9 guard
+/// silently blind) is preserved, not merely reproduced: those three
+/// spellings, PLUS every job-body indent, are now covered.
 ///
 /// `#[cfg(unix)]` (PR #671 review round 15, CI-caught): only caller is
 /// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`,
@@ -542,21 +477,9 @@ fn matrix_needs_members(ci: &str) -> Vec<String> {
 /// comment above for the full "gating a test orphans its helpers"
 /// explanation.
 #[cfg(unix)]
-fn line_declares_job_level_key(line: &str, key: &str) -> bool {
-    let Some(after_indent) = line.strip_prefix("    ") else {
-        return false;
-    };
-    if after_indent.starts_with(' ') {
-        return false; // 5+ leading spaces: a step-level or deeper key.
-    }
-    for quoted in [format!("\"{key}\""), format!("'{key}'"), key.to_string()] {
-        if let Some(after_key) = after_indent.strip_prefix(quoted.as_str()) {
-            if after_key.trim_start().starts_with(':') {
-                return true;
-            }
-        }
-    }
-    false
+fn job_declares_job_level_key(job_block: &str, key: &str) -> bool {
+    let job = WfDoc::parse_single_job(job_block);
+    job.keys.iter().any(|k| k == key)
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +502,22 @@ fn line_declares_job_level_key(line: &str, key: &str) -> bool {
 /// previously misnamed `..._with_correct_shell`; renamed to describe what it
 /// actually verifies rather than adding an unrelated shell assertion.
 ///
+/// # S-CIGATE-3 pass C: rewritten on `WfDoc::parse_single_job`
+///
+/// All three checks are now `Job::value_of` lookups over
+/// [`WfDoc::parse_single_job`]'s tree-derived job model, rather than raw
+/// `str::contains`/line-scan substring checks against the whole job block
+/// text. This is a genuine tightening, not merely a rewrite: the OLD
+/// `if:` check (`t.starts_with("if:") && t.contains("always()")`) matched
+/// ANY line in the block starting with `if:` after trimming — including a
+/// hypothetical STEP-level `if:` deep inside `steps:` — even though the
+/// docstring (and EC-001's rationale) is specifically about the JOB-level
+/// `if:`; `job.value_of("if")` inherently looks at the job's own direct
+/// keys only. All three lookups are immune, by construction, to key
+/// spelling (`name:`/`"name":`/`'name':`/`name :`, etc.) and to
+/// `ci-gate`'s own job-body indent — neither axis has a literal to get
+/// wrong under tree membership.
+///
 /// RED GATE: `ci-gate` does not exist in ci.yml.  This test FAILS on develop.
 #[test]
 fn test_ci_gate_job_exists_with_required_metadata() {
@@ -591,41 +530,54 @@ fn test_ci_gate_job_exists_with_required_metadata() {
              S-CIGATE-1 AC-001."
         )
     });
+    let job = WfDoc::parse_single_job(gate_block);
 
     // name: CI Gate — produces the human-readable branch-protection context
     // string "CI Gate".  If omitted, the context would be the key "ci-gate".
+    let name_is_ci_gate = matches!(
+        job.value_of("name"),
+        Some(Value::Scalar { text, .. }) if text == "CI Gate"
+    );
     assert!(
-        gate_block.contains("name: CI Gate"),
-        "FAIL (RED GATE): The `ci-gate` job block does not contain \
-         `name: CI Gate`.\n\
+        name_is_ci_gate,
+        "FAIL (RED GATE): The `ci-gate` job block does not have \
+         `name: CI Gate` (found job-level `name:` value {:?}).\n\
          Required: set `name: CI Gate` so the branch-protection context string \
          is human-readable (EC-003).\n\
-         Current ci-gate block:\n{gate_block}"
+         Current ci-gate block:\n{gate_block}",
+        job.value_of("name")
     );
 
     // runs-on: ubuntu-latest — the aggregator is a lightweight step that only
     // inspects upstream results; ubuntu-latest is the correct runner.
+    let runs_on_ubuntu = matches!(
+        job.value_of("runs-on"),
+        Some(Value::Scalar { text, .. }) if text == "ubuntu-latest"
+    );
     assert!(
-        gate_block.contains("runs-on: ubuntu-latest"),
-        "FAIL (RED GATE): The `ci-gate` job block does not contain \
-         `runs-on: ubuntu-latest`.\n\
-         Current ci-gate block:\n{gate_block}"
+        runs_on_ubuntu,
+        "FAIL (RED GATE): The `ci-gate` job block does not have \
+         `runs-on: ubuntu-latest` (found job-level `runs-on:` value {:?}).\n\
+         Current ci-gate block:\n{gate_block}",
+        job.value_of("runs-on")
     );
 
     // if: ${{ always() }} — LOAD-BEARING.  Without this, a failed upstream
     // skips `ci-gate` entirely; GitHub evaluates skip as SUCCESS, so a broken
     // upstream would silently permit merge (EC-001).
+    let has_always_if = matches!(
+        job.value_of("if"),
+        Some(Value::Scalar { text, .. }) if text.contains("always()")
+    );
     assert!(
-        gate_block.lines().any(|l| {
-            let t = l.trim();
-            t.starts_with("if:") && t.contains("always()")
-        }),
-        "FAIL (RED GATE): The `ci-gate` job block does not have an \
-         `if:` line containing `always()`.\n\
+        has_always_if,
+        "FAIL (RED GATE): The `ci-gate` job block does not have a \
+         job-level `if:` value containing `always()` (found {:?}).\n\
          Required: `if: ${{{{ always() }}}}` at the job level (load-bearing — \
          without it a failed upstream SKIPS ci-gate, which GitHub branch \
          protection evaluates as SUCCESS).\n\
-         Current ci-gate block:\n{gate_block}"
+         Current ci-gate block:\n{gate_block}",
+        job.value_of("if")
     );
 }
 
@@ -1213,48 +1165,44 @@ fn test_ci_gate_needs_jobs_have_no_job_level_if() {
             )
         });
 
-        // A job-level `if:` is at exactly 4-space indent directly under the
-        // job key (GitHub Actions YAML convention).  Step-level `if:` blocks
-        // are indented 8+ spaces; those are irrelevant to this check.
-        //
-        // We detect a job-level if: KEY via `extract_key_name_at_indent`
-        // (S-626-1 pass-55, ADV-P55-LOW-001) — deliberately NOT filtering
-        // on the condition's content or shape (see F-03 docstring above):
-        // any job-level `if:` key on these seven jobs is hazardous, whether
-        // it's a single-line condition, a folded/block scalar, or references
-        // something other than `github.event_name`. A bare `starts_with("
-        // if:")` used to match ONLY that one spelling, missing `"if":`,
-        // `'if':`, and `if :` (space before colon) — all PyYAML-identical
-        // to the bare spelling, and all recognized by
-        // `extract_key_name_at_indent` already.
-        for line in job_block.lines() {
-            // Match lines at job-property indent (4 spaces, not 8+).
-            if extract_key_name_at_indent(line, 4).as_deref() == Some("if") {
-                panic!(
-                    "FAIL (M1/F-03): Job `{job_name}` has a job-level `if:` \
-                     key:\n\
-                     \n  {line}\n\
-                     \n\
-                     Any job-level `if:` on this job is hazardous regardless \
-                     of the condition's shape or content: a false condition \
-                     makes `{job_name}` report `skipped` (not `failure`). \
-                     Since `{job_name}` is not in `scripts/check-ci-gate.sh`'s \
-                     `ALLOWED_SKIPS` allowlist, its fail-closed `evaluate_needs()` \
-                     will correctly FAIL the gate on that skip — this is no \
-                     longer a false-green — but only at CI time, surprising a \
-                     maintainer at review time who did not expect this job to \
-                     ever report anything but `success`/`failure`.\n\
-                     \n\
-                     Fix: either remove the job-level `if:` guard from \
-                     `{job_name}` and use a step-level `if:` instead, or, if \
-                     the skip is legitimate, add `{job_name}` to \
-                     `ALLOWED_SKIPS` in `scripts/check-ci-gate.sh` with a \
-                     matching entry in this file's \
-                     `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`, or remove \
-                     `{job_name}` from `ci-gate.needs` and update this test \
-                     accordingly."
-                );
-            }
+        // S-CIGATE-3 pass C: rewritten on `WfDoc::parse_single_job`. A
+        // job-level `if:` key is found by TREE MEMBERSHIP
+        // (`Job::keys`/`WfDoc::parse_single_job`) — deliberately NOT
+        // filtering on the condition's content or shape (see F-03 docstring
+        // above): any job-level `if:` key on these seven jobs is hazardous,
+        // whether it's a single-line condition, a folded/block scalar, or
+        // references something other than `github.event_name`. Tree
+        // membership is immune, by construction, to every spelling variant
+        // (`if:`/`"if":`/`'if':`/`if :`, previously enumerated by hand via
+        // `extract_key_name_at_indent`) AND every job-body indent (the old
+        // scan hard-coded 4 spaces — `POSITIONAL-ASSUMPTION-AXIS`, closed
+        // here per AC-008).
+        let job = WfDoc::parse_single_job(job_block);
+        if job.keys.iter().any(|k| k == "if") {
+            panic!(
+                "FAIL (M1/F-03): Job `{job_name}` has a job-level `if:` key.\n\
+                 \n\
+                 Any job-level `if:` on this job is hazardous regardless \
+                 of the condition's shape or content: a false condition \
+                 makes `{job_name}` report `skipped` (not `failure`). \
+                 Since `{job_name}` is not in `scripts/check-ci-gate.sh`'s \
+                 `ALLOWED_SKIPS` allowlist, its fail-closed `evaluate_needs()` \
+                 will correctly FAIL the gate on that skip — this is no \
+                 longer a false-green — but only at CI time, surprising a \
+                 maintainer at review time who did not expect this job to \
+                 ever report anything but `success`/`failure`.\n\
+                 \n\
+                 Fix: either remove the job-level `if:` guard from \
+                 `{job_name}` and use a step-level `if:` instead, or, if \
+                 the skip is legitimate, add `{job_name}` to \
+                 `ALLOWED_SKIPS` in `scripts/check-ci-gate.sh` with a \
+                 matching entry in this file's \
+                 `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`, or remove \
+                 `{job_name}` from `ci-gate.needs` and update this test \
+                 accordingly.\n\
+                 \n\
+                 Current `{job_name}` block:\n{job_block}"
+            );
         }
     }
 }
@@ -2895,6 +2843,51 @@ fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
 /// Anchoring: assertion is made only within the `msrv` job block, so a
 /// matching substring in an unrelated job (e.g. `coverage`, which pins a
 /// different dtolnay toolchain) cannot produce a false positive.
+///
+/// # S-CIGATE-3 pass C: rewritten on `WfDoc::parse_single_job` +
+/// `first_step_mapping_child_value` / `step_mapping_child_value`
+///
+/// Every check below used to be either a whole-job-block `str::contains`
+/// substring test (loose — matches anywhere, including the WRONG step) or,
+/// for the one placement-sensitive check (F-02, round 19), a hand-rolled
+/// byte-offset anchor + step-boundary slice keyed on the LITERAL run-line
+/// text (fragile — a comment reproducing that text earlier in the file, or
+/// a re-quoted run line, could mis-anchor it; see the F-02/ADV-P48-MED-001
+/// history above, now superseded by this rewrite rather than deleted, so
+/// the reasoning that motivated it remains legible).
+///
+/// This rewrite finds the "cargo check" step and the "dtolnay/rust-
+/// toolchain" step by TREE MEMBERSHIP instead:
+///   - The `toolchain: "1.85.0"` check uses
+///     [`first_step_mapping_child_value`] rather than the STEP-ANCHORED
+///     [`step_mapping_child_value`] (S-CIGATE-3 pass B) — the `msrv` job
+///     has FOUR steps that all carry a `uses:` key (harden-runner,
+///     checkout, dtolnay/rust-toolchain, Swatinem/rust-cache), so
+///     anchoring on `step_anchor_key = "uses"` would match the WRONG step
+///     (harden-runner, source-order-first, whose own `with:` has
+///     `egress-policy` but no `toolchain`) and return `None` for the whole
+///     job rather than continuing to the step that actually has it — see
+///     that function's own doc comment for the full rationale.
+///   - The `cargo check --all-features --locked` run-line check finds the
+///     step directly via [`Job::steps`]/[`Step::value_of`] — no anchor
+///     string, no byte-offset slicing.
+///   - The F-02 SAME-STEP placement check for `RUSTUP_TOOLCHAIN` reuses
+///     pass B's [`step_mapping_child_value`] anchored on
+///     `step_anchor_key = "run"`, which is SAFE here (unlike `"uses"`
+///     above) because exactly ONE step in the `msrv` job has a `run:` key
+///     at all — the placement guarantee (RUSTUP_TOOLCHAIN must be on the
+///     SAME step as the `run:` line) falls out of that anchor by
+///     construction, with no separate slice-and-compare step needed.
+///
+/// AC-004 quoting fidelity: `toolchain: "1.85.0"` and
+/// `RUSTUP_TOOLCHAIN: "1.85.0"` are asserted as `ScalarStyle::DoubleQuoted`
+/// (matching `ci.yml`'s current spelling — an unquoted `toolchain: 1.85.0`
+/// would parse to a YAML FLOAT, not the string the `dtolnay/rust-toolchain`
+/// action expects, so this is a real behavioral distinction, not
+/// cosmetic); the `run:` line is asserted as `ScalarStyle::Plain` (its
+/// current, unquoted spelling). All three axes this story's AC-008 cares
+/// about — spelling, indent, and (here specifically) quoting style — are
+/// closed for every check in this rewrite.
 #[test]
 fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
     let ci = read_ci_yml();
@@ -2905,140 +2898,118 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
              1.85.0 (S-626-1 AC-3)."
         )
     });
+    let job = WfDoc::parse_single_job(msrv_block);
 
-    assert!(
-        msrv_block.contains("toolchain: \"1.85.0\""),
-        "FAIL (S-626-1): The `msrv` job does not pin `toolchain: \"1.85.0\"` \
-         on its `dtolnay/rust-toolchain` step.\n\
-         Required: at the pinned SHA (`fa04a1451ff1842e2626ccb99004d0195b455a88`), \
-         `toolchain` is a required input with no default — omitting the `with:` \
-         block does not fall back to `rust-toolchain.toml` or a default; the \
-         action exits 1 with `'toolchain' is a required input`, failing the job \
-         loudly. The genuinely silent revert vector is removal of the \
-         `RUSTUP_TOOLCHAIN` env override on the `cargo check` step (see the next \
-         assertion) — that's what this input's presence guards against staying \
-         meaningful.\n\
-         Current msrv job block:\n{msrv_block}"
-    );
-
-    assert!(
-        msrv_block.contains("RUSTUP_TOOLCHAIN: \"1.85.0\""),
-        "FAIL (S-626-1): The `msrv` job does not set \
-         `RUSTUP_TOOLCHAIN: \"1.85.0\"` as an env override on its \
-         `cargo check` step.\n\
-         Required: `RUSTUP_TOOLCHAIN` outranks `rust-toolchain.toml` \
-         (`channel = \"stable\"`) in rustup's precedence chain. Without this \
-         override, `cargo check` silently validates `stable` instead of \
-         1.85.0 — the exact false-green this job exists to close.\n\
-         Current msrv job block:\n{msrv_block}"
-    );
-
-    assert!(
-        msrv_block.contains("cargo check --all-features --locked"),
-        "FAIL (S-626-1 AC-3): The `msrv` job's `cargo check` step is not \
-         invoked with `--locked`.\n\
-         Required: without `--locked`, `cargo check` is free to re-resolve \
-         other and transitive dependencies against `Cargo.toml` at check \
-         time, decoupling the MSRV check from the exact dependency graph \
-         the rest of CI (and users) actually build against — a silent \
-         drift vector with no other test or CI signal to catch it.\n\
-         Current msrv job block:\n{msrv_block}"
-    );
-
-    // -----------------------------------------------------------------------
-    // F-02 (round 19): pin PLACEMENT, not just whole-block presence.
-    //
-    // The `RUSTUP_TOOLCHAIN: "1.85.0"` assertion above is a whole-block
-    // substring check — it passes as long as that string appears ANYWHERE
-    // in the `msrv` job, including on the WRONG step. Moving the `env:`
-    // block from the `cargo check --all-features --locked` step onto the
-    // `dtolnay/rust-toolchain` step (or any other step) keeps that
-    // assertion green while `cargo check` runs with no `RUSTUP_TOOLCHAIN`
-    // override; `rust-toolchain.toml` (`channel = "stable"`) then wins at
-    // process level, and the job silently validates stable — exactly the
-    // false-green AC-3 exists to close (see this test's own docstring and
-    // CLAUDE.md § "rust-toolchain.toml outranks rustup default").
-    //
-    // Technique: isolate the step slice that starts at the `cargo check
-    // --all-features --locked` anchor and runs to the next step boundary
-    // (a line at the same `      - ` list-item indent used throughout
-    // `steps:` in this file) or end of block — the same indent-based
-    // level-distinction technique `test_ci_gate_pass_fail_semantics_are_structurally_placed`
-    // uses to separate job-level from step-level `if:` keys. Then assert
-    // the env override lives INSIDE that slice, not merely inside the
-    // whole `msrv` block.
-    //
-    // ADV-P48-MED-001 (round 20): the anchor previously used here was the
-    // BARE command substring `cargo check --all-features --locked`, found
-    // via `str::find` (first occurrence in file order). The `msrv` job
-    // carries a ~10-line scope-rationale comment ABOVE the real `run:`
-    // step discussing `--all-targets`/`--all-features` (see this
-    // function's docstring); that comment does not currently reproduce
-    // the full concatenated command string, but nothing structurally
-    // prevents a future edit from quoting it verbatim there for
-    // explanatory purposes. If it did, `find` would anchor on the
-    // COMMENT occurrence (earlier in the file than the real step) instead
-    // of the real `run:` line, and the step-slice sliced from that wrong
-    // anchor would not contain the real step's `env:` block — this test
-    // would then fail RED on a genuinely correct config. That is a
-    // robustness bug, not a false-green: the failure mode is fail-loud on
-    // a false-positive substring match, never fail-silent.
-    //
-    // Fixed by anchoring on the actual YAML STEP SYNTAX rather than just
-    // the command text: `\n      - run: <cmd>` — the exact newline +
-    // 6-space list-item indent + `- run: ` prefix that appears only once
-    // in this file, on the real step line. Every scope comment in this
-    // job is `      #`-prefixed prose (see the comment immediately above
-    // the real step); defeating this anchor would require reproducing the
-    // literal step-declaration syntax `- run: ` character for character —
-    // no longer an accidental substring collision but hand-authored YAML
-    // forgery, the same "code review is the control for hand-crafted
-    // YAML" boundary already documented for the node-property residual in
-    // CLAUDE.md's CI Gate history (round 16). `rfind` (last occurrence)
-    // was considered and rejected: it is still a bare substring match
-    // with no syntactic anchoring, so a comment added AFTER the real step
-    // (nothing prevents that ordering) would defeat it identically —
-    // `rfind` narrows the reachable window without closing the
-    // underlying gap the way anchoring on real step syntax does.
-    // -----------------------------------------------------------------------
-    let cargo_check_anchor = "\n      - run: cargo check --all-features --locked";
-    let anchor_pos = msrv_block.find(cargo_check_anchor).unwrap_or_else(|| {
-        panic!(
-            "FAIL (S-626-1 AC-3 / F-02): could not re-locate the step-line \
-             anchor `{cargo_check_anchor:?}` in the `msrv` job block to \
-             check `RUSTUP_TOOLCHAIN` placement — the assertion immediately \
-             above this one should already have failed.\n\
+    // toolchain: "1.85.0" on the dtolnay/rust-toolchain step's `with:` block.
+    match common::wf::first_step_mapping_child_value(msrv_block, "with", "toolchain") {
+        Some(Value::Scalar { text, style, .. }) => {
+            assert_eq!(
+                text, "1.85.0",
+                "FAIL (S-626-1): the `msrv` job's `with.toolchain` value is \
+                 {text:?}, not \"1.85.0\".\n\
+                 Current msrv job block:\n{msrv_block}"
+            );
+            assert_eq!(
+                style,
+                ScalarStyle::DoubleQuoted,
+                "FAIL (S-626-1, AC-004 quoting fidelity): the `msrv` job's \
+                 `with.toolchain: \"1.85.0\"` value must be a DOUBLE-QUOTED \
+                 scalar (matching ci.yml's current spelling) — found \
+                 {style:?} instead. A bare `toolchain: 1.85.0` (unquoted) \
+                 would parse to a YAML FLOAT, not the string \"1.85.0\" the \
+                 `dtolnay/rust-toolchain` action expects — re-quoting it any \
+                 other way is a real behavioral change this pin must catch, \
+                 not a cosmetic one.\n\
+                 Current msrv job block:\n{msrv_block}"
+            );
+        }
+        other => panic!(
+            "FAIL (S-626-1): The `msrv` job does not pin `toolchain: \"1.85.0\"` \
+             on its `dtolnay/rust-toolchain` step (found {other:?} instead of \
+             a scalar `with.toolchain`).\n\
+             Required: at the pinned SHA (`fa04a1451ff1842e2626ccb99004d0195b455a88`), \
+             `toolchain` is a required input with no default — omitting the `with:` \
+             block does not fall back to `rust-toolchain.toml` or a default; the \
+             action exits 1 with `'toolchain' is a required input`, failing the job \
+             loudly. The genuinely silent revert vector is removal of the \
+             `RUSTUP_TOOLCHAIN` env override on the `cargo check` step (see the next \
+             assertion) — that's what this input's presence guards against staying \
+             meaningful.\n\
              Current msrv job block:\n{msrv_block}"
+        ),
+    }
+
+    // The `cargo check --all-features --locked` step, found by its OWN
+    // `run:` value via tree membership — not a byte-offset anchor + slice.
+    let cargo_check_step = job.steps.iter().find(|s| {
+        matches!(
+            s.value_of("run"),
+            Some(Value::Scalar { text, .. }) if text == "cargo check --all-features --locked"
         )
     });
-    // Skip the leading `\n` captured by the anchor so the slice starts on
-    // the `      - run: …` step line itself.
-    let after_anchor = &msrv_block[anchor_pos + 1..];
-    // The next step begins at a line with the `      - ` (6-space + dash)
-    // list-item indent used for every step in this file. Skip past the
-    // anchor's own leading byte before searching so the anchor line itself
-    // is never mistaken for the boundary.
-    let step_end = after_anchor[1..]
-        .find("\n      - ")
-        .map(|p| p + 1)
-        .unwrap_or(after_anchor.len());
-    let cargo_check_step = &after_anchor[..step_end];
+    let Some(cargo_check_step) = cargo_check_step else {
+        panic!(
+            "FAIL (S-626-1 AC-3): no step in the `msrv` job has a `run:` \
+             value of exactly `cargo check --all-features --locked`.\n\
+             Required: without `--locked`, `cargo check` is free to \
+             re-resolve other and transitive dependencies against \
+             `Cargo.toml` at check time, decoupling the MSRV check from \
+             the exact dependency graph the rest of CI (and users) \
+             actually build against — a silent drift vector with no other \
+             test or CI signal to catch it.\n\
+             Current msrv job block:\n{msrv_block}"
+        );
+    };
+    if let Some(Value::Scalar { style, .. }) = cargo_check_step.value_of("run") {
+        assert_eq!(
+            *style,
+            ScalarStyle::Plain,
+            "FAIL (S-626-1 AC-3, AC-004 quoting fidelity): the `msrv` job's \
+             `run: cargo check --all-features --locked` step must be a \
+             PLAIN (unquoted) scalar — found {style:?} instead.\n\
+             Current msrv job block:\n{msrv_block}"
+        );
+    }
 
-    assert!(
-        cargo_check_step.contains("RUSTUP_TOOLCHAIN: \"1.85.0\""),
-        "FAIL (S-626-1 AC-3 / F-02): `RUSTUP_TOOLCHAIN: \"1.85.0\"` is not \
-         on the SAME step as `cargo check --all-features --locked`.\n\
-         `RUSTUP_TOOLCHAIN` outranks `rust-toolchain.toml` at PROCESS level \
-         — it must be an `env:` override on the `cargo check` step itself. \
-         Setting it on any other step (e.g. the `dtolnay/rust-toolchain` \
-         step) only affects that step's own process; `cargo check` would \
-         then run with no override, `rust-toolchain.toml`'s \
-         `channel = \"stable\"` would win, and the job would silently \
-         validate stable again.\n\
-         Step slice inspected (from the `cargo check` anchor to the next \
-         step boundary):\n{cargo_check_step}\n\
-         Full msrv job block:\n{msrv_block}"
-    );
+    // F-02 (round 19, re-derived S-CIGATE-3 pass C): `RUSTUP_TOOLCHAIN`
+    // must be an `env:` override on THIS SAME step, not merely present
+    // anywhere in the `msrv` job block. `step_mapping_child_value` anchors
+    // on `step_anchor_key = "run"` — safe here because exactly ONE step in
+    // this job has a `run:` key at all (`cargo_check_step` above is that
+    // step), so anchoring on `"run"` cannot select the wrong step the way
+    // anchoring on `"uses"` would for the `toolchain` check above.
+    match common::wf::step_mapping_child_value(msrv_block, "run", "env", "RUSTUP_TOOLCHAIN") {
+        Some(Value::Scalar { text, style, .. }) => {
+            assert_eq!(
+                text, "1.85.0",
+                "FAIL (S-626-1): the `msrv` job's `cargo check` step's \
+                 `env.RUSTUP_TOOLCHAIN` value is {text:?}, not \"1.85.0\".\n\
+                 Current msrv job block:\n{msrv_block}"
+            );
+            assert_eq!(
+                style,
+                ScalarStyle::DoubleQuoted,
+                "FAIL (S-626-1, AC-004 quoting fidelity): \
+                 `RUSTUP_TOOLCHAIN: \"1.85.0\"` must be a double-quoted \
+                 scalar (matching ci.yml's current spelling) — found \
+                 {style:?} instead.\n\
+                 Current msrv job block:\n{msrv_block}"
+            );
+        }
+        other => panic!(
+            "FAIL (S-626-1 AC-3 / F-02): `RUSTUP_TOOLCHAIN: \"1.85.0\"` is \
+             not on the SAME step as `cargo check --all-features --locked` \
+             (found {other:?} instead).\n\
+             `RUSTUP_TOOLCHAIN` outranks `rust-toolchain.toml` at PROCESS \
+             level — it must be an `env:` override on the `cargo check` \
+             step itself. Setting it on any other step (e.g. the \
+             `dtolnay/rust-toolchain` step) only affects that step's own \
+             process; `cargo check` would then run with no override, \
+             `rust-toolchain.toml`'s `channel = \"stable\"` would win, and \
+             the job would silently validate stable again.\n\
+             Current msrv job block:\n{msrv_block}"
+        ),
+    }
 }
 
 /// PR #671 review round 11, CRITICAL 3 (workflow-level half):
@@ -5524,19 +5495,19 @@ fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
     // `outputs :` all parse to the identical key; a real job-level
     // `outputs:` block spelled any of the latter three left this guard
     // silently blind (14/14 green) while the `{}` premise it exists to
-    // protect no longer held. `line_declares_job_level_key` below
-    // recognizes all four. This guard's job is narrow enough (one literal
-    // key name, one fixed indent depth) that enumerating the recognized
-    // forms is tractable and auditable — unlike `if:`'s arbitrary
-    // expression text, which is why THAT function rejects rather than
-    // tries to enumerate.
+    // protect no longer held. `job_declares_job_level_key` below
+    // recognizes all four (S-CIGATE-3 pass C: tree-based rewrite, renamed
+    // from `line_declares_job_level_key` to reflect its new
+    // `job_block`-based, not per-line, signature — recognizes every indent
+    // too, not just 4 spaces). This guard's job is narrow enough (one
+    // literal key name) that enumerating the recognized forms was
+    // tractable and auditable even before the tree-based rewrite closed
+    // the indent axis for free.
     for job in &all_jobs {
         let job_block = extract_job_block(&ci, job).unwrap_or_else(|| {
             panic!("FAIL: `ci-gate.needs` names `{job}`, but no `{job}:` job exists in ci.yml.")
         });
-        let declares_outputs = job_block
-            .lines()
-            .any(|l| line_declares_job_level_key(l, "outputs"));
+        let declares_outputs = job_declares_job_level_key(job_block, "outputs");
         assert!(
             !declares_outputs,
             "FAIL (PR #671 review round 9, outputs-content addendum): \
@@ -6120,25 +6091,19 @@ fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
             )
         });
 
-        // S-626-1 pass-59 (ADV-P57-INFO-001): routed through
-        // `extract_key_name_at_indent`, the same quote/whitespace-aware
-        // matcher used throughout this file, rather than a raw
-        // `l.starts_with("    if:")` — this was the THIRD such site the
-        // `910b8ab0` class sweep missed (M2-a/M2-d were the other two;
-        // see `test_ci_gate_pass_fail_semantics_are_structurally_placed`).
-        // Also drops the dead conjunct `&& !l.starts_with("        ")`,
-        // which — as round 10 already noted when removing the same dead
-        // conjunct from `line_declares_job_level_key` — could never be
-        // `false` once the 4-space-prefix check had already matched (no
-        // line can simultaneously start with exactly 4 spaces AND 8
-        // spaces). This test is a faster diagnostic layered on top of the
+        // S-CIGATE-3 pass C: rewritten on `WfDoc::parse_single_job` — a
+        // job-level `if:` key is found by TREE MEMBERSHIP, immune by
+        // construction to both the spelling axis (the prior
+        // `extract_key_name_at_indent` quote/whitespace-aware matcher this
+        // replaces) and the indent axis (that matcher's hard-coded 4-space
+        // assumption — `POSITIONAL-ASSUMPTION-AXIS`, closed here per
+        // AC-008). This test is a faster diagnostic layered on top of the
         // behavioral closure in
         // `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
         // (see this function's own doc comment) — fail-closed either way,
         // consistency fix only.
-        let has_job_level_if = job_block
-            .lines()
-            .any(|l| extract_key_name_at_indent(l, 4).as_deref() == Some("if"));
+        let parsed_job = WfDoc::parse_single_job(job_block);
+        let has_job_level_if = parsed_job.keys.iter().any(|k| k == "if");
 
         assert!(
             has_job_level_if,
@@ -6718,104 +6683,49 @@ fn test_matrix_os_lists_remain_static_literals() {
         matrix_job_ids.len()
     );
 
+    // S-CIGATE-3 pass C: rewritten on `job_level_nested_value` /
+    // `job_level_nested_sequence_items` / `job_level_nested_keys`
+    // (`tests/common/wf.rs`), event-stream backed. Every hand-rolled
+    // indent-anchored line scan below (`os:` at 8-space indent, `matrix:`
+    // at 6-space indent, a manual inline-array-vs-block-sequence fork) is
+    // gone: `strategy.matrix.os`/`strategy.matrix` are now reached by
+    // JOB-LEVEL NESTED PATH — tree membership, not indent arithmetic — and
+    // `read_sequence` (`tests/common/wf.rs`) walks a flow (`[a, b]`) and a
+    // block (`- a` / `- b`) sequence identically, so the old manual
+    // block-sequence fallback (ADV-P55-MED-004) is no longer needed at
+    // all: there is no "empty same-line value" case to special-case when
+    // the sequence's items are read by tree structure regardless of which
+    // physical-line shape they were written in.
+    let os_path = ["strategy", "matrix", "os"];
     for job_id in &matrix_job_ids {
         let job_block = extract_job_block(&ci, job_id)
             .unwrap_or_else(|| panic!("FAIL: no `{job_id}:` job in ci.yml."));
 
-        let lines: Vec<&str> = job_block.lines().collect();
-        let os_line_idx = lines
-            .iter()
-            .position(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("os"))
-            .unwrap_or_else(|| {
-                panic!(
-                    "FAIL (S-626-1 Guard B): `{job_id}` has no \
-                     `strategy.matrix.os:` line at the expected 8-space \
-                     indent — has this job's matrix shape changed? If `os:` \
-                     moved to a different indent or key name, update this \
-                     test's anchor alongside the ci.yml change."
-                )
-            });
-        let os_line = lines[os_line_idx];
-
-        // ADV-P56-HIGH-001: the key was detected via the quote/whitespace-
-        // aware `extract_key_name_at_indent` above, but this bare
-        // `strip_prefix("os:")` re-read of the SAME line does not
-        // recognize a quoted key spelling (`"os":` / `'os':`) or `os :`
-        // (space before colon). The prior `.unwrap_or("")` silently
-        // collapsed that mismatch to an empty string, and an empty string
-        // trivially satisfies `!"".contains("${{") &&
-        // !"".contains("fromJSON")` — CERTIFYING a dynamic matrix as
-        // static rather than merely missing it. Panic loudly instead: this
-        // checker refuses to guess at a value it detected the KEY for but
-        // cannot safely re-parse.
-        let raw_value = os_line
-            .trim_start()
-            .strip_prefix("os:")
-            .unwrap_or_else(|| {
-                panic!(
-                    "FAIL (S-626-1 Guard B, ADV-P56-HIGH-001): `{job_id}`'s \
-                     `strategy.matrix.os:` key was detected via the \
-                     quote/whitespace-aware matcher at 8-space indent, but \
-                     this checker's own value-extraction re-read (a bare \
-                     `strip_prefix(\"os:\")`) could not parse the same \
-                     line — most likely a quoted key spelling (`\"os\":` / \
-                     `'os':`) or `os :` (space before colon). Silently \
-                     collapsing to an empty string here would make \
-                     `!\"\".contains(\"${{{{\") && \
-                     !\"\".contains(\"fromJSON\")` evaluate TRUE, \
-                     CERTIFYING a dynamic matrix as static rather than \
-                     merely missing it.\n\
-                     Offending line: {os_line:?}"
-                )
-            })
-            .trim();
-
-        // ADV-P55-MED-004: `os:` alone on its own line, with the actual
-        // list on FOLLOWING `- item` block-sequence lines, is legal YAML
-        // and leaves `raw_value` empty here — which, exactly as above,
-        // would trivially (and wrongly) certify the matrix as static
-        // without this checker ever reading the real list. Read the
-        // block-sequence form explicitly rather than let an empty same-
-        // line value fall through unnoticed.
-        let value: std::borrow::Cow<'_, str> = if raw_value.is_empty() {
-            let mut collected: Vec<String> = Vec::new();
-            for line in &lines[os_line_idx + 1..] {
-                let trimmed = line.trim_start();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
-                    continue;
-                }
-                let indent = line.len() - trimmed.len();
-                if indent <= 8 {
-                    break;
-                }
-                let Some(item) = trimmed.strip_prefix("- ") else {
+        let value: String = match common::wf::job_level_nested_value(job_block, &os_path) {
+            Some(Value::Scalar { text, .. }) => text,
+            Some(Value::Other) => common::wf::job_level_nested_sequence_items(job_block, &os_path)
+                .unwrap_or_else(|| {
                     panic!(
-                        "FAIL (S-626-1 Guard B, ADV-P55-MED-004): \
-                         `{job_id}`'s `strategy.matrix.os:` has an empty \
-                         same-line value, and the following indented line \
-                         (\"{line}\") is not a plain `- item` \
-                         block-sequence entry. This checker only supports \
-                         the inline-array (`os: [a, b]`) and plain \
-                         block-sequence (`- a` / `- b`) forms and refuses \
-                         to guess at anything else (e.g. a flow mapping \
-                         per item) rather than risk certifying a dynamic \
-                         matrix as static."
-                    );
-                };
-                collected.push(item.trim().to_string());
-            }
-            if collected.is_empty() {
-                panic!(
-                    "FAIL (S-626-1 Guard B, ADV-P55-MED-004): `{job_id}`'s \
-                     `strategy.matrix.os:` has an empty same-line value and \
-                     no following block-sequence items at all — this \
-                     checker cannot certify a matrix with no discoverable \
-                     `os` list as static."
-                );
-            }
-            std::borrow::Cow::Owned(collected.join(", "))
-        } else {
-            std::borrow::Cow::Borrowed(raw_value)
+                        "FAIL (S-626-1 Guard B): `{job_id}`'s \
+                             `strategy.matrix.os` value is a nested mapping, \
+                             not a scalar or sequence — unsupported shape. \
+                             Investigate this workflow file directly."
+                    )
+                })
+                .join(", "),
+            Some(Value::Alias) => panic!(
+                "FAIL (S-626-1 Guard B): `{job_id}`'s `strategy.matrix.os` \
+                 value is a YAML alias (`*anchor`) reference — this checker \
+                 does not resolve aliases (see tests/common/wf.rs module \
+                 docs, \"Aliases are not resolved\") and refuses to guess \
+                 whether the aliased value is static."
+            ),
+            None => panic!(
+                "FAIL (S-626-1 Guard B): `{job_id}` has no \
+                 `strategy.matrix.os:` key — has this job's matrix shape \
+                 changed? If `os:` moved to a different key path, update \
+                 this test's `os_path` alongside the ci.yml change."
+            ),
         };
 
         assert!(
@@ -6846,28 +6756,21 @@ fn test_matrix_os_lists_remain_static_literals() {
         // combinations from an otherwise-static list — into the same kind
         // of decidable source property as the `${{ }}`/`fromJSON` check
         // above: does `{job_id}.strategy.matrix` declare an `exclude:` key
-        // at all? Scoped to the `matrix:` mapping specifically (not a bare
-        // `job_block.contains("exclude:")`) via `collect_mapping_key_set`
-        // — the same quote/whitespace-aware, comment-and-blank-line-
-        // tolerant primitive used for every other key-set pin in this
-        // file — anchored on the `matrix:` key at 6-space indent (one
-        // level above `os:`'s 8-space indent) so a coincidental
-        // `exclude:` living under a step's `with:` block elsewhere in the
-        // job would not be mistaken for this one.
-        let matrix_line_idx = lines
-            .iter()
-            .position(|l| extract_key_name_at_indent(l, 6).as_deref() == Some("matrix"))
+        // at all? Scoped to the `matrix:` mapping specifically via
+        // `job_level_nested_keys(job_block, &["strategy", "matrix"])` — a
+        // TREE-MEMBERSHIP lookup, so a coincidental `exclude:` living under
+        // a step's `with:` block elsewhere in the job is structurally
+        // unreachable from this path, not merely unlikely to collide.
+        let matrix_keys = common::wf::job_level_nested_keys(job_block, &["strategy", "matrix"])
             .unwrap_or_else(|| {
                 panic!(
                     "FAIL (S-626-1 Guard B, ADV-P56-INFO-001): `{job_id}` \
-                     has no `strategy.matrix:` line at the expected \
-                     6-space indent, even though it has an `os:` line at \
-                     8-space indent one level deeper — has this job's \
-                     matrix nesting changed? Update this test's anchor \
-                     alongside the ci.yml change."
+                         has no `strategy.matrix:` mapping, even though it \
+                         has an `os:` value one level deeper — has this \
+                         job's matrix nesting changed? Update this test's \
+                         path alongside the ci.yml change."
                 )
             });
-        let matrix_keys = collect_mapping_key_set(&lines, matrix_line_idx + 1, 8);
         assert!(
             !matrix_keys.iter().any(|k| k == "exclude"),
             "FAIL (S-626-1 Guard B, ADV-P56-INFO-001): \

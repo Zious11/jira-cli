@@ -960,3 +960,268 @@ pub fn step_mapping_child_value(
     }
     None
 }
+
+// ---------------------------------------------------------------------------
+// S-CIGATE-3 pass C additions
+//
+// Everything below was added for the `ci-gate.needs` / job-graph migration
+// cluster in `tests/ci_gate_completeness.rs`: `parse_needs_set`,
+// `list_all_ci_yml_job_names`, `always_run_needs_members`,
+// `matrix_needs_members`, `test_matrix_os_lists_remain_static_literals`, and
+// `test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env`. These
+// generalize pass A/B's job/step accessors to JOB-LEVEL NESTED mapping
+// paths (`strategy.matrix.os`, `strategy.matrix.exclude`) that neither
+// `Job::value_of` (one level only) nor the step-scoped
+// `step_mapping_child_*` functions (anchored inside a `steps:` sequence
+// item) can reach, plus a step accessor (`first_step_mapping_child_value`)
+// that does not require a `step_anchor_key` disambiguator — needed because
+// the `msrv` job has FOUR steps sharing a `uses:` key, only one of which
+// has the `with.toolchain` child pass B's anchored
+// `step_mapping_child_value` would need to disambiguate correctly.
+// ---------------------------------------------------------------------------
+
+/// Shared first step for every job-level-path accessor below: parse
+/// `job_block` into its raw event stream, panicking (same contract as
+/// [`WfDoc::parse`]) if it is not well-formed YAML 1.2.
+fn parse_job_block_events<'a>(job_block: &'a str, caller: &str) -> Vec<(Event<'a>, Span)> {
+    Parser::new_from_str(job_block)
+        .collect::<Result<Vec<_>, ScanError>>()
+        .unwrap_or_else(|e| {
+            panic!("wf.rs: {caller}: failed to parse job block YAML as valid YAML 1.2: {e}")
+        })
+}
+
+/// This job's own direct mapping entries (its single root entry's body), as
+/// read by every job-level-path accessor below. `None` if `job_block` has
+/// no top-level mapping at all, or its sole root entry's value is not
+/// itself a mapping (a malformed job block).
+fn job_body_entries(events: &[(Event<'_>, Span)]) -> Option<Vec<MapEntry>> {
+    let root_start = events
+        .iter()
+        .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))?;
+    let (root_entries, _) = read_mapping(events, root_start);
+    let entry = root_entries.first()?;
+    if !matches!(events[entry.value_start].0, Event::MappingStart(..)) {
+        return None;
+    }
+    let (body_entries, _) = read_mapping(events, entry.value_start);
+    Some(body_entries)
+}
+
+/// Descend `entries` through every segment of `path`, treating EACH
+/// segment as a mapping key whose value is itself a mapping, returning the
+/// FINAL segment's own entries. Returns `None` the moment any segment is
+/// missing, or any segment's value is not a mapping.
+fn descend_as_mappings(
+    events: &[(Event<'_>, Span)],
+    mut entries: Vec<MapEntry>,
+    path: &[&str],
+) -> Option<Vec<MapEntry>> {
+    for segment in path {
+        let target = entries.iter().find(|e| e.key == *segment)?;
+        if !matches!(events[target.value_start].0, Event::MappingStart(..)) {
+            return None;
+        }
+        let (next_entries, _) = read_mapping(events, target.value_start);
+        entries = next_entries;
+    }
+    Some(entries)
+}
+
+/// Resolve the [`Value`] found by walking a JOB-LEVEL nested mapping PATH:
+/// `path[0]` is a direct key of the job itself; each subsequent `path[i]`
+/// is resolved as a child of the PREVIOUS segment's mapping value. Returns
+/// the LAST segment's resolved [`Value`] — which may itself be
+/// [`Value::Other`] (e.g. a further-nested mapping, or a sequence; see
+/// [`job_level_nested_sequence_items`] for reading a sequence's own items).
+///
+/// # Why this exists (S-CIGATE-3 pass C)
+///
+/// Neither [`Job::value_of`] (one level only) nor the STEP-scoped
+/// [`step_mapping_child_value`] (anchored inside a `steps:` sequence item)
+/// can reach a job-level nested mapping chain like `strategy.matrix.os` —
+/// GitHub Actions' build-matrix shape lives directly under the job, not
+/// inside any step. Motivating caller:
+/// `tests/ci_gate_completeness.rs::test_matrix_os_lists_remain_static_literals`.
+///
+/// Returns `None` if any NON-FINAL segment of `path` is missing or its
+/// value is not itself a mapping (nothing further to descend into), or the
+/// final segment itself is missing.
+///
+/// # Panics
+///
+/// Panics if `path` is empty (caller error — there is no key to resolve),
+/// or if `job_block` is not well-formed YAML 1.2 (same contract as
+/// [`WfDoc::parse`]).
+#[must_use]
+pub fn job_level_nested_value(job_block: &str, path: &[&str]) -> Option<Value> {
+    assert!(
+        !path.is_empty(),
+        "wf.rs: job_level_nested_value: path must not be empty"
+    );
+    let events = parse_job_block_events(job_block, "job_level_nested_value");
+    let body = job_body_entries(&events)?;
+    let (prefix, last) = path.split_at(path.len() - 1);
+    let entries = descend_as_mappings(&events, body, prefix)?;
+    let target = entries.iter().find(|e| e.key == last[0])?;
+    Some(resolve_value(&events, target.value_start))
+}
+
+/// Resolve the complete key set (source order, not deduplicated) of the
+/// mapping found by walking a JOB-LEVEL nested mapping PATH — EVERY
+/// segment, including the last, is resolved as a mapping (unlike
+/// [`job_level_nested_value`], whose final segment may be any node kind).
+///
+/// Motivating caller: `strategy.matrix`'s own key set (does it declare
+/// `exclude:`?) in
+/// `tests/ci_gate_completeness.rs::test_matrix_os_lists_remain_static_literals`.
+///
+/// Returns `None` if any segment (including the last) is missing, or its
+/// value is not itself a mapping.
+///
+/// # Panics
+///
+/// Same contract as [`job_level_nested_value`].
+#[must_use]
+pub fn job_level_nested_keys(job_block: &str, path: &[&str]) -> Option<Vec<String>> {
+    assert!(
+        !path.is_empty(),
+        "wf.rs: job_level_nested_keys: path must not be empty"
+    );
+    let events = parse_job_block_events(job_block, "job_level_nested_keys");
+    let body = job_body_entries(&events)?;
+    let entries = descend_as_mappings(&events, body, path)?;
+    Some(entries.iter().map(|e| e.key.clone()).collect())
+}
+
+/// Resolve a JOB-LEVEL nested mapping PATH's final segment as a SEQUENCE,
+/// returning each item's resolved scalar text in source order. Every
+/// segment before the last is resolved as a mapping (like
+/// [`job_level_nested_value`]); the LAST segment's value must itself be a
+/// sequence (block-list `- item` or flow `[a, b]` — tree membership makes
+/// no distinction between the two forms, unlike the pre-S-CIGATE-3
+/// line-based checker this replaces, which needed separate handling for
+/// each).
+///
+/// Motivating callers: `needs:` (a single-segment path, `&["needs"]` —
+/// `tests/ci_gate_completeness.rs::parse_needs_set`) and
+/// `strategy.matrix.os` (a three-segment path —
+/// `test_matrix_os_lists_remain_static_literals`).
+///
+/// Returns `None` if any segment is missing, a non-final segment's value
+/// is not a mapping, or the final segment's value is not a sequence
+/// (including a bare scalar — GitHub Actions permits `needs: single_job`
+/// without brackets, which this function deliberately does NOT special-case
+/// as a one-item list, mirroring the pre-S-CIGATE-3 checker's behavior).
+///
+/// # Panics
+///
+/// Same contract as [`job_level_nested_value`], plus: panics if any item
+/// of the resolved sequence is not itself a scalar (an alias or nested
+/// mapping/sequence item) — none of this file's callers' target keys
+/// (`needs:`, `strategy.matrix.os`) ever legitimately contain one, and
+/// silently skipping such an item would under-report true membership —
+/// the same failure shape this story's whole rewrite exists to close.
+#[must_use]
+pub fn job_level_nested_sequence_items(job_block: &str, path: &[&str]) -> Option<Vec<String>> {
+    assert!(
+        !path.is_empty(),
+        "wf.rs: job_level_nested_sequence_items: path must not be empty"
+    );
+    let events = parse_job_block_events(job_block, "job_level_nested_sequence_items");
+    let body = job_body_entries(&events)?;
+    let (prefix, last) = path.split_at(path.len() - 1);
+    let entries = descend_as_mappings(&events, body, prefix)?;
+    let target = entries.iter().find(|e| e.key == last[0])?;
+    if !matches!(events[target.value_start].0, Event::SequenceStart(..)) {
+        return None;
+    }
+    let (items, _) = read_sequence(&events, target.value_start);
+    Some(
+        items
+            .into_iter()
+            .map(|(item_start, _item_end)| match &events[item_start].0 {
+                Event::Scalar(text, ..) => text.to_string(),
+                other => panic!(
+                    "wf.rs: job_level_nested_sequence_items: sequence item \
+                     under `{}` is not a scalar: {other:?} — this indicates \
+                     malformed or unsupported workflow YAML for this call \
+                     site.",
+                    path.join(".")
+                ),
+            })
+            .collect(),
+    )
+}
+
+/// Resolve the [`Value`] of ONE named child (`child_key`) of the mapping
+/// value of `mapping_key`, within the FIRST step (in source order) whose
+/// own `mapping_key` mapping actually CONTAINS `child_key`.
+///
+/// # Why this is a separate function from `step_mapping_child_value`
+/// (S-CIGATE-3 pass B)
+///
+/// `step_mapping_child_value`'s `step_anchor_key` design assumes a single,
+/// stable OTHER key uniquely identifies the step of interest — true for the
+/// `ci-gate` gate step (only one step in that job has a `run:` key at all),
+/// but not true in general. Motivating caller:
+/// `tests/ci_gate_completeness.rs::test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env`
+/// — the `msrv` job has FOUR steps that all carry a `uses:` key, only one
+/// of which has a `with.toolchain` child. Anchoring on
+/// `step_anchor_key = "uses"` would match the WRONG step
+/// (`step-security/harden-runner`, source-order-first, whose own `with:`
+/// has `egress-policy` but no `toolchain`) and — per
+/// `step_mapping_child_value`'s own `?`-early-return-on-missing-child
+/// behavior — return `None` for the whole job rather than continuing to the
+/// step that actually has it. This function instead scans every step,
+/// SKIPPING (not aborting on) a step whose `mapping_key` mapping exists but
+/// lacks `child_key`.
+///
+/// Returns `None` if no step has a `mapping_key` mapping containing
+/// `child_key`.
+///
+/// # Panics
+///
+/// Same malformed-YAML-panics contract as [`WfDoc::parse`].
+#[must_use]
+pub fn first_step_mapping_child_value(
+    job_block: &str,
+    mapping_key: &str,
+    child_key: &str,
+) -> Option<Value> {
+    let events = parse_job_block_events(job_block, "first_step_mapping_child_value");
+
+    let root_start = events
+        .iter()
+        .position(|(ev, _)| matches!(ev, Event::MappingStart(..)))?;
+    let (root_entries, _) = read_mapping(&events, root_start);
+    let entry = root_entries.first()?;
+    if !matches!(events[entry.value_start].0, Event::MappingStart(..)) {
+        return None;
+    }
+    let (body_entries, _) = read_mapping(&events, entry.value_start);
+    let steps_entry = body_entries.iter().find(|e| e.key == "steps")?;
+    if !matches!(events[steps_entry.value_start].0, Event::SequenceStart(..)) {
+        return None;
+    }
+    let (items, _) = read_sequence(&events, steps_entry.value_start);
+
+    for (item_start, _item_end) in items {
+        if !matches!(events[item_start].0, Event::MappingStart(..)) {
+            continue;
+        }
+        let (step_entries, _) = read_mapping(&events, item_start);
+        let Some(mapping_entry) = step_entries.iter().find(|e| e.key == mapping_key) else {
+            continue;
+        };
+        if !matches!(events[mapping_entry.value_start].0, Event::MappingStart(..)) {
+            continue;
+        }
+        let (child_entries, _) = read_mapping(&events, mapping_entry.value_start);
+        let Some(child) = child_entries.iter().find(|e| e.key == child_key) else {
+            continue;
+        };
+        return Some(resolve_value(&events, child.value_start));
+    }
+    None
+}
