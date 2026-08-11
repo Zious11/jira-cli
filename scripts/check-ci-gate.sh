@@ -256,22 +256,35 @@ print_allowed_skips() {
 # break of the kind this whole function exists to prevent recurring.
 #
 # Linux entries are ONE physical directory under two names, not two
-# independent trust grants (S-626-1 research pass, 2026-08-10, CONFIRM
-# against Canonical/Debian docs): Ubuntu 24.04 LTS (`ubuntu-latest`) is
-# the first LTS with usrmerge, under which `/bin` is a symlink to
-# `/usr/bin` — `/usr/bin/jq` and `/bin/jq` are the same inode. No
-# equivalence gap exists for the `/bin` entry to close, and `/bin` is kept
-# only as free, defensive redundancy against a future `PATH` reordering.
-# Do NOT add `realpath`/`readlink` canonicalization to `is_trusted_jq_dir`
-# to "resolve" this — there is nothing to resolve, and doing so would
-# reintroduce an external-binary dependency on the decision path, undoing
-# the point of `736fea28`.
+# independent trust grants (S-626-1 research pass, 2026-08-10; corrected
+# ADV-P675-MEDIUM-001, 2026-08-10 — the original "first LTS with usrmerge"
+# framing was wrong): `/bin` is a symlink to `/usr/bin` on `ubuntu-latest`
+# (Ubuntu 24.04) — `/usr/bin/jq` and `/bin/jq` are the same inode. Ubuntu
+# has shipped merged-`/usr` for new installs since 18.10 Cosmic, so 20.04
+# and 22.04 LTS were ALSO already usrmerged; "24.04 is the first LTS with
+# usrmerge" is false as a general Ubuntu-installations claim — the
+# Rockcraft source for that phrasing scopes it to Ubuntu as a *base system
+# inside rocks/container images*, not installations generally. The
+# operative conclusion (one physical directory, no canonicalization
+# needed) is unaffected: it holds on every LTS the GitHub-hosted runner
+# fleet has offered. CONFIRM against Canonical/Debian docs still applies —
+# to the merged-`/usr`-since-18.10 property, not the retracted "first LTS"
+# claim. No equivalence gap exists for the `/bin` entry to close, and
+# `/bin` is kept only as free, defensive redundancy against a future
+# `PATH` reordering. Do NOT add `realpath`/`readlink` canonicalization to
+# `is_trusted_jq_dir` to "resolve" this — there is nothing to resolve, and
+# doing so would reintroduce an external-binary dependency on the decision
+# path, undoing the point of `736fea28`.
 #
 # macOS entries — read as a COMPATIBILITY assertion, not a security one
-# (S-626-1 research pass, 2026-08-10): `/opt/homebrew/bin` is owned by
-# `runner` (Homebrew chowns its prefix to the installing user) and
-# writable WITHOUT `sudo` — unlike `/usr/bin`/`/bin` above, which require
-# root. This entry exists solely so the runner's own real Homebrew `jq`
+# (S-626-1 research pass, 2026-08-10): `/opt/homebrew/bin` is (INFERRED,
+# high confidence — Homebrew chowns its prefix to the installing user; no
+# primary source states the hosted image's mode bits) owned by `runner`
+# and writable without `sudo`, unlike `/usr/bin`/`/bin` above, whose
+# root-only status rests on the same class of inference (ADV-P675-MEDIUM-002:
+# neither half of this comparison is independently CONFIRMED against a
+# primary source — see `.factory/research/ci-gate-shell-trust-assumptions-2026-08-10.md`
+# Q1b/Q3b). This entry exists solely so the runner's own real Homebrew `jq`
 # (Apple Silicon `macos-latest`) is accepted rather than falsely rejected
 # — see the CI-BREAK-1 comment on `resolve_trusted_jq` below, the
 # production break this entry was added to fix. It provides no meaningful
@@ -380,11 +393,17 @@ EOF
 # (S-626-1 research pass, 2026-08-10, NEWLY-RESEARCHED against primary
 # source): `actions/runner :: src/Runner.Worker/Handlers/ScriptHandler.cs`
 # assembles a `run:` step's process environment by applying runtime
-# contexts — every `RunnerContext` key, `RUNNER_OS` included — LAST and
-# UNCONDITIONALLY:
+# contexts — every `RunnerContext` key, `RUNNER_OS` included — LAST, and
+# the write ITSELF is unconditional once that per-context type check
+# passes (ADV-P675-LOW-001: the line below binding `runtimeContext` was
+# previously dropped from this quotation without an elision marker,
+# reading as though the write were unconditional on context TYPE too —
+# it is not; the filter is on which `ExpressionValues` entry qualifies,
+# not on which keys get written once it does):
 #   foreach (var context in ExecutionContext.ExpressionValues)
-#       foreach (var env in runtimeContext.GetRuntimeEnvironmentVariables())
-#           Environment[env.Key] = env.Value;
+#       if (context.Value is IEnvironmentContextData runtimeContext && runtimeContext != null)
+#           foreach (var env in runtimeContext.GetRuntimeEnvironmentVariables())
+#               Environment[env.Key] = env.Value;
 # — a plain assignment, not `TryAdd`, no null guard, no allowlist or
 # denylist on which keys get written. This runs AFTER the inherited
 # global environment (where `$GITHUB_ENV` writes accumulate) and the
@@ -443,11 +462,12 @@ EOF
 # for real; `Test (macos-latest)` failed on this false rejection;
 # `CI Gate` correctly failed as a consequence of that failure). Why this
 # was invisible locally before merging: strict mode only engages when
-# `GITHUB_ACTIONS=true`, which is unset on a developer machine by
-# default, so `--self-test` alone never reached this branch — see
-# `run_jq_trust_self_test` below, added specifically to close that gap by
-# exercising the strict branch deterministically regardless of where
-# `--self-test` runs.
+# `RUNNER_OS` is non-empty (ADV-P675-LOW-002, 2026-08-10: corrected from
+# `GITHUB_ACTIONS=true`, stale since the S-626-1 re-key documented above),
+# which is unset on a developer machine by default, so `--self-test` alone
+# never reached this branch — see `run_jq_trust_self_test` below, added
+# specifically to close that gap by exercising the strict branch
+# deterministically regardless of where `--self-test` runs.
 #
 # Why a DIRECTORY ALLOWLIST keyed by $RUNNER_OS, not a denylist of
 # writable locations ($GITHUB_WORKSPACE/$RUNNER_TEMP/$HOME/...): this
@@ -665,12 +685,15 @@ evaluate_needs() {
 
 # ---------------------------------------------------------------------------
 # jq-trust self-test (S-626-1 CI-BREAK-1, real CI run 31406705091 on
-# a17939e2): exercises resolve_trusted_jq's STRICT branch
-# (GITHUB_ACTIONS=true) locally. Without this, the strict directory
-# allowlist branch is unreachable from ANY local or CI `--self-test` run
-# — `run_self_test` above only ever calls evaluate_needs(), which never
-# sets GITHUB_ACTIONS=true itself, so a developer running `--self-test`
-# on a laptop never touches the strict branch at all. That is exactly
+# a17939e2): exercises resolve_trusted_jq's STRICT branch (RUNNER_OS
+# non-empty — ADV-P675-LOW-002, 2026-08-10: corrected from
+# `GITHUB_ACTIONS=true`, stale since the S-626-1 re-key; item 3 below
+# already documented the re-key correctly, making this opening line the
+# odd one out) locally. Without this, the strict directory allowlist
+# branch is unreachable from ANY local or CI `--self-test` run —
+# `run_self_test` above only ever calls evaluate_needs(), which never
+# sets RUNNER_OS itself, so a developer running `--self-test` on a laptop
+# never touches the strict branch at all. That is exactly
 # the defect class that shipped broken: the ORIGINAL single-path pin
 # (`/usr/bin/jq` only) was correct for `ubuntu-latest` but wrong for
 # `macos-latest`'s real Homebrew jq location, and nothing running
