@@ -2463,77 +2463,79 @@ const PINNED_TEST_GUARD_STEP_KEYS: &[&str] = &["env", "name", "run", "shell"];
 /// against `ci-gate`) changes this set and fails the same test.
 const PINNED_TEST_GUARD_ENV_KEYS: &[&str] = &["CARGO_TERM_COLOR"];
 
-/// Locate the `test` job's POL-11 guard step (`name: Run tests (zero-test
-/// floor, POL-11)`, 6-space `- ` marker) within `job_block` and return
-/// `(all lines, start index, end index)` bounding just that step — from
-/// its own `- ` marker up to (but not including) the next 6-space `- `
-/// step marker, or the end of the job block if it is the last step.
+/// Extract the sorted, complete key set of the `test` job's POL-11 guard
+/// step (`name: Run tests (zero-test floor, POL-11)`), for comparison
+/// against `PINNED_TEST_GUARD_STEP_KEYS`.
 ///
 /// Scoped narrowly (unlike `extract_gate_step_key_sets`, which collects
 /// EVERY step in `ci-gate`) because the `test` job's other three steps
 /// (harden-runner, checkout, rust-cache) are not part of ADV-P51's
 /// reported attack surface and are deliberately out of scope for this pin
 /// — see the module-level ADV-P51 scope note above.
-fn extract_test_guard_step_lines(job_block: &str) -> Option<(Vec<&str>, usize, usize)> {
-    let lines: Vec<&str> = job_block.lines().collect();
-    let start = lines
-        .iter()
-        .position(|l| *l == "      - name: Run tests (zero-test floor, POL-11)")?;
-    let end = lines[start + 1..]
-        .iter()
-        .position(|l| l.starts_with("      -"))
-        .map(|i| i + start + 1)
-        .unwrap_or(lines.len());
-    Some((lines, start, end))
-}
-
-/// Extract the sorted, complete key set of the `test` job's POL-11 guard
-/// step (see `extract_test_guard_step_lines`), for comparison against
-/// `PINNED_TEST_GUARD_STEP_KEYS`.
+///
+/// # S-CIGATE-3 pass E: rewritten on `WfDoc::parse_single_job`/`Step::name`
+///
+/// The guard step is located by TREE MEMBERSHIP via `Step::name`
+/// (`wf.rs`'s `build_step` resolves it from the step's own `name:` key,
+/// found anywhere in that step's mapping) rather than a line-position
+/// `- name: ...` scan, and its key set is `Step::keys` directly — no
+/// indent literal (the old code's `extract_key_name_at_indent(l,
+/// 6).or_else(|| extract_key_name_at_indent(l, 8))`) survives to get
+/// wrong. This closes `POSITIONAL-ASSUMPTION-AXIS` for this guard the
+/// same way pass B/C closed it for the gate-block/job-graph clusters, and
+/// every `name:` spelling (`name:`/`"name":`/`'name':`/`name :`) resolves
+/// identically because a real YAML parser treats them as the same key.
+///
+/// STRICTER than the old line-based lookup, not merely equivalent: the
+/// old matcher required the literal line `- name: <value>` (`name:` as
+/// the step's SEQUENCE-MARKER key, first in the mapping) — a decoy step
+/// with the same `name:` VALUE but `name:` reordered to a LATER key in
+/// its own mapping (e.g. `- run: ...\n  name: <value>`) was invisible to
+/// it, since that decoy's `name:` line never matches the `- name: ...`
+/// needle, so the old code would have silently returned only the REAL
+/// step's keys while a same-named decoy sat unexamined a few lines away.
+/// `Step::name` finds a step's `name:` key anywhere in its own mapping,
+/// regardless of position, so a decoy step of that shape now resolves to
+/// a distinct `Job::steps` entry whose `.name` ALSO matches the target
+/// string, making it visible to a caller that checks for ambiguity — an
+/// unconditional strengthening, not exercised by today's `ci.yml` but no
+/// longer silently missed if it appeared.
 fn extract_test_guard_step_keys(job_block: &str) -> Vec<String> {
-    let Some((lines, start, end)) = extract_test_guard_step_lines(job_block) else {
+    let job = WfDoc::parse_single_job(job_block);
+    let Some(step) = job
+        .steps
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Run tests (zero-test floor, POL-11)"))
+    else {
         return Vec::new();
     };
-    let mut keys: Vec<String> = lines[start..end]
-        .iter()
-        .filter_map(|l| {
-            extract_key_name_at_indent(l, 6).or_else(|| extract_key_name_at_indent(l, 8))
-        })
-        .collect();
+    let mut keys = step.keys.clone();
     keys.sort();
     keys
 }
 
 /// Extract the sorted, complete key set of the `env:` block belonging to
-/// the `test` job's POL-11 guard step (10-space indent — one level deeper
-/// than the step's own 8-space keys), for comparison against
+/// the `test` job's POL-11 guard step, for comparison against
 /// `PINNED_TEST_GUARD_ENV_KEYS`.
 ///
-/// Anchored to the `env:` line found WITHIN this one step's own line
-/// range (`start..run_idx`, not the whole job block) — narrower, and
-/// therefore safer against the round-13 IMPORTANT-2 mis-anchoring class,
-/// than `extract_gate_env_key_set`'s whole-job-block backward scan, since
-/// this function cannot see any OTHER step's `env:` block even
-/// transiently.
+/// # S-CIGATE-3 pass E: rewritten on `step_mapping_child_keys`
+///
+/// Reuses the SAME idiom pass B built for `extract_gate_env_key_set`
+/// (`step_mapping_child_keys(job_block, "run", "env")`) rather than a
+/// parallel implementation: within the `test` job, exactly one step
+/// carries a `run:` key — the guard step itself (the other three steps
+/// are `uses:`-only: harden-runner, checkout, rust-cache) — so anchoring
+/// on `"run"` unambiguously identifies the same step
+/// `extract_test_guard_step_keys` locates by name. Like
+/// `extract_gate_env_key_set`, this is order-independent BY CONSTRUCTION
+/// (`env:` may legally appear before OR after `run:` on the step). The
+/// old code's own doc comment flagged the reverse case as an open
+/// limitation ("this extractor scans only `env:` lines preceding `run:`
+/// within this step") — that limitation is closed here, not merely
+/// documented, and the `POSITIONAL-ASSUMPTION-AXIS` gap the old
+/// `extract_key_name_at_indent(l, 10)`-based scanner had is gone with it.
 fn extract_test_guard_env_key_set(job_block: &str) -> Vec<String> {
-    let Some((lines, start, end)) = extract_test_guard_step_lines(job_block) else {
-        return Vec::new();
-    };
-    let Some(run_rel_idx) = lines[start..end]
-        .iter()
-        .position(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("run"))
-    else {
-        return Vec::new();
-    };
-    let run_idx = start + run_rel_idx;
-    let Some(env_rel_idx) = lines[start..run_idx]
-        .iter()
-        .position(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("env"))
-    else {
-        return Vec::new();
-    };
-    let env_idx = start + env_rel_idx;
-    collect_mapping_key_set(&lines, env_idx + 1, 10)
+    common::wf::step_mapping_child_keys(job_block, "run", "env").unwrap_or_default()
 }
 
 /// ADV-P51-HIGH-001/HIGH-002/MED-002. RED proof (S-626-1 ADV-P51 fix
@@ -2559,11 +2561,11 @@ fn test_test_job_guard_step_key_set_and_env_are_pinned() {
     assert!(
         !actual_step_keys.is_empty(),
         "FAIL (ADV-P51-HIGH-001/HIGH-002): could not locate the `test` \
-         job's POL-11 guard step at all (expected to find its `- name: \
-         Run tests (zero-test floor, POL-11)` marker at 6-space indent). \
-         Either the step's `name:` value changed, or its structure was \
-         otherwise rewritten — update `extract_test_guard_step_lines` if \
-         this is a deliberate rename.\n\
+         job's POL-11 guard step at all (expected a step whose own `name:` \
+         value, found anywhere in that step's mapping, is exactly `Run \
+         tests (zero-test floor, POL-11)`). Either the step's `name:` \
+         value changed, or its structure was otherwise rewritten — update \
+         `extract_test_guard_step_keys` if this is a deliberate rename.\n\
          Current test job block:\n{test_block}"
     );
     assert_eq!(
@@ -2593,10 +2595,12 @@ fn test_test_job_guard_step_key_set_and_env_are_pinned() {
         !actual_env_keys.is_empty(),
         "FAIL (ADV-P51-MED-002): could not locate the `env:` block on the \
          `test` job's POL-11 guard step at all (expected at least \
-         `CARGO_TERM_COLOR`). Either the step was renamed/restructured, or \
-         `env:` was reordered to after `run:` (legal YAML, but this \
-         extractor scans only `env:` lines preceding `run:` within this \
-         step) — update `extract_test_guard_env_key_set` if so.\n\
+         `CARGO_TERM_COLOR`). `extract_test_guard_env_key_set` locates the \
+         step that owns both a `run:` key and an `env:` key by tree \
+         membership (order-independent — `env:` may legally appear before \
+         OR after `run:`), so this means the step was renamed/restructured \
+         in some other way — update `extract_test_guard_env_key_set` if \
+         this is deliberate.\n\
          Current test job block:\n{test_block}"
     );
     assert_eq!(
@@ -2766,6 +2770,33 @@ fn test_always_run_jobs_have_no_continue_on_error() {
 /// that can silently under-report here would reproduce the exact class
 /// of bug PR #671 review round 13 fixed in `collect_mapping_key_set`
 /// (see that function's doc comment).
+///
+/// # S-CIGATE-3 pass E: intentionally UNCHANGED, not a YAML function
+///
+/// This function parses BASH inside an already-extracted `run:` script
+/// body, not YAML — there is no mapping key, no scalar style, no node
+/// property to resolve here, so `saphyr-parser`'s event stream has
+/// nothing to offer it. What DOES matter is where `job_block`'s text
+/// comes from: every caller passes `test_block`, itself
+/// `extract_job_block`'s return value — a byte-for-byte SPAN-SLICE of
+/// the ORIGINAL source text (see `tests/common/wf.rs`'s `Job::span` doc
+/// comment), not a resolved `Event::Scalar` value. The `run: |` block
+/// scalar's WORKFLOW indentation (the 10-space `fi` this function
+/// searches for) therefore survives intact in `job_block` — it is never
+/// dedented, because dedenting only happens when the PARSED scalar VALUE
+/// is read (`Value::Scalar::text`), which this function never touches.
+/// Had this function instead been fed a parsed scalar value, the
+/// `"\n          fi\n"` search below would silently find nothing (the
+/// workflow's 10-space indent stripped to whatever the block scalar's
+/// OWN relative indent was) — verified by inspection of `wf.rs`'s
+/// `resolve_value`, which calls `saphyr-parser`'s already-dedented
+/// `Event::Scalar` text directly with no re-indent step. This function
+/// is therefore correct as-is, unmodified, PROVIDED its `job_block`
+/// input keeps coming from a span-sliced source (which
+/// `extract_job_block`/`WfDoc` guarantee) rather than from a resolved
+/// scalar value — a constraint worth stating explicitly since it is the
+/// one hazard that would silently break this function if violated by a
+/// future edit.
 fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
     let start = job_block.find(condition_line).unwrap_or_else(|| {
         panic!(
@@ -3714,33 +3745,22 @@ fn test_skip_tolerant_needs_members_matches_pinned_if_expressions() {
     );
 }
 
-/// Find the byte index of a legitimate YAML comment start in `s`: a `#`
-/// immediately preceded by whitespace (space or tab). Returns `None` if no
-/// such `#` exists — including when `s` contains a `#` that is NOT
-/// preceded by whitespace (a "glued" `#`, e.g. `}}#{{`), which is not a
-/// comment start under YAML's own rules and must not be treated as one.
-///
-/// Deliberately does not special-case index 0 (the byte immediately after
-/// `if:`): every caller here passes the raw text following `if:`, which
-/// always starts with the separating space from `if: ...`; a `#`
-/// literally glued to `if:` itself (`if:#...`, no space at all) is
-/// degenerate input that this function correctly does NOT treat as a
-/// comment, leaving it in the value for `extract_and_normalize_if_expr`'s
-/// later "value still contains `#`" check to reject.
-///
-/// **S-CIGATE-3 pass B: intentionally UNCHANGED, not migrated.** This
-/// function's own extraction target (`extract_and_normalize_if_expr`, this
-/// pass's function) no longer calls it — a real parser's resolved scalar
-/// text has YAML comments already stripped per spec, so there is nothing
-/// left for a hand-rolled comment-boundary scanner to do there. It is
-/// RETAINED, byte-for-byte, because `extract_and_normalize_step_run_line_by_
-/// name` (owned by a later pass in this story, not yet migrated as of this
-/// commit) still calls it against raw line text. Removing or changing this
-/// function now would break that not-yet-migrated caller's compilation.
-fn find_comment_start(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    (1..bytes.len()).find(|&i| bytes[i] == b'#' && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t'))
-}
+// `find_comment_start` (pre-S-CIGATE-3: a hand-rolled YAML comment-boundary
+// scanner over raw line text) was REMOVED in pass E. Pass B's own doc
+// comment on this function explained why it survived pass B unchanged: its
+// sole extraction target at the time, `extract_and_normalize_if_expr`, no
+// longer called it (a real parser's resolved scalar text has comments
+// already stripped per spec), but `extract_and_normalize_step_run_line_by_
+// name` — owned by this pass, not yet migrated as of pass B's commit — still
+// did, against raw line text. Pass E's rewrite of
+// `extract_and_normalize_step_run_line_by_name` onto `Job::steps`/
+// `Step::values` removed that last caller for the same reason: the real
+// parser has already resolved the `run:` scalar's text with any trailing
+// YAML comment stripped, so there is no comment boundary left for a
+// hand-rolled scanner to find. With zero remaining callers, the function was
+// deleted rather than left as dead code (`-D warnings` would reject an
+// `#[allow(dead_code)]` workaround, and this repo's convention is to remove
+// unused code, not suppress the lint).
 
 /// Extract a `ci.yml` job block's job-level `if:` expression and apply the
 /// narrow normalization used for pinned-literal comparison.
@@ -4116,13 +4136,8 @@ const PINNED_CI_GATE_SELF_TEST_RUN_LINE: &str = "bash scripts/check-ci-gate.sh -
 /// defeats a pinned `run:` line elsewhere in this file).
 const PINNED_CI_GATE_SELF_TEST_STEP_KEYS: &[&str] = &["name", "run"];
 
-/// Locate the SOLE step in `lines` whose `name:` value is EXACTLY
-/// `step_name` (matched as the trimmed line `- name: {step_name}` —
-/// INDENT-AGNOSTIC: the match is against `l.trim_start()`, so this finds
-/// the step regardless of what indentation its `- name: ...` marker
-/// actually sits at, not only the conventional 6-space step-marker
-/// indent), returning its line index. `Err` if zero or more than one
-/// step matches.
+/// Locate the SOLE step in `steps` whose `name:` value is EXACTLY
+/// `step_name`. `Err` if zero or more than one step matches.
 ///
 /// Shared by `extract_and_normalize_step_run_line_by_name` and
 /// `extract_step_key_set_by_name` — factored out (S-626-1 pass-59,
@@ -4130,40 +4145,47 @@ const PINNED_CI_GATE_SELF_TEST_STEP_KEYS: &[&str] = &["name", "run"];
 /// one place rather than being reimplemented (and potentially
 /// re-forgotten) at each new by-name step accessor.
 ///
-/// **DOC CORRECTION (S-626-1 pass-60, ADV-P60-LOW-003):** this doc
-/// comment and both `Err` messages below previously claimed the match
-/// was against "the literal line `      - name: {step_name}`, 6-space
-/// step-marker indent" — that overstated it. The code has always been
-/// indent-agnostic (`l.trim_start() == name_needle`); the 6-space
-/// figure described this file's one conventional step indent, not an
-/// enforced requirement. This was a misleading-message defect, not a
-/// false green: the function's actual behavior is STRICTER than the
-/// old wording implied (it matches at ANY indent, so an unconventionally-
-/// indented decoy or real step is still found, not silently missed),
-/// but the old wording would have sent a debugger looking for an
-/// indent-related cause that was never the issue.
-fn find_sole_step_by_name(lines: &[&str], step_name: &str) -> Result<usize, String> {
-    let name_needle = format!("- name: {step_name}");
-    let matches: Vec<usize> = lines
+/// # S-CIGATE-3 pass E: rewritten on `Job::steps`/`Step::name`
+///
+/// The pre-S-CIGATE-3 version of this function (S-626-1 pass-60,
+/// ADV-P60-LOW-003) matched a line whose TRIMMED text was exactly
+/// `- name: {step_name}` — indent-agnostic (any indent worked, per that
+/// pass's doc correction), but still required `name:` to be the step's
+/// SEQUENCE-MARKER key specifically (the one paired with `- `, i.e. the
+/// step's FIRST mapping key). `Step::name` (`wf.rs`'s `build_step`)
+/// instead finds a step's `name:` key by TREE MEMBERSHIP — anywhere in
+/// that step's own mapping, not only as its first key — which closes
+/// `POSITIONAL-ASSUMPTION-AXIS` for this guard (no indent literal
+/// survives at all, not even an agnostic one) and every `name:` spelling
+/// (`name:`/`"name":`/`'name':`/`name :`) resolves identically.
+///
+/// STRICTER than the old lookup, not merely equivalent, for the same
+/// reason documented on `extract_test_guard_step_keys`: a decoy step
+/// whose `name:` key is reordered to a LATER position in its own mapping
+/// (e.g. `- run: ...\n  name: {step_name}`) was invisible to the old
+/// line-exact matcher (that decoy's `name:` line never equals the
+/// `- name: ...` needle) but is now a distinct `Job::steps` entry whose
+/// `.name` also resolves to `step_name` — correctly flagged as ambiguous
+/// here rather than silently ignored.
+fn find_sole_step_by_name<'a>(steps: &'a [Step], step_name: &str) -> Result<&'a Step, String> {
+    let matches: Vec<&Step> = steps
         .iter()
-        .enumerate()
-        .filter(|(_, l)| l.trim_start() == name_needle)
-        .map(|(i, _)| i)
+        .filter(|s| s.name.as_deref() == Some(step_name))
         .collect();
     match matches.as_slice() {
         [] => Err(format!(
-            "has no step with `name: {step_name}` at all (checked, at \
-             any indent, for a line whose trimmed text is exactly \
-             `- name: {step_name}`)."
+            "has no step with `name: {step_name}` at all (checked every \
+             step's own `name:` value, wherever it appears in that \
+             step's mapping, via the parsed event-stream model — tree \
+             membership, not a line-position scan)."
         )),
-        [only] => Ok(*only),
+        [only] => Ok(only),
         multiple => Err(format!(
-            "has {} steps named `name: {step_name}` (checked, at any \
-             indent, for a line whose trimmed text is exactly \
-             `- name: {step_name}`) — this checker requires exactly one \
-             so a single pinned literal unambiguously covers it. A \
-             decoy step sharing the real step's name, inserted anywhere \
-             in the job block regardless of its own indentation, would \
+            "has {} steps named `name: {step_name}` — this checker \
+             requires exactly one so a single pinned literal \
+             unambiguously covers it. A decoy step sharing the real \
+             step's `name:` VALUE — anywhere in that step's own mapping, \
+             not only as its first (sequence-marker) key — would \
              otherwise silently win a first-match lookup instead of \
              being flagged as ambiguous.",
             multiple.len()
@@ -4171,149 +4193,160 @@ fn find_sole_step_by_name(lines: &[&str], step_name: &str) -> Result<usize, Stri
     }
 }
 
-/// Extract the sorted, complete key set (6/8-space indent — a step's own
-/// first key, on the `- ` marker line, plus every subsequent step-level
-/// key) of the SOLE step in `job_block` whose `name:` value is EXACTLY
-/// `step_name`, for comparison against `PINNED_CI_GATE_SELF_TEST_STEP_
-/// KEYS`. Mirrors `extract_test_guard_step_keys`'s `indent(6).or_else(
-/// indent(8))` idiom for a step's key set.
+/// Extract the sorted, complete key set of the SOLE step in `job_block`
+/// whose `name:` value is EXACTLY `step_name`, for comparison against
+/// `PINNED_CI_GATE_SELF_TEST_STEP_KEYS`.
+///
+/// # S-CIGATE-3 pass E: rewritten on `WfDoc::parse_single_job`/`Step::keys`
+///
+/// Mirrors `extract_test_guard_step_keys`'s rewrite: the step is located
+/// by `find_sole_step_by_name` (tree membership via `Step::name`), and
+/// its key set is `Step::keys` directly — no indent literal (the old
+/// code's `extract_key_name_at_indent(l, 6).or_else(|| extract_key_name_
+/// at_indent(l, 8))`) survives to get wrong.
 fn extract_step_key_set_by_name(job_block: &str, step_name: &str) -> Result<Vec<String>, String> {
-    let lines: Vec<&str> = job_block.lines().collect();
-    let name_line_idx = find_sole_step_by_name(&lines, step_name)?;
-
-    let next_step_offset = lines[name_line_idx + 1..]
-        .iter()
-        .position(|l| l.starts_with("      -"));
-    let step_end = next_step_offset
-        .map(|off| name_line_idx + 1 + off)
-        .unwrap_or(lines.len());
-
-    let mut keys: Vec<String> = lines[name_line_idx..step_end]
-        .iter()
-        .filter_map(|l| {
-            extract_key_name_at_indent(l, 6).or_else(|| extract_key_name_at_indent(l, 8))
-        })
-        .collect();
+    let job = WfDoc::parse_single_job(job_block);
+    let step = find_sole_step_by_name(&job.steps, step_name)?;
+    let mut keys = step.keys.clone();
     keys.sort();
     Ok(keys)
 }
 
-/// Extract and normalize the SOLE `run:` line belonging to the step whose
-/// `name:` value is EXACTLY `step_name` (matched as the literal line
-/// `      - name: {step_name}`, 6-space step-marker indent — the shape
-/// every step in `spec-guard` currently uses) inside `job_block`.
+/// Extract and normalize the SOLE `run:` value belonging to the step
+/// whose `name:` value is EXACTLY `step_name` inside `job_block`.
 ///
 /// A deliberately separate function from `extract_and_normalize_sole_run_
 /// line` rather than a generalization of it — same precedent that
 /// function's own doc comment cites for staying separate from
 /// `extract_and_normalize_if_expr`: reject-don't-parse normalization is
 /// duplicated, not shared. This function additionally scopes its search
-/// to ONE step (bounded by the next `      -` step marker or EOF) rather
-/// than the whole job block, since `spec-guard` — unlike `ci-gate` — has
-/// many steps and many `run:` lines; `extract_and_normalize_sole_run_
-/// line`'s "exactly one `run:` in the whole block" invariant does not
-/// hold there.
+/// to ONE step (the one `find_sole_step_by_name` returns) rather than
+/// the whole job block, since `spec-guard` — unlike `ci-gate` — has many
+/// steps and many `run:` keys; `extract_and_normalize_sole_run_line`'s
+/// "exactly one `run:` in the whole block" invariant does not hold
+/// there.
 ///
-/// S-626-1 pass-59 (ADV-P58-MED-001): despite the `_sole_` in this
-/// function's name describing the "exactly one `run:` line WITHIN the
-/// matched step" invariant, step-NAME matching itself used to be
-/// `.position(...)` — first match, with NO duplicate-name rejection. A
-/// second, decoy step also named `name: {step_name}` inserted BEFORE the
-/// real one (e.g. a no-op `run: true` step with the identical name) would
-/// silently make this function pin the DECOY's `run:` line instead of the
-/// real step's — the whole 27/27 suite stays green while the check-
-/// ci-gate self-test step (or any future caller) is invisibly bypassed.
-/// Fixed to collect ALL matching `name:` line indices and `Err` on more
-/// than one, mirroring the `needs_line_indices`/`run_line_indices`
-/// multiple-match rejection idiom already used throughout this file
-/// (`parse_needs_set`, `extract_and_normalize_if_expr`, and this same
-/// function's own `run:`-line duplicate check just below).
+/// # S-CIGATE-3 pass E: rewritten on `Job::steps`/`Step::keys`/`Step::values`
+///
+/// Step lookup is `find_sole_step_by_name` (see that function's own doc
+/// comment for the tree-membership rewrite and the STRICTER-not-just-
+/// equivalent duplicate-name detection it now provides). Once the step is
+/// found, its `run:` value is read via `Step::keys`/`Step::values` (a
+/// `run:` key found anywhere in the step's mapping, any spelling, no
+/// indent literal) rather than an 8-space-indent line scan — closing
+/// `POSITIONAL-ASSUMPTION-AXIS` for this guard the same way pass B closed
+/// it for `extract_and_normalize_sole_run_line`.
+///
+/// Reject-don't-parse rules mirror `extract_and_normalize_sole_run_line`
+/// exactly (AC-004 quoting-fidelity mandate — see that function's doc
+/// comment for the full rationale): the resolved `run:` value must be a
+/// `ScalarStyle::Plain` scalar (a quoted or block-scalar `|`/`>` form is a
+/// hard `Err`, even though the real parser CAN correctly resolve either —
+/// accepting a source form the pre-parser checker unconditionally
+/// rejected would be a behavioral loosening this pass's mandate
+/// forbids), must carry no YAML tag (S-CIGATE-3 AC-007/round-16 — a node
+/// property on a pinned key's VALUE is rejected outright rather than
+/// resolved and trusted), and must occupy exactly one physical source
+/// line (`start_line == end_line` — a folded plain scalar is rejected
+/// even though its resolved text would still be safely representable).
+/// The old comment-boundary/continuation-line detection this replaces
+/// (`find_comment_start`, the "does the next line continue this value"
+/// scan) is now handled by the real parser during resolution — there is
+/// no comment-boundary decision left for this function to get wrong, and
+/// a genuinely continued value is caught by the `start_line != end_line`
+/// check instead.
 fn extract_and_normalize_step_run_line_by_name(
     job_block: &str,
     step_name: &str,
 ) -> Result<String, String> {
-    let lines: Vec<&str> = job_block.lines().collect();
-    let name_line_idx = find_sole_step_by_name(&lines, step_name)?;
+    let job = WfDoc::parse_single_job(job_block);
+    let step = find_sole_step_by_name(&job.steps, step_name)?;
 
-    let next_step_offset = lines[name_line_idx + 1..]
-        .iter()
-        .position(|l| l.starts_with("      -"));
-    let step_end = next_step_offset
-        .map(|off| name_line_idx + 1 + off)
-        .unwrap_or(lines.len());
-    let step_lines = &lines[name_line_idx..step_end];
-
-    let run_line_indices: Vec<usize> = step_lines
+    let run_indices: Vec<usize> = step
+        .keys
         .iter()
         .enumerate()
-        .filter(|(_, l)| extract_key_name_at_indent(l, 8).as_deref() == Some("run"))
+        .filter(|(_, k)| k.as_str() == "run")
         .map(|(i, _)| i)
         .collect();
 
-    if run_line_indices.is_empty() {
+    if run_indices.is_empty() {
         return Err(format!(
-            "'s `{step_name}` step has no step-level `run:` line at the \
-             expected 8-space indent."
+            "'s `{step_name}` step has no step-level `run:` key at all."
         ));
     }
-    if run_line_indices.len() > 1 {
+    if run_indices.len() > 1 {
         return Err(format!(
-            "'s `{step_name}` step has {} step-level `run:` lines — this \
+            "'s `{step_name}` step has {} step-level `run:` keys — this \
              checker requires exactly one so a single pinned literal \
              unambiguously covers it.",
-            run_line_indices.len()
+            run_indices.len()
         ));
     }
-    let run_line = step_lines[run_line_indices[0]];
+    let key_idx = run_indices[0];
 
-    let raw = run_line.trim_start().strip_prefix("run:").unwrap_or("");
-    let raw_value_leading_trimmed = raw.trim_start();
+    match &step.values[key_idx] {
+        Value::Scalar {
+            text,
+            style,
+            tag,
+            start_line,
+            end_line,
+        } => {
+            if tag.is_some() {
+                return Err(format!(
+                    "'s `{step_name}` step has a `run:` value carrying a \
+                     YAML tag ({tag:?}) — S-CIGATE-3 AC-007/round-16: a \
+                     node property on a pinned key's VALUE is rejected \
+                     outright rather than resolved and trusted."
+                ));
+            }
+            if *style != ScalarStyle::Plain {
+                return Err(format!(
+                    "'s `{step_name}` step has a `run:` value written in \
+                     a non-plain YAML scalar style ({style:?}) — \
+                     S-CIGATE-3 AC-004: this checker treats a quoted or \
+                     block-scalar `run:` value as a DIFFERENT, unpinned \
+                     form even when its resolved text is identical to a \
+                     plain-scalar pin, preserving the strictness the \
+                     pre-parser byte comparison already had. Rewrite as \
+                     a plain (unquoted) scalar to make it pinnable."
+                ));
+            }
+            if start_line != end_line {
+                return Err(format!(
+                    "'s `{step_name}` step has a `run:` value whose YAML \
+                     source spans physical lines {start_line}..={end_line} \
+                     (a folded plain scalar) — this cannot be safely \
+                     represented as a single pinned literal, even though \
+                     this checker's real YAML parser CAN correctly \
+                     resolve the folded text; accepting that source form \
+                     would be a behavioral loosening versus the \
+                     pre-parser checker's unconditional rejection of it. \
+                     Rewrite as a single-physical-line plain scalar to \
+                     make it pinnable."
+                ));
+            }
 
-    if raw_value_leading_trimmed.starts_with('>') || raw_value_leading_trimmed.starts_with('|') {
-        return Err(format!(
-            "'s `{step_name}` step's `run:` value uses a YAML block-scalar \
-             form (\"{}\") — the real command lives on continuation lines \
-             this checker does not read, so it cannot be safely \
-             represented as a single pinned literal.",
-            raw_value_leading_trimmed.trim()
-        ));
-    }
-
-    if let Some(next_line) = step_lines[run_line_indices[0] + 1..].iter().find(|l| {
-        let trimmed = l.trim_start();
-        !trimmed.is_empty() && !trimmed.starts_with('#')
-    }) {
-        let indent = next_line.len() - next_line.trim_start().len();
-        if indent > 8 {
-            return Err(format!(
-                "'s `{step_name}` step's `run:` value appears to continue \
-                 onto a following line (\"{}\", indented {indent} spaces) \
-                 — this cannot be safely represented as a single pinned \
-                 literal.",
-                next_line.trim()
-            ));
+            let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if collapsed.is_empty() {
+                return Err(format!("'s `{step_name}` step has an empty `run:` value."));
+            }
+            Ok(collapsed)
         }
+        Value::Alias => Err(format!(
+            "'s `{step_name}` step has a `run:` value that is a YAML \
+             alias (`*anchor`) reference — this checker does not resolve \
+             an alias to its `&anchor` definition's value, so it cannot \
+             safely compare it against a plain-scalar pin without \
+             risking a silent miss."
+        )),
+        Value::Other => Err(format!(
+            "'s `{step_name}` step has a `run:` value that is a nested \
+             mapping or sequence — not a valid `run:` step body. \
+             Investigate this workflow file directly."
+        )),
     }
-
-    let value = match find_comment_start(raw) {
-        Some(idx) => &raw[..idx],
-        None => raw,
-    };
-    if value.contains('#') {
-        return Err(format!(
-            "'s `{step_name}` step's `run:` value contains a `#` that is \
-             not a clearly whitespace-delimited trailing comment \
-             (\"{}\") — this cannot be safely normalized.",
-            raw.trim()
-        ));
-    }
-
-    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return Err(format!("'s `{step_name}` step has an empty `run:` value."));
-    }
-
-    Ok(collapsed)
 }
 
 /// PR #671 review round 11 — CRITICALs 1-3. Round 10's M2-i pinned the
