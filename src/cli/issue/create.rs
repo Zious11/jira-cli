@@ -75,18 +75,40 @@ pub(super) async fn handle_create(
         .await;
     }
 
-    // Emit stderr warnings for JSM-only flags that are silently ignored on the
-    // platform path (BC-3.8.012, BC-3.8.013). Warnings fire BEFORE the platform
-    // POST so they appear even if the command later errors on missing fields.
+    // Pre-flight guard (DEC-188, BC-3.8.012, BC-3.8.013): --field and
+    // --on-behalf-of are self-declared JSM-only flags. On the platform path
+    // (--request-type absent — this arm only runs when that fork above was
+    // NOT taken), supplying either flag is a categorical user error, not an
+    // ambiguous choice. Exit 64 BEFORE project-key resolution, BEFORE any
+    // interactive prompt, BEFORE the blocking --description-stdin read, and
+    // BEFORE any HTTP call. Combined check fires first so both flags produce
+    // ONE error, not two. Presence-only (`!field_pairs.is_empty()` /
+    // `on_behalf_of.is_some()`) — malformed/empty values still trip the guard,
+    // and repeated --field occurrences still yield exactly one error.
+    //
+    // MUST NOT be implemented via `#[arg(requires = "request_type")]` — that
+    // yields clap exit 2, not the exit-64 JrError::UserError BC-3.8.012/013
+    // require.
+    if !field_pairs.is_empty() && on_behalf_of.is_some() {
+        return Err(JrError::UserError(
+            "--field and --on-behalf-of are only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to use these flags, or drop them to create a standard platform issue."
+                .into(),
+        )
+        .into());
+    }
     if !field_pairs.is_empty() {
-        eprintln!(
-            "warning: --field is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To pass custom fields to a JSM request type, also supply --request-type."
-        );
+        return Err(JrError::UserError(
+            "--field is only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to submit a JSM request with custom fields, or drop --field to create a standard platform issue."
+                .into(),
+        )
+        .into());
     }
     if on_behalf_of.is_some() {
-        eprintln!(
-            "warning: --on-behalf-of is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To raise a request on behalf of another user, also supply --request-type."
-        );
+        return Err(JrError::UserError(
+            "--on-behalf-of is only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to raise a request on behalf of another user, or drop --on-behalf-of to create a standard platform issue."
+                .into(),
+        )
+        .into());
     }
 
     // Resolve project key
