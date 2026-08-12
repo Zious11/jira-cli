@@ -8076,7 +8076,15 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// removed from THIS file in this pass; the three other findings fixed in
 /// the same pass (ADV-SC3-P6-LOW-001, -LOW-002, -LOW-003) changed existing
 /// functions' bodies/doc comments, not the `#[test]` count.
-const EXPECTED_GUARD_TEST_COUNT: usize = 31;
+///
+/// S-CIGATE-3 adversarial pass 8 (finding 2): bumped 31 -> 32 for the one
+/// new `#[test] fn test_ac_008_guards_are_key_spelling_and_indent_agnostic`
+/// added in this pass — the persisted, standing two-axis (key-spelling ×
+/// job-body-indent) RED proof AC-008 requires, closing a HIGH drift item
+/// (no such proof survived past the temporary/untracked `ci.yml` copies
+/// used to produce it during earlier passes) down to LOW. No other
+/// `#[test]` fn was added to or removed from THIS file in this pass.
+const EXPECTED_GUARD_TEST_COUNT: usize = 32;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
@@ -8353,4 +8361,160 @@ fn test_this_file_test_count_matches_expected_denominator() {
          gated the same way (PR #671 review round 15's \"gating a test \
          also orphans its helpers\" lesson)."
     );
+}
+
+/// AC-008 persisted two-axis RED proof (S-CIGATE-3, adversarial pass 8,
+/// finding 2 — closes a HIGH drift item down to LOW).
+///
+/// Story AC-008 requires a RED proof, for every guard rewritten onto
+/// `WfDoc`, crossing BOTH the key-spelling axis (`key:`/`"key":`/
+/// `'key':`/`key :`, `RED-PROOF-NEEDS-SPELLING-VARIANTS`) and the
+/// job-body-indent axis (a job's own direct children indented 3, 6, or 8
+/// spaces instead of `ci.yml`'s native 4,
+/// `POSITIONAL-ASSUMPTION-AXIS`). That proof WAS done, repeatedly,
+/// during S-CIGATE-3's implementation and its seven adversarial-review
+/// fix-bursts — but every one of those proofs ran against a temporary or
+/// untracked `ci.yml` copy that was discarded afterward (see, e.g., the
+/// round-16/S-CIGATE-3 history in this file's own module-level "RESIDUAL
+/// RISK" doc comment, which narrates several such proofs in prose without
+/// a single line of them surviving as a runnable test). Nothing in this
+/// repository PERSISTED that proof until now — this test is that
+/// persisted proof, run on every `cargo test` invocation rather than
+/// once, by hand, during review.
+///
+/// # Why this test would catch a regression to line-based matching
+///
+/// `WfDoc::parse_single_job` is the single choke point every job/step
+/// key-set guard in this file (`extract_job_level_key_set`,
+/// `extract_gate_step_key_sets`, and every `Job::value_of`/`Step::
+/// value_of`-based byte pin) routes through — proving IT is
+/// spelling/indent-agnostic proves the same for all of them
+/// simultaneously, which is why this test exercises it directly (plus
+/// the two named wrapper functions above, to prove the wrapping itself
+/// introduces no new position/spelling assumption) rather than picking
+/// one arbitrary named guard.
+///
+/// If this file (or `tests/common/wf.rs` underneath it) were ever
+/// reverted to a `str::lines()` scanner hard-coded to 4-space job-child
+/// indent and the bare `key:` spelling — the exact shape every
+/// S-626-1-era checker this story replaced actually had, per
+/// `extract_key_name_at_indent`'s own documented history in the SCOPE
+/// SUMMARY / round-16 history above this test — it would:
+///   - see NOTHING at all for the 3- and 6-space indent fixtures below
+///     (a hard-coded `"    key:"`-style prefix check never matches a
+///     line indented 3 or 6 spaces), producing an EMPTY key set where
+///     this test asserts a non-empty one containing exactly `"if"` — an
+///     immediate, loud assertion failure, not a silent pass; and
+///   - even at the native 4-space indent, see NOTHING for the `"if":`,
+///     `'if':`, and `if :` spellings (only the bare `if:` spelling has a
+///     literal `"    if:"` prefix) — three of the four spelling
+///     fixtures per indent would fail the same way.
+///
+/// Both failure shapes are exactly what this file's own documented
+/// history says the pre-S-CIGATE-3 line-based checkers actually produced
+/// before being replaced — this test would have caught every one of
+/// those historical regressions, and catches a reintroduction of the
+/// same shape today.
+#[test]
+fn test_ac_008_guards_are_key_spelling_and_indent_agnostic() {
+    // Spelling axis: `key:`, `"key":`, `'key':`, `key :` (space before
+    // colon) — the four spellings named by `RED-PROOF-NEEDS-SPELLING-
+    // VARIANTS`.
+    const SPELLINGS: [&str; 4] = ["if:", "\"if\":", "'if':", "if :"];
+    // Indent axis: job-body direct-child indent at 3, 6, and 8 spaces —
+    // the three widths named by `POSITIONAL-ASSUMPTION-AXIS`, deliberately
+    // NOT including the file's native 4-space convention.
+    const INDENTS: [usize; 3] = [3, 6, 8];
+
+    // Job-level: the full 4×3 = 12 combination cross-product.
+    for &indent in &INDENTS {
+        for &spelling in &SPELLINGS {
+            let pad = " ".repeat(indent);
+            let job_block =
+                format!("gate-job:\n{pad}{spelling} always-true\n{pad}runs-on: ubuntu-latest\n");
+
+            let job = WfDoc::parse_single_job(&job_block);
+            assert!(
+                job.keys.iter().any(|k| k == "if"),
+                "FAIL (AC-008 RED proof): spelling {spelling:?} at indent \
+                 {indent} was not detected as job-level key `if` via \
+                 `WfDoc::parse_single_job` — job.keys = {:?}. This means a \
+                 guard has regressed toward a line-based / hard-coded-\
+                 indent matcher.\njob_block:\n{job_block}",
+                job.keys
+            );
+
+            let keyset = extract_job_level_key_set(&job_block);
+            assert!(
+                keyset.iter().any(|k| k == "if"),
+                "FAIL (AC-008 RED proof, extract_job_level_key_set): \
+                 spelling {spelling:?} at indent {indent} not found in \
+                 extracted key set {keyset:?}.\njob_block:\n{job_block}"
+            );
+
+            let value = job.value_of("if").unwrap_or_else(|| {
+                panic!(
+                    "FAIL (AC-008 RED proof): job.value_of(\"if\") \
+                     returned None for spelling {spelling:?} at indent \
+                     {indent}.\njob_block:\n{job_block}"
+                )
+            });
+            match value {
+                Value::Scalar { text, .. } => assert_eq!(
+                    text, "always-true",
+                    "FAIL (AC-008 RED proof): resolved value text \
+                     differs for spelling {spelling:?} at indent \
+                     {indent}: {text:?}."
+                ),
+                other => panic!(
+                    "FAIL (AC-008 RED proof): expected a Scalar value \
+                     for spelling {spelling:?} at indent {indent}, got \
+                     {other:?}."
+                ),
+            }
+        }
+    }
+
+    // Step-level: the SAME two axes, on a step's own `if:` key rather
+    // than the job's — a representative subset (the bare and single-
+    // quoted spellings, crossed with all three indents) rather than the
+    // full 12, since step-key detection routes through the same
+    // `Job::steps` tree walk the job-level loop above already exercised
+    // for all four spellings; this closes the remaining "is the
+    // step-scoped accessor ALSO immune" question without re-deriving the
+    // whole matrix.
+    for &indent in &INDENTS {
+        for &spelling in &[SPELLINGS[0], SPELLINGS[2]] {
+            let pad = " ".repeat(indent);
+            let job_block = format!(
+                "gate-job:\n{pad}runs-on: ubuntu-latest\n{pad}steps:\n{pad}- name: x\n{pad}  {spelling} always-true\n"
+            );
+            let job = WfDoc::parse_single_job(&job_block);
+            assert_eq!(
+                job.steps.len(),
+                1,
+                "FAIL (AC-008 RED proof, step-level setup): expected \
+                 exactly one step for spelling {spelling:?} at indent \
+                 {indent}.\njob_block:\n{job_block}"
+            );
+            assert!(
+                job.steps[0].keys.iter().any(|k| k == "if"),
+                "FAIL (AC-008 RED proof, step-level): spelling \
+                 {spelling:?} at indent {indent} not detected as step \
+                 key `if` — steps[0].keys = {:?}.\njob_block:\n{job_block}",
+                job.steps[0].keys
+            );
+
+            let step_key_sets = extract_gate_step_key_sets(&job_block);
+            assert!(
+                step_key_sets
+                    .first()
+                    .is_some_and(|keys| keys.iter().any(|k| k == "if")),
+                "FAIL (AC-008 RED proof, extract_gate_step_key_sets): \
+                 spelling {spelling:?} at indent {indent} not found in \
+                 extracted step key sets {step_key_sets:?}.\n\
+                 job_block:\n{job_block}"
+            );
+        }
+    }
 }
