@@ -61,6 +61,10 @@ The platform path has no changes — it is byte-for-byte the same code path
 that existed before S-288. The fork is gated solely on whether `--request-type`
 was supplied. No project-type pre-check occurs before this fork.
 
+> **DEC-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
+> being absent; when either flag is present without `--request-type`, the platform
+> path exits 64 pre-flight (BC-3.8.012/013). See `docs/specs/issue-create-preflight-guards.md`.
+
 **Justification:** The gate is the simplest expression of user intent.
 `--request-type` is a JSM-specific concept with no platform analogue. Its
 presence is an unambiguous signal that the JSM API should be used. Checking
@@ -74,6 +78,10 @@ zero-HTTP local guards fire.
 is an early return. All code below it in `handle_create` is the pre-existing
 platform path. No platform-path behavior, output shape, or error message is
 altered by this ADR.
+
+> **DEC-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
+> being absent; when either flag is present without `--request-type`, the platform
+> path exits 64 pre-flight (BC-3.8.012/013). See `docs/specs/issue-create-preflight-guards.md`.
 
 ### 2. JSM endpoint: `POST /rest/servicedeskapi/request`
 
@@ -158,8 +166,15 @@ C.1–C.4 in `api/jsm/requests.rs`).
 
 - `jr issue create --request-type <NAME>` routes to `POST /rest/servicedeskapi/request`
   instead of `POST /rest/api/3/issue`. No other `jr issue create` invocation is affected.
+  > **DEC-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
+  > being absent; when either flag is present without `--request-type`, the platform
+  > path exits 64 pre-flight (BC-3.8.012/013) instead of the pre-DEC-188 warn-and-proceed
+  > behavior. See `docs/specs/issue-create-preflight-guards.md`.
 - The platform path is byte-for-byte unchanged: the dispatch gate is an early return at
   the top of `handle_create`, so all downstream platform logic is untouched.
+  > **DEC-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
+  > being absent; when either flag is present without `--request-type`, the platform
+  > path exits 64 pre-flight (BC-3.8.012/013). See `docs/specs/issue-create-preflight-guards.md`.
 - `--type` (and five other platform-only flags) are silently warned on the JSM path rather
   than errored, preserving alias/script compatibility.
 - Scripts or wrappers that pipe `jr issue create --request-type … --output json` to `jq`
@@ -177,3 +192,6 @@ C.1–C.4 in `api/jsm/requests.rs`).
 - `src/api/jsm/requests.rs` — `JsmRequestBuilder` pure body helper and proptest suite
 - `src/api/jsm/servicedesks.rs::require_service_desk` — JSM project gate (step 4)
 - ADR-0015 — Proactive resolution enforcement on done-category transitions (parallel JSM context)
+- `docs/specs/issue-create-preflight-guards.md` — DEC-188 pre-flight exit-64 guards for
+  `--field`/`--on-behalf-of` without `--request-type` (S-639-1; amends the "byte-for-byte
+  unchanged" claims in this ADR, does not supersede the dispatch architecture itself)

@@ -4,6 +4,23 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **`jr issue create --field`/`--on-behalf-of` without `--request-type` now exit 64
+  pre-flight instead of warning and proceeding (S-639-1, closes #639, DEC-188,
+  BC-3.8.012/013 [AMENDED]):** Previously (S-383), supplying `--field NAME=VALUE` or
+  `--on-behalf-of <accountId>` on the platform create path (i.e. without
+  `--request-type`) emitted a `warning: … is ignored on the platform create path`
+  line to stderr and the platform issue was still created (exit 0). These flags are
+  self-declared JSM-only flags, and DEC-188 promotes this to a categorical user
+  error: `jr issue create` now exits 64 BEFORE any HTTP call, project-key resolution,
+  interactive prompt, or `--description-stdin` read. If both flags are supplied
+  together, ONE combined error fires (not two). **Migration:** add `--request-type
+  <NAME>` to route the request through the JSM API, or drop `--field`/`--on-behalf-of`
+  to create a standard platform issue. `--output json` invocations get the same
+  structured `{"error": "…", "code": 64}` envelope on stderr as any other pre-flight
+  guard. See `docs/specs/issue-create-preflight-guards.md`.
+
 ### Fixed
 
 - **MSRV CI job genuinely validates 1.85.0 (S-626-1, #626, CI correctness):** The `msrv`
