@@ -71,40 +71,40 @@ empty stdout — the same channel-separation contract every other pre-flight `Us
 ### Guard placement (step ordering, BC-3.8.012 "Platform-Path Guard Ordering SSOT")
 
 The guard lives in `src/cli/issue/create.rs::handle_create`, immediately after the JSM dispatch
-fork and before everything else:
+fork and before everything else. Step numbers below match the BC-3.8.012 "Platform-Path Guard
+Ordering — `handle_create`" SSOT block verbatim (`.factory/specs/prd/bc-3-issue-write.md`;
+argument destructuring precedes step 1 and is not itself guard-relevant, so it is not numbered):
 
 ```
-1. Argument destructuring
-2. if request_type.is_some() { return handle_jsm_create(...) }   [ADR-0014, unchanged]
-3. Pre-flight guard (THIS STORY):
+1. JSM dispatch fork — if request_type.is_some() { return handle_jsm_create(...) }   [ADR-0014, unchanged]
+2. Pre-flight guard (THIS STORY):
      a. if !field_pairs.is_empty() && on_behalf_of.is_some() → combined UserError, return
      b. if !field_pairs.is_empty()                            → BC-3.8.012 UserError, return
      c. if on_behalf_of.is_some()                              → BC-3.8.013 UserError, return
-4. Project-key resolution (interactive prompt possible here)
-5. Issue-type resolution (interactive prompt possible here)
-6. Summary resolution (interactive prompt possible here)
-7. --description-stdin blocking read (spawn_blocking)
-8. Field-by-field body assembly (--team / --points / --to trigger helper HTTP here)
-9. POST /rest/api/3/issue
+3. Project-key resolution (interactive prompt possible here)
+4. Interactive prompts — issue-type resolution, summary resolution (interactive prompt possible here)
+4a. --description-stdin blocking read (spawn_blocking)
+5. Helper HTTP — field-by-field body assembly (--team / --points / --to trigger helper HTTP here)
+6. Platform POST — POST /rest/api/3/issue
 ```
 
-Steps 4–9 are all suppressed by an early guard return at step 3 — this is the zero-HTTP
+Steps 3–6 are all suppressed by an early guard return at step 2 — this is the zero-HTTP
 guarantee: no HTTP call of any kind (not `GET /rest/api/3/myself`, not the team-org GraphQL
 lookup, not `GET /rest/api/3/field` for CMDB discovery, nothing) happens when the guard fires,
 even when other flags (`--team`, `--to`) would normally trigger pre-POST helper HTTP.
 
-**Why step 3 sits where it does:**
-- **After the JSM fork (step 2):** so `--field a=b --request-type ""` still routes to
+**Why step 2 sits where it does:**
+- **After the JSM fork (step 1):** so `--field a=b --request-type ""` still routes to
   `handle_jsm_create` (which then fires its own BC-3.8.016 "request type cannot be empty" guard)
   rather than mis-firing BC-3.8.012. `request_type.is_some()` is true for `Some("")`, so the
   dispatch fork's routing decision is unaffected by string emptiness.
-- **Before project-key resolution (step 4):** so a projectless invocation
+- **Before project-key resolution (step 3):** so a projectless invocation
   (`jr issue create --field a=b`) reports the BC-3.8.012 guard error, not "Project key is
   required" — the caller's actual mistake (a stray JSM-only flag) is surfaced first.
-- **Before interactive prompts (steps 4–6) and the blocking stdin read (step 7):** so the guard
+- **Before interactive prompts (steps 3–4) and the blocking stdin read (step 4a):** so the guard
   fires deterministically in TTY mode and never blocks on stdin waiting for description content
   that will never be used.
-- **Before all HTTP (steps 4, 8, 9):** the zero-HTTP guarantee above.
+- **Before all HTTP (steps 3, 5, 6):** the zero-HTTP guarantee above.
 
 ### Why not `#[arg(requires = "request_type")]`
 
