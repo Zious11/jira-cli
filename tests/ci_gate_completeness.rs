@@ -4828,9 +4828,18 @@ fn extract_and_normalize_if_expr(job_block: &str) -> Result<Option<String>, Stri
             text,
             style,
             tag,
+            has_anchor,
             start_line,
             end_line,
         }) => {
+            if *has_anchor {
+                return Err("has a job-level `if:` value carrying a YAML anchor \
+                     (`&...`) — S-CIGATE-3 B-1 fix \
+                     (VALUE-SIDE-ANCHOR-GAP-UNCLOSED): a node property on \
+                     a pinned key's VALUE is rejected outright rather than \
+                     resolved and trusted, the same as a value-side tag."
+                    .to_string());
+            }
             if tag.is_some() {
                 return Err(format!(
                     "has a job-level `if:` value carrying a YAML tag \
@@ -4997,9 +5006,18 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
             text,
             style,
             tag,
+            has_anchor,
             start_line,
             end_line,
         } => {
+            if *has_anchor {
+                return Err("has a `run:` value carrying a YAML anchor (`&...`) — \
+                     S-CIGATE-3 B-1 fix (VALUE-SIDE-ANCHOR-GAP-UNCLOSED): \
+                     a node property on a pinned key's VALUE is rejected \
+                     outright rather than resolved and trusted, the same \
+                     as a value-side tag."
+                    .to_string());
+            }
             if tag.is_some() {
                 return Err(format!(
                     "has a `run:` value carrying a YAML tag ({tag:?}) — \
@@ -5303,9 +5321,19 @@ fn extract_and_normalize_step_run_line_by_name(
             text,
             style,
             tag,
+            has_anchor,
             start_line,
             end_line,
         } => {
+            if *has_anchor {
+                return Err(format!(
+                    "'s `{step_name}` step has a `run:` value carrying a \
+                     YAML anchor (`&...`) — S-CIGATE-3 B-1 fix \
+                     (VALUE-SIDE-ANCHOR-GAP-UNCLOSED): a node property on \
+                     a pinned key's VALUE is rejected outright rather than \
+                     resolved and trusted, the same as a value-side tag."
+                ));
+            }
             if tag.is_some() {
                 return Err(format!(
                     "'s `{step_name}` step has a `run:` value carrying a \
@@ -6060,9 +6088,18 @@ fn extract_and_normalize_sole_needs_json_line(job_block: &str) -> Result<String,
             text,
             style,
             tag,
+            has_anchor,
             start_line,
             end_line,
         } => {
+            if has_anchor {
+                return Err("has a `NEEDS_JSON:` value carrying a YAML anchor \
+                     (`&...`) — S-CIGATE-3 B-1 fix \
+                     (VALUE-SIDE-ANCHOR-GAP-UNCLOSED): a node property on \
+                     a pinned key's VALUE is rejected outright rather than \
+                     resolved and trusted, the same as a value-side tag."
+                    .to_string());
+            }
             if tag.is_some() {
                 return Err(format!(
                     "has a `NEEDS_JSON:` value carrying a YAML tag \
@@ -6199,15 +6236,30 @@ fn extract_and_normalize_sole_needs_line(job_block: &str) -> Result<String, Stri
              silent miss."
             .to_string()),
         Some(Value::Other) => {
-            let span = common::wf::job_level_value_span(job_block, "needs").unwrap_or_else(|| {
-                panic!(
-                    "wf.rs: job_level_value_span returned None for `needs` \
+            let outcome =
+                common::wf::job_level_value_span(job_block, "needs").unwrap_or_else(|| {
+                    panic!(
+                        "wf.rs: job_level_value_span returned None for `needs` \
                      immediately after Job::value_of confirmed a mapping/\
                      sequence value present — this indicates a bug in this \
                      module's event-index bookkeeping, not malformed \
                      input."
-                )
-            });
+                    )
+                });
+            let span = match outcome {
+                common::wf::ValueSpanOutcome::NodeProperty { has_anchor, tag } => {
+                    return Err(format!(
+                        "has a job-level `needs:` value carrying a YAML \
+                         node property directly on the value node \
+                         (anchor={has_anchor}, tag={tag:?}) — S-CIGATE-3 \
+                         B-1 fix (VALUE-SIDE-ANCHOR-GAP-UNCLOSED): a node \
+                         property on a pinned key's VALUE is rejected \
+                         outright rather than resolved and trusted, \
+                         matching every other rewritten pin in this file."
+                    ));
+                }
+                common::wf::ValueSpanOutcome::Span(span) => span,
+            };
             let raw = &job_block[span];
 
             if raw.contains('\n') {
@@ -8084,7 +8136,24 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// (no such proof survived past the temporary/untracked `ci.yml` copies
 /// used to produce it during earlier passes) down to LOW. No other
 /// `#[test]` fn was added to or removed from THIS file in this pass.
-const EXPECTED_GUARD_TEST_COUNT: usize = 32;
+///
+/// S-CIGATE-3 (PR #680 review finding B-1 / VALUE-SIDE-ANCHOR-GAP-
+/// UNCLOSED): bumped 32 -> 38 for six new `#[test]` fns —
+/// `test_b1_if_expr_rejects_value_side_anchor`,
+/// `test_b1_sole_run_line_rejects_value_side_anchor`,
+/// `test_b1_step_run_line_by_name_rejects_value_side_anchor`,
+/// `test_b1_needs_json_line_rejects_value_side_anchor`,
+/// `test_b1_needs_line_rejects_value_side_anchor`, and
+/// `test_b1_needs_line_rejects_value_side_tag` — added to RED-prove, then
+/// pin, the fix closing the coverage regression left open by round 16's
+/// `find_key_node_properties`: a YAML node property on the VALUE side of
+/// an already-correctly-pinned scalar (or, for `needs:`'s flow-sequence
+/// form, the composite value node itself) previously slipped past all
+/// five byte-for-byte pins (`if:`, `run:` ×2 forms, `NEEDS_JSON:`,
+/// `needs:`). See `tests/common/wf.rs`'s `Value::Scalar::has_anchor` field
+/// and `ValueSpanOutcome` enum for the fix itself. No other `#[test]` fn
+/// was added to or removed from THIS file in this pass.
+const EXPECTED_GUARD_TEST_COUNT: usize = 38;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
@@ -8517,4 +8586,164 @@ fn test_ac_008_guards_are_key_spelling_and_indent_agnostic() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// S-CIGATE-3 B-1 fix: value-side node-property (anchor/tag) rejection on
+// the 5 byte-for-byte scalar/composite pins (`if:`, `run:` ×2 forms,
+// `NEEDS_JSON:`, `needs:`).
+//
+// PR #680 review finding B-1 / VALUE-SIDE-ANCHOR-GAP-UNCLOSED: a YAML node
+// property (`&anchor` and/or `!tag`) attached directly to the VALUE side of
+// an already-correctly-pinned scalar or sequence — e.g. `run: &x echo
+// "${NEEDS_JSON}" | bash scripts/check-ci-gate.sh` — resolved to
+// byte-identical `text`/`style` (or, for `needs:`'s flow-sequence form, a
+// byte-identical sliced span) as the un-anchored pinned form, so it slipped
+// past all five pins even though `find_key_node_properties`'s KEY-side
+// rejection (round-16, S-CIGATE-3) already closed the equivalent gap for a
+// node property on the KEY. Root cause: `resolve_value` (`tests/common/
+// wf.rs`) discarded `anchor_id` entirely, and `job_level_value_span`'s span
+// started at the composite value's CONTENT, not at a preceding node-
+// property token.
+//
+// Each test below is a RED proof: before the fix, `resolve_value` ignored
+// `anchor_id` and `job_level_value_span` never inspected the value node's
+// own anchor/tag, so every pin function here returned `Ok(_)` for a
+// value-side-anchored (or, for `needs:`, value-side-tagged) input whose
+// resolved text was otherwise byte-correct. After the fix, each returns
+// `Err(_)`, mirroring the existing value-side `tag` rejection these
+// functions (except the pre-fix `needs:` pin, which had no tag check
+// either) already had. Each test also asserts the POSITIVE control (the
+// identical fixture with the node property removed) still succeeds, so
+// this is not just a "reject everything" regression.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_b1_if_expr_rejects_value_side_anchor() {
+    let anchored = "gate-job:\n  if: &x ${{ always() }}\n  runs-on: ubuntu-latest\n";
+    let result = extract_and_normalize_if_expr(anchored);
+    assert!(
+        result.is_err(),
+        "FAIL (B-1 RED proof): extract_and_normalize_if_expr accepted a \
+         job-level `if:` value carrying a YAML anchor instead of \
+         rejecting it — got {result:?}.\njob_block:\n{anchored}"
+    );
+
+    // Positive control: the identical fixture minus the anchor must still
+    // resolve normally — this pin must not have become unconditionally
+    // rejecting.
+    let plain = "gate-job:\n  if: ${{ always() }}\n  runs-on: ubuntu-latest\n";
+    assert_eq!(
+        extract_and_normalize_if_expr(plain),
+        Ok(Some("${{ always() }}".to_string())),
+        "FAIL (B-1 positive control): the un-anchored form of the same \
+         `if:` value must still resolve successfully.\njob_block:\n{plain}"
+    );
+}
+
+#[test]
+fn test_b1_sole_run_line_rejects_value_side_anchor() {
+    let anchored =
+        "ci-gate:\n  runs-on: ubuntu-latest\n  steps:\n    - name: Gate\n      run: &x echo hi\n";
+    let result = extract_and_normalize_sole_run_line(anchored);
+    assert!(
+        result.is_err(),
+        "FAIL (B-1 RED proof): extract_and_normalize_sole_run_line \
+         accepted a `run:` value carrying a YAML anchor instead of \
+         rejecting it — got {result:?}.\njob_block:\n{anchored}"
+    );
+
+    let plain =
+        "ci-gate:\n  runs-on: ubuntu-latest\n  steps:\n    - name: Gate\n      run: echo hi\n";
+    assert_eq!(
+        extract_and_normalize_sole_run_line(plain),
+        Ok("echo hi".to_string()),
+        "FAIL (B-1 positive control): the un-anchored form of the same \
+         `run:` value must still resolve successfully.\njob_block:\n{plain}"
+    );
+}
+
+#[test]
+fn test_b1_step_run_line_by_name_rejects_value_side_anchor() {
+    const STEP_NAME: &str = "check-ci-gate self-test (fixture suite, S-CIGATE-2)";
+    let anchored = format!(
+        "spec-guard:\n  runs-on: ubuntu-latest\n  steps:\n    - name: {STEP_NAME}\n      run: &x bash scripts/check-ci-gate.sh --self-test\n"
+    );
+    let result = extract_and_normalize_step_run_line_by_name(&anchored, STEP_NAME);
+    assert!(
+        result.is_err(),
+        "FAIL (B-1 RED proof): extract_and_normalize_step_run_line_by_name \
+         accepted a `run:` value carrying a YAML anchor instead of \
+         rejecting it — got {result:?}.\njob_block:\n{anchored}"
+    );
+
+    let plain = format!(
+        "spec-guard:\n  runs-on: ubuntu-latest\n  steps:\n    - name: {STEP_NAME}\n      run: bash scripts/check-ci-gate.sh --self-test\n"
+    );
+    assert_eq!(
+        extract_and_normalize_step_run_line_by_name(&plain, STEP_NAME),
+        Ok("bash scripts/check-ci-gate.sh --self-test".to_string()),
+        "FAIL (B-1 positive control): the un-anchored form of the same \
+         `run:` value must still resolve successfully.\njob_block:\n{plain}"
+    );
+}
+
+#[test]
+fn test_b1_needs_json_line_rejects_value_side_anchor() {
+    let anchored = "ci-gate:\n  runs-on: ubuntu-latest\n  steps:\n    - name: Gate\n      run: echo hi\n      env:\n        NEEDS_JSON: &x ${{ toJSON(needs) }}\n";
+    let result = extract_and_normalize_sole_needs_json_line(anchored);
+    assert!(
+        result.is_err(),
+        "FAIL (B-1 RED proof): extract_and_normalize_sole_needs_json_line \
+         accepted a `NEEDS_JSON:` value carrying a YAML anchor instead of \
+         rejecting it — got {result:?}.\njob_block:\n{anchored}"
+    );
+
+    let plain = "ci-gate:\n  runs-on: ubuntu-latest\n  steps:\n    - name: Gate\n      run: echo hi\n      env:\n        NEEDS_JSON: ${{ toJSON(needs) }}\n";
+    assert_eq!(
+        extract_and_normalize_sole_needs_json_line(plain),
+        Ok("${{ toJSON(needs) }}".to_string()),
+        "FAIL (B-1 positive control): the un-anchored form of the same \
+         `NEEDS_JSON:` value must still resolve successfully.\n\
+         job_block:\n{plain}"
+    );
+}
+
+#[test]
+fn test_b1_needs_line_rejects_value_side_anchor() {
+    let anchored = "ci-gate:\n  runs-on: ubuntu-latest\n  needs: &x [fmt, clippy]\n";
+    let result = extract_and_normalize_sole_needs_line(anchored);
+    assert!(
+        result.is_err(),
+        "FAIL (B-1 RED proof): extract_and_normalize_sole_needs_line \
+         accepted a job-level `needs:` value carrying a YAML anchor \
+         instead of rejecting it — got {result:?}.\njob_block:\n{anchored}"
+    );
+
+    let plain = "ci-gate:\n  runs-on: ubuntu-latest\n  needs: [fmt, clippy]\n";
+    assert_eq!(
+        extract_and_normalize_sole_needs_line(plain),
+        Ok("[fmt, clippy]".to_string()),
+        "FAIL (B-1 positive control): the un-anchored form of the same \
+         `needs:` value must still resolve successfully.\njob_block:\n{plain}"
+    );
+}
+
+#[test]
+fn test_b1_needs_line_rejects_value_side_tag() {
+    // Unlike the other four pins, `extract_and_normalize_sole_needs_line`
+    // had NO tag check at all before this fix (its `needs:` value is a
+    // flow sequence, resolved via `Value::Other` + a raw `job_level_value_
+    // span` slice, never through `resolve_value`'s `Value::Scalar` arm
+    // where the other four pins' pre-existing tag checks live) — so this
+    // is the one pin where a value-side TAG, not just a value-side
+    // anchor, was previously unguarded.
+    let tagged = "ci-gate:\n  runs-on: ubuntu-latest\n  needs: !!seq [fmt, clippy]\n";
+    let result = extract_and_normalize_sole_needs_line(tagged);
+    assert!(
+        result.is_err(),
+        "FAIL (B-1 RED proof): extract_and_normalize_sole_needs_line \
+         accepted a job-level `needs:` value carrying a YAML tag instead \
+         of rejecting it — got {result:?}.\njob_block:\n{tagged}"
+    );
 }

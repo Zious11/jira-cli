@@ -133,6 +133,20 @@ pub enum Value {
         /// specific tag form outright, the way `ci_gate_completeness.rs`'s
         /// round-16 node-property guards do for mapping KEYS.
         tag: Option<String>,
+        /// Whether the scalar carries a YAML anchor (`&x`) directly on
+        /// itself (e.g. `run: &x cargo check`).
+        ///
+        /// Added by S-CIGATE-3 fix (B-1 / VALUE-SIDE-ANCHOR-GAP-UNCLOSED):
+        /// `resolve_value` used to discard `anchor_id` entirely, so a
+        /// value-side anchor on an otherwise byte-correct pinned scalar
+        /// (`run: &x echo "${NEEDS_JSON}" | bash scripts/check-ci-gate.sh`)
+        /// was invisible to every byte-pin assertion in
+        /// `tests/ci_gate_completeness.rs` that reads a `Value::Scalar`'s
+        /// `text`/`style`/`tag` — mirrors `tag`'s existing rationale above,
+        /// just for the anchor half of a YAML node property instead of the
+        /// tag half. See [`find_key_node_properties`]'s doc comment,
+        /// "Scope correction" section, for the full before/after account.
+        has_anchor: bool,
         /// The 1-indexed source line the scalar's span STARTS on, via
         /// `Marker::line()` (confirmed 1-indexed and accurate — see module
         /// docs; unlike `Marker::col()`/`index()`, no known doc-comment
@@ -781,12 +795,13 @@ fn read_sequence(events: &[(Event<'_>, Span)], start: usize) -> (Vec<(usize, usi
 /// `events[value_start]`.
 fn resolve_value(events: &[(Event<'_>, Span)], value_start: usize) -> Value {
     match &events[value_start].0 {
-        Event::Scalar(text, style, _anchor_id, tag) => {
+        Event::Scalar(text, style, anchor_id, tag) => {
             let span = events[value_start].1;
             Value::Scalar {
                 text: text.to_string(),
                 style: *style,
                 tag: tag.as_ref().map(|t| format!("{}{}", t.handle, t.suffix)),
+                has_anchor: *anchor_id != 0,
                 start_line: span.start.line(),
                 end_line: span.end.line(),
             }
@@ -944,29 +959,44 @@ pub struct KeyNodeProperty {
 /// itself, independent of whether the key's SET membership also happens to
 /// be correct.
 ///
-/// # Scope correction (S-CIGATE-3 fix-burst-4, ADV-SC3-P2-LOW-004): KEY
-/// anchors and tags only, not VALUE anchors
+/// # Scope correction (S-CIGATE-3 fix-burst-4, ADV-SC3-P2-LOW-004; CLOSED
+/// by a later fix — see the paragraph after next): KEY anchors and tags
+/// only, not VALUE anchors
 ///
 /// In `&x run: some-other-command`, `&x` attaches to the KEY node `run`
 /// (YAML node properties bind to the node immediately following them —
 /// here that's the key scalar, not the value scalar), which is exactly
 /// what [`MapEntry::key_has_anchor`]/`key_tag` capture and this function
 /// scans for. A DIFFERENT construct — `run: &x some-other-command`, an
-/// anchor on the VALUE — is NOT covered by this function, nor by anything
-/// else in this module: [`resolve_value`] deliberately captures a value
-/// scalar's `tag` (see [`Value::Scalar::tag`]) but discards its
-/// `anchor_id` entirely, so a VALUE-side anchor on an already-pinned
-/// scalar (e.g. `run: &x cargo check --all-features --locked`) is
-/// currently invisible to every byte-pin assertion in
-/// `tests/ci_gate_completeness.rs` that reads a `Value::Scalar`'s `text`/
-/// `style`/`tag` — an anchor alone does not change the resolved `text` a
-/// pin compares against, and a later `*x` alias appearing in a PINNED
-/// slot is independently hard-rejected as `Value::Alias` by every pin
-/// function's own match arms, but this is a real, if currently
-/// unexploited, asymmetry between what this doc comment's KEY-anchor
-/// guarantee implies and what the VALUE side actually has. Not fixed in
-/// this pass — see `ADV-SC3-P2-LOW-004` for the full analysis of why no
-/// live exploit was constructible from this gap alone.
+/// anchor on the VALUE — was NOT covered by this function, nor (at the
+/// time this section was first written) by anything else in this module:
+/// [`resolve_value`] deliberately captured a value scalar's `tag` (see
+/// [`Value::Scalar::tag`]) but discarded its `anchor_id` entirely, so a
+/// VALUE-side anchor on an already-pinned scalar (e.g. `run: &x cargo
+/// check --all-features --locked`) was invisible to every byte-pin
+/// assertion in `tests/ci_gate_completeness.rs` that reads a
+/// `Value::Scalar`'s `text`/`style`/`tag`.
+///
+/// **This gap is now CLOSED (S-CIGATE-3, PR #680 review finding B-1 /
+/// VALUE-SIDE-ANCHOR-GAP-UNCLOSED) for the five pins that need it.**
+/// [`Value::Scalar`] gained a `has_anchor: bool` field, [`resolve_value`]
+/// now captures `anchor_id != 0` into it instead of discarding it, and
+/// [`job_level_value_span`] (the composite-value sibling used for
+/// `needs:`'s flow-sequence form, which has no single `Event::Scalar` to
+/// route through `resolve_value` at all) now inspects the value node's own
+/// `anchor_id`/`tag` directly and returns [`ValueSpanOutcome::NodeProperty`]
+/// instead of a slice-able span when either is present. Every one of the
+/// five byte-for-byte pins in `tests/ci_gate_completeness.rs`
+/// (`extract_and_normalize_if_expr`, `extract_and_normalize_sole_run_line`,
+/// `extract_and_normalize_step_run_line_by_name`,
+/// `extract_and_normalize_sole_needs_json_line`, and
+/// `extract_and_normalize_sole_needs_line`) now rejects a value-side
+/// anchor the same way it already rejected a value-side tag — closing the
+/// asymmetry this section used to describe between the KEY-anchor
+/// guarantee above and what the VALUE side actually had. A later `*x`
+/// alias appearing in a pinned slot remains independently hard-rejected
+/// as `Value::Alias` by every pin function's own match arms, unchanged by
+/// this fix.
 ///
 /// # Additional accepted residuals (adversarial pass 5, S-CIGATE-3, LOW)
 ///
@@ -1155,6 +1185,38 @@ impl WfDoc {
     }
 }
 
+/// Outcome of [`job_level_value_span`]'s lookup for a composite (mapping or
+/// sequence) job-level value.
+///
+/// Added by S-CIGATE-3 fix (B-1 / VALUE-SIDE-ANCHOR-GAP-UNCLOSED): before
+/// this, `job_level_value_span` returned a bare `Option<Range<usize>>` whose
+/// span started at the value node's CONTENT — not at a preceding node
+/// property token — so `needs: &x [fmt, clippy, ...]` sliced out exactly
+/// `"[fmt, clippy, ...]"`, byte-identical to the pin, with the anchor
+/// silently dropped. This mirrors [`Value::Scalar`]'s `has_anchor`/`tag`
+/// fields, just for a composite (non-scalar) value node, which
+/// `resolve_value` never captured node-property info for either (it
+/// collapses every `MappingStart`/`SequenceStart` to `Value::Other`
+/// regardless of anchor/tag).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueSpanOutcome {
+    /// The value node's byte span, safe to slice verbatim for a byte-pin
+    /// comparison — the node carries no anchor or tag directly on itself.
+    Span(Range<usize>),
+    /// The value node itself carries a YAML anchor and/or tag directly on
+    /// it (e.g. `needs: &x [fmt, clippy]` or `needs: !!seq [fmt, clippy]`).
+    /// The caller MUST reject this rather than slice past the node
+    /// property — mirrors [`find_key_node_properties`]'s KEY-side
+    /// rejection, applied here to the VALUE side.
+    NodeProperty {
+        /// Whether the value node carries a YAML anchor (`&x`).
+        has_anchor: bool,
+        /// The value node's tag (e.g. `!!seq`), if any, as `handle` +
+        /// `suffix` concatenated.
+        tag: Option<String>,
+    },
+}
+
 /// Resolve the byte SPAN (into `job_block`) of the job-level value of key
 /// `key`, PROVIDED that value is itself a mapping or sequence node (for a
 /// scalar/alias value, use [`Job::value_of`] instead — this function exists
@@ -1163,7 +1225,9 @@ impl WfDoc {
 ///
 /// Returns `None` if `job_block`'s job has no `key` at its own (job) level,
 /// or `key`'s value there is a scalar or alias rather than a mapping/
-/// sequence.
+/// sequence. Returns `Some(ValueSpanOutcome::NodeProperty { .. })`, instead
+/// of a span, if the value node itself carries an anchor and/or tag — see
+/// [`ValueSpanOutcome`]'s doc comment.
 ///
 /// # Why span-slicing instead of reconstructing from resolved values
 ///
@@ -1180,7 +1244,7 @@ impl WfDoc {
 /// a raw substring search), just applied to a composite value instead of a
 /// single scalar's resolved text.
 #[must_use]
-pub fn job_level_value_span(job_block: &str, key: &str) -> Option<Range<usize>> {
+pub fn job_level_value_span(job_block: &str, key: &str) -> Option<ValueSpanOutcome> {
     let events: Vec<(Event<'_>, Span)> = Parser::new_from_str(job_block)
         .collect::<Result<Vec<_>, ScanError>>()
         .unwrap_or_else(|e| {
@@ -1203,11 +1267,17 @@ pub fn job_level_value_span(job_block: &str, key: &str) -> Option<Range<usize>> 
 
     let target = find_unique_entry(&body_entries, key, "job_level_value_span")?;
     match &events[target.value_start].0 {
-        Event::MappingStart(..) | Event::SequenceStart(..) => {
+        Event::MappingStart(anchor_id, tag) | Event::SequenceStart(anchor_id, tag) => {
+            if *anchor_id != 0 || tag.is_some() {
+                return Some(ValueSpanOutcome::NodeProperty {
+                    has_anchor: *anchor_id != 0,
+                    tag: tag.as_ref().map(|t| format!("{}{}", t.handle, t.suffix)),
+                });
+            }
             let value_end = skip_node(&events, target.value_start);
             let start_byte = table[events[target.value_start].1.start.index()];
             let end_byte = table[events[value_end - 1].1.end.index()];
-            Some(start_byte..end_byte)
+            Some(ValueSpanOutcome::Span(start_byte..end_byte))
         }
         _ => None,
     }
