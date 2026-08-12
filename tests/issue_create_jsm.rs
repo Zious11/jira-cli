@@ -12,9 +12,12 @@
 //! AC-013 proptest properties live in `src/cli/issue/create.rs::mod parse_field_kv_proptests`.
 //! AC-014 proptest properties live in `src/api/jsm/requests.rs::mod proptests`.
 
+#[allow(dead_code)]
+mod common;
+
 use assert_cmd::Command;
 use serde_json::{Value, json};
-use wiremock::matchers::{body_partial_json, method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ─── Shared mock fixture helpers ──────────────────────────────────────────────
@@ -2378,17 +2381,30 @@ async fn test_jsm_create_markdown_without_description_exits_64_with_platform_mes
     );
 }
 
-// ─── S-383: Platform-path inverse warnings (BC-3.8.012 / BC-3.8.013) ─────────
+// ─── S-639-1: Platform-path pre-flight exit-64 guards (BC-3.8.012 / BC-3.8.013,
+//     DEC-188) ─────────────────────────────────────────────────────────────────
 //
 // These tests live in `issue_create_jsm.rs` by the explicit decision in the
 // S-383 story file (`.factory/stories/S-383-platform-inverse-warnings.md`
-// §"Test File Decision").  They are PLATFORM-PATH tests — no `--request-type`
-// flag — co-located here because they cover the inverse symmetry of the
-// BC-3.8.011 forward-direction warnings already in this file.
+// §"Test File Decision"), carried forward by S-639-1
+// (`.factory/stories/S-639-1.md`). They are PLATFORM-PATH tests — no
+// `--request-type` flag — co-located here because they cover the inverse
+// symmetry of the BC-3.8.011 forward-direction warnings already in this file.
 //
-// Red Gate: all 7 tests MUST fail against the unmodified implementation
-// in `src/cli/issue/create.rs`.  The implementation change (2 `eprintln!`
-// guards) is introduced in a subsequent commit.
+// **IMPLEMENTING SUCCESSOR to S-383 (DEC-188, 2026-07-25):** the S-383
+// warn-and-proceed contract (exit 0 + issue created despite the stray flag)
+// is SUPERSEDED by a pre-flight `JrError::UserError` exit-64 guard that fires
+// BEFORE any HTTP call. AC-1/AC-2/AC-3/AC-5/AC-7 below are INVERTED from
+// exit-0 to exit-64 (renamed per the story's "Superseded Tests" table);
+// AC-4/AC-6 are vacuity→non-vacuity transitions (same names, updated bodies).
+// AC-8 through AC-21 are new tests added by S-639-1.
+//
+// Red Gate: every test below asserting exit-64 + a new verbatim error string
+// MUST fail against the unmodified (S-383-era) implementation in
+// `src/cli/issue/create.rs`, which still warns-and-proceeds (exit 0) for
+// `--field` / `--on-behalf-of` without `--request-type`. The guard
+// implementation (3-branch pre-flight check after the JSM dispatch fork) is
+// introduced in a subsequent commit — see S-639-1 Task 3.
 
 /// Helper: mount the two stubs the platform path needs (POST /rest/api/3/issue
 /// + GET /rest/api/3/field for CMDB discovery) and return the key "PROJ-123".
@@ -2410,19 +2426,25 @@ async fn mount_platform_create_stubs(server: &wiremock::MockServer) {
         .await;
 }
 
-// ─── AC-1: --field on platform path emits BC-3.8.012 warning ─────────────────
+// ─── AC-1: --field on platform path exits 64 pre-flight (BC-3.8.012) ─────────
 
-/// AC-1 (BC-3.8.012 postcondition 1): `jr issue create --field NAME=VALUE`
-/// WITHOUT `--request-type` emits exactly the verbatim BC-3.8.012 warning on
-/// stderr.  The platform POST to `/rest/api/3/issue` proceeds; exit code 0.
-/// The JSM endpoint is never called.
+/// AC-1 (BC-3.8.012, [mode: human]): `jr issue create --field NAME=VALUE`
+/// WITHOUT `--request-type` exits 64 BEFORE any HTTP, with the verbatim
+/// BC-3.8.012 single-flag error on stderr. INVERTED from the S-383 exit-0
+/// warn-and-proceed contract (DEC-188). Renamed from
+/// `test_platform_create_field_flag_emits_warning_without_request_type`.
+///
+/// Pairing: symmetric twin of AC-10 ([mode: --output json]) for the same
+/// invocation class.
 #[tokio::test]
-async fn test_platform_create_field_flag_emits_warning_without_request_type() {
+async fn test_platform_create_field_flag_exits_64_without_request_type() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
-    write_minimal_config(config_dir.path(), &server.uri());
+    common::fixtures::write_profile_config(config_dir.path(), &server.uri());
 
+    // Would-otherwise-succeed precondition — proves the guard fires pre-flight,
+    // not merely that the platform POST happens to be unreachable.
     mount_platform_create_stubs(&server).await;
 
     // JSM endpoint must NEVER be called.
@@ -2451,10 +2473,8 @@ async fn test_platform_create_field_flag_emits_warning_without_request_type() {
             "--summary",
             "test",
             "--field",
-            "NAME=VALUE",
+            "a=b",
             "--no-input",
-            "--output",
-            "json",
         ])
         .output()
         .unwrap();
@@ -2462,288 +2482,403 @@ async fn test_platform_create_field_flag_emits_warning_without_request_type() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "BC-3.8.012 / AC-1: expected exit 0; got {:?}. stderr: {stderr}",
-        output.status.code()
-    );
-    assert!(
-        stderr.contains("warning: --field is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To pass custom fields to a JSM request type, also supply --request-type."),
-        "BC-3.8.012 / AC-1: verbatim warning must appear on stderr; got: {stderr}"
-    );
-    assert!(
-        stdout.contains("PROJ-123"),
-        "BC-3.8.012 / AC-1: platform issue key must appear on stdout; got: {stdout}"
-    );
-    // Warning must NOT bleed onto stdout.
-    assert!(
-        !stdout.contains("warning: --field is ignored"),
-        "BC-3.8.012 / AC-1: warning must be on stderr only, not stdout; got: {stdout}"
-    );
-    // The .expect(0) on the JSM mock is enforced on server drop.
-}
-
-// ─── AC-2: --on-behalf-of on platform path emits BC-3.8.013 warning ──────────
-
-/// AC-2 (BC-3.8.013 postcondition 1): `jr issue create --on-behalf-of <ID>`
-/// WITHOUT `--request-type` emits exactly the verbatim BC-3.8.013 warning on
-/// stderr.  The platform POST proceeds; exit code 0.  The JSM endpoint is
-/// never called.
-#[tokio::test]
-async fn test_platform_create_on_behalf_of_flag_emits_warning_without_request_type() {
-    let server = MockServer::start().await;
-    let cache_dir = tempfile::tempdir().unwrap();
-    let config_dir = tempfile::tempdir().unwrap();
-    write_minimal_config(config_dir.path(), &server.uri());
-
-    mount_platform_create_stubs(&server).await;
-
-    Mock::given(method("POST"))
-        .and(path("/rest/servicedeskapi/request"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
-        .expect(0)
-        .mount(&server)
-        .await;
-
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .env("XDG_CACHE_HOME", cache_dir.path())
-        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
-        .args([
-            "issue",
-            "create",
-            "--project",
-            "PROJ",
-            "--type",
-            "Task",
-            "--summary",
-            "test",
-            "--on-behalf-of",
-            "fake-account-id",
-            "--no-input",
-            "--output",
-            "json",
-        ])
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(
-        output.status.success(),
-        "BC-3.8.013 / AC-2: expected exit 0; got {:?}. stderr: {stderr}",
-        output.status.code()
-    );
-    assert!(
-        stderr.contains("warning: --on-behalf-of is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To raise a request on behalf of another user, also supply --request-type."),
-        "BC-3.8.013 / AC-2: verbatim warning must appear on stderr; got: {stderr}"
-    );
-    assert!(
-        stdout.contains("PROJ-123"),
-        "BC-3.8.013 / AC-2: platform issue key must appear on stdout; got: {stdout}"
-    );
-    assert!(
-        !stdout.contains("warning: --on-behalf-of is ignored"),
-        "BC-3.8.013 / AC-2: warning must be on stderr only, not stdout; got: {stdout}"
-    );
-}
-
-// ─── AC-3: Both --field + --on-behalf-of emit independent warnings ────────────
-
-/// AC-3 (BC-3.8.012 postcondition 3 + BC-3.8.013 postcondition 3): When both
-/// `--field NAME=VALUE` and `--on-behalf-of <ID>` are supplied WITHOUT
-/// `--request-type`, BOTH verbatim warnings fire independently on stderr.
-/// Each appears at least once.  Ordering is not asserted.  Platform POST
-/// proceeds normally; exit code 0.
-#[tokio::test]
-async fn test_platform_create_both_inverse_flags_emit_independent_warnings() {
-    let server = MockServer::start().await;
-    let cache_dir = tempfile::tempdir().unwrap();
-    let config_dir = tempfile::tempdir().unwrap();
-    write_minimal_config(config_dir.path(), &server.uri());
-
-    mount_platform_create_stubs(&server).await;
-
-    Mock::given(method("POST"))
-        .and(path("/rest/servicedeskapi/request"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
-        .expect(0)
-        .mount(&server)
-        .await;
-
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .env("XDG_CACHE_HOME", cache_dir.path())
-        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
-        .args([
-            "issue",
-            "create",
-            "--project",
-            "PROJ",
-            "--type",
-            "Task",
-            "--summary",
-            "test",
-            "--field",
-            "A=1",
-            "--on-behalf-of",
-            "fake-id",
-            "--no-input",
-            "--output",
-            "json",
-        ])
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(
-        output.status.success(),
-        "BC-3.8.012+013 / AC-3: expected exit 0; got {:?}. stderr: {stderr}",
-        output.status.code()
-    );
-    assert!(
-        stderr.contains("warning: --field is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To pass custom fields to a JSM request type, also supply --request-type."),
-        "BC-3.8.012 / AC-3: BC-3.8.012 warning must appear on stderr; got: {stderr}"
-    );
-    assert!(
-        stderr.contains("warning: --on-behalf-of is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To raise a request on behalf of another user, also supply --request-type."),
-        "BC-3.8.013 / AC-3: BC-3.8.013 warning must appear on stderr; got: {stderr}"
-    );
-}
-
-// ─── AC-4: No inverse flags → no new warnings ────────────────────────────────
-
-/// AC-4 (BC-3.8.012 postcondition 4 + BC-3.8.013 postcondition 4 — negative
-/// case): `jr issue create --project PROJ --summary "Foo"` WITHOUT `--field`
-/// AND WITHOUT `--on-behalf-of` AND WITHOUT `--request-type` must NOT emit
-/// either inverse warning.  Stderr is byte-identical to pre-issue-#383 behavior.
-#[tokio::test]
-async fn test_platform_create_without_inverse_flags_emits_no_new_warnings() {
-    let server = MockServer::start().await;
-    let cache_dir = tempfile::tempdir().unwrap();
-    let config_dir = tempfile::tempdir().unwrap();
-    write_minimal_config(config_dir.path(), &server.uri());
-
-    mount_platform_create_stubs(&server).await;
-
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .env("XDG_CACHE_HOME", cache_dir.path())
-        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
-        .args([
-            "issue",
-            "create",
-            "--project",
-            "PROJ",
-            "--type",
-            "Task",
-            "--summary",
-            "Foo",
-            "--no-input",
-            "--output",
-            "json",
-        ])
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(
-        output.status.success(),
-        "BC-3.8.012+013 / AC-4: expected exit 0; got {:?}. stderr: {stderr}",
-        output.status.code()
-    );
-    assert!(
-        !stderr.contains("--field is ignored"),
-        "BC-3.8.012 / AC-4: BC-3.8.012 warning must NOT appear when --field is absent; got: {stderr}"
-    );
-    assert!(
-        !stderr.contains("--on-behalf-of is ignored"),
-        "BC-3.8.013 / AC-4: BC-3.8.013 warning must NOT appear when --on-behalf-of is absent; got: {stderr}"
-    );
-}
-
-// ─── AC-5: Multiple --field occurrences emit exactly ONE warning ──────────────
-
-/// AC-5 (BC-3.8.012 postcondition 2 — idempotency): `--field A=1 --field A=2
-/// --field B=3` WITHOUT `--request-type` emits the BC-3.8.012 warning EXACTLY
-/// ONCE — the per-logical-flag-NAME rule means `--field` is one logical flag
-/// regardless of how many NAME=VALUE pairs are supplied.
-#[tokio::test]
-async fn test_platform_create_field_idempotent_one_warning_per_logical_flag() {
-    let server = MockServer::start().await;
-    let cache_dir = tempfile::tempdir().unwrap();
-    let config_dir = tempfile::tempdir().unwrap();
-    write_minimal_config(config_dir.path(), &server.uri());
-
-    mount_platform_create_stubs(&server).await;
-
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .env("XDG_CACHE_HOME", cache_dir.path())
-        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
-        .args([
-            "issue",
-            "create",
-            "--project",
-            "PROJ",
-            "--type",
-            "Task",
-            "--summary",
-            "test",
-            "--field",
-            "A=1",
-            "--field",
-            "A=2",
-            "--field",
-            "B=3",
-            "--no-input",
-            "--output",
-            "json",
-        ])
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(
-        output.status.success(),
-        "BC-3.8.012 / AC-5: expected exit 0; got {:?}. stderr: {stderr}",
-        output.status.code()
-    );
     assert_eq!(
-        stderr
-            .matches("warning: --field is ignored on the platform create path")
-            .count(),
-        1,
-        "BC-3.8.012 / AC-5: warning must appear EXACTLY ONCE regardless of --field count; got: {stderr}"
+        output.status.code(),
+        Some(64),
+        "BC-3.8.012 / AC-1: expected exit 64; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Error: "),
+        "BC-3.8.012 / AC-1: human-mode 'Error: ' prefix must appear; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-1: prefix pin must appear on stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "--field is only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to submit a JSM request with custom fields, or drop --field to create a standard platform issue."
+        ),
+        "BC-3.8.012 / AC-1: FULL-STRING verbatim single-flag error must appear on stderr; got: {stderr}"
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "BC-3.8.012 / AC-1: stdout must be empty (HYGIENE); got: {stdout}"
+    );
+    assert!(
+        !stderr.contains("Created issue"),
+        "BC-3.8.012 / AC-1: DISCRIMINATING — no success path must have executed; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012 / AC-1: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
+    );
+    // The .expect(0) on the JSM mock is enforced on server drop. The
+    // NORMATIVE zero-HTTP proof (received_requests().is_empty()) is covered
+    // by AC-8, which uses an isolated MockServer specifically for that check.
+}
+
+// ─── AC-2: --on-behalf-of on platform path exits 64 pre-flight (BC-3.8.013) ──
+
+/// AC-2 (BC-3.8.013, [mode: --output json]): `jr issue create --on-behalf-of
+/// <ID>` WITHOUT `--request-type` exits 64 with a JSON error envelope on
+/// stderr. INVERTED from the S-383 exit-0 warn-and-proceed contract
+/// (DEC-188). Renamed from
+/// `test_platform_create_on_behalf_of_flag_emits_warning_without_request_type`.
+#[tokio::test]
+async fn test_platform_create_on_behalf_of_flag_exits_64_without_request_type() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    // Pre-migrated config REQUIRED — assert_json_error_envelope strict-parses
+    // stderr as JSON; the legacy [instance] shape triggers a migration line
+    // that would poison the parse.
+    common::fixtures::write_profile_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--on-behalf-of",
+            "X",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    common::assertions::assert_json_error_envelope(&output, 64, "BC-3.8.013 / AC-2");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert!(
+        parsed["error"]
+            .as_str()
+            .is_some_and(|s| s.contains("--on-behalf-of is only valid with")),
+        "BC-3.8.013 / AC-2: error field must contain the single-flag prefix pin; got: {parsed}"
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "BC-3.8.013 / AC-2: DISCRIMINATING — stdout must be empty; got: {stdout}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.013 / AC-2: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
+    );
+}
+
+// ─── AC-3: Both --field + --on-behalf-of exit 64 with ONE combined error ─────
+
+/// AC-3 (BC-3.8.012 combined postcondition, [mode: human]): When both
+/// `--field NAME=VALUE` and `--on-behalf-of <ID>` are supplied WITHOUT
+/// `--request-type`, exactly ONE combined `JrError::UserError` fires
+/// (exit 64) — NOT two independent single-flag errors. INVERTED from the
+/// S-383 exit-0 warn-and-proceed contract (DEC-188). Renamed from
+/// `test_platform_create_both_inverse_flags_emit_independent_warnings`.
+#[tokio::test]
+async fn test_platform_create_both_inverse_flags_exit_64_combined_error() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "a=b",
+            "--on-behalf-of",
+            "X",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.012 / AC-3: expected exit 64; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("--field and --on-behalf-of are only valid with"),
+        "BC-3.8.012 / AC-3: combined-error prefix pin must appear on stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "--field and --on-behalf-of are only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to use these flags, or drop them to create a standard platform issue."
+        ),
+        "BC-3.8.012 / AC-3: FULL-STRING verbatim combined error must appear on stderr; got: {stderr}"
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "BC-3.8.012 / AC-3: stdout must be empty (HYGIENE); got: {stdout}"
+    );
+    assert!(
+        !stderr.contains("Created issue"),
+        "BC-3.8.012 / AC-3: DISCRIMINATING — no success path must have executed; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-3: FALSIFIABLE-COARSE — single-flag guard must NOT fire instead of combined; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--on-behalf-of is only valid with"),
+        "BC-3.8.013 / AC-3: FALSIFIABLE-COARSE — single-flag guard must NOT fire instead of combined; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012+013 / AC-3: REGRESSION PIN — old S-383 warn strings must not appear; got: {stderr}"
+    );
+}
+
+// ─── AC-4: No inverse flags → no pre-flight errors (regression baseline) ─────
+
+/// AC-4 (BC-3.8.012 negative postcondition — clean-path regression baseline,
+/// [mode: --output json]): `jr issue create --project PROJ --summary "test"`
+/// WITHOUT `--field` AND WITHOUT `--on-behalf-of` AND WITHOUT `--request-type`
+/// must NOT trip any of the three new pre-flight guard error strings. Exit
+/// code stays 0 (BREAKING-CHANGE REGRESSION PIN, H-NEW-PREFLIGHT-004).
+///
+/// **AC-4 VACUITY→NON-VACUITY TRANSITION (DEC-188):** the old assertions
+/// (`!stderr.contains("--field is ignored")` / the `--on-behalf-of` twin) are
+/// vacuously true post-DEC-188 — those substrings no longer exist ANYWHERE in
+/// the codebase, so they would pass even if the guard fired unconditionally.
+/// Replaced with FALSIFIABLE-COARSE negatives on the three NEW error
+/// substrings, which DO catch an unconditionally-firing guard.
+/// Renamed from `test_platform_create_without_inverse_flags_emits_no_new_warnings`.
+#[tokio::test]
+async fn test_platform_create_without_inverse_flags_emits_no_errors() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "BC-3.8.012+013 / AC-4: expected exit 0 (H-NEW-PREFLIGHT-004 regression pin); got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-4: FALSIFIABLE-COARSE — single-flag guard must NOT fire on a clean invocation; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--on-behalf-of is only valid with"),
+        "BC-3.8.013 / AC-4: FALSIFIABLE-COARSE — single-flag guard must NOT fire on a clean invocation; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field and --on-behalf-of are only valid with"),
+        "BC-3.8.012 / AC-4: FALSIFIABLE-COARSE — combined guard must NOT fire on a clean invocation; got: {stderr}"
+    );
+}
+
+// ─── AC-5: Multiple --field occurrences → exactly ONE idempotent error ────────
+
+/// AC-5 (BC-3.8.012 idempotency postcondition, [mode: human]): `--field a=b`
+/// (ONE occurrence) and `--field a=b --field c=d` (TWO occurrences) WITHOUT
+/// `--request-type` both exit 64 with the SAME single-flag error — the guard
+/// fires on `!field_pairs.is_empty()` (presence-only), so `--field` is one
+/// logical flag regardless of how many NAME=VALUE pairs are supplied.
+/// INVERTED from the S-383 exit-0 warn-and-proceed contract (DEC-188).
+/// Renamed from `test_platform_create_field_idempotent_one_warning_per_logical_flag`.
+///
+/// Two-invocation comparison test — deliberately separate from AC-1.
+#[tokio::test]
+async fn test_platform_create_field_idempotent_one_error_per_logical_flag() {
+    // Invocation (i): exactly ONE --field.
+    let server_i = MockServer::start().await;
+    let cache_dir_i = tempfile::tempdir().unwrap();
+    let config_dir_i = tempfile::tempdir().unwrap();
+    common::fixtures::write_profile_config(config_dir_i.path(), &server_i.uri());
+    mount_platform_create_stubs(&server_i).await;
+
+    let output_i = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server_i.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir_i.path())
+        .env("JR_CACHE_DIR", cache_dir_i.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir_i.path())
+        .env("JR_CONFIG_DIR", config_dir_i.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "a=b",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    // Invocation (ii): exactly TWO --field occurrences.
+    let server_ii = MockServer::start().await;
+    let cache_dir_ii = tempfile::tempdir().unwrap();
+    let config_dir_ii = tempfile::tempdir().unwrap();
+    common::fixtures::write_profile_config(config_dir_ii.path(), &server_ii.uri());
+    mount_platform_create_stubs(&server_ii).await;
+
+    let output_ii = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server_ii.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir_ii.path())
+        .env("JR_CACHE_DIR", cache_dir_ii.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir_ii.path())
+        .env("JR_CONFIG_DIR", config_dir_ii.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "a=b",
+            "--field",
+            "c=d",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr_i = String::from_utf8_lossy(&output_i.stderr).to_string();
+    let stderr_ii = String::from_utf8_lossy(&output_ii.stderr).to_string();
+
+    for (label, output, stderr) in [
+        ("AC-5(i, n=1)", &output_i, &stderr_i),
+        ("AC-5(ii, n=2)", &output_ii, &stderr_ii),
+    ] {
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.8.012 / {label}: expected exit 64; got {:?}. stderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("--field is only valid with"),
+            "BC-3.8.012 / {label}: anchor — single-flag error must appear; got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("is ignored on the platform create path"),
+            "BC-3.8.012 / {label}: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("Created issue"),
+            "BC-3.8.012 / {label}: DISCRIMINATING — no success path must have executed; got: {stderr}"
+        );
+    }
+
+    // Byte-identity: ONE error regardless of --field count (idempotent per-flag,
+    // not per-value). The anchor assertions above guarantee this isn't merely
+    // two identical "Created issue" success paths.
+    assert_eq!(
+        stderr_i, stderr_ii,
+        "BC-3.8.012 / AC-5: stderr must be byte-identical for n=1 and n=2 --field occurrences \
+         (idempotent, presence-only guard); i={stderr_i} ii={stderr_ii}"
     );
 }
 
 // ─── AC-6: JSM path + --field does NOT fire BC-3.8.012 (regression gate) ─────
 
-/// AC-6 (BC-3.8.011 invariant — forward-path regression gate): When
-/// `--request-type` IS set alongside `--field NAME=VALUE`, the command takes
-/// the JSM path and BC-3.8.012 must NOT fire.  The existing BC-3.8.011
-/// forward-direction warning tests remain unaffected by the S-383 change.
+/// AC-6 (BC-3.8.012 JSM-path non-mis-fire, BC-3.3.001 regression baseline,
+/// [mode: --output json]): When `--request-type` IS set alongside `--field
+/// NAME=VALUE`, the command takes the JSM path and neither the BC-3.8.012
+/// single-flag nor combined guard may fire. Exit code stays 0. The
+/// `expect(1)` POST stub below is KEPT (load-bearing).
+///
+/// **AC-6 VACUITY→NON-VACUITY TRANSITION (DEC-188):** the old assertion
+/// (`!stderr.contains("--field is ignored on the platform create path")`) is
+/// vacuously true post-DEC-188 — that substring no longer exists anywhere in
+/// the codebase. Replaced with DISCRIMINATING + FALSIFIABLE-COARSE negatives
+/// on the new guard error substrings.
 #[tokio::test]
 async fn test_jsm_create_with_field_and_request_type_does_not_fire_bc_3_8_012() {
     let server = MockServer::start().await;
@@ -2796,24 +2931,30 @@ async fn test_jsm_create_with_field_and_request_type_does_not_fire_bc_3_8_012() 
         output.status.code()
     );
     assert!(
-        !stderr.contains("--field is ignored on the platform create path"),
-        "BC-3.8.012 / AC-6: BC-3.8.012 warning must NOT fire on JSM path; got: {stderr}"
+        !stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-6: DISCRIMINATING — single-flag guard must NOT fire on JSM path; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field and --on-behalf-of are only valid with"),
+        "BC-3.8.012 / AC-6: FALSIFIABLE-COARSE — combined guard must NOT fire when only --field is present; got: {stderr}"
     );
 }
 
-// ─── AC-7: Malformed --field on platform path → one warning, no exit-64 ──────
+// ─── AC-7: Malformed --field on platform path exits 64 (EC-3.8.012-3) ────────
 
-/// AC-7 (BC-3.8.012 postcondition 5 — malformed --field edge case): When
-/// `--field bare-name-no-equals` is supplied WITHOUT `--request-type`, the
-/// platform path emits the BC-3.8.012 warning EXACTLY ONCE and proceeds to
-/// the platform POST (no exit-64).  Format validation (BC-3.8.008) applies
-/// only on the JSM path, not the platform path.
+/// AC-7 (BC-3.8.012 EC-3.8.012-3 — malformed --field edge case,
+/// [mode: --output json]): `--field bareflagnoequals` (no `=`) WITHOUT
+/// `--request-type` exits 64 with the BC-3.8.012 single-flag error. The
+/// guard fires on `!field_pairs.is_empty()` BEFORE value parsing — malformed
+/// format does not affect guard activation. INVERTED from the S-383 exit-0
+/// warn-and-proceed contract (DEC-188). Renamed from
+/// `test_platform_create_malformed_field_one_warning_no_exit_64`.
 #[tokio::test]
-async fn test_platform_create_malformed_field_one_warning_no_exit_64() {
+async fn test_platform_create_malformed_field_without_request_type_exits_64() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
-    write_minimal_config(config_dir.path(), &server.uri());
+    common::fixtures::write_profile_config(config_dir.path(), &server.uri());
 
     mount_platform_create_stubs(&server).await;
 
@@ -2850,19 +2991,1028 @@ async fn test_platform_create_malformed_field_one_warning_no_exit_64() {
         .output()
         .unwrap();
 
+    common::assertions::assert_json_error_envelope(&output, 64, "BC-3.8.012 / AC-7");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert!(
+        parsed["error"]
+            .as_str()
+            .is_some_and(|s| s.contains("--field is only valid with")),
+        "BC-3.8.012 / AC-7: error field must contain the single-flag prefix pin; got: {parsed}"
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "BC-3.8.012 / AC-7: DISCRIMINATING — stdout must be empty; got: {stdout}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012 / AC-7: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
+    );
+}
+
+// ─── AC-8 (NEW): --field / --on-behalf-of + helper flags → zero HTTP ─────────
+
+/// AC-8 (BC-3.8.012 + BC-3.8.013 zero-HTTP guarantee, [mode: human]): Even
+/// when `--team`/`--to` (or `--field`/`--on-behalf-of`'s sibling) would
+/// normally trigger pre-POST helper HTTP (team resolution, assignee
+/// resolution), the pre-flight guard suppresses ALL of it — zero HTTP of any
+/// kind. Two sub-invocations, each against its own dedicated isolated
+/// `MockServer` (no `mount_platform_create_stubs` — wiremock 0.6 FIFO:
+/// free-fire mocks registered first would defeat the `expect(0)` mocks here).
+#[tokio::test]
+async fn test_platform_create_field_with_helpers_exits_64_zero_http() {
+    // Sub-invocation (i): --field + --team + --to.
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        for (m, p) in [
+            ("GET", "/rest/api/3/myself"),
+            ("POST", "/gateway/api/graphql"),
+        ] {
+            Mock::given(method(m))
+                .and(path(p))
+                .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+                .expect(0)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path_regex("/gateway/api/public/teams/v1/org/.*/teams"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/field"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/issue"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "a=b",
+                "--team",
+                "X",
+                "--to",
+                "me",
+                "--no-input",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.8.012 / AC-8(i): expected exit 64; got {:?}. stderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("--field is only valid with"),
+            "BC-3.8.012 / AC-8(i): prefix pin must appear; got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("is ignored on the platform create path"),
+            "BC-3.8.012 / AC-8(i): REGRESSION PIN; got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("Created issue"),
+            "BC-3.8.012 / AC-8(i): HYGIENE — structurally unreachable on an isolated server; got: {stderr}"
+        );
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "BC-3.8.012 / AC-8(i): NORMATIVE zero-HTTP proof — no request of any kind must reach the server"
+        );
+        // All five .expect(0) mocks are additionally enforced on server drop.
+    }
+
+    // Sub-invocation (ii): --on-behalf-of + --team + --to (BC-3.8.013 mirror).
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        for (m, p) in [
+            ("GET", "/rest/api/3/myself"),
+            ("POST", "/gateway/api/graphql"),
+        ] {
+            Mock::given(method(m))
+                .and(path(p))
+                .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+                .expect(0)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path_regex("/gateway/api/public/teams/v1/org/.*/teams"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/field"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/issue"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--on-behalf-of",
+                "X",
+                "--team",
+                "X",
+                "--to",
+                "me",
+                "--no-input",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.8.013 / AC-8(ii): expected exit 64; got {:?}. stderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("--on-behalf-of is only valid with"),
+            "BC-3.8.013 / AC-8(ii): prefix pin must appear; got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("is ignored on the platform create path"),
+            "BC-3.8.013 / AC-8(ii): REGRESSION PIN; got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("Created issue"),
+            "BC-3.8.013 / AC-8(ii): HYGIENE — structurally unreachable on an isolated server; got: {stderr}"
+        );
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "BC-3.8.013 / AC-8(ii): NORMATIVE zero-HTTP proof — no request of any kind must reach the server"
+        );
+    }
+}
+
+// ─── AC-9 (NEW): --field without --project exits 64, not a project error ────
+
+/// AC-9 (BC-3.8.012 EC-3.8.012-4, [mode: human]): `--field a=b` WITHOUT
+/// `--project` and WITHOUT `--request-type` exits 64 with the BC-3.8.012
+/// error — NOT the "Project key is required" error. Proves the guard fires
+/// at step 2, BEFORE project-key resolution at step 3.
+#[tokio::test]
+async fn test_platform_create_field_without_project_exits_64_not_project_error() {
+    let cwd_dir = tempfile::tempdir().unwrap();
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    // Config lacks a project key — write_minimal_config writes only [instance] url.
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .current_dir(cwd_dir.path())
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args(["issue", "create", "--field", "a=b", "--no-input"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.012 / AC-9: expected exit 64; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-9: positive guard assertion; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Project key"),
+        "BC-3.8.012 / AC-9: DISCRIMINATING — guard must fire BEFORE project-key resolution; got: {stderr}"
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "BC-3.8.012 / AC-9: stdout must be empty (HYGIENE); got: {stdout}"
+    );
+    assert!(
+        !stderr.contains("Created issue"),
+        "BC-3.8.012 / AC-9: HYGIENE — structurally unreachable without a project; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012 / AC-9: REGRESSION PIN; got: {stderr}"
+    );
+}
+
+// ─── AC-10 (NEW): --field --output json error-envelope shape ────────────────
+
+/// AC-10 (BC-3.8.012 `--output json` envelope shape, [mode: --output json]):
+/// Pairing/symmetric twin of AC-1 ([mode: human]) for the same invocation
+/// class.
+#[tokio::test]
+async fn test_platform_create_field_without_request_type_json_error_shape() {
+    let cwd_dir = tempfile::tempdir().unwrap();
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    common::fixtures::write_profile_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .current_dir(cwd_dir.path())
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "a=b",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    common::assertions::assert_json_error_envelope(&output, 64, "BC-3.8.012 / AC-10");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(
+        parsed["code"].as_i64(),
+        Some(64),
+        "BC-3.8.012 / AC-10: code field must be 64; got: {parsed}"
+    );
+    assert!(
+        parsed["error"]
+            .as_str()
+            .is_some_and(|s| s.contains("--field is only valid with")),
+        "BC-3.8.012 / AC-10: error field must contain the single-flag prefix pin; got: {parsed}"
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "BC-3.8.012 / AC-10: DISCRIMINATING — stdout must be empty; got: {stdout}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012 / AC-10: REGRESSION PIN; got: {stderr}"
+    );
+}
+
+// ─── AC-11 (NEW): --field in TTY/interactive mode exits 64 before prompt ────
+
+/// AC-11 (BC-3.8.012 mode-agnosticism, [mode: human/TTY]): `--field a=b`
+/// WITHOUT `--project`, WITHOUT `--request-type`, and WITHOUT `--no-input`
+/// exits 64 BEFORE any interactive prompt fires, even with
+/// `JR_STDIN_IS_TTY=1` (debug seam suppressing the auto-`--no-input` flip on
+/// non-TTY stdin).
+///
+/// Non-goal: dialoguer 0.12 `interact_text()` short-circuits on non-TTY
+/// stderr under `assert_cmd`; the true PTY-interactive branch is untestable
+/// without a PTY harness. AC-11's unique value is exercising the
+/// `JR_STDIN_IS_TTY=1` no-auto-flip code path itself.
+#[tokio::test]
+async fn test_platform_create_field_interactive_tty_exits_64_before_prompt() {
+    let cwd_dir = tempfile::tempdir().unwrap();
+    // Bare MockServer, no registered handlers — expect(0) mocks are
+    // NON-DISCRIMINATING here (guard-absent also fails before reaching HTTP,
+    // via the project-resolution or prompt path); the discriminating proof
+    // is the "Project key" absence + presence of the guard string below.
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .current_dir(cwd_dir.path())
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .env("JR_STDIN_IS_TTY", "1")
+        .args(["issue", "create", "--field", "a=b"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-11: positive guard assertion; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Project key"),
+        "BC-3.8.012 / AC-11: DISCRIMINATING — guard must fire BEFORE project-key resolution; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Created issue"),
+        "BC-3.8.012 / AC-11: HYGIENE — structurally unreachable without a project; got: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.012 / AC-11: HYGIENE (guard-absent also exits 64 on the eventual project error; \
+         items 1+2 above are what discriminate); got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "BC-3.8.012 / AC-11: output-channel hygiene; got: {stdout}"
+    );
+}
+
+// ─── AC-12 (NEW): --help pins "requires --request-type" on BOTH flags ───────
+
+/// AC-12 (BC-3.8.012 delivery item (d) — help text first-line update,
+/// [mode: human help]): `jr issue create --help` must contain
+/// "requires --request-type" for BOTH the `--field` and `--on-behalf-of`
+/// entries. A single `stdout.contains(…)` would pass with only one flag
+/// updated — the `.count() == 2` form is required to pin BOTH.
+#[tokio::test]
+async fn test_platform_create_help_flags_requires_request_type_in_help() {
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .args(["issue", "create", "--help"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Normalization is MANDATORY — clap 4 next-line layout may wrap long doc
+    // strings, causing the substring to straddle a newline.
+    let normalized = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    assert_eq!(
+        normalized.matches("requires --request-type").count(),
+        2,
+        "BC-3.8.012 / AC-12: 'requires --request-type' must appear exactly twice \
+         (once for --field, once for --on-behalf-of) in whitespace-normalized help; \
+         got normalized help: {normalized}"
+    );
+}
+
+// ─── AC-13 (NEW): empty --on-behalf-of + --field → combined, not two singles ─
+
+/// AC-13 (BC-3.8.012 EC-3.8.012-1 — combined-check ordering with empty
+/// `--on-behalf-of`, [mode: human]): `--on-behalf-of "" --field a=b` WITHOUT
+/// `--request-type` fires the COMBINED error, not two independent single-flag
+/// errors — `""` is still `Some("")`, i.e. `is_some()` is true. Dedicated
+/// isolated `MockServer` (not `mount_platform_create_stubs`) so the
+/// zero-HTTP proof is DISCRIMINATING against the would-otherwise-succeed
+/// guard-absent path.
+#[tokio::test]
+async fn test_platform_create_combined_empty_on_behalf_with_field_exits_64_combined_error() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    // Would-otherwise-succeed precondition (inlined, not via
+    // mount_platform_create_stubs, to keep this MockServer dedicated).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": "10001",
+            "key": "PROJ-123",
+            "self": format!("{}/rest/api/3/issue/10001", server.uri()),
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::Value::Array(vec![])))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--on-behalf-of",
+            "",
+            "--field",
+            "a=b",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("--field and --on-behalf-of are only valid with"),
+        "BC-3.8.012 / AC-13: combined error must be present; got: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.012 / AC-13: expected exit 64; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-13: FALSIFIABLE-COARSE — single-flag guard must NOT fire instead of combined; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--on-behalf-of is only valid with"),
+        "BC-3.8.013 / AC-13: FALSIFIABLE-COARSE — single-flag guard must NOT fire instead of combined; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012+013 / AC-13: REGRESSION PIN — DISCRIMINATING (this invocation previously \
+         emitted BOTH old S-383 warn strings); got: {stderr}"
+    );
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "BC-3.8.012 / AC-13: NORMATIVE zero-HTTP proof — would-otherwise-succeed, so a \
+         guard-absent implementation would have reached HTTP"
+    );
+}
+
+// ─── AC-14 (NEW): empty --request-type routes to JSM, not BC-3.8.012 ────────
+
+/// AC-14 (BC-3.8.012 EC-3.8.012-2 — routing guard is JSM-fork-agnostic,
+/// [mode: human]): `--project PROJ --field a=b --request-type ""` routes to
+/// the JSM dispatch fork (since `request_type.is_some()` is true for `""`)
+/// and fires the BC-3.8.016 empty-request-type guard, NOT BC-3.8.012.
+/// `--project PROJ` is REQUIRED: `handle_jsm_create` resolves the project key
+/// BEFORE the empty-request-type guard.
+#[tokio::test]
+async fn test_platform_create_empty_request_type_routes_jsm_not_bc_3_8_012() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--field",
+            "a=b",
+            "--request-type",
+            "",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("request type cannot be empty"),
+        "BC-3.8.012 / AC-14: POSITIVE — BC-3.8.016 empty-request-type guard must fire; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-14: DISCRIMINATING — BC-3.8.012 would fire here if the platform-path \
+         guard preceded the JSM dispatch fork; got: {stderr}"
+    );
+}
+
+// ─── AC-15 (NEW): clap conflicts_with exits 2, not 64 ────────────────────────
+
+/// AC-15 (BC-3.8.012 EC-3.8.012-8 — clap parse-level rejection precedes
+/// `handle_create`, [mode: human]): `--field a=b --to me --account-id X`
+/// (clap `conflicts_with` pair: `--to` conflicts with `--account-id`) exits 2
+/// (clap parse error), NOT 64. The guard is structurally unreachable on any
+/// clap-rejected invocation.
+#[tokio::test]
+async fn test_platform_create_conflicting_flags_exit_2_not_64_clap_precedence() {
+    let server = MockServer::start().await;
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "create",
+            "--field",
+            "a=b",
+            "--to",
+            "me",
+            "--account-id",
+            "X",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "BC-3.8.012 / AC-15: expected clap exit 2 (not 64); got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-15: HYGIENE — handle_create is never entered on a clap-rejected \
+         invocation; got: {stderr}"
+    );
+}
+
+// ─── AC-16 (NEW): --on-behalf-of "" alone fires BC-3.8.013 ──────────────────
+
+/// AC-16 (BC-3.8.013 EC-3.8.013-1 — empty string value is still `is_some()`,
+/// [mode: human]): `--on-behalf-of ""` alone (no `--field`, no
+/// `--request-type`) exits 64 with the verbatim BC-3.8.013 single-flag error.
+#[tokio::test]
+async fn test_platform_create_on_behalf_empty_string_exits_64_013_error() {
+    let cwd_dir = tempfile::tempdir().unwrap();
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .current_dir(cwd_dir.path())
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args(["issue", "create", "--on-behalf-of", "", "--no-input"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.013 / AC-16: expected exit 64; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("--on-behalf-of is only valid with"),
+        "BC-3.8.013 / AC-16: prefix pin must appear; got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "--on-behalf-of is only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to raise a request on behalf of another user, or drop --on-behalf-of to create a standard platform issue."
+        ),
+        "BC-3.8.013 / AC-16: FULL-STRING verbatim single-flag error must appear on stderr; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field and --on-behalf-of are only valid with"),
+        "BC-3.8.013 / AC-16: FALSIFIABLE-COARSE — combined guard must NOT mis-fire when --field is absent; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.013 / AC-16: REGRESSION PIN — DISCRIMINATING (this invocation previously \
+         emitted the old S-383 warn string); got: {stderr}"
+    );
+}
+
+// ─── AC-17 (NEW): --markdown + --field exits 64 (BC-3.8.012), not markdown err ─
+
+/// AC-17 (BC-3.8.012 EC-3.8.012-5 — guard fires before `--markdown`→ADF
+/// conversion, [mode: human]): `--markdown --field description=x` WITHOUT
+/// `--request-type` exits 64 with the BC-3.8.012 error, NOT the JSM-path
+/// `--markdown` conflict error (that string lives only inside
+/// `handle_jsm_create`, structurally unreachable without `--request-type`
+/// routing).
+#[tokio::test]
+async fn test_platform_create_markdown_with_field_exits_64_bc_3_8_012_not_markdown_error() {
+    let cwd_dir = tempfile::tempdir().unwrap();
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .current_dir(cwd_dir.path())
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--markdown",
+            "--field",
+            "description=x",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.012 / AC-17: expected exit 64; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-17: positive guard assertion; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Project key"),
+        "BC-3.8.012 / AC-17: DISCRIMINATING — guard must fire BEFORE project-key resolution; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("cannot be combined with `--markdown`"),
+        "BC-3.8.012 / AC-17: HYGIENE — the JSM-path --markdown conflict string is structurally \
+         unreachable without --request-type routing; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012 / AC-17: REGRESSION PIN; got: {stderr}"
+    );
+}
+
+// ─── AC-18 (NEW): --description-stdin + --field exits 64, stdin not consumed ─
+
+/// AC-18 (BC-3.8.012 EC-3.8.012-7 — guard fires before the
+/// `--description-stdin` blocking read, [mode: human]): `--field a=b
+/// --description-stdin` WITHOUT `--request-type` exits 64 before the blocking
+/// stdin read at step 4a. Stdin is piped (non-TTY) with some content; if the
+/// guard did NOT fire first, the read would consume it and the
+/// would-otherwise-succeed platform POST would proceed.
+#[tokio::test]
+async fn test_platform_create_description_stdin_with_field_exits_64_stdin_not_consumed() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "a=b",
+            "--description-stdin",
+            "--no-input",
+        ])
+        .write_stdin("some description content\n")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.012 / AC-18: expected exit 64; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-18: positive guard assertion; got: {stderr}"
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "BC-3.8.012 / AC-18: stdout must be empty (HYGIENE); got: {stdout}"
+    );
+    assert!(
+        !stderr.contains("Created issue"),
+        "BC-3.8.012 / AC-18: DISCRIMINATING — would-otherwise-succeed, so a guard-absent \
+         implementation would have reached the success path; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012 / AC-18: REGRESSION PIN; got: {stderr}"
+    );
+}
+
+// ─── AC-19 (NEW): --field a= (empty value) still fires BC-3.8.012 ───────────
+
+/// AC-19 (BC-3.8.012 EC-3.8.012-9 — key-present empty-value still triggers
+/// guard, [mode: human]): `--field a=` (key present, empty value after `=`)
+/// WITHOUT `--request-type` exits 64. The guard fires on
+/// `!field_pairs.is_empty()` (presence-only) — value contents are never
+/// inspected at guard stage. Distinct from EC-3.8.012-3's malformed-no-equals
+/// class (AC-7).
+#[tokio::test]
+async fn test_platform_create_field_empty_value_exits_64_bc_3_8_012() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "a=",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.012 / AC-19: expected exit 64; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-19: positive guard assertion; got: {stderr}"
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "BC-3.8.012 / AC-19: stdout must be empty (HYGIENE); got: {stdout}"
+    );
+    assert!(
+        !stderr.contains("Created issue"),
+        "BC-3.8.012 / AC-19: DISCRIMINATING — no success path must have executed; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012 / AC-19: REGRESSION PIN — DISCRIMINATING (this invocation previously \
+         triggered the old S-383 warn string); got: {stderr}"
+    );
+}
+
+// ─── AC-20 (NEW): JSM path + --on-behalf-of does NOT fire BC-3.8.013 ────────
+
+/// AC-20 (BC-3.8.013 JSM-path non-mis-fire, [mode: --output json]): When
+/// `--request-type` IS set alongside `--on-behalf-of <ID>`, the command takes
+/// the JSM path and neither guard may fire.
+#[tokio::test]
+async fn test_jsm_create_with_on_behalf_of_and_request_type_does_not_fire_bc_3_8_013() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--summary",
+            "test",
+            "--on-behalf-of",
+            "X",
+            "--request-type",
+            "Password Reset",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
         output.status.success(),
-        "BC-3.8.012 / AC-7: expected exit 0 (not 64) for malformed --field on platform path; got {:?}. stderr: {stderr}",
+        "BC-3.8.013 / AC-20: expected exit 0 on JSM path; got {:?}. stderr: {stderr}",
         output.status.code()
     );
-    assert_eq!(
-        stderr
-            .matches("warning: --field is ignored on the platform create path")
-            .count(),
-        1,
-        "BC-3.8.012 / AC-7: warning must appear EXACTLY ONCE for malformed --field; got: {stderr}"
+    assert!(
+        !stderr.contains("--on-behalf-of is only valid with"),
+        "BC-3.8.013 / AC-20: DISCRIMINATING — single-flag guard must NOT fire on JSM path; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field is only valid with"),
+        "BC-3.8.013 / AC-20: HYGIENE — invocation has no --field; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field and --on-behalf-of are only valid with"),
+        "BC-3.8.013 / AC-20: FALSIFIABLE-COARSE — combined guard must NOT fire when only \
+         --on-behalf-of is present; got: {stderr}"
+    );
+}
+
+// ─── AC-21 (NEW): JSM path + BOTH flags does NOT fire either guard ──────────
+
+/// AC-21 (BC-3.8.012 + BC-3.8.013 combined JSM-path non-mis-fire,
+/// [mode: --output json]): The ONLY invocation falsifying the COMBINED guard
+/// on the JSM path — `--project HELP --summary test --field a=b
+/// --on-behalf-of X --request-type "Password Reset"` (BOTH `--field` AND
+/// `--on-behalf-of` with `--request-type`) must not fire ANY of the three
+/// guard error strings.
+#[tokio::test]
+async fn test_jsm_create_with_both_flags_and_request_type_does_not_fire_guards() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--summary",
+            "test",
+            "--field",
+            "a=b",
+            "--on-behalf-of",
+            "X",
+            "--request-type",
+            "Password Reset",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "BC-3.8.012+013 / AC-21: expected exit 0 on JSM path; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("--field is only valid with"),
+        "BC-3.8.012 / AC-21: DISCRIMINATING — single-flag guard must NOT fire; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--on-behalf-of is only valid with"),
+        "BC-3.8.013 / AC-21: DISCRIMINATING — single-flag guard must NOT fire; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field and --on-behalf-of are only valid with"),
+        "BC-3.8.012+013 / AC-21: DISCRIMINATING — combined guard must NOT fire; this is the \
+         discriminating negative AC-6 and AC-20 cannot provide; got: {stderr}"
     );
 }
 

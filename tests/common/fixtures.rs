@@ -444,3 +444,23 @@ pub fn issue_response_with_team(
     response["fields"][team_field_id] = json!(team_uuid);
     response
 }
+
+/// Write a pre-migrated `[profiles.default]`-shaped jr config to a temp
+/// `XDG_CONFIG_HOME`, unlike the legacy `[instance]` shape some fixtures write.
+///
+/// Required by JSON-mode tests that strict-parse stderr via
+/// `common::assertions::assert_json_error_envelope`: the legacy `[instance]`
+/// shape triggers a one-time "Migrated config to multi-profile layout…" line
+/// from `src/config.rs`, which would poison strict JSON parsing of stderr
+/// (S-639-1).
+pub fn write_profile_config(config_home: &std::path::Path, base_url: &str) {
+    let dir = config_home.join("jr");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        format!(
+            "default_profile = \"default\"\n[profiles.default]\nurl = \"{base_url}\"\nauth_method = \"api_token\"\n"
+        ),
+    )
+    .unwrap();
+}

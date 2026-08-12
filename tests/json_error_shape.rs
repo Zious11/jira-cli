@@ -39,6 +39,8 @@ use assert_cmd::Command;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use common::assertions::assert_json_error_envelope;
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -56,44 +58,6 @@ fn jr_cmd(server_uri: &str, cache_dir: &std::path::Path, config_dir: &std::path:
         .env("JR_CONFIG_DIR", config_dir.join("jr"))
         .arg("--no-input");
     cmd
-}
-
-/// Assert the error-envelope contract: stderr is `{"error":"…","code":<expected_code>}`,
-/// stdout is empty, and the process exits with `expected_code`.
-fn assert_json_error_envelope(output: &std::process::Output, expected_code: i32, label: &str) {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Exit code.
-    assert_eq!(
-        output.status.code(),
-        Some(expected_code),
-        "{label}: expected exit {expected_code}; stderr={stderr} stdout={stdout}"
-    );
-
-    // stdout must be empty — channel-separation invariant (#526).
-    assert!(
-        stdout.trim().is_empty(),
-        "{label}: stdout must be empty on error (channel-separation #526); stdout={stdout}"
-    );
-
-    // stderr must be valid JSON.
-    let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|e| {
-        panic!("{label}: stderr must be valid JSON when --output json set: {e}\nstderr: {stderr}")
-    });
-
-    // `error` field must be a non-empty string.
-    assert!(
-        parsed["error"].as_str().is_some_and(|s| !s.is_empty()),
-        "{label}: JSON envelope must have non-empty 'error' field; got: {parsed}"
-    );
-
-    // `code` field must match the exit code.
-    assert_eq!(
-        parsed["code"].as_i64(),
-        Some(expected_code as i64),
-        "{label}: JSON envelope 'code' must be {expected_code}; got: {parsed}"
-    );
 }
 
 // ---------------------------------------------------------------------------
