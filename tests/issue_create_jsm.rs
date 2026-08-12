@@ -2405,7 +2405,7 @@ async fn test_jsm_create_markdown_without_description_exits_64_with_platform_mes
 // `src/cli/issue/create.rs`, which still warns-and-proceeds (exit 0) for
 // `--field` / `--on-behalf-of` without `--request-type`. The guard
 // implementation (3-branch pre-flight check after the JSM dispatch fork) is
-// introduced in a subsequent commit — see S-639-1 Task 3.
+// implemented in `src/cli/issue/create.rs` on this branch (S-639-1 Task 3).
 
 /// Helper: mount the two stubs the platform path needs (POST /rest/api/3/issue
 /// + GET /rest/api/3/field for CMDB discovery) and return the key "PROJ-123".
@@ -3385,6 +3385,10 @@ async fn test_platform_create_field_interactive_tty_exits_64_before_prompt() {
     assert!(
         !stderr.contains("Created issue"),
         "BC-3.8.012 / AC-11: HYGIENE — structurally unreachable without a project; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is ignored on the platform create path"),
+        "BC-3.8.012 / AC-11: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
     );
     assert_eq!(
         output.status.code(),
