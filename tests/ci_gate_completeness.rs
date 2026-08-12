@@ -5927,6 +5927,15 @@ const PINNED_WORKFLOW_ROOT_KEYS: &[&str] = &["env", "jobs", "name", "on"];
 /// non-empty assertion in the caller (`test_ci_gate_pass_fail_semantics_
 /// are_structurally_placed`) is still the operative "this must not be
 /// silently treated as nothing to worry about" backstop.
+///
+/// # Accepted residual: first-match anchoring, not ambiguity-checked
+/// (adversarial pass 5, S-CIGATE-3, LOW-3)
+///
+/// See `tests/common/wf.rs`'s `find_key_node_properties` doc comment,
+/// "Additional accepted residuals" § LOW-3, for the full analysis of why
+/// this first-match-by-`step_anchor_key` anchoring is backstopped (not
+/// exploitable) by `PINNED_GATE_STEP_KEY_SETS`/`PINNED_GATE_JOB_KEYS` and
+/// therefore left as-is rather than fixed here.
 fn extract_gate_env_key_set(job_block: &str) -> Vec<String> {
     common::wf::step_mapping_child_keys(job_block, "run", "env").unwrap_or_default()
 }
@@ -5992,6 +6001,16 @@ fn extract_workflow_env_key_set(ci: &str) -> Vec<String> {
 /// resolving its value — tree-based, so it is immune to the
 /// `POSITIONAL-ASSUMPTION-AXIS`/spelling gaps the old 10-space line scan
 /// had.
+///
+/// # Accepted residual: first-match anchoring, not ambiguity-checked
+/// (adversarial pass 5, S-CIGATE-3, LOW-3)
+///
+/// See `tests/common/wf.rs`'s `find_key_node_properties` doc comment,
+/// "Additional accepted residuals" § LOW-3, for the full analysis of why
+/// this first-match-by-`step_anchor_key` anchoring (shared with
+/// `extract_gate_env_key_set` above, both via `step_mapping_child_keys`)
+/// is backstopped (not exploitable) by `PINNED_GATE_STEP_KEY_SETS`/
+/// `PINNED_GATE_JOB_KEYS` and therefore left as-is rather than fixed here.
 fn extract_and_normalize_sole_needs_json_line(job_block: &str) -> Result<String, String> {
     let env_keys = common::wf::step_mapping_child_keys(job_block, "run", "env");
     let Some(env_keys) = env_keys else {

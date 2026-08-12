@@ -184,11 +184,25 @@ pub struct Job {
     /// starts at byte 0 of the
     /// physical line containing this job's key (i.e. it includes the job
     /// key's leading indentation, recovered via `Marker::col()` — see module
-    /// docs), and ends at the start of the next sibling job's line, or at
-    /// `yaml.len()` for the last job in `jobs:` (verified: using the
-    /// `jobs:` mapping's `MappingEnd` marker instead of `yaml.len()`
-    /// undershoots by design — see module docs on `sync-upstream.yml`'s
-    /// trailing block scalar).
+    /// docs), and ends at the start of the next sibling job's line.
+    ///
+    /// For the LAST job in `jobs:`, the end bound is (S-CIGATE-3
+    /// adversarial pass 5, MEDIUM; fixed after the ADV-SC3-P5-MED
+    /// finding): the start of the line containing the next ROOT-level key
+    /// after `jobs:`, if one exists — `jobs:` need not be the workflow's
+    /// final top-level key; `concurrency:`, `defaults:`, `env:`,
+    /// `permissions:`, `on:` are all legal AFTER it, and the ORIGINAL
+    /// unconditional `yaml.len()` bound silently swallowed any such
+    /// trailing root key into the last job's own block. Only when `jobs:`
+    /// genuinely IS the workflow's last root key does this fall back to
+    /// `yaml.len()` — preserving the ORIGINAL rationale for that bound
+    /// (verified: using the `jobs:` mapping's `MappingEnd` marker instead
+    /// of `yaml.len()` undershoots by design — see module docs on
+    /// `sync-upstream.yml`'s trailing block scalar) exactly for the case
+    /// it was chosen to cover. See `WfDoc::parse`'s
+    /// `test_wfdoc_parse_last_job_span_excludes_trailing_root_key` and
+    /// `test_wfdoc_parse_last_job_span_includes_full_trailing_block_scalar_when_jobs_is_last_root_key`
+    /// for the two regression tests pinning both directions.
     pub span: Range<usize>,
     /// This job's own direct mapping keys (`name`, `if`, `needs`,
     /// `runs-on`, `steps`, `env`, ...), in source order. Not deduplicated.
@@ -376,6 +390,23 @@ impl WfDoc {
         let mut jobs = Vec::new();
         if let Some(jobs_entry) = find_unique_entry(&root_entries, "jobs", "WfDoc::parse") {
             if matches!(events[jobs_entry.value_start].0, Event::MappingStart(..)) {
+                // `jobs:` need not be the workflow's FINAL top-level key —
+                // `concurrency:`, `defaults:`, `env:`, `permissions:`,
+                // `on:` are all legal AFTER `jobs:` (S-CIGATE-3 adversarial
+                // pass 5, MEDIUM). `find_unique_entry` above already
+                // proved there is at most one `jobs:` key among
+                // `root_entries`, so locating IT by key text again here is
+                // safe (no duplicate to silently pick a winner between).
+                // If a root key follows `jobs:` in source order, the LAST
+                // job's span must be bounded by that key's own line start
+                // — never by `yaml.len()` — or the last job's block would
+                // silently swallow it.
+                let next_root_key_start_byte = root_entries
+                    .iter()
+                    .position(|e| e.key == "jobs")
+                    .and_then(|jobs_idx| root_entries.get(jobs_idx + 1))
+                    .map(|next_root_entry| byte_of(line_start_char_idx(&next_root_entry.key_span)));
+
                 let (job_entries, _) = read_mapping(&events, jobs_entry.value_start);
                 assert_no_duplicate_keys(&job_entries, "WfDoc::parse (jobs:)");
                 let job_count = job_entries.len();
@@ -384,7 +415,19 @@ impl WfDoc {
                     let end_byte = if idx + 1 < job_count {
                         byte_of(line_start_char_idx(&job_entries[idx + 1].key_span))
                     } else {
-                        yaml.len()
+                        // Last job in `jobs:`: bound to the next ROOT
+                        // key's line start when one follows `jobs:`
+                        // (mirrors the inter-job boundary above, one level
+                        // out — everything up to that line, including any
+                        // trailing blank lines/comments and a trailing
+                        // block scalar's full content, still belongs to
+                        // this job). Only fall back to `yaml.len()` when
+                        // `jobs:` genuinely IS the workflow's last root
+                        // key — preserving the original, deliberately
+                        // undershoot-proof behavior for that case (see
+                        // `Job::span`'s own doc comment on
+                        // `sync-upstream.yml`'s trailing block scalar).
+                        next_root_key_start_byte.unwrap_or(yaml.len())
                     };
 
                     let (keys, values, steps) =
@@ -924,6 +967,40 @@ pub struct KeyNodeProperty {
 /// guarantee implies and what the VALUE side actually has. Not fixed in
 /// this pass — see `ADV-SC3-P2-LOW-004` for the full analysis of why no
 /// live exploit was constructible from this gap alone.
+///
+/// # Additional accepted residuals (adversarial pass 5, S-CIGATE-3, LOW)
+///
+/// Two further LOW-severity gaps were found and accepted (documented, not
+/// fixed) in the same review pass that produced the last-job-span fix
+/// (`WfDoc::parse`'s `end_byte` computation, S-CIGATE-3 ADV pass-5
+/// MEDIUM):
+///
+/// - **LOW-1 (aliased `steps:`/whole-job values):** an aliased `steps:`
+///   value (`steps: *common`) or an aliased whole-job value (`build:
+///   *tmpl`) is not resolved by this module (see the module docs' own
+///   "Aliases are not resolved" note) — [`extract_steps`] and
+///   [`WfDoc::parse`]'s job-body branch both require an
+///   `Event::MappingStart`/`Event::SequenceStart` to build anything, so
+///   an `Event::Alias` value there yields an empty step/key list rather
+///   than the aliased content. This FAILS CLOSED (a false-RED: the
+///   affected pin simply can't locate the step/key it expects and errors
+///   loudly), not open, and is not modeled further — same acceptance
+///   basis as the VALUE-side-anchor residual just above: no workflow file
+///   in this repo uses an anchor/alias today, and GitHub only shipped
+///   Actions anchor/alias support to production on 2025-09-18.
+/// - **LOW-3 (gate-step anchoring is first-match, not ambiguity-checked):**
+///   `tests/ci_gate_completeness.rs::extract_gate_env_key_set` and
+///   `::extract_and_normalize_sole_needs_json_line` anchor the gate step
+///   via [`step_mapping_child_keys`]'s first-match-by-`step_anchor_key`
+///   semantics (the first step whose own keys include `"run"`), rather
+///   than an ambiguity-checked "exactly one such step" lookup. This is
+///   backstopped, not exploitable: a decoy earlier `run:`+`env:` step
+///   changes the `ci-gate` job's step-KEY-SET arity, which trips
+///   `PINNED_GATE_STEP_KEY_SETS`/`PINNED_GATE_JOB_KEYS` independently of
+///   whether this anchoring picks the "right" step. Recorded as an
+///   accepted consistency residual to avoid churning gate-critical
+///   accessors that are already covered by an orthogonal pin, not fixed
+///   here.
 ///
 /// # Panics
 ///
@@ -1940,6 +2017,108 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // Last-job span bounding (adversarial pass 5, MEDIUM, S-CIGATE-3):
+    // `jobs:` need not be the FINAL top-level key of a workflow file —
+    // `concurrency:`, `defaults:`, `env:`, `permissions:`, `on:` are all
+    // legal AFTER `jobs:`. Before the fix, the LAST job under `jobs:` was
+    // always assigned a span running to `yaml.len()`, silently swallowing
+    // any trailing root key into that job's own block — which then broke
+    // `extract_job_block`/`parse_single_job` on that job with a confusing
+    // "malformed job block" diagnostic pointing nowhere near the real
+    // cause.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_wfdoc_parse_last_job_span_excludes_trailing_root_key() {
+        let yaml = concat!(
+            "name: CI\n",
+            "jobs:\n",
+            "  alpha:\n",
+            "    runs-on: ubuntu-latest\n",
+            "  beta:\n",
+            "    runs-on: ubuntu-latest\n",
+            "    steps:\n",
+            "      - run: echo hi\n",
+            "concurrency:\n",
+            "  group: ci-${{ github.ref }}\n",
+            "  cancel-in-progress: true\n",
+        );
+        let doc = WfDoc::parse(yaml);
+        assert_eq!(doc.jobs.len(), 2);
+        let beta = &doc.jobs[1];
+        assert_eq!(beta.id, "beta");
+
+        let block = &yaml[beta.span.clone()];
+        assert!(
+            !block.contains("concurrency"),
+            "beta's block over-captured the trailing `concurrency:` root \
+             key, which is not part of the `jobs:` mapping at all: {block:?}"
+        );
+
+        // The over-capture doesn't just leave stray text in the slice — a
+        // trailing root key one level further out is a column-0 dedent
+        // below beta's own root mapping, so re-parsing the (buggy)
+        // over-captured block as a standalone job block fails outright.
+        // A correctly-bounded block must parse cleanly and expose exactly
+        // beta's own keys.
+        let single = WfDoc::parse_single_job(block);
+        assert_eq!(single.id, "beta");
+        assert_eq!(
+            single.keys,
+            vec!["runs-on".to_string(), "steps".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_wfdoc_parse_last_job_span_includes_full_trailing_block_scalar_when_jobs_is_last_root_key()
+     {
+        // Guard against a regression in the OTHER direction (this is why
+        // `yaml.len()` was chosen originally — see `Job::span`'s own doc
+        // comment): when `jobs:` genuinely IS the workflow's last root
+        // key, the last job's span must still capture its own trailing
+        // content in FULL, including a multi-line block scalar with no
+        // trailing newline at end-of-file — the real shape
+        // `sync-upstream.yml`'s last job has today. Must pass both before
+        // and after the last-job-span fix.
+        let yaml = concat!(
+            "name: CI\n",
+            "jobs:\n",
+            "  alpha:\n",
+            "    runs-on: ubuntu-latest\n",
+            "  beta:\n",
+            "    runs-on: ubuntu-latest\n",
+            "    steps:\n",
+            "      - name: Sync tags\n",
+            "        run: |\n",
+            "          git push origin --tags\n",
+            "          echo done",
+        );
+        let doc = WfDoc::parse(yaml);
+        assert_eq!(doc.jobs.len(), 2);
+        let beta = &doc.jobs[1];
+        assert_eq!(beta.id, "beta");
+
+        let block = &yaml[beta.span.clone()];
+        assert!(
+            block.contains("git push origin --tags") && block.contains("echo done"),
+            "beta's block under-captured its own trailing block scalar: {block:?}"
+        );
+
+        let single = WfDoc::parse_single_job(block);
+        assert_eq!(single.id, "beta");
+        assert_eq!(single.steps.len(), 1);
+        let run_value = single.steps[0]
+            .value_of("run")
+            .expect("Sync tags step has a `run:` key");
+        match run_value {
+            Value::Scalar { text, .. } => {
+                assert_eq!(text, "git push origin --tags\necho done\n");
+            }
+            other => panic!("expected a Scalar value for `run:`, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
     // read_mapping / read_sequence / skip_node on nested structures
     // -----------------------------------------------------------------
 
@@ -2408,7 +2587,7 @@ mod tests {
     // `#[cfg(unix)]` allowance, since this file has no platform-gated
     // test today; see `ALLOWED_TEST_CFG_GATES` below) from
     // `tests/ci_gate_completeness.rs`'s ADV-P60-HIGH-001 fix.
-    const EXPECTED_WF_TEST_COUNT: usize = 24;
+    const EXPECTED_WF_TEST_COUNT: usize = 26;
 
     /// Collect the line indices (0-based, into `lines`) of every
     /// `#[cfg(...)]` attribute in the CONTIGUOUS attribute/doc block
