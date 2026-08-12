@@ -395,12 +395,14 @@ pub enum IssueCommand {
         /// The project must be a Jira Service Management project.
         #[arg(long = "request-type")]
         request_type: Option<String>,
-        /// Additional request field values as NAME=VALUE pairs (repeatable).
+        /// Set a custom request field as NAME=VALUE (repeatable; JSM only;
+        /// requires --request-type).
         /// The first '=' splits; subsequent '=' characters are part of the value.
-        /// Duplicate keys use the last value provided. Applies to JSM requests only.
+        /// Duplicate keys use the last value provided.
         #[arg(long = "field", action = clap::ArgAction::Append)]
         field: Vec<String>,
-        /// Raise the JSM request on behalf of this accountId (JSM requests only).
+        /// Create the request on behalf of this accountId (JSM only; requires
+        /// --request-type).
         /// Maps to the top-level `raiseOnBehalfOf` field in the request body.
         #[arg(long = "on-behalf-of")]
         on_behalf_of: Option<String>,

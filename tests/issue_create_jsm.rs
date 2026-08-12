@@ -2323,11 +2323,12 @@ async fn test_jsm_create_markdown_description_yields_adf_with_strong_marks() {
 
 // ─── M-01 sanity: --markdown without --description exits 64 on JSM path ───────
 
-/// M-01 (adversary pass-02-retry) + platform-parity: `--markdown` without
-/// `--description` or `--description-stdin` on the JSM path errors with the
-/// same verbatim message as the platform path (mirrors lines 333-343 of
-/// handle_create). Regression guard for the validation block added in
-/// handle_jsm_create at b35bc1a.
+/// M-01 (adversary pass-02-retry): `--markdown` without `--description` or
+/// `--description-stdin` on the JSM path errors with a JSM-specific message.
+/// No platform-path equivalent exists (S-639-1, EC-3.8.012-5 — see the
+/// correction in `jsm_create.rs::handle_jsm_create` step 3): on the platform
+/// path, `--markdown` with no description is simply a no-op. Regression guard
+/// for the validation block added in handle_jsm_create at b35bc1a.
 ///
 /// No HTTP mocks are mounted — the validation fires before any HTTP is made.
 /// If a future refactor moves the validation after HTTP, the test will fail
@@ -2373,11 +2374,11 @@ async fn test_jsm_create_markdown_without_description_exits_64_with_platform_mes
         Some(64),
         "M-01 / BC-3.8.006: expected exit 64 for --markdown without --description; stderr: {stderr}"
     );
-    // Verbatim match against the platform path's error text (verify against
-    // create.rs lines 333-343 if this assertion drifts).
+    // JSM-specific message (jsm_create.rs::handle_jsm_create step 3) — no
+    // platform-path equivalent exists (S-639-1, EC-3.8.012-5).
     assert!(
         stderr.contains("--markdown requires --description or --description-stdin to take effect"),
-        "M-01 / BC-3.8.006: expected platform-parity validation message; got: {stderr}"
+        "M-01 / BC-3.8.006: expected JSM-path validation message; got: {stderr}"
     );
 }
 

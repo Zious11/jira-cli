@@ -168,8 +168,16 @@ pub(super) async fn handle_jsm_create(
         }
     }
 
-    // Step 3: M-01 (adversary pass-02-retry) + platform-path parity: --markdown requires
-    // a description source on the JSM path, just like the platform path.
+    // Step 3: M-01 (adversary pass-02-retry): --markdown requires a description
+    // source on the JSM path. No platform-path equivalent exists (S-639-1,
+    // EC-3.8.012-5) — on the platform path, --markdown with no description is
+    // simply a no-op (the markdown flag is only consulted when desc_text is
+    // Some). This function only runs when --request-type is present (the
+    // caller's dispatch fork routes here); when --field/--on-behalf-of are
+    // supplied WITHOUT --request-type, BC-3.8.012/013's pre-flight guard in
+    // create.rs::handle_create fires on the platform path instead, so this
+    // JSM-specific --markdown guard is structurally unreachable without
+    // --request-type routing.
     if markdown && description.is_none() && !description_stdin {
         return Err(JrError::UserError(
             "--markdown requires --description or --description-stdin to take effect. \
