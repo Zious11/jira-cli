@@ -328,6 +328,9 @@ pub enum IssueCommand {
         /// Show linked assets column
         #[arg(long)]
         assets: bool,
+        /// Show due date column
+        #[arg(long)]
+        duedate: bool,
         /// Filter by linked asset object key (e.g., CUST-5)
         #[arg(long)]
         asset: Option<String>,

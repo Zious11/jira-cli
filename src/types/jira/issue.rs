@@ -66,6 +66,7 @@ pub struct IssueFields {
     pub project: Option<IssueProject>,
     pub created: Option<String>,
     pub updated: Option<String>,
+    pub duedate: Option<String>,
     pub resolution: Option<Resolution>,
     #[serde(default)]
     pub components: Option<Vec<Component>>,

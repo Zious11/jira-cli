@@ -326,12 +326,17 @@ async fn handle_current(
                     } else {
                         None
                     };
-                    super::issue::format_issue_row(issue, sp_field_id, None, team)
+                    super::issue::format_issue_row(issue, None, sp_field_id, None, team)
                 })
                 .collect();
             output::print_output(
                 output_format,
-                &super::issue::issue_table_headers(sp_field_id.is_some(), false, show_team_col),
+                &super::issue::issue_table_headers(
+                    false,
+                    sp_field_id.is_some(),
+                    false,
+                    show_team_col,
+                ),
                 &rows,
                 &issues,
             )?;

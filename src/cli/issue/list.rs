@@ -73,6 +73,7 @@ pub(super) async fn handle_list(
         open,
         points: show_points,
         assets: show_assets,
+        duedate: show_duedate,
         asset: asset_key,
         created_after,
         created_before,
@@ -569,11 +570,24 @@ pub(super) async fn handle_list(
             } else {
                 None
             };
-            format::format_issue_row(issue, effective_sp, assets, team)
+            // `Some("")` fallback (not `None`) when the issue's own duedate
+            // is unset — this keeps the column SHOWN (rendering "-" via
+            // `render_due_date`) whenever `--duedate` is passed, rather than
+            // hiding the column per-row based on data presence (BC-2.2.032).
+            let duedate = if show_duedate {
+                Some(issue.fields.duedate.as_deref().unwrap_or(""))
+            } else {
+                None
+            };
+            format::format_issue_row(issue, duedate, effective_sp, assets, team)
         })
         .collect();
-    let headers =
-        format::issue_table_headers(effective_sp.is_some(), show_assets_col, show_team_col);
+    let headers = format::issue_table_headers(
+        show_duedate,
+        effective_sp.is_some(),
+        show_assets_col,
+        show_team_col,
+    );
     output::print_output(output_format, &headers, &rows, &issues)?;
 
     if has_more && !all {

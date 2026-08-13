@@ -155,6 +155,10 @@ pub(super) async fn handle_view(
                         .unwrap_or_else(|| "-".into()),
                 ],
                 vec![
+                    "Due Date".into(),
+                    format::render_due_date(issue.fields.duedate.as_deref()),
+                ],
+                vec![
                     "Project".into(),
                     issue
                         .fields

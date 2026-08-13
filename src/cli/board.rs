@@ -269,10 +269,10 @@ async fn handle_view(
             } else {
                 None
             };
-            super::issue::format_issue_row(issue, None, None, team)
+            super::issue::format_issue_row(issue, None, None, None, team)
         })
         .collect();
-    let headers = super::issue::issue_table_headers(false, false, show_team_col);
+    let headers = super::issue::issue_table_headers(false, false, false, show_team_col);
     output::print_output(output_format, &headers, &rows, &issues)?;
 
     if has_more && !all {

@@ -21,6 +21,7 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
     "description",
     "created",
     "updated",
+    "duedate",
     "resolution",
     "components",
     "fixVersions",
