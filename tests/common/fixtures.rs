@@ -374,6 +374,7 @@ pub fn issue_response_with_standard_fields(key: &str, summary: &str) -> Value {
             "project": {"key": key.split('-').next().unwrap_or("TEST"), "name": "Test Project"},
             "created": "2026-03-20T14:32:00.000+0000",
             "updated": "2026-03-25T09:15:22.000+0000",
+            "duedate": "2027-07-30",
             "resolution": {"name": "Fixed"},
             "components": [{"name": "Backend"}, {"name": "API"}],
             "fixVersions": [{"name": "v2.0", "released": false, "releaseDate": "2026-04-01"}],
@@ -382,6 +383,23 @@ pub fn issue_response_with_standard_fields(key: &str, summary: &str) -> Value {
             "issuelinks": []
         }
     })
+}
+
+/// Issue response with `duedate` explicitly set to a given value, or JSON
+/// `null` when `None`. Built on top of the minimal `issue_response` shape
+/// (BC-2.2.032 / BC-2.3.039, issue #668).
+pub fn issue_response_with_duedate(
+    key: &str,
+    summary: &str,
+    status: &str,
+    duedate: Option<&str>,
+) -> Value {
+    let mut response = issue_response(key, summary, status);
+    response["fields"]["duedate"] = match duedate {
+        Some(d) => json!(d),
+        None => Value::Null,
+    };
+    response
 }
 
 pub fn issue_response_with_labels_parent_links(key: &str, summary: &str) -> Value {

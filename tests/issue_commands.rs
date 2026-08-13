@@ -547,6 +547,10 @@ async fn get_issue_includes_standard_fields() {
         issue.fields.updated.as_deref(),
         Some("2026-03-25T09:15:22.000+0000")
     );
+    // AC-12 (BC-2.3.036 [AMENDED]): `duedate` deserializes as a NAMED field
+    // when present in the fixture — date-only `YYYY-MM-DD`, no time
+    // component, no `#[serde(rename)]` needed (wire name already lowercase).
+    assert_eq!(issue.fields.duedate.as_deref(), Some("2027-07-30"));
 
     let reporter = issue.fields.reporter.as_ref().unwrap();
     assert_eq!(reporter.display_name, "Jane Smith");
@@ -574,6 +578,11 @@ async fn get_issue_includes_standard_fields() {
     assert!(value["fields"]["resolution"].is_object());
     assert!(value["fields"]["components"].is_array());
     assert!(value["fields"]["fixVersions"].is_array());
+    // AC-1 / AC-14 (BC-2.3.036 [AMENDED]): `duedate` is a NAMED field, so it
+    // serializes at `fields.duedate` directly — NOT inside the `extra`
+    // flatten map (which would put it at an entirely different, unnamed
+    // location with no dedicated key).
+    assert_eq!(value["fields"]["duedate"], "2027-07-30");
 }
 
 #[tokio::test]
@@ -604,6 +613,9 @@ async fn get_issue_null_standard_fields() {
     assert!(issue.fields.resolution.is_none());
     assert!(issue.fields.components.is_none());
     assert!(issue.fields.fix_versions.is_none());
+    // AC-13 (BC-2.3.036 [AMENDED]): `duedate` absent from the wire response
+    // deserializes to `None`, not a panic.
+    assert!(issue.fields.duedate.is_none());
 }
 
 #[tokio::test]
@@ -973,7 +985,7 @@ async fn test_search_issues_includes_labels_parent_issuelinks() {
             "fields": [
                 "summary", "status", "issuetype", "priority", "assignee",
                 "reporter", "project", "description", "created", "updated",
-                "resolution", "components", "fixVersions",
+                "duedate", "resolution", "components", "fixVersions",
                 "labels", "parent", "issuelinks"
             ]
         })))
@@ -1916,5 +1928,778 @@ async fn test_unlink_single_substring_rejected_no_input() {
     assert!(
         stderr.contains("Blocks"),
         "Expected matched candidate 'Blocks' in stderr: {stderr}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// S-668-1 — `duedate` in `issue view`/`issue list` (issue #668)
+//
+// BC-2.2.028 [AMENDED], BC-2.2.032 [NEW], BC-2.3.036 [AMENDED], BC-2.3.039 [NEW]
+//
+// TDD Red Gate (BC-5.38.001): `src/cli/issue/format.rs::render_due_date` and
+// `::due_date_header` are `todo!()` stubs. Any test that reaches either stub
+// panics (non-zero exit, "not yet implemented" on stderr) until the
+// implementer fills them in. See the direct unit tests on `render_due_date`
+// in `src/cli/issue/format.rs::tests` for the tightest Red Gate anchor.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Split a comfy-table row/header line into trimmed, non-empty cell strings.
+///
+/// `output.rs` renders with comfy-table's `UTF8_FULL_CONDENSED` preset, whose
+/// preset string (`comfy_table::style::presets::UTF8_FULL_CONDENSED`) documents
+/// itself with the example `│ Hello ┆ there │`: `│` (U+2502) is the OUTER
+/// border character (appears once on each end of the line); the INTERNAL
+/// column separator is `┆` (U+2506, "BOX DRAWINGS LIGHT TRIPLE DASH
+/// VERTICAL"). Split on `┆` for one chunk per column, then trim both
+/// whitespace and any leftover outer `│` border from the first/last chunk.
+fn table_cells(line: &str) -> Vec<&str> {
+    line.split('┆')
+        .map(|s| s.trim().trim_matches('│').trim())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// AC-1 (BC-2.3.036 [AMENDED] / BC-2.2.028): `issue view --output json`
+/// includes `.fields.duedate` verbatim when set. Does NOT reach the
+/// `render_due_date` stub — the JSON branch in `handle_view` serializes the
+/// typed struct directly, before the Table arm's row-building code — so
+/// this is expected to PASS already once the additive struct/field-list
+/// changes (already applied by the stub) are in place.
+#[tokio::test]
+async fn test_issue_view_json_includes_duedate_when_set() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_duedate(
+                "PROJ-1",
+                "Ship the widget",
+                "To Do",
+                Some("2027-07-30"),
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "--output", "json", "issue", "view", "PROJ-1"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["fields"]["duedate"], "2027-07-30",
+        "AC-1: .fields.duedate must equal the fixture value verbatim, got: {json}"
+    );
+}
+
+/// AC-2 (BC-2.3.036 [AMENDED]): `issue view --output json` shows
+/// `.fields.duedate` as JSON `null` (present, not omitted) when unset.
+/// Same JSON-branch reasoning as AC-1 — does not reach the stub.
+#[tokio::test]
+async fn test_issue_view_json_duedate_null_when_unset() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_duedate(
+                "PROJ-2",
+                "No due date yet",
+                "To Do",
+                None,
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "--output", "json", "issue", "view", "PROJ-2"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["fields"]
+            .as_object()
+            .expect("fields is an object")
+            .contains_key("duedate"),
+        "AC-2: duedate key must be PRESENT (as null), not omitted, got: {json}"
+    );
+    assert!(
+        json["fields"]["duedate"].is_null(),
+        "AC-2: .fields.duedate must be JSON null when unset, got: {:?}",
+        json["fields"]["duedate"]
+    );
+}
+
+/// AC-3 (BC-2.2.028 / BC-2.2.032 JSON-mode clause): `issue list --output
+/// json` includes `duedate` per row, unconditionally — no `--duedate` flag
+/// is passed in this invocation. `handle_list` still computes rows/headers
+/// via `format::format_issue_row`/`issue_table_headers` unconditionally of
+/// output format, but with `show_duedate == false` neither stub is reached,
+/// so this is expected to PASS already.
+#[tokio::test]
+async fn test_issue_list_json_includes_duedate_unconditional_of_flag() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_duedate(
+                    "PROJ-1",
+                    "Has a due date",
+                    "To Do",
+                    Some("2027-07-30"),
+                ),
+                common::fixtures::issue_response_with_duedate(
+                    "PROJ-2",
+                    "No due date",
+                    "To Do",
+                    None,
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json.as_array().expect("issue list JSON is an array");
+    assert_eq!(arr.len(), 2);
+    assert_eq!(
+        arr[0]["fields"]["duedate"], "2027-07-30",
+        "AC-3: set duedate must round-trip verbatim, got: {arr:?}"
+    );
+    assert!(
+        arr[1]["fields"]["duedate"].is_null(),
+        "AC-3: unset duedate must serialize as JSON null, got: {arr:?}"
+    );
+}
+
+/// AC-4 (BC-2.3.039): `issue view` human output ALWAYS shows a "Due Date"
+/// row (unconditional, no flag), positioned between `Updated` and
+/// `Project`, rendering the fixture value verbatim. This reaches
+/// `format::render_due_date` unconditionally in `view.rs`'s Table arm —
+/// expected to FAIL (panic on `todo!()`) until implemented.
+#[tokio::test]
+async fn test_issue_view_human_shows_due_date_row_when_set() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_duedate(
+                "PROJ-1",
+                "Ship the widget",
+                "To Do",
+                Some("2027-07-30"),
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "issue", "view", "PROJ-1"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    let due_date_line = lines
+        .iter()
+        .position(|l| l.contains("Due Date"))
+        .unwrap_or_else(|| panic!("AC-4: no 'Due Date' row found in stdout:\n{stdout}"));
+    assert!(
+        lines[due_date_line].contains("2027-07-30"),
+        "AC-4: Due Date row must render the value verbatim, got line: {}",
+        lines[due_date_line]
+    );
+
+    let updated_line = lines
+        .iter()
+        .position(|l| l.contains("Updated"))
+        .expect("Updated row should exist");
+    let project_line = lines
+        .iter()
+        .position(|l| l.contains("Project"))
+        .expect("Project row should exist");
+    assert!(
+        updated_line < due_date_line && due_date_line < project_line,
+        "AC-4: Due Date row must sit between Updated ({updated_line}) and \
+         Project ({project_line}), got Due Date at {due_date_line}"
+    );
+}
+
+/// AC-5 (BC-2.3.039 empty-rendering clause): `issue view` human output
+/// shows `-` (not `(none)`) for an unset Due Date. Reaches
+/// `render_due_date` — expected to FAIL until implemented.
+#[tokio::test]
+async fn test_issue_view_human_shows_dash_when_duedate_unset() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_duedate(
+                "PROJ-2",
+                "No due date yet",
+                "To Do",
+                None,
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "issue", "view", "PROJ-2"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+
+    let due_date_line = stdout
+        .lines()
+        .find(|l| l.contains("Due Date"))
+        .unwrap_or_else(|| panic!("AC-5: no 'Due Date' row found in stdout:\n{stdout}"));
+    let cells = table_cells(due_date_line);
+    assert_eq!(
+        cells.get(1).copied(),
+        Some("-"),
+        "AC-5: Due Date row must render '-' (not '(none)') when unset, got row: {cells:?}"
+    );
+}
+
+/// AC-6 (BC-2.2.032 column-position clause): `issue list --duedate` shows
+/// the column at `Key, Type, Status, Priority, Due Date, Assignee, Summary`
+/// (no --points/--assets/--team flags), rendering the fixture value
+/// verbatim. Reaches both `due_date_header` and `render_due_date` — expected
+/// to FAIL until implemented.
+#[tokio::test]
+async fn test_issue_list_duedate_flag_shows_column_correct_position() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_duedate(
+                    "PROJ-1",
+                    "Ship the widget",
+                    "To Do",
+                    Some("2027-07-30"),
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--duedate",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+
+    let header_line = stdout
+        .lines()
+        .find(|l| l.contains("Key") && l.contains("Summary"))
+        .unwrap_or_else(|| panic!("AC-6: no header row found in stdout:\n{stdout}"));
+    let headers = table_cells(header_line);
+    assert_eq!(
+        headers,
+        vec![
+            "Key", "Type", "Status", "Priority", "Due Date", "Assignee", "Summary"
+        ],
+        "AC-6: column order must be Key, Type, Status, Priority, Due Date, \
+         Assignee, Summary (no --points/--assets/--team passed) — got: {headers:?}"
+    );
+
+    let data_line = stdout
+        .lines()
+        .find(|l| l.contains("PROJ-1"))
+        .expect("data row for PROJ-1 present");
+    let cells = table_cells(data_line);
+    let due_date_idx = headers
+        .iter()
+        .position(|h| *h == "Due Date")
+        .expect("Due Date header present");
+    assert_eq!(
+        cells.get(due_date_idx).copied(),
+        Some("2027-07-30"),
+        "AC-6: Due Date cell must render the fixture value verbatim, got row: {cells:?}"
+    );
+}
+
+/// AC-7 (BC-2.2.032 empty-rendering clause): `issue list --duedate` shows
+/// `-` for an unset Due Date. Reaches both stubs — expected to FAIL until
+/// implemented.
+#[tokio::test]
+async fn test_issue_list_duedate_flag_shows_dash_when_unset() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_duedate(
+                    "PROJ-2",
+                    "No due date",
+                    "To Do",
+                    None,
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--duedate",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+
+    let header_line = stdout
+        .lines()
+        .find(|l| l.contains("Key") && l.contains("Summary"))
+        .expect("header row present");
+    let headers = table_cells(header_line);
+    let due_date_idx = headers
+        .iter()
+        .position(|h| *h == "Due Date")
+        .expect("Due Date header present");
+
+    let data_line = stdout
+        .lines()
+        .find(|l| l.contains("PROJ-2"))
+        .expect("data row for PROJ-2 present");
+    let cells = table_cells(data_line);
+    assert_eq!(
+        cells.get(due_date_idx).copied(),
+        Some("-"),
+        "AC-7: Due Date cell must render '-' when unset, got row: {cells:?}"
+    );
+}
+
+/// AC-8 (BC-2.2.032 opt-in clause): `issue list` WITHOUT `--duedate` omits
+/// the column entirely — column absent, not merely hidden. Does NOT reach
+/// either stub (`show_duedate == false`) — expected to PASS already.
+#[tokio::test]
+async fn test_issue_list_without_duedate_flag_omits_column() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_duedate(
+                    "PROJ-1",
+                    "Ship the widget",
+                    "To Do",
+                    Some("2027-07-30"),
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "issue", "list", "--jql", "project = PROJ"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+
+    assert!(
+        !stdout.contains("Due Date"),
+        "AC-8: header must NOT contain 'Due Date' without --duedate, got:\n{stdout}"
+    );
+    let has_duedate_cell = stdout
+        .lines()
+        .any(|l| table_cells(l).contains(&"2027-07-30"));
+    assert!(
+        !has_duedate_cell,
+        "AC-8: fixture due-date string must not appear as a distinct table \
+         cell (column absent, not merely hidden), got:\n{stdout}"
+    );
+}
+
+/// AC-9 (BC-2.2.032 JSON-mode clause): `--duedate --output json` is a
+/// silent no-op — identical JSON shape to `--output json` alone, no
+/// stderr warning. `handle_list` computes headers unconditionally of
+/// output format, so with `--duedate` set this currently reaches the
+/// `due_date_header` stub even in JSON mode — expected to FAIL until
+/// implemented.
+#[tokio::test]
+async fn test_issue_list_duedate_flag_json_output_is_noop() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_duedate(
+                    "PROJ-1",
+                    "Ship the widget",
+                    "To Do",
+                    Some("2027-07-30"),
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let base_args = [
+        "--no-input",
+        "--output",
+        "json",
+        "issue",
+        "list",
+        "--jql",
+        "project = PROJ",
+    ];
+
+    let with_flag = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(base_args)
+        .arg("--duedate")
+        .output()
+        .unwrap();
+
+    let without_flag = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(base_args)
+        .output()
+        .unwrap();
+
+    let with_flag_stderr = String::from_utf8_lossy(&with_flag.stderr);
+    let without_flag_stderr = String::from_utf8_lossy(&without_flag.stderr);
+    assert!(with_flag.status.success(), "stderr: {with_flag_stderr}");
+    assert!(
+        without_flag.status.success(),
+        "stderr: {without_flag_stderr}"
+    );
+
+    let with_flag_json: serde_json::Value = serde_json::from_slice(&with_flag.stdout).unwrap();
+    let without_flag_json: serde_json::Value =
+        serde_json::from_slice(&without_flag.stdout).unwrap();
+    assert_eq!(
+        with_flag_json, without_flag_json,
+        "AC-9: --duedate must have zero effect on --output json shape"
+    );
+
+    assert!(
+        !with_flag_stderr.contains("--duedate"),
+        "AC-9: --duedate combined with --output json must not emit a \
+         warning, got: {with_flag_stderr}"
+    );
+}
+
+/// AC-16 (BC-2.2.032 Scope clause): `board view` does not gain a Due Date
+/// column even when the underlying issue has a set `duedate` — the call
+/// site passes `None` for the new parameter unconditionally. Does not
+/// reach either stub — expected to PASS already (regression guard).
+#[tokio::test]
+async fn test_board_view_no_due_date_column_regardless_of_duedate_value() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("kanban")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_duedate(
+                    "PROJ-1",
+                    "Ship the widget",
+                    "To Do",
+                    Some("2027-07-30"),
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "--project",
+            "PROJ",
+            "board",
+            "view",
+            "--board",
+            "42",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Due Date"),
+        "AC-16: board view must not show a Due Date column, got:\n{stdout}"
+    );
+}
+
+/// AC-16 (BC-2.2.032 Scope clause): `sprint current` does not gain a Due
+/// Date column. Does not reach either stub — expected to PASS already
+/// (regression guard).
+#[tokio::test]
+async fn test_sprint_current_no_due_date_column_regardless_of_duedate_value() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board"))
+        .and(query_param("projectKeyOrId", "PROJ"))
+        .and(query_param("type", "scrum"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::board_list_response(vec![common::fixtures::board_response(
+                42,
+                "PROJ Scrum Board",
+                "scrum",
+                "PROJ",
+            )]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("scrum")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/sprint"))
+        .and(query_param("state", "active"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::sprint_list_response(vec![common::fixtures::sprint(
+                100, "Sprint 1", "active",
+            )]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::sprint_issues_response(
+                vec![common::fixtures::issue_response_with_duedate(
+                    "PROJ-1",
+                    "Ship the widget",
+                    "To Do",
+                    Some("2027-07-30"),
+                )],
+                1,
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "--project", "PROJ", "sprint", "current"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Due Date"),
+        "AC-16: sprint current must not show a Due Date column, got:\n{stdout}"
+    );
+}
+
+/// AC-16 (BC-2.2.032 Scope clause): `queue view` does not gain a Due Date
+/// column. Does not reach either stub — expected to PASS already
+/// (regression guard).
+#[tokio::test]
+async fn test_queue_view_no_due_date_column_regardless_of_duedate_value() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/PROJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "10001",
+            "key": "PROJ",
+            "projectTypeKey": "service_desk",
+            "simplified": false
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{"id": "15", "projectId": "10001", "projectName": "Test Project"}]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue/10/issue"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{"key": "PROJ-1", "fields": {"summary": "Ship the widget"}}]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_duedate(
+                    "PROJ-1",
+                    "Ship the widget",
+                    "To Do",
+                    Some("2027-07-30"),
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .args([
+            "--no-input",
+            "--project",
+            "PROJ",
+            "queue",
+            "view",
+            "--id",
+            "10",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Due Date"),
+        "AC-16: queue view must not show a Due Date column, got:\n{stdout}"
     );
 }
