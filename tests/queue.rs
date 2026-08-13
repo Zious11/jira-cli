@@ -1065,6 +1065,20 @@ async fn test_bc_x_8_009_queue_view_id_path_incurs_one_additional_list_queues_ca
         String::from_utf8_lossy(&id_output.stderr)
     );
 
+    // S5 (pr-reviewer suggestion): the --id HAPPY path (aux lookup succeeds,
+    // queue declares a customfield) must surface it in --output json too —
+    // AC-1 only pins this for the name path.
+    let id_stdout: serde_json::Value = serde_json::from_slice(&id_output.stdout).unwrap();
+    let id_issues = id_stdout.as_array().expect("json output must be an array");
+    assert_eq!(id_issues.len(), 1);
+    assert_eq!(
+        id_issues[0]["fields"]["customfield_10050"],
+        json!("v"),
+        "id path happy case: customfield_10050 must surface in the JSON `fields` \
+         object same as the name path; got: {}",
+        id_issues[0]["fields"]
+    );
+
     let id_reqs = id_server.received_requests().await.unwrap();
     let id_calls = count_requests_to(
         &id_reqs,

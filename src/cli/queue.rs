@@ -80,6 +80,15 @@ enum QueueIdSource {
     },
 }
 
+impl QueueIdSource {
+    fn id(&self) -> &str {
+        match self {
+            QueueIdSource::ById(id) => id,
+            QueueIdSource::ByName { id, .. } => id,
+        }
+    }
+}
+
 async fn handle_view(
     service_desk_id: &str,
     name: Option<String>,
@@ -102,10 +111,7 @@ async fn handle_view(
             QueueIdSource::ByName { id, fields }
         }
     };
-    let queue_id = match &source {
-        QueueIdSource::ById(id) => id.clone(),
-        QueueIdSource::ByName { id, .. } => id.clone(),
-    };
+    let queue_id = source.id().to_string();
 
     // Apply default limit consistent with other commands (issue list, board view, sprint current)
     let effective_limit = limit.or(Some(crate::cli::DEFAULT_LIMIT));
@@ -127,6 +133,12 @@ async fn handle_view(
     // `list_queues` call here, fail-open on error/no-match (BC-X.8.009
     // EC-X.8.009-1) — deliberately deferred until now so a zero-issue queue
     // never pays this cost (AC-7).
+    //
+    // `list_queues` (list-all + local id match) is used here pending
+    // verification that the single-queue `GET .../queue/{queueId}` endpoint
+    // also returns `fields[]` — if confirmed, that endpoint would let the
+    // `--id` path fetch by id directly instead of listing and filtering
+    // client-side (pr-reviewer S1 follow-up; deferred, not re-litigated here).
     let queue_fields: Option<Vec<String>> = match source {
         QueueIdSource::ByName { fields, .. } => fields,
         QueueIdSource::ById(id) => match client.list_queues(service_desk_id).await {
@@ -186,11 +198,34 @@ async fn handle_view(
 /// auxiliary lookup — never the raw HTTP error body (same convention as
 /// `write_cmdb_fields_cache`/`write_object_type_attr_cache`, see CLAUDE.md).
 fn describe_aux_lookup_error(err: &anyhow::Error) -> String {
-    match err.downcast_ref::<JrError>() {
+    let cause = match err.downcast_ref::<JrError>() {
         Some(JrError::ApiError { status, .. }) => format!("API error ({status})"),
         Some(JrError::NotAuthenticated { .. }) => "not authenticated".to_string(),
         Some(other) => other.to_string(),
         None => err.to_string(),
+    };
+    // The two named branches above never contain newlines, but the
+    // fallthrough `other`/`err.to_string()` arms can carry an arbitrary
+    // (possibly multi-line, possibly very long) error message — collapse
+    // and cap it so it can never split the one-line `warning: …`
+    // diagnostic across multiple stderr lines or dominate it.
+    collapse_and_truncate(&cause)
+}
+
+/// Collapses all whitespace (including embedded newlines) to single spaces
+/// and caps the result at [`MAX_CAUSE_LEN`] characters (UTF-8-safe, appending
+/// `…` when truncated). Used by [`describe_aux_lookup_error`] to keep the
+/// `<cause>` slot in the degrade warning terse and single-line, matching the
+/// model-b convention (never a raw multi-line HTTP body dump).
+const MAX_CAUSE_LEN: usize = 200;
+
+fn collapse_and_truncate(s: &str) -> String {
+    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() > MAX_CAUSE_LEN {
+        let truncated: String = collapsed.chars().take(MAX_CAUSE_LEN).collect();
+        format!("{truncated}\u{2026}")
+    } else {
+        collapsed
     }
 }
 
@@ -200,16 +235,20 @@ fn describe_aux_lookup_error(err: &anyhow::Error) -> String {
 /// pseudo-columns (`issuekey`), base fields, and malformed near-misses
 /// (`customfield_`, `customfield_10050_x`, `Customfield_99`) — is dropped.
 /// `fields: None` (or an empty/all-rejected array) yields an empty `Vec`,
-/// byte-identical to the pre-#693 `extra_fields = &[]` behavior.
+/// byte-identical to the pre-#693 `extra_fields = &[]` behavior. Duplicate
+/// tokens in the source `fields[]` are deduplicated, preserving first-seen
+/// order — a queue declaring `customfield_10050` twice must not send it
+/// twice to `search_issues`.
 fn extra_fields_allow_list(fields: Option<&[String]>) -> Vec<&str> {
-    fields
-        .map(|fs| {
-            fs.iter()
-                .filter(|f| is_customfield_token(f))
-                .map(|s| s.as_str())
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(fs) = fields else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    fs.iter()
+        .filter(|f| is_customfield_token(f))
+        .map(|s| s.as_str())
+        .filter(|s| seen.insert(*s))
+        .collect()
 }
 
 /// True iff `s` matches `^customfield_\d+$` exactly (anchored, one or more
@@ -299,7 +338,9 @@ pub async fn resolve_queue_by_name(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_key_in_jql, reorder_by_queue_position};
+    use super::{
+        build_key_in_jql, extra_fields_allow_list, is_customfield_token, reorder_by_queue_position,
+    };
     use crate::types::jira::Issue;
     use crate::types::jsm::Queue;
 
@@ -431,5 +472,86 @@ mod tests {
         let queue_keys = vec!["A-1".into()];
         let result = reorder_by_queue_position(issues, &queue_keys);
         assert!(result.is_empty());
+    }
+
+    // ─── BC-X.8.009 (#693) — pure allow-list helper coverage ───────────────
+
+    #[test]
+    fn test_is_customfield_token_accepts_valid_shapes() {
+        for accepted in ["customfield_10050", "customfield_1", "customfield_0"] {
+            assert!(
+                is_customfield_token(accepted),
+                "expected {accepted:?} to be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_customfield_token_rejects_malformed_and_non_matching_shapes() {
+        for rejected in [
+            "customfield_",        // zero digits
+            "customfield_10050_x", // trailing non-digit content
+            "Customfield_99",      // wrong case
+            "issuekey",            // pseudo-column
+            "summary",             // BASE_ISSUE_FIELDS member
+            "status",              // BASE_ISSUE_FIELDS member
+            "customfield_-1",      // signed — '-' is not an ASCII digit
+            "customfield_+1",      // signed — '+' is not an ASCII digit
+            "customfield_ 1",      // padded with a space
+            "customfield_10050 ",  // trailing space
+            "customfield_१०",      // Unicode (Devanagari) digits, not ASCII
+            "",                    // empty string
+        ] {
+            assert!(
+                !is_customfield_token(rejected),
+                "expected {rejected:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_extra_fields_allow_list_none_yields_empty() {
+        assert!(extra_fields_allow_list(None).is_empty());
+    }
+
+    #[test]
+    fn test_extra_fields_allow_list_keeps_only_customfield_tokens() {
+        let fields = vec![
+            "issuekey".to_string(),
+            "summary".to_string(),
+            "customfield_10050".to_string(),
+            "customfield_".to_string(),
+            "customfield_10050_x".to_string(),
+            "Customfield_99".to_string(),
+        ];
+        assert_eq!(
+            extra_fields_allow_list(Some(&fields)),
+            vec!["customfield_10050"]
+        );
+    }
+
+    #[test]
+    fn test_extra_fields_allow_list_empty_slice_yields_empty() {
+        let fields: Vec<String> = vec![];
+        assert!(extra_fields_allow_list(Some(&fields)).is_empty());
+    }
+
+    #[test]
+    fn test_extra_fields_allow_list_all_rejected_yields_empty() {
+        let fields = vec!["issuekey".to_string(), "status".to_string()];
+        assert!(extra_fields_allow_list(Some(&fields)).is_empty());
+    }
+
+    #[test]
+    fn test_extra_fields_allow_list_dedups_preserving_first_seen_order() {
+        let fields = vec![
+            "customfield_10050".to_string(),
+            "customfield_20099".to_string(),
+            "customfield_10050".to_string(),
+        ];
+        assert_eq!(
+            extra_fields_allow_list(Some(&fields)),
+            vec!["customfield_10050", "customfield_20099"]
+        );
     }
 }
