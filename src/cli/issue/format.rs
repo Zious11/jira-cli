@@ -249,9 +249,8 @@ mod tests {
     }
 
     // AC-10 (BC-2.2.032 / BC-2.3.039): direct unit coverage on the shared
-    // `render_due_date` helper. These are the Red Gate anchor tests — the
-    // current `todo!()` body panics on every call, so all three MUST FAIL
-    // until the implementer replaces the stub.
+    // `render_due_date` helper, which is fully implemented (see the
+    // function above — verbatim string when present, "-" otherwise).
     #[test]
     fn test_render_due_date_returns_verbatim_string_when_present() {
         assert_eq!(render_due_date(Some("2027-07-30")), "2027-07-30");
@@ -279,5 +278,81 @@ mod tests {
             false,
         );
         assert_eq!(row[2], "(no content)");
+    }
+
+    // ── BC-2.2.032 F1 Open Question #2: normative column order, with Due
+    // Date and Points BOTH present ──────────────────────────────────────
+    //
+    // No prior test exercised `issue_table_headers`/`format_issue_row` with
+    // every optional column shown simultaneously, so a swapped Due
+    // Date/Points position would have gone undetected. These two tests
+    // close that gap directly against the implementation, independent of
+    // any CLI/config/cache plumbing.
+
+    #[test]
+    fn test_issue_table_headers_full_order_with_all_optional_columns() {
+        let headers = issue_table_headers(true, true, true, true);
+        assert_eq!(
+            headers,
+            vec![
+                "Key", "Type", "Status", "Priority", "Due Date", "Points", "Assignee", "Team",
+                "Assets", "Summary",
+            ],
+            "BC-2.2.032 F1 Open Question #2: the implementer MUST follow the \
+             exact ordering Priority, Due Date, Points, Assignee, Team, \
+             Assets, Summary — got: {headers:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_issue_row_all_optional_columns_present_matches_header_order() {
+        let issue: crate::types::jira::Issue = serde_json::from_value(serde_json::json!({
+            "key": "PROJ-1",
+            "fields": {
+                "summary": "Ship the widget",
+                "issuetype": {"name": "Task"},
+                "status": {"name": "To Do"},
+                "priority": {"name": "High"},
+                "assignee": {"accountId": "abc123", "displayName": "Jane Smith"},
+                "duedate": "2027-07-30",
+                "customfield_10031": 5.0
+            }
+        }))
+        .unwrap();
+
+        let assets = vec![LinkedAsset {
+            key: Some("OBJ-1".into()),
+            name: Some("Acme Corp".into()),
+            ..Default::default()
+        }];
+
+        let row = format_issue_row(
+            &issue,
+            Some("2027-07-30"),
+            Some("customfield_10031"),
+            Some(&assets),
+            Some("Platform"),
+        );
+        let headers = issue_table_headers(true, true, true, true);
+
+        assert_eq!(
+            row.len(),
+            headers.len(),
+            "row/header length must match with all optional columns shown: \
+             headers={headers:?}, row={row:?}"
+        );
+        // Positional order must match issue_table_headers' order exactly:
+        // Key, Type, Status, Priority, Due Date, Points, Assignee, Team,
+        // Assets, Summary.
+        assert_eq!(row[0], "PROJ-1", "Key");
+        assert_eq!(row[1], "Task", "Type");
+        assert_eq!(row[2], "To Do", "Status");
+        assert_eq!(row[3], "High", "Priority");
+        assert_eq!(row[4], "2027-07-30", "Due Date");
+        assert_eq!(row[5], "5", "Points");
+        assert_eq!(row[6], "Jane Smith", "Assignee");
+        assert_eq!(row[7], "Platform", "Team");
+        assert_eq!(row[8], "Acme Corp", "Assets");
+        assert_eq!(row[9], "Ship the widget", "Summary");
     }
 }

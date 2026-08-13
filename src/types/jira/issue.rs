@@ -485,7 +485,8 @@ mod tests {
             "reporter": {"accountId": "abc123", "displayName": "Jane Smith"},
             "resolution": {"name": "Fixed"},
             "components": [{"name": "Backend"}, {"name": "API"}],
-            "fixVersions": [{"name": "v2.0", "released": false, "releaseDate": "2026-04-01"}]
+            "fixVersions": [{"name": "v2.0", "released": false, "releaseDate": "2026-04-01"}],
+            "duedate": "2027-07-30"
         });
         let fields: IssueFields = serde_json::from_value(json).unwrap();
         assert_eq!(
@@ -509,13 +510,15 @@ mod tests {
         assert_eq!(versions[0].name, "v2.0");
         assert_eq!(versions[0].released, Some(false));
         assert_eq!(versions[0].release_date.as_deref(), Some("2026-04-01"));
-        // New typed fields should NOT appear in extra
+        assert_eq!(fields.duedate.as_deref(), Some("2027-07-30"));
+        // New typed fields should NOT appear in extra (AC-14)
         assert!(!fields.extra.contains_key("created"));
         assert!(!fields.extra.contains_key("updated"));
         assert!(!fields.extra.contains_key("reporter"));
         assert!(!fields.extra.contains_key("resolution"));
         assert!(!fields.extra.contains_key("components"));
         assert!(!fields.extra.contains_key("fixVersions"));
+        assert!(!fields.extra.contains_key("duedate"));
     }
 
     #[test]
