@@ -4,6 +4,95 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-13
+
+First stable release of the 0.6.0 line, consolidating the `0.6.0-dev.1`
+through `0.6.0-dev.12` pre-releases. Highlights below; see the per-dev
+sections for full detail.
+
+### Breaking Changes
+
+- **`jr issue create --field`/`--on-behalf-of` without `--request-type` now exit 64
+  pre-flight instead of warning and proceeding** (S-639-1, DEC-188, BC-3.8.012/013
+  [AMENDED]). These flags are JSM-only; supplying them on the platform create path
+  now fails fast, before any HTTP call, project-key resolution, interactive prompt,
+  or `--description-stdin` read. Migration: add `--request-type <NAME>` or drop the
+  flag. (#639)
+- **`jr issue comment` is now a subcommand group.** The flat form
+  `jr issue comment KEY "message"` is no longer valid — migrate to
+  `jr issue comment add KEY "message"`. New subcommands `delete`, `edit`, and
+  `view` ship in this release alongside `add`. (S-577-1, #577)
+- **`jr issue move <key> <done-status>` requires an explicit resolution on
+  done-category transitions** (carried over from 0.5.0, BC-3.2.013, ADR-0015).
+  Supply `--resolution <name>` or `--no-resolution`; interactive sessions prompt.
+- **`--verbose` no longer prints HTTP request/response bodies by default** — use
+  `--verbose-bodies` for full body inspection (SD-003, PII-leakage hardening).
+
+### Added
+
+- **Windows build support (ADR-0016):** pre-built `x86_64-pc-windows-msvc.zip`
+  release binaries, Windows Credential Manager–backed keychain storage, idiomatic
+  `%APPDATA%\jr` / `%LOCALAPPDATA%\jr` config/cache paths, an 8 MB main-thread
+  stack fix, and Windows CI coverage across the `clippy`/`test` matrices.
+- **Attachment commands (S-576 series):** `jr issue attachment list/upload/
+  download/delete`, including streaming download with CWE-22 disk-path
+  sanitization, multipart upload with `--replace-existing` and `--dry-run`,
+  single/bulk/age-based delete, and JSM `--public`/`--internal` visibility
+  support via the servicedeskapi two-step flow with stale-ID self-heal. (#576)
+- **Comment CRUD with visibility (S-577 series):** `jr issue comment add/edit/
+  delete/view`, with `--internal`/`--public` visibility flags on `edit` using
+  merge (not replace) semantics on Jira's comment-properties endpoint, and an
+  interactive confirmation gate before making a comment public. (#577)
+- **Expanded Markdown → ADF coverage:** GFM task lists (`taskList`/`taskItem`),
+  GFM alerts (`> [!NOTE]` → `panel`), superscript/subscript, bare-URL
+  autolinking, footnotes, and block-level HTML preservation with `hardBreak`
+  interior newlines. A recursion-depth guard (CWE-674, SEC-001) protects both
+  the forward and reverse conversion paths. (#470, #471, #472, #473, #474,
+  #481, #483, #489, #492, #522, #553)
+- **JSM enhancements:** request-type discovery caching, queue list/view,
+  attachment visibility flows, and an expanded live-E2E suite (self-closing
+  teardown, resolution discovery).
+- **CI/spec-guard hardening (S-CIGATE/S-626 series):** a fail-closed `ci-gate`
+  aggregator as the single required branch-protection check; a genuine MSRV
+  1.85.0 validation job (previously silently ran under `stable`); the `ci.yml`
+  workflow file itself is now parsed with a real YAML parser
+  (`saphyr-parser`) for structural CI-gate assertions instead of line-based
+  heuristics; `cargo-mutants` wired in as a hard-required merge gate; BC-body
+  and cargo-mutants-policy citation guards; CLAUDE.md dead-citation CI guard.
+  (#519–#553, #626, S-CIGATE-1..3)
+
+### Fixed
+
+- Attachment download/upload/delete edge cases: integer-vs-string `id` in
+  live Jira responses, RFC 3339 fractional-second parsing, Content-Disposition
+  CRLF/quote/backslash injection guards (CWE-93), disk-write error
+  classification with remediation hints, and 404 body-surfacing asymmetries
+  between targeted and bulk paths (DEC-168). (#576, #644, #646, #647, #649)
+- ADF code-mark exclusivity (inline code inside bold/superscript no longer
+  emits HTTP-400-rejected ADF), listItem/footnote/panel content-model
+  conformance, and multi-line inline/block HTML no longer emitting raw `\n`
+  into text nodes. (#470–#492, #522, #571)
+- `jr issue edit --field` no longer crashes on GDPR-era Jira instances with
+  `accountId`-only picker `allowedValues`; `jr api -X`/`--method` now accepts
+  case-insensitive HTTP methods. (#589, #590)
+- CI correctness: MSRV job false-green (`RUSTUP_TOOLCHAIN` precedence fix),
+  `verify-signatures` step no-op on signing-configured forks, fork-ops signing
+  workflows hardened against CWE-77 env injection and TOCTOU races. (#535, #626)
+
+### Changed
+
+- Internal: split the oversized `src/cli/issue/create.rs` (2,880 LOC) into
+  `create.rs`/`edit.rs`/`jsm_create.rs` per the ADR-0012 shard rule; extracted
+  `interactions.rs` from `workflow.rs`. No behavior change. (#556, #558)
+- `jr issue create --request-type` and `jr project fields` now emit
+  pretty-printed (not compact) JSON, consistent with every other `jr --output
+  json` path. (#526)
+- `comfy-table` pinned to `=7.2.1` (MSRV protection); dependency bumps across
+  the CI/security toolchain (`anyhow`, `gitleaks-action` v3, `codeql-action`,
+  `checkout`, and others).
+- Opt-in fork release-ops workflows (Apple binary signing, release backfill,
+  gap-fill, upstream sync) added, inert by default in the canonical repo.
+
 ## [0.6.0-dev.12] - 2026-08-12
 
 ### Breaking Changes
