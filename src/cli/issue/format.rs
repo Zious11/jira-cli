@@ -103,7 +103,7 @@ pub fn issue_table_headers(
 ) -> Vec<&'static str> {
     let mut headers = vec!["Key", "Type", "Status", "Priority"];
     if show_duedate {
-        headers.push(due_date_header());
+        headers.push("Due Date");
     }
     if show_points {
         headers.push("Points");
@@ -117,11 +117,6 @@ pub fn issue_table_headers(
     }
     headers.push("Summary");
     headers
-}
-
-/// "Due Date" column header (BC-2.2.032).
-fn due_date_header() -> &'static str {
-    "Due Date"
 }
 
 pub fn format_points(value: f64) -> String {

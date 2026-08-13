@@ -1941,12 +1941,13 @@ async fn test_unlink_single_substring_rejected_no_input() {
 // BC-2.2.028 [AMENDED], BC-2.2.032 [NEW], BC-2.3.036 [AMENDED], BC-2.3.039 [NEW]
 //
 // BC-5.38.001: the tests below exercise the IMPLEMENTED
-// `src/cli/issue/format.rs::render_due_date` and `::due_date_header`
-// helpers — `render_due_date` returns the due-date value verbatim when
-// present and `"-"` for `None`/empty; `due_date_header` returns the literal
-// header string `"Due Date"`. See the direct unit tests on `render_due_date`
-// in `src/cli/issue/format.rs::tests` for the tightest anchor on that
-// behavior.
+// `src/cli/issue/format.rs::render_due_date` helper and the `"Due Date"`
+// header literal emitted by `::issue_table_headers` — `render_due_date`
+// returns the due-date value verbatim when present and `"-"` for
+// `None`/empty; `issue_table_headers` pushes the literal header string
+// `"Due Date"` when `show_duedate` is true. See the direct unit tests on
+// `render_due_date` in `src/cli/issue/format.rs::tests` for the tightest
+// anchor on that behavior.
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Split a comfy-table row/header line into trimmed cell strings, one per
@@ -2061,7 +2062,7 @@ async fn test_issue_view_json_duedate_null_when_unset() {
 /// is passed in this invocation. `handle_list` still computes rows/headers
 /// via `format::format_issue_row`/`issue_table_headers` unconditionally of
 /// output format, but with `show_duedate == false` neither
-/// `render_due_date` nor `due_date_header` is reached.
+/// `render_due_date` nor the `"Due Date"` header push is reached.
 #[tokio::test]
 async fn test_issue_list_json_includes_duedate_unconditional_of_flag() {
     let server = MockServer::start().await;
@@ -2228,7 +2229,7 @@ async fn test_issue_view_human_shows_dash_when_duedate_unset() {
 /// AC-6 (BC-2.2.032 column-position clause): `issue list --duedate` shows
 /// the column at `Key, Type, Status, Priority, Due Date, Assignee, Summary`
 /// (no --points/--assets/--team flags), rendering the fixture value
-/// verbatim. Reaches both `due_date_header` and `render_due_date`.
+/// verbatim. Reaches both the `"Due Date"` header push and `render_due_date`.
 #[tokio::test]
 async fn test_issue_list_duedate_flag_shows_column_correct_position() {
     let server = MockServer::start().await;
@@ -2300,7 +2301,7 @@ async fn test_issue_list_duedate_flag_shows_column_correct_position() {
 }
 
 /// AC-7 (BC-2.2.032 empty-rendering clause): `issue list --duedate` shows
-/// `-` for an unset Due Date. Reaches both `due_date_header` and
+/// `-` for an unset Due Date. Reaches both the `"Due Date"` header push and
 /// `render_due_date`.
 #[tokio::test]
 async fn test_issue_list_duedate_flag_shows_dash_when_unset() {
@@ -2366,7 +2367,7 @@ async fn test_issue_list_duedate_flag_shows_dash_when_unset() {
 
 /// AC-8 (BC-2.2.032 opt-in clause): `issue list` WITHOUT `--duedate` omits
 /// the column entirely — column absent, not merely hidden. Does NOT reach
-/// `render_due_date`/`due_date_header` (`show_duedate == false`).
+/// `render_due_date`/the `"Due Date"` header push (`show_duedate == false`).
 #[tokio::test]
 async fn test_issue_list_without_duedate_flag_omits_column() {
     let server = MockServer::start().await;
@@ -2429,9 +2430,9 @@ async fn test_issue_list_without_duedate_flag_omits_column() {
 /// AC-9 (BC-2.2.032 JSON-mode clause): `--duedate --output json` is a
 /// silent no-op — identical JSON shape to `--output json` alone, no
 /// stderr warning. `handle_list` computes headers unconditionally of
-/// output format, so with `--duedate` set this reaches `due_date_header`
-/// even in JSON mode; the header must simply have no effect on the JSON
-/// shape.
+/// output format, so with `--duedate` set this reaches the `"Due Date"`
+/// header push even in JSON mode; the header must simply have no effect on
+/// the JSON shape.
 #[tokio::test]
 async fn test_issue_list_duedate_flag_json_output_is_noop() {
     let server = MockServer::start().await;
@@ -2630,7 +2631,7 @@ story_points_field_id = "customfield_10031"
 /// AC-16 (BC-2.2.032 Scope clause): `board view` does not gain a Due Date
 /// column even when the underlying issue has a set `duedate` — the call
 /// site passes `None` for the new parameter unconditionally. Does not
-/// reach `render_due_date`/`due_date_header` (regression guard).
+/// reach `render_due_date`/the `"Due Date"` header push (regression guard).
 #[tokio::test]
 async fn test_board_view_no_due_date_column_regardless_of_duedate_value() {
     let server = MockServer::start().await;
@@ -2699,7 +2700,7 @@ async fn test_board_view_no_due_date_column_regardless_of_duedate_value() {
 }
 
 /// AC-16 (BC-2.2.032 Scope clause): `sprint current` does not gain a Due
-/// Date column. Does not reach `render_due_date`/`due_date_header`
+/// Date column. Does not reach `render_due_date`/the `"Due Date"` header push
 /// (regression guard).
 #[tokio::test]
 async fn test_sprint_current_no_due_date_column_regardless_of_duedate_value() {
@@ -2788,7 +2789,7 @@ async fn test_sprint_current_no_due_date_column_regardless_of_duedate_value() {
 }
 
 /// AC-16 (BC-2.2.032 Scope clause): `queue view` does not gain a Due Date
-/// column. Does not reach `render_due_date`/`due_date_header`
+/// column. Does not reach `render_due_date`/the `"Due Date"` header push
 /// (regression guard).
 #[tokio::test]
 async fn test_queue_view_no_due_date_column_regardless_of_duedate_value() {
