@@ -22,7 +22,10 @@ All notable changes to jr will be documented here.
   where a pathologically nested description previously returned exit 0 under
   `--dry-run` while the corresponding live edit would exit 64. Any automation
   asserting on the old literal placeholder string will observe a different
-  value. (#692)
+  value. Note: `--dry-run --description-stdin` now performs a blocking read
+  of stdin (matching the live path). Invocations that previously returned
+  immediately without stdin attached will now wait for EOF — pipe input, or
+  redirect from /dev/null. (#692)
 
 ### Added
 

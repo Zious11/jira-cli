@@ -767,10 +767,20 @@ async fn test_bc_3_4_021_dry_run_other_fields_remain_simplified_previews_unaffec
         "Expected exit 0; stderr={label_stderr} stdout={label_stdout}"
     );
     let label_parsed = parse_json(&label_stdout);
+    let label_planned = &label_parsed["plannedChanges"];
     assert_eq!(
-        label_parsed["plannedChanges"]["labels"],
+        label_planned["labels"],
         serde_json::json!([{"action": "ADD", "name": "foo"}]),
         "labels must remain the flat-array preview, NOT labelsFields; stdout={label_stdout}"
+    );
+
+    // Negative pin: no description input flag was supplied on this call, so
+    // NEITHER `description` NOR `descriptionAdf` may appear in plannedChanges
+    // (the derived-key absence direction of BC-3.4.021 Postconditions-json
+    // item 2 — descriptionAdf is present IFF a description input is supplied).
+    assert!(
+        label_planned.get("descriptionAdf").is_none() && label_planned.get("description").is_none(),
+        "neither description nor descriptionAdf may appear when no description flag was supplied; planned={label_planned:?}"
     );
 }
 
