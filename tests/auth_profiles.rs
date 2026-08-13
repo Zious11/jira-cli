@@ -695,6 +695,38 @@ auth_method = "api_token"
         .stderr(predicates::str::contains(GUARD_MESSAGE_SUBSTR));
 }
 
+/// NIT-4 (pr-reviewer, PR #696): the leading-flag form — `--profile` placed
+/// BEFORE the `auth switch` subcommand entirely (`jr --profile X auth switch
+/// Y`) — is accepted by clap (it's a global arg) and must reject identically
+/// to the subcommand-position forms already covered above. This closes the
+/// third of three argv shapes clap accepts for a `global = true` flag:
+/// before the subcommand, after it, and interleaved with the positional.
+#[test]
+fn test_bc_1_2_047_auth_switch_profile_flag_rejected_when_leading_before_subcommand() {
+    let (dir, path) = fresh_config_dir();
+    std::fs::write(
+        &path,
+        r#"
+default_profile = "default"
+[profiles.default]
+url = "https://default.example"
+auth_method = "api_token"
+[profiles.realprofile]
+url = "https://real.example"
+auth_method = "api_token"
+"#,
+    )
+    .unwrap();
+
+    jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
+        .args(["--profile", "realprofile", "auth", "switch", "realprofile"])
+        .assert()
+        .failure()
+        .code(64)
+        .stderr(predicates::str::contains(GUARD_MESSAGE_SUBSTR));
+}
+
 /// AC-5 (BC-1.2.047 EC-1.2.047-4, VP-663-003 — protects the direnv-scoped
 /// sandbox workflow): `JR_PROFILE=sandbox` alone (the global `--profile`
 /// FLAG absent) must NOT trip the guard. The switch proceeds normally.

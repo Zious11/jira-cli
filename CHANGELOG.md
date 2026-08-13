@@ -6,12 +6,12 @@ All notable changes to jr will be documented here.
 
 ### Breaking Changes
 
-- **`jr auth switch --profile <X> <NAME>` now exits 64 instead of silently
-  accepting `--profile` and ignoring its value** (S-663-1, BC-1.2.047). The
-  global `--profile` flag has no effect on `auth switch` — the profile to
-  activate is always the positional `<NAME>` argument — so passing `--profile`
-  previously produced the confusing "both values must be real profiles, only
-  one matters" incantation the issue reports. Migration: drop `--profile` and
+- **`jr auth switch --profile <X> <NAME>` now exits 64** (S-663-1,
+  BC-1.2.047). `--profile` was previously *accepted* and had no effect on
+  which profile was activated — the positional `<NAME>` always won — though
+  it did force an active-profile existence check via `Config::load_with`,
+  producing the confusing "both values must be real profiles, only one
+  matters" incantation the issue reports. Migration: drop `--profile` and
   run `jr auth switch <NAME>`. All other `auth` subcommands (`list`, `remove`,
   `login`, `status`, `refresh`, `logout`) continue to honor `--profile`
   unchanged. (#663)

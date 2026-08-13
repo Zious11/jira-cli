@@ -255,7 +255,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                         )
                         .into());
                     }
-                    cli::auth::handle_switch(&name, cli.profile.as_deref(), &cli.output).await
+                    // Past the guard above, `cli.profile` is provably `None` —
+                    // pass `None` explicitly rather than `cli.profile.as_deref()`
+                    // so the dead argument doesn't read as though this arm still
+                    // composes a caller-supplied profile (it never did; see
+                    // handle_switch's `cli_profile` param, used only for
+                    // `Config::load_with`'s active-profile resolution).
+                    cli::auth::handle_switch(&name, None, &cli.output).await
                 }
                 cli::AuthCommand::List => {
                     cli::auth::handle_list(&cli.output, cli.profile.as_deref()).await
