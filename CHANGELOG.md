@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.6.0-dev.12] - 2026-08-12
+
 ### Breaking Changes
 
 - **`jr issue create --field`/`--on-behalf-of` without `--request-type` now exit 64
