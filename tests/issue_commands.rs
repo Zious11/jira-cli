@@ -581,7 +581,11 @@ async fn get_issue_includes_standard_fields() {
     // AC-1 / AC-14 (BC-2.3.036 [AMENDED]): `duedate` is a NAMED field, so it
     // serializes at `fields.duedate` directly — NOT inside the `extra`
     // flatten map (which would put it at an entirely different, unnamed
-    // location with no dedicated key).
+    // location with no dedicated key). Note: the runtime JSON assertion
+    // below would also pass if `duedate` were flattened under a key of the
+    // same name — the actual named-field-vs-flatten guarantee rests on the
+    // compile-time `issue.fields.duedate` field access (AC-12 / view.rs),
+    // which only compiles because `duedate` is a real struct field.
     assert_eq!(value["fields"]["duedate"], "2027-07-30");
 }
 
@@ -1936,11 +1940,13 @@ async fn test_unlink_single_substring_rejected_no_input() {
 //
 // BC-2.2.028 [AMENDED], BC-2.2.032 [NEW], BC-2.3.036 [AMENDED], BC-2.3.039 [NEW]
 //
-// TDD Red Gate (BC-5.38.001): `src/cli/issue/format.rs::render_due_date` and
-// `::due_date_header` are `todo!()` stubs. Any test that reaches either stub
-// panics (non-zero exit, "not yet implemented" on stderr) until the
-// implementer fills them in. See the direct unit tests on `render_due_date`
-// in `src/cli/issue/format.rs::tests` for the tightest Red Gate anchor.
+// BC-5.38.001: the tests below exercise the IMPLEMENTED
+// `src/cli/issue/format.rs::render_due_date` and `::due_date_header`
+// helpers — `render_due_date` returns the due-date value verbatim when
+// present and `"-"` for `None`/empty; `due_date_header` returns the literal
+// header string `"Due Date"`. See the direct unit tests on `render_due_date`
+// in `src/cli/issue/format.rs::tests` for the tightest anchor on that
+// behavior.
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Split a comfy-table row/header line into trimmed, non-empty cell strings.
