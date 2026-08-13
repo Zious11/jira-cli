@@ -394,6 +394,45 @@ pub(super) async fn handle_edit(
             .await?;
         }
 
+        // BC-3.4.021 (DEC-274, scope extended by adversary pass-3 MEDIUM-1):
+        // resolve the description input — for `--description-stdin`, read
+        // stdin via the same `spawn_blocking` + `read_to_string` idiom the
+        // live path uses (see `desc_text` below, ~line 642); for bare
+        // `--description`, the text is already available synchronously —
+        // then render it to ADF via the identical `markdown_to_adf`/
+        // `text_to_adf` selection the live path uses. This is a single,
+        // unconditional PRE-STEP that MUST complete — including a possible
+        // `markdown_to_adf` `Err` (MAX_ADF_DEPTH, BC-7.2.012) propagating as
+        // an exit-64 error — BEFORE the `match output_format` block below
+        // begins emitting ANY output. This ordering is load-bearing, not
+        // cosmetic: `--output table`'s preview lines are printed
+        // INCREMENTALLY via per-field `println!` calls, so performing this
+        // read+conversion interleaved with (or after) that sequence would
+        // risk a depth-guard `Err` leaking partial stdout before the exit-64
+        // return, contradicting the "stdout EMPTY on error, in both modes"
+        // postcondition (EC-3.4.021-15/-19, VP-692-002/-004). `--dry-run`
+        // suppresses mutation HTTP calls only — it does NOT suppress this
+        // resolution error (Invariant 2/3).
+        let dr_desc_text: Option<String> = if description_stdin {
+            let buf = tokio::task::spawn_blocking(|| {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+                Ok::<_, std::io::Error>(buf)
+            })
+            .await??;
+            Some(buf)
+        } else {
+            description.clone()
+        };
+        let dr_desc_adf: Option<serde_json::Value> = match &dr_desc_text {
+            Some(text) => Some(if markdown {
+                adf::markdown_to_adf(text)?
+            } else {
+                adf::text_to_adf(text)
+            }),
+            None => None,
+        };
+
         match output_format {
             OutputFormat::Json => {
                 // C-3: --output json must produce machine-readable JSON on stdout,
@@ -463,14 +502,17 @@ pub(super) async fn handle_edit(
                 if let Some(ref t) = team {
                     planned.insert("team".into(), json!(t));
                 }
-                if let Some(ref d) = description {
-                    planned.insert("description".into(), json!(d));
-                } else if description_stdin {
-                    // --dry-run does NOT read stdin; document this as a known limitation.
-                    planned.insert(
-                        "description".into(),
-                        json!("<from stdin — not yet read in dry-run>"),
-                    );
+                // BC-3.4.021 (DEC-274): `description` carries the RAW input string
+                // verbatim (BC-3.4.013/#398 unaffected) for EITHER description-input
+                // flag; the additive `descriptionAdf` key (nested inside
+                // `plannedChanges`, never top-level) carries the real rendered ADF
+                // document — byte-identical to what the live path would POST — and
+                // is present iff a description input flag was supplied.
+                if let Some(ref text) = dr_desc_text {
+                    planned.insert("description".into(), json!(text));
+                }
+                if let Some(ref adf_val) = dr_desc_adf {
+                    planned.insert("descriptionAdf".into(), adf_val.clone());
                 }
                 if markdown {
                     planned.insert("markdown".into(), json!(true));
@@ -526,27 +568,34 @@ pub(super) async fn handle_edit(
                 if let Some(ref t) = team {
                     println!("  team → {t}");
                 }
-                if let Some(ref d) = description {
+                if let Some(ref text) = dr_desc_text {
                     // Truncate long descriptions to 60 codepoints for readability.
                     // Use chars().count() / chars().take(60) — NOT byte slicing —
                     // to avoid panics on multi-byte UTF-8 codepoints (Cyrillic,
                     // CJK, emoji, accented chars). Codepoint-aware is the correct
                     // Rust-stdlib idiom; grapheme clusters (unicode_segmentation)
                     // would be overkill for a display truncation.
-                    let char_count = d.chars().count();
+                    let char_count = text.chars().count();
                     let preview = if char_count > 60 {
-                        let truncated: String = d.chars().take(60).collect();
+                        let truncated: String = text.chars().take(60).collect();
                         format!("{truncated}...")
                     } else {
-                        d.clone()
+                        text.clone()
                     };
                     println!("  description → {preview}");
-                } else if description_stdin {
-                    // --dry-run does NOT read stdin; document this as a known limitation.
-                    println!("  description → (read from stdin — not yet read in dry-run)");
                 }
                 if markdown {
                     println!("  markdown rendering: enabled");
+                }
+                // BC-3.4.021 (DEC-274): unconditional render-OK indicator — emitted
+                // whenever a description input was supplied, regardless of whether
+                // truncation fired (Postconditions-table item 2, adversary pass-5
+                // LOW-1). Table mode never dumps the raw ADF JSON (poor UX); this
+                // validated-indicator line confirms the same conversion succeeded.
+                // MUST be printed AFTER the "markdown rendering: enabled" line
+                // (pinned relative order, adversary pass-5 INFO-2).
+                if dr_desc_adf.is_some() {
+                    println!("  description (ADF): rendered OK");
                 }
                 // H-3(a): emit resolved --field entries to stdout (not stderr) so the
                 // entire planned-changes preview is on a single coherent stream.
