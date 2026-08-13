@@ -6,6 +6,16 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- **`jr queue view` surfaces queue-configured custom fields in `--output json`**
+  (S-693-1, BC-X.8.009 AMENDED): the resolved queue's declared `fields[]`
+  (filtered to `customfield_<digits>` tokens only) now flow into the batch
+  issue fetch, so `customfield_*` values configured as queue columns appear
+  in JSON output via the existing `IssueFields` flatten mechanism. Table
+  output is unchanged (no new column; render-side work tracked separately as
+  #575). The `--id` path incurs one additional `list_queues` call to obtain
+  this field config that the `<name>` path already has in hand; on failure
+  it degrades to base fields only with a stderr warning rather than failing
+  the command. (#693)
 - **Due date visibility (S-668-1):** `jr issue view` and `jr issue list --output json`
   now include the `duedate` field. `jr issue view` shows a Due Date row; `jr issue list
   --duedate` adds an opt-in Due Date column. (#668)
