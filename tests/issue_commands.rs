@@ -2500,6 +2500,133 @@ async fn test_issue_list_duedate_flag_json_output_is_noop() {
     );
 }
 
+/// EC-5 (adversarial pass, S-668-1 LOW finding): `issue list --duedate
+/// --points` combined — the full column order (Priority, Due Date, Points,
+/// Assignee, …) is otherwise pinned only at the unit level
+/// (`src/cli/issue/format.rs::tests::test_issue_table_headers_full_order_with_all_optional_columns`).
+/// This is the CLI-level (wiremock) counterpart: it exercises the real
+/// config → `resolve_show_points` → header-building path with both flags
+/// set simultaneously, mirroring the config scaffolding used by
+/// `tests/multi_profile_fields.rs::test_bc_6_3_001_points_column_present_after_save_round_trip`.
+#[tokio::test]
+async fn test_issue_list_duedate_and_points_columns_ordered_correctly() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // Config with the story-points field id under [profiles.default], no
+    // legacy [fields] block — mirrors write_single_profile_config_no_legacy_fields
+    // in tests/multi_profile_fields.rs.
+    let conf_dir = config_dir.path().join("jr");
+    std::fs::create_dir_all(&conf_dir).unwrap();
+    std::fs::write(
+        conf_dir.join("config.toml"),
+        r#"
+default_profile = "default"
+
+[profiles.default]
+url = "https://acme.atlassian.net"
+story_points_field_id = "customfield_10031"
+"#,
+    )
+    .unwrap();
+
+    // One issue carrying both a duedate and a story-points value.
+    let issue = {
+        let mut base = common::fixtures::issue_response_with_duedate(
+            "PROJ-1",
+            "Ship the widget",
+            "To Do",
+            Some("2027-07-30"),
+        );
+        base["fields"]["customfield_10031"] = serde_json::json!(5.0);
+        base
+    };
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::issue_search_response(vec![issue])),
+        )
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", &conf_dir)
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--duedate",
+            "--points",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+
+    let header_line = stdout
+        .lines()
+        .find(|l| l.contains("Key") && l.contains("Summary"))
+        .unwrap_or_else(|| panic!("EC-5: no header row found in stdout:\n{stdout}"));
+    let headers = table_cells(header_line);
+    assert_eq!(
+        headers,
+        vec![
+            "Key", "Type", "Status", "Priority", "Due Date", "Points", "Assignee", "Summary"
+        ],
+        "EC-5: combined --duedate --points column order must be Key, Type, \
+         Status, Priority, Due Date, Points, Assignee, Summary — got: {headers:?}"
+    );
+
+    let data_line = stdout
+        .lines()
+        .find(|l| l.contains("PROJ-1"))
+        .expect("data row for PROJ-1 present");
+    let cells = table_cells(data_line);
+
+    let due_date_idx = headers
+        .iter()
+        .position(|h| *h == "Due Date")
+        .expect("Due Date header present");
+    let points_idx = headers
+        .iter()
+        .position(|h| *h == "Points")
+        .expect("Points header present");
+
+    assert_eq!(due_date_idx, 4, "EC-5: Due Date must be at column index 4");
+    assert_eq!(points_idx, 5, "EC-5: Points must be at column index 5");
+    assert!(
+        due_date_idx < points_idx,
+        "EC-5: Due Date must appear before Points in the header row"
+    );
+
+    assert_eq!(
+        cells.get(due_date_idx).copied(),
+        Some("2027-07-30"),
+        "EC-5: Due Date cell must render the fixture value, got row: {cells:?}"
+    );
+    assert_eq!(
+        cells.get(points_idx).copied(),
+        Some("5"),
+        "EC-5: Points cell must render the fixture value, got row: {cells:?}"
+    );
+}
+
 /// AC-16 (BC-2.2.032 Scope clause): `board view` does not gain a Due Date
 /// column even when the underlying issue has a set `duedate` — the call
 /// site passes `None` for the new parameter unconditionally. Does not
