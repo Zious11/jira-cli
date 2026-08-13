@@ -531,6 +531,7 @@ mod tests {
         assert!(fields.resolution.is_none());
         assert!(fields.components.is_none());
         assert!(fields.fix_versions.is_none());
+        assert!(fields.duedate.is_none());
     }
 
     #[test]
@@ -542,7 +543,8 @@ mod tests {
             "reporter": null,
             "resolution": null,
             "components": null,
-            "fixVersions": null
+            "fixVersions": null,
+            "duedate": null
         });
         let fields: IssueFields = serde_json::from_value(json).unwrap();
         assert!(fields.created.is_none());
@@ -551,6 +553,7 @@ mod tests {
         assert!(fields.resolution.is_none());
         assert!(fields.components.is_none());
         assert!(fields.fix_versions.is_none());
+        assert!(fields.duedate.is_none());
     }
 
     #[test]

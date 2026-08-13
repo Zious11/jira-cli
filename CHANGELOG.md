@@ -4,6 +4,12 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Due date visibility (S-668-1):** `jr issue view` and `jr issue list --output json`
+  now include the `duedate` field. `jr issue view` shows a Due Date row; `jr issue list
+  --duedate` adds an opt-in Due Date column. (#668)
+
 ## [0.6.0] - 2026-08-13
 
 First stable release of the 0.6.0 line, consolidating the `0.6.0-dev.1`
