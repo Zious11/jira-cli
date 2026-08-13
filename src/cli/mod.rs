@@ -648,7 +648,7 @@ pub enum IssueCommand {
         /// Issue key (e.g., FOO-123)
         key: String,
     },
-    /// Attachment operations: list. (S-576-1)
+    /// Attachment operations: list, download, upload, delete. (S-576-1..4)
     Attachment {
         #[command(subcommand)]
         command: AttachmentSubcommand,
@@ -771,6 +771,9 @@ pub enum AttachmentSubcommand {
         all: bool,
 
         /// Download the N most-recent attachments by `created` descending.
+        /// `--filter` predicates (if any) are applied BEFORE this truncation — the
+        /// surviving set is sorted by `created` descending (most recent first),
+        /// then truncated to the first N.
         /// Accepts negative integers — N ≤ 0 is rejected in the handler (exit 64,
         /// `--newest requires a positive integer.`; EC-2.7.009-1; `allow_negative_numbers`
         /// lets clap accept them so the handler can emit the canonical message).
@@ -785,7 +788,10 @@ pub enum AttachmentSubcommand {
 
         /// Output directory for batch downloads.
         /// Requires the `batch` group (`--all` or `--newest`; EC-2.7.008-9 ~812).
-        /// Conflicts with `--id`.
+        /// Conflicts with `--id`. Files land as
+        /// `<40-char-SHA-1-of-the-attachment-id>_<sanitized-filename>` — the
+        /// on-disk name is NOT predictable from `list` output; recover it by
+        /// parsing the `path` field of this command's JSON manifest.
         #[arg(long = "out-dir", requires = "batch", conflicts_with = "id")]
         out_dir: Option<std::path::PathBuf>,
 
