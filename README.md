@@ -243,7 +243,7 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 |---------|-------------|
 | `jr init` | Configure Jira instance and authenticate (prompts to add another profile if any are already configured) |
 | `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0. `--profile NAME` targets a specific profile (creates if absent); `--url URL` sets the Jira instance URL when creating. Non-interactive: `--email`/`--token` or `JR_EMAIL`/`JR_API_TOKEN`; `--client-id`/`--client-secret` or `JR_OAUTH_CLIENT_ID`/`JR_OAUTH_CLIENT_SECRET` for OAuth |
-| `jr auth switch <NAME>` | Set the default profile in `config.toml`. Errors if `NAME` doesn't exist |
+| `jr auth switch <NAME>` | Set the default profile in `config.toml`. Errors if `NAME` doesn't exist. The global `--profile` flag is rejected on this subcommand (exit 64) — `NAME` is always the switch target, so use `jr auth switch <NAME>` alone |
 | `jr auth list` | List configured profiles (table or JSON via `--output`); active profile marked with `*` |
 | `jr auth status` | Show authentication status for the active profile, or `--profile NAME` for another |
 | `jr auth refresh` | Refresh credentials for the active profile (or `--profile NAME`); same flags/env vars as `auth login` |
@@ -304,7 +304,7 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 |------|-------------|
 | `--output json\|table` | Output format (default: table) |
 | `--project FOO` | Override project key |
-| `--profile NAME` | Override the active profile for this invocation (precedence: this flag > `JR_PROFILE` env > `default_profile` in config > `"default"`) |
+| `--profile NAME` | Override the active profile for this invocation (precedence: this flag > `JR_PROFILE` env > `default_profile` in config > `"default"`). Rejected (exit 64) on `jr auth switch` — that subcommand's switch target is always the positional `NAME` argument |
 | `--no-color` | Disable colored output (also respects `NO_COLOR` env) |
 | `--no-input` | Disable interactive prompts (auto-enabled in pipes/scripts) |
 | `--verbose` | Show HTTP method + URL per request (header-only since v0.6 / SD-003; does NOT print bodies) |
@@ -352,6 +352,9 @@ jr auth switch sandbox          # persistent — writes default_profile in confi
 jr --profile sandbox issue list # one-shot — overrides for this call only
 JR_PROFILE=sandbox jr issue list # session-scoped (works well with direnv)
 ```
+
+Note: `--profile` and `auth switch` don't combine — `jr auth switch --profile X Y` exits
+64. `auth switch`'s target is always its positional `NAME` argument.
 
 A single classic Atlassian API token authenticates the same user against
 any Atlassian Cloud site, so `email` + `api-token` are stored once in the

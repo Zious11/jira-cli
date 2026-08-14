@@ -681,3 +681,854 @@ async fn queue_list_network_drop_surfaces_reach_error() {
     );
     assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
 }
+
+// ─── S-693-1 (#693): `queue view` threads queue-declared customfield_*
+// columns into search_issues extra_fields (BC-X.8.009 AMENDED) ────────────
+//
+// RED GATE — these tests pin AC-1 through AC-8 from
+// .factory/stories/S-693-1-queue-view-custom-fields.md against BC-X.8.009.
+// They are written to exercise the full CLI (subprocess) pipeline rather
+// than a not-yet-existing pure helper, so the crate keeps compiling (and
+// every pre-existing queue test above keeps passing) whether or not the
+// story's implementation has landed yet.
+//
+// Test-fn naming intentionally uses `test_bc_x_8_009_...` (lowercase) per
+// this repo's snake_case test-naming convention (CLAUDE.md), rather than
+// the literal `test_BC_X_8_009_...` spelling used in the story's AC
+// headings — the story names are shorthand, not a literal fn-name mandate,
+// and lowercase avoids a `non_snake_case` warning under `-D warnings`.
+//
+// Fixed fixture identity used throughout: project key "HELPDESK", service
+// desk id "15", queue id "10" (name "Triage") — mirrors the existing
+// conventions already established elsewhere in this file.
+
+/// Mounts the two prerequisite mocks `require_service_desk` needs before
+/// `handle_view` is ever entered: the project-meta lookup (confirms a JSM
+/// `service_desk` project) and the service-desk list (resolves the numeric
+/// `service_desk_id` for the project).
+async fn mount_jsm_prereqs(server: &MockServer, project_key: &str, service_desk_id: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/project/{project_key}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "10000",
+            "key": project_key,
+            "projectTypeKey": "service_desk",
+            "simplified": false
+        })))
+        .mount(server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [
+                { "id": service_desk_id, "projectId": "10000", "projectName": "Service Desk" }
+            ]
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `GET .../servicedesk/{sdId}/queue` (the `list_queues` endpoint —
+/// used both by `resolve_queue_by_name` on the name path, and by the new
+/// `--id`-path auxiliary lookup this story adds) returning a single queue
+/// with the given `fields[]` declaration (`None` omits the `fields` key
+/// entirely, matching a queue with no configured columns).
+async fn mount_queue_list(
+    server: &MockServer,
+    service_desk_id: &str,
+    queue_id: &str,
+    queue_name: &str,
+    fields: Option<Vec<&str>>,
+) {
+    let mut queue = json!({
+        "id": queue_id,
+        "name": queue_name,
+        "issueCount": 1
+    });
+    if let Some(f) = fields {
+        queue["fields"] = json!(f);
+    }
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/rest/servicedeskapi/servicedesk/{service_desk_id}/queue"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [queue]
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `GET .../servicedesk/{sdId}/queue/{queueId}/issue` (the
+/// `get_queue_issue_keys` endpoint) returning the given keys in order.
+async fn mount_queue_issue_keys(
+    server: &MockServer,
+    service_desk_id: &str,
+    queue_id: &str,
+    keys: &[&str],
+) {
+    let values: Vec<serde_json::Value> = keys
+        .iter()
+        .map(|k| json!({ "key": k, "fields": {} }))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/rest/servicedeskapi/servicedesk/{service_desk_id}/queue/{queue_id}/issue"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": keys.len(),
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": values
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `POST /rest/api/3/search/jql` returning a single issue carrying
+/// `field_id: value` in addition to the standard base fields.
+async fn mount_search_issues_with_customfield(
+    server: &MockServer,
+    key: &str,
+    field_id: &str,
+    value: serde_json::Value,
+) {
+    let mut issue = json!({
+        "key": key,
+        "fields": {
+            "summary": "Test issue",
+            "status": {"name": "New"},
+            "issuetype": {"name": "Task"},
+            "priority": {"name": "Medium"},
+            "assignee": serde_json::Value::Null
+        }
+    });
+    issue["fields"][field_id] = value;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issues": [issue],
+            "nextPageToken": serde_json::Value::Null
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `POST /rest/api/3/search/jql` returning a single issue with only
+/// the standard base fields (no custom field) — used for the "nothing
+/// matches the allow-list" scenarios.
+async fn mount_search_issues_plain(server: &MockServer, key: &str) {
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issues": [{
+                "key": key,
+                "fields": {
+                    "summary": "Test issue",
+                    "status": {"name": "New"},
+                    "issuetype": {"name": "Task"},
+                    "priority": {"name": "Medium"},
+                    "assignee": serde_json::Value::Null
+                }
+            }],
+            "nextPageToken": serde_json::Value::Null
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Runs `jr queue view --project HELPDESK --no-input <extra_args>` against
+/// `server_uri`, with the given XDG cache/config temp dirs.
+fn run_jr_queue_view(
+    server_uri: &str,
+    cache_dir: &std::path::Path,
+    config_dir: &std::path::Path,
+    extra_args: &[&str],
+) -> std::process::Output {
+    write_minimal_config(config_dir, server_uri);
+    let mut args: Vec<&str> = vec!["queue", "view", "--project", "HELPDESK", "--no-input"];
+    args.extend_from_slice(extra_args);
+    Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server_uri)
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir)
+        .env("JR_CACHE_DIR", cache_dir.join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir)
+        .env("JR_CONFIG_DIR", config_dir.join("jr"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// Finds the (first) captured `POST /rest/api/3/search/jql` request and
+/// returns its `fields` array as owned strings.
+async fn captured_search_fields(server: &MockServer) -> Vec<String> {
+    let reqs = server
+        .received_requests()
+        .await
+        .expect("wiremock must record requests");
+    let search_req = reqs
+        .iter()
+        .find(|r| {
+            r.method == wiremock::http::Method::POST && r.url.path() == "/rest/api/3/search/jql"
+        })
+        .expect("must have hit /rest/api/3/search/jql");
+    let body: serde_json::Value =
+        serde_json::from_slice(&search_req.body).expect("search body must be valid JSON");
+    body["fields"]
+        .as_array()
+        .expect("fields must be an array")
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .expect("field entries must be strings")
+                .to_string()
+        })
+        .collect()
+}
+
+/// Counts captured requests matching an exact method + path.
+fn count_requests_to(reqs: &[wiremock::Request], m: wiremock::http::Method, p: &str) -> usize {
+    reqs.iter()
+        .filter(|r| r.method == m && r.url.path() == p)
+        .count()
+}
+
+/// AC-1 (BC-X.8.009 Issue fetch pipeline step 3, happy path): name-path
+/// custom fields surface in JSON, with zero additional `list_queues` calls
+/// beyond the one `resolve_queue_by_name` already makes.
+#[tokio::test]
+async fn test_bc_x_8_009_queue_view_name_path_surfaces_declared_customfield_in_json() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_jsm_prereqs(&server, "HELPDESK", "15").await;
+    mount_queue_list(
+        &server,
+        "15",
+        "10",
+        "Triage",
+        Some(vec!["issuekey", "summary", "customfield_10050"]),
+    )
+    .await;
+    mount_queue_issue_keys(&server, "15", "10", &["HELPDESK-42"]).await;
+    mount_search_issues_with_customfield(
+        &server,
+        "HELPDESK-42",
+        "customfield_10050",
+        json!("Acme Corp"),
+    )
+    .await;
+
+    let output = run_jr_queue_view(
+        &server.uri(),
+        cache_dir.path(),
+        config_dir.path(),
+        &["Triage", "--output", "json"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "expected exit 0; stderr={stderr}");
+
+    // Primary pin: the search request's `fields` must include the queue's
+    // declared customfield_10050 token.
+    let fields = captured_search_fields(&server).await;
+    assert!(
+        fields.iter().any(|f| f == "customfield_10050"),
+        "AC-1: search request `fields` must include queue-declared customfield_10050; got: {fields:?}"
+    );
+
+    // --output json must surface the custom field value.
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let issues = stdout.as_array().expect("json output must be an array");
+    assert_eq!(issues.len(), 1);
+    assert_eq!(
+        issues[0]["fields"]["customfield_10050"],
+        json!("Acme Corp"),
+        "AC-1: customfield_10050 must surface in the JSON `fields` object; got: {}",
+        issues[0]["fields"]
+    );
+
+    // Name path incurs no additional list_queues call beyond the one
+    // resolve_queue_by_name already makes.
+    let reqs = server.received_requests().await.unwrap();
+    let queue_list_calls = count_requests_to(
+        &reqs,
+        wiremock::http::Method::GET,
+        "/rest/servicedeskapi/servicedesk/15/queue",
+    );
+    assert_eq!(
+        queue_list_calls, 1,
+        "AC-1: name path must make exactly ONE list_queues call (no extra aux lookup); got {queue_list_calls}"
+    );
+}
+
+/// AC-2 (BC-X.8.009 Queue ID resolution item 1, cost asymmetry): the `--id`
+/// path incurs the `list_queues` endpoint exactly once (the new auxiliary
+/// lookup this story adds — pre-story the `--id` path never calls this
+/// endpoint at all), the same absolute count as the `<name>` path's
+/// pre-existing resolution call, but for a different reason.
+#[tokio::test]
+async fn test_bc_x_8_009_queue_view_id_path_incurs_one_additional_list_queues_call() {
+    // --- Name path: baseline is exactly ONE list_queues call (via resolve_queue_by_name) ---
+    let name_server = MockServer::start().await;
+    let name_cache = tempfile::tempdir().unwrap();
+    let name_config = tempfile::tempdir().unwrap();
+    mount_jsm_prereqs(&name_server, "HELPDESK", "15").await;
+    mount_queue_list(
+        &name_server,
+        "15",
+        "10",
+        "Triage",
+        Some(vec!["customfield_10050"]),
+    )
+    .await;
+    mount_queue_issue_keys(&name_server, "15", "10", &["HELPDESK-42"]).await;
+    mount_search_issues_with_customfield(
+        &name_server,
+        "HELPDESK-42",
+        "customfield_10050",
+        json!("v"),
+    )
+    .await;
+
+    let name_output = run_jr_queue_view(
+        &name_server.uri(),
+        name_cache.path(),
+        name_config.path(),
+        &["Triage", "--output", "json"],
+    );
+    assert!(
+        name_output.status.success(),
+        "name path must exit 0; stderr={}",
+        String::from_utf8_lossy(&name_output.stderr)
+    );
+
+    let name_reqs = name_server.received_requests().await.unwrap();
+    let name_calls = count_requests_to(
+        &name_reqs,
+        wiremock::http::Method::GET,
+        "/rest/servicedeskapi/servicedesk/15/queue",
+    );
+    assert_eq!(
+        name_calls, 1,
+        "name path baseline must be exactly 1 list_queues call; got {name_calls}"
+    );
+
+    // --- --id path: incurs the SAME endpoint exactly once — the aux lookup
+    // this story adds — since --id bypasses resolve_queue_by_name entirely
+    // and therefore has no OTHER reason to call list_queues. Pre-story, this
+    // count would be 0 (no aux lookup exists yet), so asserting 1 here is
+    // the AC-2 pin.
+    let id_server = MockServer::start().await;
+    let id_cache = tempfile::tempdir().unwrap();
+    let id_config = tempfile::tempdir().unwrap();
+    mount_jsm_prereqs(&id_server, "HELPDESK", "15").await;
+    mount_queue_list(
+        &id_server,
+        "15",
+        "10",
+        "Triage",
+        Some(vec!["customfield_10050"]),
+    )
+    .await;
+    mount_queue_issue_keys(&id_server, "15", "10", &["HELPDESK-42"]).await;
+    mount_search_issues_with_customfield(
+        &id_server,
+        "HELPDESK-42",
+        "customfield_10050",
+        json!("v"),
+    )
+    .await;
+
+    let id_output = run_jr_queue_view(
+        &id_server.uri(),
+        id_cache.path(),
+        id_config.path(),
+        &["--id", "10", "--output", "json"],
+    );
+    assert!(
+        id_output.status.success(),
+        "id path must exit 0; stderr={}",
+        String::from_utf8_lossy(&id_output.stderr)
+    );
+
+    // S5 (pr-reviewer suggestion): the --id HAPPY path (aux lookup succeeds,
+    // queue declares a customfield) must surface it in --output json too —
+    // AC-1 only pins this for the name path.
+    let id_stdout: serde_json::Value = serde_json::from_slice(&id_output.stdout).unwrap();
+    let id_issues = id_stdout.as_array().expect("json output must be an array");
+    assert_eq!(id_issues.len(), 1);
+    assert_eq!(
+        id_issues[0]["fields"]["customfield_10050"],
+        json!("v"),
+        "id path happy case: customfield_10050 must surface in the JSON `fields` \
+         object same as the name path; got: {}",
+        id_issues[0]["fields"]
+    );
+
+    let id_reqs = id_server.received_requests().await.unwrap();
+    let id_calls = count_requests_to(
+        &id_reqs,
+        wiremock::http::Method::GET,
+        "/rest/servicedeskapi/servicedesk/15/queue",
+    );
+    assert_eq!(
+        id_calls, 1,
+        "AC-2: --id path must incur exactly ONE list_queues call (the new aux \
+         lookup for queue.fields); pre-story this endpoint is never called on \
+         the --id path at all (0), so this pins the 0→1 cost asymmetry; got {id_calls}"
+    );
+}
+
+/// AC-3 (BC-X.8.009 EC-X.8.009-1, MEDIUM-3/LOW-1 fail-open degrade): the
+/// `--id` path's auxiliary `list_queues` lookup failing (5xx) OR succeeding
+/// with no id match must degrade to `extra_fields = &[]`, exit 0, and emit
+/// the canonical stderr warning — never hard-fail.
+#[tokio::test]
+async fn test_bc_x_8_009_queue_view_id_path_aux_lookup_failure_degrades_with_warning_exit_0() {
+    // --- Sub-case (a) / EC-3: aux list_queues lookup 5xxs ---
+    let server_a = MockServer::start().await;
+    let cache_a = tempfile::tempdir().unwrap();
+    let config_a = tempfile::tempdir().unwrap();
+    mount_jsm_prereqs(&server_a, "HELPDESK", "15").await;
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue"))
+        .respond_with(
+            ResponseTemplate::new(500)
+                .set_body_json(json!({"errorMessages": ["boom"], "errors": {}})),
+        )
+        .mount(&server_a)
+        .await;
+    mount_queue_issue_keys(&server_a, "15", "999", &["HELPDESK-1"]).await;
+    mount_search_issues_with_customfield(
+        &server_a,
+        "HELPDESK-1",
+        "customfield_10050",
+        json!("unused"),
+    )
+    .await;
+
+    let output_a = run_jr_queue_view(
+        &server_a.uri(),
+        cache_a.path(),
+        config_a.path(),
+        &["--id", "999", "--output", "json"],
+    );
+    let stderr_a = String::from_utf8_lossy(&output_a.stderr);
+
+    assert!(
+        output_a.status.success(),
+        "AC-3(a)/EC-3: a failed aux lookup must NOT hard-fail the command; stderr={stderr_a}"
+    );
+    assert!(
+        stderr_a.contains(
+            "warning: could not fetch queue field configuration for --id 999 (API error (500)); showing base fields only."
+        ),
+        "AC-3(a)/EC-3: expected canonical degrade warning in stderr; got: {stderr_a}"
+    );
+    let stdout_a: serde_json::Value = serde_json::from_slice(&output_a.stdout).unwrap();
+    assert!(
+        stdout_a[0]["fields"].get("customfield_10050").is_none(),
+        "AC-3(a): degraded --id path must show base fields only, no custom field; got: {}",
+        stdout_a[0]["fields"]
+    );
+
+    // --- Sub-case (b) / EC-4: aux lookup succeeds (HTTP 200) but no entry's
+    // id matches the requested --id ---
+    let server_b = MockServer::start().await;
+    let cache_b = tempfile::tempdir().unwrap();
+    let config_b = tempfile::tempdir().unwrap();
+    mount_jsm_prereqs(&server_b, "HELPDESK", "15").await;
+    mount_queue_list(
+        &server_b,
+        "15",
+        "10",
+        "Triage",
+        Some(vec!["customfield_10050"]),
+    )
+    .await; // id "10", not "999"
+    mount_queue_issue_keys(&server_b, "15", "999", &["HELPDESK-2"]).await;
+    mount_search_issues_with_customfield(
+        &server_b,
+        "HELPDESK-2",
+        "customfield_10050",
+        json!("unused"),
+    )
+    .await;
+
+    let output_b = run_jr_queue_view(
+        &server_b.uri(),
+        cache_b.path(),
+        config_b.path(),
+        &["--id", "999", "--output", "json"],
+    );
+    let stderr_b = String::from_utf8_lossy(&output_b.stderr);
+
+    assert!(
+        output_b.status.success(),
+        "AC-3(b)/EC-4: a no-id-match aux lookup must NOT hard-fail the command; stderr={stderr_b}"
+    );
+    assert!(
+        stderr_b.contains(
+            "warning: could not fetch queue field configuration for --id 999 (no matching queue); showing base fields only."
+        ),
+        "AC-3(b)/EC-4: expected canonical degrade warning in stderr; got: {stderr_b}"
+    );
+    let stdout_b: serde_json::Value = serde_json::from_slice(&output_b.stdout).unwrap();
+    assert!(
+        stdout_b[0]["fields"].get("customfield_10050").is_none(),
+        "AC-3(b): degraded --id path must show base fields only, no custom field; got: {}",
+        stdout_b[0]["fields"]
+    );
+}
+
+/// AC-4 (BC-X.8.009 Issue fetch pipeline step 3, allow-list pin): only
+/// `^customfield_\d+$`-shaped tokens are kept; pseudo-columns, base fields,
+/// and malformed near-misses are all dropped.
+#[tokio::test]
+async fn test_bc_x_8_009_extra_fields_allow_list_rejects_non_matching_tokens() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_jsm_prereqs(&server, "HELPDESK", "15").await;
+    mount_queue_list(
+        &server,
+        "15",
+        "10",
+        "Triage",
+        Some(vec![
+            "issuekey",
+            "summary",
+            "status",
+            "customfield_10050",
+            "customfield_",
+            "customfield_10050_x",
+            "Customfield_99",
+        ]),
+    )
+    .await;
+    mount_queue_issue_keys(&server, "15", "10", &["HELPDESK-42"]).await;
+    mount_search_issues_with_customfield(
+        &server,
+        "HELPDESK-42",
+        "customfield_10050",
+        json!("kept"),
+    )
+    .await;
+
+    let output = run_jr_queue_view(
+        &server.uri(),
+        cache_dir.path(),
+        config_dir.path(),
+        &["Triage", "--output", "json"],
+    );
+    assert!(
+        output.status.success(),
+        "expected exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let fields = captured_search_fields(&server).await;
+
+    assert_eq!(
+        fields.iter().filter(|f| *f == "customfield_10050").count(),
+        1,
+        "AC-4: customfield_10050 must be kept exactly once; got: {fields:?}"
+    );
+    for rejected in [
+        "customfield_",
+        "customfield_10050_x",
+        "Customfield_99",
+        "issuekey",
+    ] {
+        assert!(
+            !fields.iter().any(|f| f == rejected),
+            "AC-4: '{rejected}' must be dropped by the allow-list, never sent to search_issues; got: {fields:?}"
+        );
+    }
+    // BASE_ISSUE_FIELDS members declared by the queue (summary/status) must
+    // not be duplicated by the extra_fields pass — they're already in the
+    // base set requested unconditionally.
+    assert_eq!(
+        fields.iter().filter(|f| *f == "summary").count(),
+        1,
+        "AC-4: 'summary' must appear exactly once (base field, not re-added); got: {fields:?}"
+    );
+    assert_eq!(
+        fields.iter().filter(|f| *f == "status").count(),
+        1,
+        "AC-4: 'status' must appear exactly once (base field, not re-added); got: {fields:?}"
+    );
+}
+
+/// AC-5 (BC-X.8.009 EC-X.8.009-2): a queue whose declared `fields[]`
+/// entirely fails the allow-list produces `extra_fields = &[]`,
+/// byte-identical to a queue with `fields: null`.
+#[tokio::test]
+async fn test_bc_x_8_009_extra_fields_all_filtered_out_yields_empty_slice_no_regression() {
+    const BASE_ISSUE_FIELDS: &[&str] = &[
+        "summary",
+        "status",
+        "issuetype",
+        "priority",
+        "assignee",
+        "reporter",
+        "project",
+        "description",
+        "created",
+        "updated",
+        "duedate",
+        "resolution",
+        "components",
+        "fixVersions",
+        "labels",
+        "parent",
+        "issuelinks",
+    ];
+
+    // --- Scenario A: queue declares fields, none match the allow-list ---
+    let server_a = MockServer::start().await;
+    let cache_a = tempfile::tempdir().unwrap();
+    let config_a = tempfile::tempdir().unwrap();
+    mount_jsm_prereqs(&server_a, "HELPDESK", "15").await;
+    mount_queue_list(
+        &server_a,
+        "15",
+        "10",
+        "Triage",
+        Some(vec!["issuekey", "summary", "status"]),
+    )
+    .await;
+    mount_queue_issue_keys(&server_a, "15", "10", &["HELPDESK-42"]).await;
+    mount_search_issues_plain(&server_a, "HELPDESK-42").await;
+
+    let output_a = run_jr_queue_view(
+        &server_a.uri(),
+        cache_a.path(),
+        config_a.path(),
+        &["Triage", "--output", "json"],
+    );
+    assert!(
+        output_a.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output_a.stderr)
+    );
+    let fields_a = captured_search_fields(&server_a).await;
+    assert_eq!(
+        fields_a, BASE_ISSUE_FIELDS,
+        "AC-5: no allow-list matches → fields must be BYTE-IDENTICAL to BASE_ISSUE_FIELDS \
+         (empty extra_fields); got: {fields_a:?}"
+    );
+
+    // --- Scenario B: queue declares fields: null (baseline, pre-#693 identical) ---
+    let server_b = MockServer::start().await;
+    let cache_b = tempfile::tempdir().unwrap();
+    let config_b = tempfile::tempdir().unwrap();
+    mount_jsm_prereqs(&server_b, "HELPDESK", "15").await;
+    mount_queue_list(&server_b, "15", "10", "Triage", None).await;
+    mount_queue_issue_keys(&server_b, "15", "10", &["HELPDESK-42"]).await;
+    mount_search_issues_plain(&server_b, "HELPDESK-42").await;
+
+    let output_b = run_jr_queue_view(
+        &server_b.uri(),
+        cache_b.path(),
+        config_b.path(),
+        &["Triage", "--output", "json"],
+    );
+    assert!(
+        output_b.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output_b.stderr)
+    );
+    let fields_b = captured_search_fields(&server_b).await;
+
+    assert_eq!(
+        fields_a, fields_b,
+        "AC-5/EC-8: fields:[non-matching] and fields:null must produce byte-identical \
+         search requests; got a={fields_a:?} b={fields_b:?}"
+    );
+}
+
+/// AC-6 (BC-X.8.009 Output/Table-output clause, regression pin): table
+/// output is unaffected by queue-configured custom fields — no new column,
+/// byte-identical headers to pre-#693.
+#[tokio::test]
+async fn test_bc_x_8_009_queue_view_table_output_unaffected_by_custom_field_extra_fields() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_jsm_prereqs(&server, "HELPDESK", "15").await;
+    mount_queue_list(
+        &server,
+        "15",
+        "10",
+        "Triage",
+        Some(vec!["customfield_10050"]),
+    )
+    .await;
+    mount_queue_issue_keys(&server, "15", "10", &["HELPDESK-42"]).await;
+    mount_search_issues_with_customfield(
+        &server,
+        "HELPDESK-42",
+        "customfield_10050",
+        json!("Acme"),
+    )
+    .await;
+
+    // Default output (table) — no --output flag.
+    let output = run_jr_queue_view(
+        &server.uri(),
+        cache_dir.path(),
+        config_dir.path(),
+        &["Triage"],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("Key")
+            && stdout.contains("Type")
+            && stdout.contains("Status")
+            && stdout.contains("Priority")
+            && stdout.contains("Assignee")
+            && stdout.contains("Summary"),
+        "AC-6: expected standard 6-column headers (Key/Type/Status/Priority/Assignee/Summary); \
+         got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("customfield_10050") && !stdout.contains("Acme"),
+        "AC-6: table output must NOT surface the custom field id or value \
+         (render-side work tracked separately as #575); got: {stdout}"
+    );
+}
+
+/// AC-7 (BC-X.8.009 Issue fetch pipeline item 2, regression pin): a
+/// zero-issue queue short-circuits before any `search_issues` call, and
+/// before any aux `list_queues` lookup — nothing to fetch fields for.
+#[tokio::test]
+async fn test_bc_x_8_009_queue_view_zero_issues_short_circuits_no_extra_fields_lookup() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_jsm_prereqs(&server, "HELPDESK", "15").await;
+    // Deliberately do NOT mount GET .../servicedesk/15/queue (list_queues) or
+    // POST /rest/api/3/search/jql — if handle_view attempts either for a
+    // zero-issue --id-path queue, the request hits an unmounted route (404)
+    // and the command exits non-zero, failing the assertions below.
+    mount_queue_issue_keys(&server, "15", "999", &[]).await;
+
+    let output = run_jr_queue_view(
+        &server.uri(),
+        cache_dir.path(),
+        config_dir.path(),
+        &["--id", "999", "--output", "json"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-7: zero-issue queue must exit 0; stderr={stderr}"
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        json!([]),
+        "AC-7: zero-issue queue must produce an empty JSON array; got: {stdout}"
+    );
+
+    let reqs = server.received_requests().await.unwrap();
+    let list_calls = count_requests_to(
+        &reqs,
+        wiremock::http::Method::GET,
+        "/rest/servicedeskapi/servicedesk/15/queue",
+    );
+    assert_eq!(
+        list_calls, 0,
+        "AC-7: zero-issue queue must NOT attempt the aux list_queues lookup; got {list_calls}"
+    );
+    let search_calls = count_requests_to(
+        &reqs,
+        wiremock::http::Method::POST,
+        "/rest/api/3/search/jql",
+    );
+    assert_eq!(
+        search_calls, 0,
+        "AC-7: zero-issue queue must NOT call search_issues; got {search_calls}"
+    );
+}
+
+/// AC-8 (BC-X.8.009 Errors clause, MEDIUM-3 scope note): a REAL failure of
+/// the primary pipeline (`search_issues` itself returning 401) is NOT
+/// degraded by the story's fail-open scope — it surfaces via the ordinary
+/// Errors clause exactly as before #693, and DOES affect the exit code.
+#[tokio::test]
+async fn test_bc_x_8_009_primary_pipeline_failure_still_hard_fails_unaffected_by_aux_lookup_scope()
+{
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_jsm_prereqs(&server, "HELPDESK", "15").await;
+    mount_queue_list(
+        &server,
+        "15",
+        "10",
+        "Triage",
+        Some(vec!["customfield_10050"]),
+    )
+    .await;
+    mount_queue_issue_keys(&server, "15", "10", &["HELPDESK-42"]).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Client must be authenticated to access this resource."],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = run_jr_queue_view(
+        &server.uri(),
+        cache_dir.path(),
+        config_dir.path(),
+        &["Triage", "--output", "json"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "AC-8: a real search_issues 401 must exit 2 (ordinary Errors clause), unaffected by \
+         aux-lookup scope; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Not authenticated"),
+        "AC-8: expected 'Not authenticated' in stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "AC-8: expected 'jr auth login' suggestion in stderr; got: {stderr}"
+    );
+}

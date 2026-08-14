@@ -237,7 +237,31 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     .await
                 }
                 cli::AuthCommand::Switch { name } => {
-                    cli::auth::handle_switch(&name, cli.profile.as_deref(), &cli.output).await
+                    // BC-1.2.047 (issue #663): the global `--profile` flag has no
+                    // subcommand-level field to compose against on `auth switch` —
+                    // its only observable effect was forcing an extra, confusing
+                    // existence-check on `--profile`'s own value (the "jr auth
+                    // switch --profile X X" incantation the issue reports). Reject
+                    // it outright, before `handle_switch`/`Config::load_with` runs,
+                    // rather than silently ignoring it. Keyed ONLY on the CLI flag
+                    // (`cli.profile.is_some()`) — never on `JR_PROFILE` or any other
+                    // stage of profile resolution (EC-1.2.047-4). Runtime guard, not
+                    // clap `conflicts_with`: unreliable for `global = true` args
+                    // (clap #5335/#5358) and would yield exit 2, not the required
+                    // exit-64 UserError.
+                    if cli.profile.is_some() {
+                        return Err(error::JrError::UserError(
+                            "--profile is not valid for 'auth switch'. The profile to activate is the positional argument. Try: jr auth switch <NAME>".to_string(),
+                        )
+                        .into());
+                    }
+                    // Past the guard above, `cli.profile` is provably `None` —
+                    // pass `None` explicitly rather than `cli.profile.as_deref()`
+                    // so the dead argument doesn't read as though this arm still
+                    // composes a caller-supplied profile (it never did; see
+                    // handle_switch's `cli_profile` param, used only for
+                    // `Config::load_with`'s active-profile resolution).
+                    cli::auth::handle_switch(&name, None, &cli.output).await
                 }
                 cli::AuthCommand::List => {
                     cli::auth::handle_list(&cli.output, cli.profile.as_deref()).await
