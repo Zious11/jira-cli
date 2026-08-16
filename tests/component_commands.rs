@@ -474,6 +474,303 @@ async fn test_bc_8_1_003_component_list_counts_fail_soft_on_one_5xx() {
     );
 }
 
+// ── AC-007-JSON (BC-8.1.003 — --counts --output json has issueCount field) ───
+
+/// AC-007-JSON / BC-8.1.003: `--counts --output json` adds an integer
+/// `issueCount` field (named exactly `issueCount`, per BC-8.1.003) to each
+/// component object in the JSON array.  The value must match the count
+/// returned by the `relatedIssueCounts` endpoint for that component.
+#[tokio::test]
+async fn test_bc_8_1_003_component_list_counts_json_has_issue_count_field() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10002", "Frontend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001/relatedIssueCounts"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(related_issue_counts_response("10001", 7)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10002/relatedIssueCounts"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(related_issue_counts_response("10002", 3)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "list",
+            "--project",
+            "FOO",
+            "--counts",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+    let arr = parsed.as_array().expect("JSON output must be an array");
+    assert_eq!(arr.len(), 2, "Expected 2 components in JSON output");
+
+    // Both components must have an integer `issueCount` field (BC-8.1.003).
+    // The field must be named exactly `issueCount` — NOT `relatedIssueCounts`.
+    for comp in arr {
+        let obj = comp
+            .as_object()
+            .expect("each component must be a JSON object");
+        assert!(
+            obj.contains_key("issueCount"),
+            "Each component JSON object must contain `issueCount` key (BC-8.1.003); \
+             got keys: {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            obj["issueCount"].is_u64() || obj["issueCount"].is_i64(),
+            "issueCount must be an integer; got: {:?}",
+            obj["issueCount"]
+        );
+    }
+
+    // Spot-check the actual values against the fixture counts.
+    let backend = arr
+        .iter()
+        .find(|c| c["id"] == "10001")
+        .expect("component 10001 must be in output");
+    assert_eq!(
+        backend["issueCount"], 7,
+        "Backend issueCount must be 7 per fixture"
+    );
+
+    let frontend = arr
+        .iter()
+        .find(|c| c["id"] == "10002")
+        .expect("component 10002 must be in output");
+    assert_eq!(
+        frontend["issueCount"], 3,
+        "Frontend issueCount must be 3 per fixture"
+    );
+}
+
+// ── AC-009-JSON (BC-8.1.003 — fail-soft: failing component gets null issueCount) ──
+
+/// AC-009-JSON / BC-8.1.003 EC-8.1.003-2 (JSON path): when one component's
+/// `relatedIssueCounts` call fails with 5xx, its JSON object has `issueCount`
+/// present as JSON `null` (key MUST be present — not omitted) while the
+/// succeeding component has an integer `issueCount`.  Exit 0 (fail-soft).
+/// Stderr warning names the failing component.
+#[tokio::test]
+async fn test_bc_8_1_003_component_list_counts_fail_soft_json_null_for_failed() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10002", "Frontend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Backend succeeds
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001/relatedIssueCounts"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(related_issue_counts_response("10001", 5)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Frontend fails with 5xx
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10002/relatedIssueCounts"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({"error": "internal"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "list",
+            "--project",
+            "FOO",
+            "--counts",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+
+    // Exit 0 despite one 5xx (fail-soft per BC-8.1.003 EC-8.1.003-2).
+    assert!(
+        output.status.success(),
+        "Expected exit 0 (fail-soft) even with one 5xx; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Stderr must name the failing component (BC-8.1.003).
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Frontend") || stderr.contains("10002"),
+        "Expected stderr warning naming the failed component; got: {stderr}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+    let arr = parsed.as_array().expect("JSON output must be an array");
+    assert_eq!(arr.len(), 2, "Expected 2 components in JSON output");
+
+    // Succeeding component (Backend/10001): integer issueCount.
+    let backend = arr
+        .iter()
+        .find(|c| c["id"] == "10001")
+        .expect("component 10001 must be present");
+    let backend_obj = backend.as_object().expect("component must be an object");
+    assert!(
+        backend_obj.contains_key("issueCount"),
+        "Backend must have issueCount key; keys: {:?}",
+        backend_obj.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        backend["issueCount"].is_u64() || backend["issueCount"].is_i64(),
+        "Backend issueCount must be an integer; got: {:?}",
+        backend["issueCount"]
+    );
+
+    // Failing component (Frontend/10002): issueCount key PRESENT but JSON null
+    // (BC-8.1.003: "issueCount: null" in JSON mode, NOT key omission).
+    let frontend = arr
+        .iter()
+        .find(|c| c["id"] == "10002")
+        .expect("component 10002 must be present");
+    let frontend_obj = frontend.as_object().expect("component must be an object");
+    assert!(
+        frontend_obj.contains_key("issueCount"),
+        "Frontend must have issueCount key present (even on failure — BC-8.1.003 \
+         requires null, not omission); keys: {:?}",
+        frontend_obj.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        frontend["issueCount"].is_null(),
+        "Frontend issueCount must be JSON null on 5xx failure (BC-8.1.003); got: {:?}",
+        frontend["issueCount"]
+    );
+}
+
+// ── AC-005-NULL (BC-8.1.002 — null fields PRESENT in JSON, not dropped) ──────
+
+/// AC-005-NULL / BC-8.1.002: `--output json` must include ALL fields the API
+/// returned, even when their value is null — "no field is dropped for JSON
+/// mode".  A component with null description, lead, assigneeType, and project
+/// must still appear in the JSON object with those keys explicitly present as
+/// JSON null (not omitted).
+#[tokio::test]
+async fn test_bc_8_1_002_component_list_json_null_fields_present_not_dropped() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Component with null description, lead, assigneeType (fixture also sets project: null).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                // All optional fields null — exercises BC-8.1.002 null-preservation contract.
+                component_response("10099", "Infra", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "list", "--project", "FOO", "--output", "json"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+    let arr = parsed.as_array().expect("JSON output must be an array");
+    assert_eq!(arr.len(), 1, "Expected 1 component");
+
+    let comp = &arr[0];
+    let obj = comp.as_object().expect("component must be a JSON object");
+
+    // id and name must always be present.
+    assert_eq!(comp["id"], "10099");
+    assert_eq!(comp["name"], "Infra");
+
+    // Null-valued fields MUST be present as JSON null, NOT omitted
+    // (BC-8.1.002: "no field is dropped for JSON mode").
+    let null_fields = ["description", "lead", "assigneeType", "project"];
+    for field in &null_fields {
+        assert!(
+            obj.contains_key(*field),
+            "Field `{field}` must be present in JSON output even when null \
+             (BC-8.1.002 — no field dropped); keys present: {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            comp[field].is_null(),
+            "Field `{field}` must be JSON null (not some other value); got: {:?}",
+            comp[field]
+        );
+    }
+}
+
 // ── AC-012 (BC-8.4.004 — resolver never spans projects) ─────────────────────
 
 /// AC-012 / BC-8.4.004: listing PRJA components never triggers PRJB's

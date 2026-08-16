@@ -492,6 +492,12 @@ pub fn write_profile_config(config_home: &std::path::Path, base_url: &str) {
 /// Build one component resource object as returned by
 /// `GET /rest/api/3/project/{key}/components` and
 /// `GET /rest/api/3/component/{id}`.
+///
+/// Includes all fields BC-8.1.002 lists as part of the component resource:
+/// id, name, description, lead, assigneeType, project.  Fields passed as
+/// `None` appear in the JSON as `null` (never omitted) — mirroring Jira's
+/// actual response shape and making BC-8.1.002's "no field is dropped"
+/// assertion testable.
 pub fn component_response(
     id: &str,
     name: &str,
@@ -511,6 +517,7 @@ pub fn component_response(
         "description": description,
         "lead": lead,
         "assigneeType": assignee_type,
+        "project": serde_json::Value::Null,
     })
 }
 

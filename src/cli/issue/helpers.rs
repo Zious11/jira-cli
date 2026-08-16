@@ -895,22 +895,31 @@ mod tests {
         }
     }
 
-    /// AC-011 / BC-8.4.001 Behavior step 2: non-digit input delegates to
-    /// partial_match(input, candidates) and returns its MatchResult unmodified.
-    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
+    /// AC-011 / BC-8.4.001 Behavior step 2 + BC-8.4.001 Invariant 2 + BC-X.10.001:
+    /// non-digit input delegates to partial_match(input, candidates) and returns its
+    /// MatchResult UNMODIFIED — including Ambiguous.  A single-substring match
+    /// (one candidate contains the input but does not equal it) MUST return
+    /// Ambiguous([candidate]), never auto-resolved to Exact.  The resolver must
+    /// not override partial_match's fail-closed invariant.
     #[test]
     fn test_bc_8_4_001_resolve_component_delegates_to_partial_match_for_names() {
-        // "Back" is a prefix of "Backend" only → Exact("Backend")
+        // "Back" is a SUBSTRING of "Backend" only — not an exact match.
+        // partial_match returns Ambiguous(["Backend"]) for a single-substring hit.
+        // resolve_component MUST NOT normalize this to Exact — per BC-8.4.001
+        // Invariant 2 and BC-X.10.001, single-substring matches are Ambiguous
+        // (fail-closed) and the resolver must return the MatchResult unmodified.
         let result = resolve_component("Back", "FOO", &["Backend".into()]);
         match result {
-            crate::partial_match::MatchResult::Exact(name) => {
+            crate::partial_match::MatchResult::Ambiguous(matches) => {
                 assert_eq!(
-                    name, "Backend",
-                    "Prefix match must resolve to unique candidate"
-                )
+                    matches,
+                    vec!["Backend".to_string()],
+                    "Single-substring match must be Ambiguous([candidate]), not auto-resolved"
+                );
             }
             other => panic!(
-                "Expected Exact(\"Backend\") for unique prefix match, got {:?}",
+                "Expected Ambiguous([\"Backend\"]) for single-substring match per \
+                 BC-8.4.001 Invariant 2 + BC-X.10.001; got {:?}",
                 other
             ),
         }
