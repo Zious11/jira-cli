@@ -12,17 +12,15 @@ use serde::{Deserialize, Serialize};
 pub struct Component {
     pub id: String,
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // BC-8.1.002: no field is dropped for JSON mode — skip_serializing_if
+    // is intentionally absent so None serializes as explicit JSON null.
+    #[serde(default)]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub lead: Option<ComponentLead>,
-    #[serde(
-        rename = "assigneeType",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "assigneeType", default)]
     pub assignee_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub project: Option<String>,
     #[serde(
         rename = "relatedIssueCount",
@@ -53,9 +51,15 @@ pub struct ComponentLead {
 
 /// Response shape from
 /// `GET /rest/api/3/component/{id}/relatedIssueCounts`.
+///
+/// The live Jira Cloud endpoint returns `{"self": "…", "issueCount": N}` —
+/// the `id` field is NOT present in the response (F-3 fix: mock-vs-live drift).
+/// Making `id` `Option<String>` with `#[serde(default)]` prevents a
+/// deserialization failure when the field is absent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelatedIssueCounts {
-    pub id: String,
+    #[serde(default)]
+    pub id: Option<String>,
     #[serde(rename = "issueCount")]
     pub issue_count: u64,
 }
