@@ -1,6 +1,3 @@
-//! Shared test utilities: not every consumer uses every item, so dead_code
-//! warnings are false positives in binaries that include this module.
-#![allow(dead_code)]
 //! A spanned document model for GitHub Actions workflow YAML, built by walking
 //! `saphyr_parser::Parser`'s low-level `Event` stream.
 //!

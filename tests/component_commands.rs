@@ -5,6 +5,7 @@
 //! BC anchors: BC-8.1.001, BC-8.1.002, BC-8.1.003, BC-8.1.004, BC-8.4.004
 //! Story: S-604-1, GitHub issue #604
 
+#[allow(dead_code)]
 mod common;
 
 use assert_cmd::Command;

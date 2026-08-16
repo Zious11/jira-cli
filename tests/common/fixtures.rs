@@ -1,7 +1,3 @@
-//! Shared test fixture helpers.  Each integration-test binary includes only a
-//! subset of these, so unused-function warnings would be false positives.
-#![allow(dead_code)]
-
 use serde_json::{Value, json};
 
 pub fn user_response() -> Value {
