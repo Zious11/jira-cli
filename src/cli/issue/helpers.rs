@@ -988,6 +988,57 @@ mod tests {
             ),
         }
     }
+
+    /// F-B1 (adversarial pass-3 / MEDIUM) — BC-8.4.001 step 1 must NOT fire on
+    /// empty input.
+    ///
+    /// `"".chars().all(|c| c.is_ascii_digit())` is VACUOUSLY TRUE — the iterator
+    /// is empty so the predicate succeeds without examining any character.  The
+    /// cited precedent (`src/cli/requesttype.rs`) guards the numeric bypass with
+    /// `!name_or_id.is_empty() && name_or_id.chars().all(...)`.  The current
+    /// `resolve_component` omits the `!input.is_empty()` conjunct, so an empty
+    /// string is mis-classified as a numeric id and returned as
+    /// `Exact("")` instead of being passed to `partial_match`.
+    ///
+    /// The correct result for `resolve_component("", _, candidates)` is what
+    /// `partial_match("", candidates)` returns.  Because the empty string is a
+    /// substring of every string, `partial_match` returns
+    /// `Ambiguous(all candidates)`.
+    ///
+    /// This test MUST FAIL against the current implementation (returns
+    /// `Exact("")`) and MUST PASS once the `!input.is_empty()` conjunct is
+    /// added.
+    #[test]
+    fn test_bc_8_4_001_resolve_component_empty_input_is_not_exact() {
+        let candidates = vec!["Backend".into(), "Frontend".into()];
+        let result = resolve_component("", "PROJ", &candidates);
+        match result {
+            crate::partial_match::MatchResult::Exact(id) => {
+                panic!(
+                    "resolve_component(\"\", ...) must NOT return Exact(\"{id}\") — \
+                     empty string is vacuously all-ASCII-digit but is not a numeric \
+                     id.  Expected Ambiguous per BC-8.4.001 Invariant 2 (fail-closed)."
+                );
+            }
+            crate::partial_match::MatchResult::Ambiguous(ref matches) => {
+                // Expected outcome: partial_match("", candidates) → Ambiguous(all)
+                assert!(
+                    matches.contains(&"Backend".to_string()),
+                    "Ambiguous result must include Backend; got {matches:?}"
+                );
+                assert!(
+                    matches.contains(&"Frontend".to_string()),
+                    "Ambiguous result must include Frontend; got {matches:?}"
+                );
+            }
+            other => {
+                panic!(
+                    "resolve_component(\"\", ...) must return Ambiguous for empty \
+                     input; got {other:?}"
+                );
+            }
+        }
+    }
 }
 
 // ── S-604-1: VP-COMPONENT-014 proptest (numeric bypass always Exact) ─────────

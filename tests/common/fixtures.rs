@@ -536,3 +536,48 @@ pub fn component_list_response(components: Vec<Value>) -> Value {
 pub fn related_issue_counts_response(count: u64) -> Value {
     json!({ "issueCount": count })
 }
+
+/// Extended component response fixture supporting populated `project` and
+/// `isAssigneeTypeValid` fields.
+///
+/// Used by F-B2 (adversarial pass-3 — counts JSON superset invariant) and
+/// F-B3 (populated-project round-trip coverage).  All fields passed as `None`
+/// behave identically to `component_response` — this fixture is a strict
+/// superset of that one.
+///
+/// `is_assignee_type_valid: Some(true/false)` causes `"isAssigneeTypeValid"`
+/// to appear in the JSON body so `Component.is_assignee_type_valid` deserializes
+/// as `Some(...)` and is then re-emitted by the Component serializer (which has
+/// `skip_serializing_if = "Option::is_none"`).
+pub fn component_response_with_flags(
+    id: &str,
+    name: &str,
+    description: Option<&str>,
+    lead_name: Option<&str>,
+    assignee_type: Option<&str>,
+    project: Option<&str>,
+    is_assignee_type_valid: Option<bool>,
+) -> Value {
+    let lead = lead_name.map(|n| {
+        json!({
+            "accountId": format!("acc-{}", id),
+            "displayName": n,
+        })
+    });
+    let project_value: Value = match project {
+        Some(p) => json!(p),
+        None => Value::Null,
+    };
+    let mut obj = json!({
+        "id": id,
+        "name": name,
+        "description": description,
+        "lead": lead,
+        "assigneeType": assignee_type,
+        "project": project_value,
+    });
+    if let Some(v) = is_assignee_type_valid {
+        obj["isAssigneeTypeValid"] = json!(v);
+    }
+    obj
+}

@@ -14,8 +14,8 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::fixtures::{
-    component_list_response, component_response, related_issue_counts_response,
-    write_profile_config,
+    component_list_response, component_response, component_response_with_flags,
+    related_issue_counts_response, write_profile_config,
 };
 
 // ── Harness ──────────────────────────────────────────────────────────────────
@@ -755,6 +755,219 @@ async fn test_bc_8_1_002_component_list_json_null_fields_present_not_dropped() {
             comp[field]
         );
     }
+}
+
+// ── F-B2 (adversarial pass-3 / LOW — counts JSON must be superset of plain JSON) ──
+
+/// F-B2 (adversarial pass-3 / LOW) — BC-8.1.003 is ADDITIVE over BC-8.1.002:
+/// `--counts --output json` must be a STRICT SUPERSET of plain `--output json`
+/// (same fields + `issueCount`).  A component with `isAssigneeTypeValid: true`
+/// must have that field present in BOTH plain and counts JSON output.
+///
+/// Part (a): plain `--output json` MUST contain `isAssigneeTypeValid` — currently
+/// PASSES because `Component` serializes it when `Some(...)`.
+///
+/// Part (b): `--counts --output json` MUST ALSO contain `isAssigneeTypeValid` —
+/// currently FAILS because `ComponentCountJson` omits the field entirely.
+#[tokio::test]
+async fn test_bc_8_1_003_counts_json_is_superset_of_plain_json_fields() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Component with isAssigneeTypeValid: true — exercises the superset invariant.
+    let fixture = component_response_with_flags(
+        "10001",
+        "Backend",
+        None,
+        None,
+        Some("PROJECT_LEAD"),
+        None,
+        Some(true),
+    );
+
+    // Single list mock responds to both requests (plain + counts).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![fixture])),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001/relatedIssueCounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(related_issue_counts_response(4)))
+        .mount(&server)
+        .await;
+
+    // ── Part (a): plain --output json must include isAssigneeTypeValid ──────
+    let plain_output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "list", "--project", "FOO", "--output", "json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        plain_output.status.success(),
+        "Part (a): Expected exit 0 for plain json; got {:?}\nstderr: {}",
+        plain_output.status.code(),
+        String::from_utf8_lossy(&plain_output.stderr)
+    );
+
+    let plain_stdout = String::from_utf8_lossy(&plain_output.stdout);
+    let plain_parsed: serde_json::Value =
+        serde_json::from_str(&plain_stdout).expect("plain stdout must be valid JSON");
+    let plain_arr = plain_parsed
+        .as_array()
+        .expect("plain JSON must be an array");
+    let plain_comp = &plain_arr[0];
+    let plain_obj = plain_comp
+        .as_object()
+        .expect("component must be a JSON object");
+
+    assert!(
+        plain_obj.contains_key("isAssigneeTypeValid"),
+        "Part (a): plain --output json must include isAssigneeTypeValid when it is \
+         Some(true) (Component serializes it via skip_serializing_if = Option::is_none); \
+         keys present: {:?}",
+        plain_obj.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        plain_comp["isAssigneeTypeValid"],
+        serde_json::Value::Bool(true),
+        "Part (a): isAssigneeTypeValid must be true"
+    );
+
+    // ── Part (b): --counts --output json must ALSO include isAssigneeTypeValid ──
+    let counts_output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "list",
+            "--project",
+            "FOO",
+            "--counts",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        counts_output.status.success(),
+        "Part (b): Expected exit 0 for counts json; got {:?}\nstderr: {}",
+        counts_output.status.code(),
+        String::from_utf8_lossy(&counts_output.stderr)
+    );
+
+    let counts_stdout = String::from_utf8_lossy(&counts_output.stdout);
+    let counts_parsed: serde_json::Value =
+        serde_json::from_str(&counts_stdout).expect("counts stdout must be valid JSON");
+    let counts_arr = counts_parsed
+        .as_array()
+        .expect("counts JSON must be an array");
+    let counts_comp = &counts_arr[0];
+    let counts_obj = counts_comp
+        .as_object()
+        .expect("component must be a JSON object");
+
+    // issueCount must be present (BC-8.1.003 additive field).
+    assert!(
+        counts_obj.contains_key("issueCount"),
+        "Part (b): --counts --output json must include issueCount (BC-8.1.003); \
+         keys: {:?}",
+        counts_obj.keys().collect::<Vec<_>>()
+    );
+
+    // isAssigneeTypeValid MUST be present — BC-8.1.003 is additive over
+    // BC-8.1.002; counts JSON must be a superset, not a subset.
+    // THIS ASSERTION CURRENTLY FAILS because ComponentCountJson omits the field.
+    assert!(
+        counts_obj.contains_key("isAssigneeTypeValid"),
+        "Part (b): --counts --output json must include isAssigneeTypeValid \
+         (BC-8.1.003 is a strict superset of BC-8.1.002 — same fields + issueCount); \
+         keys present: {:?}",
+        counts_obj.keys().collect::<Vec<_>>()
+    );
+}
+
+// ── F-B3 (coverage gap / keep green — populated project round-trips) ─────────
+
+/// F-B3 (adversarial pass-3 / coverage gap, keep green): the existing
+/// `component_response` fixture hard-codes `"project": null`, so the
+/// populated-project JSON/table path is never exercised.  This test uses a
+/// fixture with `"project": "FOO"` (a string) and asserts that the value
+/// round-trips through deserialization and re-serialization intact.
+///
+/// `Component.project` is `Option<String>` without `skip_serializing_if`, so
+/// `None` → `null` and `Some("FOO")` → `"FOO"` in JSON output — both are
+/// valid and this test must stay GREEN.
+#[tokio::test]
+async fn test_bc_8_1_002_component_list_json_populated_project_round_trips() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Component with populated project field (not null).
+    let fixture = component_response_with_flags(
+        "10050",
+        "Infra",
+        Some("Infrastructure services"),
+        None,
+        Some("UNASSIGNED"),
+        Some("FOO"), // populated project — the gap being closed
+        None,
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![fixture])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "list", "--project", "FOO", "--output", "json"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+    let arr = parsed.as_array().expect("JSON output must be an array");
+    assert_eq!(arr.len(), 1, "Expected 1 component");
+
+    let comp = &arr[0];
+    let obj = comp.as_object().expect("component must be a JSON object");
+
+    // project field must be present and equal to the string "FOO" (not null).
+    assert!(
+        obj.contains_key("project"),
+        "project key must be present in JSON output; keys: {:?}",
+        obj.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        comp["project"],
+        serde_json::Value::String("FOO".to_string()),
+        "Populated project value must round-trip as the string \"FOO\" \
+         (Component.project: Option<String> without skip_serializing_if)"
+    );
+
+    // Sanity-check that other fields also round-trip correctly.
+    assert_eq!(comp["id"], "10050");
+    assert_eq!(comp["name"], "Infra");
+    assert_eq!(comp["description"], "Infrastructure services");
 }
 
 // ── AC-012 (BC-8.4.004 — resolver never spans projects) ─────────────────────
