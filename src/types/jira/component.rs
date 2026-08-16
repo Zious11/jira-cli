@@ -85,4 +85,37 @@ mod tests {
              deserialization must fail when id is absent"
         );
     }
+
+    // ── S-604-1: RelatedIssueCounts id-absent regression pin (F-3 / FIX-576-DL) ─
+
+    /// F-3 / mock-vs-live drift: the live Jira Cloud endpoint
+    /// `GET /rest/api/3/component/{id}/relatedIssueCounts` returns
+    /// `{"self": "…", "issueCount": N}` — the `"id"` field is NOT present.
+    /// This test pins that the id-absent shape deserializes correctly, so a
+    /// future revert of `#[serde(default)]` on `RelatedIssueCounts.id` fails CI
+    /// before it can break live `--counts` calls (FIX-576-DL class).
+    #[test]
+    fn test_related_issue_counts_deserializes_without_id_field() {
+        let json = serde_json::json!({"issueCount": 5});
+        let result = serde_json::from_value::<RelatedIssueCounts>(json)
+            .expect("id-absent shape must deserialize successfully");
+        assert_eq!(result.id, None, "id must be None when absent from the JSON");
+        assert_eq!(result.issue_count, 5, "issue_count must be 5");
+    }
+
+    /// Regression guard (FIX-576-DL two-test pattern): the WITH-id form that the
+    /// mock server historically emitted must continue to deserialize correctly.
+    /// This ensures the `#[serde(default)]` change did not break the id-present path.
+    #[test]
+    fn test_related_issue_counts_deserializes_with_id_field() {
+        let json = serde_json::json!({"id": "10001", "issueCount": 7});
+        let result = serde_json::from_value::<RelatedIssueCounts>(json)
+            .expect("id-present shape must still deserialize successfully");
+        assert_eq!(
+            result.id,
+            Some("10001".to_string()),
+            "id must be Some(\"10001\") when present"
+        );
+        assert_eq!(result.issue_count, 7, "issue_count must be 7");
+    }
 }

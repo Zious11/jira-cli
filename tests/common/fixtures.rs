@@ -528,6 +528,11 @@ pub fn component_list_response(components: Vec<Value>) -> Value {
 }
 
 /// Response for `GET /rest/api/3/component/{id}/relatedIssueCounts`.
-pub fn related_issue_counts_response(id: &str, count: u64) -> Value {
-    json!({ "id": id, "issueCount": count })
+///
+/// The live Jira Cloud endpoint returns `{"self": "…", "issueCount": N}` —
+/// the `"id"` field is NOT present (F-3 fix: mock-vs-live drift). This fixture
+/// exercises the real id-absent shape so tests catch any revert of the
+/// `#[serde(default)]` guard on `RelatedIssueCounts.id`.
+pub fn related_issue_counts_response(count: u64) -> Value {
+    json!({ "issueCount": count })
 }

@@ -1,8 +1,6 @@
 //! CLI-level integration tests for `jr component` commands (S-604-1).
 //!
-//! RED GATE: all tests in this file FAIL because `handle_list` contains
-//! `todo!()` — the spawned subprocess exits 101 (Rust panic) instead of the
-//! expected exit codes and output.
+//! All tests in this file PASS — `handle_list` is fully implemented.
 //!
 //! BC anchors: BC-8.1.001, BC-8.1.002, BC-8.1.003, BC-8.1.004, BC-8.4.004
 //! Story: S-604-1, GitHub issue #604
@@ -327,18 +325,14 @@ async fn test_bc_8_1_003_component_list_counts_issues_one_get_per_component() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/component/10001/relatedIssueCounts"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(related_issue_counts_response("10001", 7)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(related_issue_counts_response(7)))
         .expect(1)
         .mount(&server)
         .await;
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/component/10002/relatedIssueCounts"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(related_issue_counts_response("10002", 3)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(related_issue_counts_response(3)))
         .expect(1)
         .mount(&server)
         .await;
@@ -432,9 +426,7 @@ async fn test_bc_8_1_003_component_list_counts_fail_soft_on_one_5xx() {
     // Backend succeeds
     Mock::given(method("GET"))
         .and(path("/rest/api/3/component/10001/relatedIssueCounts"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(related_issue_counts_response("10001", 5)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(related_issue_counts_response(5)))
         .expect(1)
         .mount(&server)
         .await;
@@ -501,18 +493,14 @@ async fn test_bc_8_1_003_component_list_counts_json_has_issue_count_field() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/component/10001/relatedIssueCounts"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(related_issue_counts_response("10001", 7)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(related_issue_counts_response(7)))
         .expect(1)
         .mount(&server)
         .await;
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/component/10002/relatedIssueCounts"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(related_issue_counts_response("10002", 3)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(related_issue_counts_response(3)))
         .expect(1)
         .mount(&server)
         .await;
@@ -612,9 +600,7 @@ async fn test_bc_8_1_003_component_list_counts_fail_soft_json_null_for_failed() 
     // Backend succeeds
     Mock::given(method("GET"))
         .and(path("/rest/api/3/component/10001/relatedIssueCounts"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(related_issue_counts_response("10001", 5)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(related_issue_counts_response(5)))
         .expect(1)
         .mount(&server)
         .await;

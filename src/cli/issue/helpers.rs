@@ -873,7 +873,6 @@ mod tests {
 
     /// AC-010 / BC-8.4.001 Behavior step 1: all-ASCII-digit input short-circuits to
     /// MatchResult::Exact with the numeric id, calling ZERO partial_match invocations.
-    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
     #[test]
     fn test_bc_8_4_001_resolve_component_numeric_bypass_zero_partial_match_calls() {
         let result = resolve_component("10042", "FOO", &["Backend".into(), "Frontend".into()]);
@@ -922,7 +921,6 @@ mod tests {
 
     /// AC-013 / BC-8.4.002: zero-match name → MatchResult::None with sorted candidate list.
     /// The CALLER converts this to exit-64 with the exact message from BC-8.4.002.
-    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
     #[test]
     fn test_bc_8_4_002_resolve_component_unknown_name_message_and_zero_http() {
         let candidates = vec!["Backend".into(), "Frontend".into()];
@@ -948,7 +946,6 @@ mod tests {
 
     /// AC-014 / BC-8.4.003: 2+ matches → MatchResult::Ambiguous with matching candidates.
     /// The CALLER converts this to exit-64 with the exact message from BC-8.4.003.
-    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
     #[test]
     fn test_bc_8_4_003_resolve_component_ambiguous_name_message_and_zero_http() {
         // "Back" is a substring of both "Backend" and "Backlog" → Ambiguous
@@ -978,7 +975,6 @@ mod tests {
 
     /// AC-015 / BC-8.4.005: two components differing only by case within one project
     /// both match via partial_match's ExactMultiple path — no false Ambiguous.
-    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
     #[test]
     fn test_bc_8_4_005_resolve_component_case_only_duplicates_exact_multiple() {
         // "backend" exactly matches both "Backend" and "backend" (case-insensitive)
@@ -1004,7 +1000,6 @@ mod proptests_component {
     proptest! {
         /// VP-COMPONENT-014: for ANY all-ASCII-digit input string, resolve_component
         /// must return MatchResult::Exact(n) — no partial_match call, no HTTP.
-        /// Since resolve_component is todo!(), every case panics (Red Gate).
         #[test]
         fn prop_resolve_component_numeric_input_always_returns_exact(
             n in "[0-9]{1,10}"
