@@ -1,6 +1,7 @@
 pub mod attachments;
 pub mod boards;
 pub mod bulk;
+pub mod components;
 pub mod fields;
 pub mod issues;
 pub mod links;

@@ -600,6 +600,31 @@ pub(super) async fn resolve_asset(
     }
 }
 
+/// Resolve a component `input` (numeric ID or name) against a **single
+/// project's** candidate list, returning a `MatchResult`.
+///
+/// BC-8.4.001 Behavior:
+/// - Step 1 — numeric bypass: if `input` is all ASCII digits, return the value
+///   directly as `MatchResult::Exact(input.to_string())` with ZERO calls to
+///   `partial_match` and ZERO candidate-list HTTP fetches.
+/// - Step 2 — name resolution: delegate to `partial_match::partial_match(input,
+///   candidates)` and return its result unmodified.
+///
+/// BC-8.4.004 (project-scope invariant): this function has NO project-awareness
+/// and NEVER fetches or unions multiple projects' candidate lists itself — that
+/// invariant is enforced entirely by the CALLER, which must populate `candidates`
+/// from EXACTLY ONE project's component-name list.
+///
+/// Structural clone of `resolve_team_field` (ADR-0018 Rationale rejected a shared
+/// generic abstraction).
+pub(crate) fn resolve_component(
+    _input: &str,
+    _project: &str,
+    _candidates: &[String],
+) -> crate::partial_match::MatchResult {
+    todo!()
+}
+
 /// Re-exported from `field_resolve` — see that module for the full algorithm
 /// doc (BC-3.4.015/BC-3.4.016 Steps 1–6).
 pub(crate) use super::field_resolve::resolve_edit_fields;

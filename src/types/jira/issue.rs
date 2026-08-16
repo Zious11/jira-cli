@@ -190,6 +190,13 @@ pub struct Resolution {
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct Component {
     pub name: String,
+    /// Component id — present when the API returns the full component resource
+    /// inside `fields.components[]`; absent on older or stripped responses.
+    /// BC-2.3.040: `Option<String>` so a fixture omitting `id` still deserializes
+    /// successfully. **Distinct from `types/jira/component::Component.id` which is
+    /// a required `String` for the full-resource type (§8.4 resolver dependency).**
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]

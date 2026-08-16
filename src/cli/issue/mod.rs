@@ -16,6 +16,9 @@ mod view;
 pub mod workflow;
 
 pub use format::{format_issue_row, format_issue_rows_public, format_points, issue_table_headers};
+// Re-exported for use by cli::component (BC-8.4.001 — resolve_component is the
+// shared resolver; sibling cli modules cannot reach into cli::issue::helpers directly).
+pub(crate) use helpers::resolve_component;
 
 use anyhow::Result;
 

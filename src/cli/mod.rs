@@ -2,6 +2,7 @@ pub mod api;
 pub mod assets;
 pub mod auth;
 pub mod board;
+pub mod component;
 pub mod init;
 pub mod issue;
 pub mod project;
@@ -117,6 +118,11 @@ pub enum Command {
     RequestType {
         #[command(subcommand)]
         command: RequestTypeCommand,
+    },
+    /// Manage project components
+    Component {
+        #[command(subcommand)]
+        command: ComponentSubcommand,
     },
     /// Make a raw authenticated HTTP request to the Jira REST API.
     Api {
@@ -1087,6 +1093,26 @@ pub enum RequestTypeCommand {
     Fields {
         /// Request type name (partial match supported) OR numeric ID
         name_or_id: String,
+    },
+}
+
+/// Subcommands for `jr component`.
+///
+/// Only `List` is implemented in S-604-1.  Create, edit, delete, and rename
+/// subcommands land in subsequent stories (S-604-2, S-604-3, S-608-1) and are
+/// added here additively — never remove or reorder a sibling variant.
+#[derive(Subcommand)]
+pub enum ComponentSubcommand {
+    /// List components for a project
+    List {
+        /// Project key (overrides the configured default project).
+        /// Required when no project is configured in `.jr.toml`.
+        #[arg(long)]
+        project: Option<String>,
+        /// Enrich each component row with its related issue count.
+        /// Issues one extra HTTP call per component (N+1). BC-8.1.003.
+        #[arg(long)]
+        counts: bool,
     },
 }
 

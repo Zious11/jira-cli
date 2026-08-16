@@ -663,6 +663,71 @@ pub fn write_request_type_fields_cache(
     Ok(())
 }
 
+/// Slim representation of a project component stored in the cache.
+///
+/// Holds only `id` and `name` — just enough for name-based resolution
+/// (`resolve_component`) without round-tripping the full resource on every
+/// resolver invocation. ADR-0018 Decision §2.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedComponent {
+    pub id: String,
+    pub name: String,
+}
+
+/// One project's component list plus the timestamp for TTL checks.
+///
+/// Stored as a map entry: `components_<profile>.json` →
+/// `HashMap<project_key, ComponentsCacheEntry>`. Mirrors the `ProjectMeta`
+/// keyed-cache pattern — TTL is checked per-entry. ADR-0018 Decision §2.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComponentsCacheEntry {
+    pub components: Vec<CachedComponent>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+/// Read the cached component list for a single project.
+///
+/// Returns `Ok(None)` on missing file, missing key, expired entry, or corrupt
+/// JSON (self-heal via cache-miss → re-fetch). ADR-0018 Decision §2.
+/// Profile is FIRST arg per ADR-0007 multi-profile invariant.
+pub fn read_components_cache(
+    _profile: &str,
+    _project_key: &str,
+) -> Result<Option<ComponentsCacheEntry>> {
+    todo!()
+}
+
+/// Write the component list for a project into the components cache.
+///
+/// Merges into the existing `components_<profile>.json` map, preserving
+/// entries for other projects (same merge strategy as `write_project_meta`).
+///
+/// **Model-b writer (ADR-0018 Decision §2):** a failed disk write is swallowed
+/// with `eprintln!("warning: …")` and `Ok(())` is returned unconditionally — a
+/// failed cache write must never break a successful `component list`. Callers
+/// MUST use `.ok()` to discard the infallible return value.
+/// Profile is FIRST arg per ADR-0007 multi-profile invariant.
+pub fn write_components_cache(
+    _profile: &str,
+    _project_key: &str,
+    _components: &[CachedComponent],
+) -> Result<()> {
+    todo!()
+}
+
+/// Invalidate the cached component list for a specific project.
+///
+/// Removes the `project_key` entry from `components_<profile>.json`.
+/// Called by S-604-2 / S-604-3 / S-608-1 mutating commands before or after
+/// they change components on the project, so the next `list` fetches fresh data.
+///
+/// **Model-b invalidator:** disk errors are swallowed with `eprintln!` so a
+/// failed invalidation never breaks the mutating command. Returns `()`.
+/// Profile is FIRST arg per ADR-0007 multi-profile invariant.
+pub fn invalidate_components_cache(_profile: &str, _project_key: &str) {
+    todo!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
