@@ -764,11 +764,14 @@ async fn test_bc_8_1_002_component_list_json_null_fields_present_not_dropped() {
 /// (same fields + `issueCount`).  A component with `isAssigneeTypeValid: true`
 /// must have that field present in BOTH plain and counts JSON output.
 ///
-/// Part (a): plain `--output json` MUST contain `isAssigneeTypeValid` — currently
-/// PASSES because `Component` serializes it when `Some(...)`.
+/// Part (a): plain `--output json` MUST contain `isAssigneeTypeValid` — passes
+/// because `Component` serializes it when `Some(...)`.
 ///
 /// Part (b): `--counts --output json` MUST ALSO contain `isAssigneeTypeValid` —
-/// currently FAILS because `ComponentCountJson` omits the field entirely.
+/// passes because the F-B2 fix (pass 3) removed `ComponentCountJson` entirely;
+/// counts JSON is now produced by serializing the full `Component` to
+/// `serde_json::Value`, then swapping `relatedIssueCount`→`issueCount`, so
+/// `isAssigneeTypeValid` (and all BC-8.1.002 fields) are preserved.
 #[tokio::test]
 async fn test_bc_8_1_003_counts_json_is_superset_of_plain_json_fields() {
     let cache = TempDir::new().unwrap();
@@ -881,7 +884,9 @@ async fn test_bc_8_1_003_counts_json_is_superset_of_plain_json_fields() {
 
     // isAssigneeTypeValid MUST be present — BC-8.1.003 is additive over
     // BC-8.1.002; counts JSON must be a superset, not a subset.
-    // THIS ASSERTION CURRENTLY FAILS because ComponentCountJson omits the field.
+    // Passes: counts JSON is built by serializing the full `Component` to
+    // `serde_json::Value` then swapping `relatedIssueCount`→`issueCount`
+    // (F-B2, pass 3), so `isAssigneeTypeValid` is preserved.
     assert!(
         counts_obj.contains_key("isAssigneeTypeValid"),
         "Part (b): --counts --output json must include isAssigneeTypeValid \
