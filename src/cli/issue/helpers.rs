@@ -626,14 +626,9 @@ pub(crate) fn resolve_component(
     if input.chars().all(|c| c.is_ascii_digit()) {
         return crate::partial_match::MatchResult::Exact(input.to_string());
     }
-    // BC-8.4.001 step 2: delegate to partial_match for name-based resolution.
-    // Normalize Ambiguous(single) → Exact: one substring match is unambiguous.
-    match crate::partial_match::partial_match(input, candidates) {
-        crate::partial_match::MatchResult::Ambiguous(mut matches) if matches.len() == 1 => {
-            crate::partial_match::MatchResult::Exact(matches.remove(0))
-        }
-        other => other,
-    }
+    // BC-8.4.001 step 2 + Invariant 2 + BC-X.10.001: delegate to partial_match and return
+    // its result UNMODIFIED — single-substring Ambiguous MUST NOT be auto-promoted to Exact.
+    crate::partial_match::partial_match(input, candidates)
 }
 
 /// Re-exported from `field_resolve` — see that module for the full algorithm
