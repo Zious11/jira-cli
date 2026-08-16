@@ -691,10 +691,34 @@ pub struct ComponentsCacheEntry {
 /// JSON (self-heal via cache-miss → re-fetch). ADR-0018 Decision §2.
 /// Profile is FIRST arg per ADR-0007 multi-profile invariant.
 pub fn read_components_cache(
-    _profile: &str,
-    _project_key: &str,
+    profile: &str,
+    project_key: &str,
 ) -> Result<Option<ComponentsCacheEntry>> {
-    todo!()
+    let path = cache_dir(profile).join(format!("components_{profile}.json"));
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let map: HashMap<String, ComponentsCacheEntry> = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("warning: components_{profile}.json unreadable ({e}); will refetch");
+            return Ok(None);
+        }
+    };
+
+    match map.get(project_key) {
+        Some(entry) => {
+            let age = Utc::now() - entry.fetched_at;
+            if age.num_days() >= CACHE_TTL_DAYS {
+                Ok(None)
+            } else {
+                Ok(Some(entry.clone()))
+            }
+        }
+        None => Ok(None),
+    }
 }
 
 /// Write the component list for a project into the components cache.
@@ -708,11 +732,46 @@ pub fn read_components_cache(
 /// MUST use `.ok()` to discard the infallible return value.
 /// Profile is FIRST arg per ADR-0007 multi-profile invariant.
 pub fn write_components_cache(
-    _profile: &str,
-    _project_key: &str,
-    _components: &[CachedComponent],
+    profile: &str,
+    project_key: &str,
+    components: &[CachedComponent],
 ) -> Result<()> {
-    todo!()
+    let dir = cache_dir(profile);
+
+    let result = (|| -> Result<()> {
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("components_{profile}.json"));
+
+        let mut map: HashMap<String, ComponentsCacheEntry> = if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            serde_json::from_str(&content).unwrap_or_else(|e| {
+                eprintln!(
+                    "warning: components_{profile}.json unreadable ({e}); starting fresh — other cached projects will be lost"
+                );
+                HashMap::new()
+            })
+        } else {
+            HashMap::new()
+        };
+
+        map.insert(
+            project_key.to_string(),
+            ComponentsCacheEntry {
+                components: components.to_vec(),
+                fetched_at: Utc::now(),
+            },
+        );
+
+        let content = serde_json::to_string_pretty(&map)?;
+        std::fs::write(&path, content)?;
+        Ok(())
+    })();
+
+    // Model-b writer: swallow disk errors, never propagate (ADR-0018 Decision §2).
+    if let Err(e) = result {
+        eprintln!("warning: failed to write components cache: {e}");
+    }
+    Ok(())
 }
 
 /// Invalidate the cached component list for a specific project.
@@ -724,8 +783,38 @@ pub fn write_components_cache(
 /// **Model-b invalidator:** disk errors are swallowed with `eprintln!` so a
 /// failed invalidation never breaks the mutating command. Returns `()`.
 /// Profile is FIRST arg per ADR-0007 multi-profile invariant.
-pub fn invalidate_components_cache(_profile: &str, _project_key: &str) {
-    todo!()
+pub fn invalidate_components_cache(profile: &str, project_key: &str) {
+    let path = cache_dir(profile).join(format!("components_{profile}.json"));
+    if !path.exists() {
+        return;
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("warning: failed to invalidate components cache for {project_key}: {e}");
+            return;
+        }
+    };
+    let mut map: HashMap<String, ComponentsCacheEntry> = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("warning: failed to invalidate components cache for {project_key}: {e}");
+            return;
+        }
+    };
+    if map.remove(project_key).is_none() {
+        return;
+    }
+    let new_content = match serde_json::to_string_pretty(&map) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("warning: failed to invalidate components cache for {project_key}: {e}");
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&path, new_content) {
+        eprintln!("warning: failed to invalidate components cache for {project_key}: {e}");
+    }
 }
 
 #[cfg(test)]

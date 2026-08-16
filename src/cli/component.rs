@@ -4,6 +4,8 @@ use crate::api::client::JiraClient;
 use crate::cli::OutputFormat;
 use crate::cli::issue::resolve_component;
 use crate::config::Config;
+use crate::error::JrError;
+use crate::output;
 
 use super::ComponentSubcommand;
 
@@ -35,14 +37,107 @@ pub async fn handle(
 /// Uses `resolve_component` (BC-8.4.001 — BC-8.4.005) for --component flag
 /// resolution on future `issue create/edit` paths as well as this list command.
 async fn handle_list(
-    _project: Option<&str>,
-    _counts: bool,
-    _output_format: &OutputFormat,
-    _config: &Config,
-    _client: &JiraClient,
+    project: Option<&str>,
+    counts: bool,
+    output_format: &OutputFormat,
+    config: &Config,
+    client: &JiraClient,
 ) -> Result<()> {
-    // resolve_component will be called here in the implementation phase
-    // (BC-8.4.001 — caller passes exactly one project's candidate list).
+    // BC-8.1.004: no project → exit 64 before any HTTP call.
+    let project_key = config.project_key(project).ok_or_else(|| {
+        JrError::UserError(
+            "No project configured. Pass --project KEY or set \
+             project = \"...\" in .jr.toml. Run \"jr project list\" to see available projects."
+                .into(),
+        )
+    })?;
+
+    // Fetch the component list (assumed non-paginated per BC-8.1.001 / ADR-0018).
+    let mut components = client.list_components(&project_key).await?;
+
+    // BC-8.1.003: N+1 enrichment when --counts is requested.
+    // Fail-soft: a 5xx on one component's count renders '?' (table) / null (JSON),
+    // emits a stderr warning naming the component, and does NOT fail the command.
+    if counts {
+        for c in &mut components {
+            match client.get_related_issue_counts(&c.id).await {
+                Ok(rc) => {
+                    c.related_issue_count = Some(rc.issue_count);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: failed to fetch issue count for component {} ({}): {e}",
+                        c.name, c.id
+                    );
+                    c.related_issue_count = None;
+                }
+            }
+        }
+    }
+
+    // Build table rows — columns: ID, Name, Description, Lead, Assignee Type [, Issues]
+    let dash = "-".to_string();
+    let question = "?".to_string();
+
+    if counts {
+        let rows: Vec<Vec<String>> = components
+            .iter()
+            .map(|c| {
+                vec![
+                    c.id.clone(),
+                    c.name.clone(),
+                    c.description.clone().unwrap_or_else(|| dash.clone()),
+                    c.lead
+                        .as_ref()
+                        .and_then(|l| l.display_name.clone())
+                        .unwrap_or_else(|| dash.clone()),
+                    c.assignee_type.clone().unwrap_or_else(|| dash.clone()),
+                    c.related_issue_count
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| question.clone()),
+                ]
+            })
+            .collect();
+        output::print_output(
+            output_format,
+            &[
+                "ID",
+                "Name",
+                "Description",
+                "Lead",
+                "Assignee Type",
+                "Issues",
+            ],
+            &rows,
+            &components,
+        )?;
+    } else {
+        let rows: Vec<Vec<String>> = components
+            .iter()
+            .map(|c| {
+                vec![
+                    c.id.clone(),
+                    c.name.clone(),
+                    c.description.clone().unwrap_or_else(|| dash.clone()),
+                    c.lead
+                        .as_ref()
+                        .and_then(|l| l.display_name.clone())
+                        .unwrap_or_else(|| dash.clone()),
+                    c.assignee_type.clone().unwrap_or_else(|| dash.clone()),
+                ]
+            })
+            .collect();
+        output::print_output(
+            output_format,
+            &["ID", "Name", "Description", "Lead", "Assignee Type"],
+            &rows,
+            &components,
+        )?;
+    }
+
+    // Suppress the unused-import lint; resolve_component is used on
+    // `issue create/edit` paths dispatched by callers of this module.
     let _ = resolve_component;
-    todo!()
+
+    Ok(())
 }
