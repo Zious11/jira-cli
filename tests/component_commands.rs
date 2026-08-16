@@ -975,6 +975,65 @@ async fn test_bc_8_1_002_component_list_json_populated_project_round_trips() {
     assert_eq!(comp["description"], "Infrastructure services");
 }
 
+// ── VP-COMPONENT-001 negative half (plain list issues ZERO relatedIssueCounts GETs) ──
+
+/// VP-COMPONENT-001 negative half: a plain `jr component list` (without
+/// `--counts`) must issue ZERO calls to the relatedIssueCounts endpoint.
+///
+/// Without this pin, a mutation that removes the `if counts` guard in
+/// `src/cli/component.rs` would survive all existing tests: the enrichment
+/// loop would run on the plain-list path, the unmounted endpoint would 404,
+/// the fail-soft arm would swallow the error, and the command would still
+/// exit 0 with a table rendered.  This `.expect(0)` closes that gap —
+/// wiremock enforces zero calls at `server.verify()` time.
+///
+/// Paired with AC-007 (the `.expect(N)` positive half already pinned).
+#[tokio::test]
+async fn test_vp_component_001_plain_list_issues_zero_related_issue_counts_gets() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Return ≥1 component so the enrichment loop would have something to
+    // iterate over if the guard were absent.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10002", "Frontend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // The relatedIssueCounts endpoint MUST NEVER be called on a plain list
+    // (no --counts flag).  .expect(0) is the enforcement pin for VP-COMPONENT-001.
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path_regex(
+            r"/rest/api/3/component/.*/relatedIssueCounts",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "list", "--project", "FOO"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for plain list; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // ── AC-012 (BC-8.4.004 — resolver never spans projects) ─────────────────────
 
 /// AC-012 / BC-8.4.004: listing PRJA components never triggers PRJB's

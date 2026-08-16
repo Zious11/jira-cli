@@ -157,8 +157,9 @@ async fn handle_list(
         )?;
     }
 
-    // Suppress the unused-import lint; resolve_component is used on
-    // `issue create/edit` paths dispatched by callers of this module.
+    // `resolve_component` is imported for reuse by future component/issue
+    // `--component` handlers (S-604-2/-3, S-605, S-606); this `let _` suppresses
+    // the unused-import lint until those land.
     let _ = resolve_component;
 
     Ok(())
