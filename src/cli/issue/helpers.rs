@@ -997,19 +997,19 @@ mod tests {
     /// `"".chars().all(|c| c.is_ascii_digit())` is VACUOUSLY TRUE — the iterator
     /// is empty so the predicate succeeds without examining any character.  The
     /// cited precedent (`src/cli/requesttype.rs`) guards the numeric bypass with
-    /// `!name_or_id.is_empty() && name_or_id.chars().all(...)`.  The current
-    /// `resolve_component` omits the `!input.is_empty()` conjunct, so an empty
-    /// string is mis-classified as a numeric id and returned as
-    /// `Exact("")` instead of being passed to `partial_match`.
+    /// `!name_or_id.is_empty() && name_or_id.chars().all(...)`.
+    ///
+    /// F-B1 fix (adversarial pass-3): `resolve_component` originally omitted the
+    /// `!input.is_empty()` conjunct, so an empty string (vacuously all-ASCII-digit)
+    /// was mis-classified as a numeric id and returned as `Exact("")`.  The guard at
+    /// `helpers.rs ~628` (`if !input.is_empty() && input.chars().all(|c| c.is_ascii_digit())`)
+    /// now prevents that.
     ///
     /// The correct result for `resolve_component("", _, candidates)` is what
     /// `partial_match("", candidates)` returns.  Because the empty string is a
-    /// substring of every string, `partial_match` returns
-    /// `Ambiguous(all candidates)`.
-    ///
-    /// This test MUST FAIL against the current implementation (returns
-    /// `Exact("")`) and MUST PASS once the `!input.is_empty()` conjunct is
-    /// added.
+    /// substring of every string, `partial_match` returns `Ambiguous(all candidates)`.
+    /// This test pins that invariant — `resolve_component("", …)` returns `Ambiguous`,
+    /// not `Exact("")`.
     #[test]
     fn test_bc_8_4_001_resolve_component_empty_input_is_not_exact() {
         let candidates = vec!["Backend".into(), "Frontend".into()];

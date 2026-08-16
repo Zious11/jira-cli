@@ -1467,10 +1467,9 @@ mod tests {
     //
     // These tests pin AC-002, AC-004, and AC-008 from S-WIN-2.
     //
-    // Pre-implementation Red Gate: the seam does not exist in cache_root() yet.
-    // AC-002 will FAIL because cache_root() does not read JR_CACHE_DIR at all.
-    // AC-004 is a negative (independence) test that asserts JR_CONFIG_DIR does not
-    // bleed into cache_root().
+    // The seam (`JR_CACHE_DIR` read in `cache_root()` under `#[cfg(debug_assertions)]`)
+    // was added by S-WIN-2.  AC-002 exercises the happy path; AC-004 is a negative
+    // (independence) test asserting JR_CONFIG_DIR does not bleed into cache_root();
     // AC-008 (empty-string treated as unset) mirrors AC-003 in config tests.
     // -----------------------------------------------------------------------
 
@@ -1480,9 +1479,9 @@ mod tests {
     /// `JR_CACHE_DIR` is set to a non-empty string. The XDG/home-dir logic must
     /// be bypassed entirely.
     ///
-    /// Pre-implementation Red Gate: ASSERTION FAILURE — `cache_root()` does not
-    /// read `JR_CACHE_DIR` so it returns the XDG or home-dir path instead of the
-    /// seam value.
+    /// S-WIN-2 fix: `cache_root()` now reads `JR_CACHE_DIR` under
+    /// `#[cfg(debug_assertions)]` and returns it directly, bypassing XDG/home-dir
+    /// logic. This test pins that postcondition.
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_cache_dir_seam_overrides_path() {
@@ -1511,9 +1510,9 @@ mod tests {
     /// `cache_root()` must return the OS-determined path, not any value derived
     /// from `JR_CONFIG_DIR`. The two seams are independent.
     ///
-    /// Pre-implementation Red Gate: This test PASSES even without the seam
-    /// (cache_root() never reads JR_CONFIG_DIR regardless). Included as a
-    /// regression guard once the seam exists.
+    /// Independence regression guard: `cache_root()` never reads `JR_CONFIG_DIR`
+    /// regardless of whether the `JR_CACHE_DIR` seam is present. Included to pin
+    /// that the two seams remain independent.
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_config_seam_does_not_affect_cache() {
@@ -1585,12 +1584,10 @@ mod tests {
     // All tests below are `#[cfg(windows)]`-gated. They compile out on macOS/Linux
     // (zero impact on Unix CI) and run only on a Windows runner (S-WIN-5).
     //
-    // RED GATE RATIONALE: `cache_root()` currently has NO `#[cfg(windows)]` branch —
-    // on a Windows build it falls through to the XDG/home_dir Unix path, so
-    // `dirs::cache_dir()` (= %LOCALAPPDATA%) is never consulted. Every assertion
-    // below would therefore FAIL on a Windows runner against the current code.
-    // The implementation in S-WIN-1 adds the `#[cfg(windows)]` branch that makes
-    // these tests pass.
+    // S-WIN-1 landed the `#[cfg(windows)]` branch in `cache_root()` that these
+    // tests exercise.  On a Windows runner `dirs::cache_dir()` (= %LOCALAPPDATA%)
+    // is now consulted and the assertions below pass.  On macOS/Linux the tests
+    // are compiled out entirely by `#[cfg(windows)]`.
     // -------------------------------------------------------------------------
 
     /// AC-005 / BC-6.2.016 postcondition — on Windows, `cache_root()` returns
