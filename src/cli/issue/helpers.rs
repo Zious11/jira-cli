@@ -862,4 +862,153 @@ mod tests {
         let extra = compose_extra_fields(&config, &cmdb_fields);
         assert!(extra.is_empty());
     }
+
+    // ── S-604-1: resolve_component tests (AC-010, AC-011, AC-013, AC-014, AC-015) ──
+
+    /// AC-010 / BC-8.4.001 Behavior step 1: all-ASCII-digit input short-circuits to
+    /// MatchResult::Exact with the numeric id, calling ZERO partial_match invocations.
+    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
+    #[test]
+    fn test_bc_8_4_001_resolve_component_numeric_bypass_zero_partial_match_calls() {
+        let result = resolve_component("10042", "FOO", &["Backend".into(), "Frontend".into()]);
+        // When implemented: numeric bypass returns Exact(input) directly,
+        // bypassing partial_match entirely (BC-8.4.001 step 1).
+        match result {
+            crate::partial_match::MatchResult::Exact(id) => {
+                assert_eq!(id, "10042", "Numeric bypass must return the id unchanged")
+            }
+            other => panic!(
+                "Expected Exact(\"10042\") for all-digit input, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// AC-011 / BC-8.4.001 Behavior step 2: non-digit input delegates to
+    /// partial_match(input, candidates) and returns its MatchResult unmodified.
+    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
+    #[test]
+    fn test_bc_8_4_001_resolve_component_delegates_to_partial_match_for_names() {
+        // "Back" is a prefix of "Backend" only → Exact("Backend")
+        let result = resolve_component("Back", "FOO", &["Backend".into()]);
+        match result {
+            crate::partial_match::MatchResult::Exact(name) => {
+                assert_eq!(
+                    name, "Backend",
+                    "Prefix match must resolve to unique candidate"
+                )
+            }
+            other => panic!(
+                "Expected Exact(\"Backend\") for unique prefix match, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// AC-013 / BC-8.4.002: zero-match name → MatchResult::None with sorted candidate list.
+    /// The CALLER converts this to exit-64 with the exact message from BC-8.4.002.
+    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
+    #[test]
+    fn test_bc_8_4_002_resolve_component_unknown_name_message_and_zero_http() {
+        let candidates = vec!["Backend".into(), "Frontend".into()];
+        let result = resolve_component("Xyzzy", "FOO", &candidates);
+        // partial_match("Xyzzy", &["Backend", "Frontend"]) → None(["Backend", "Frontend"])
+        match result {
+            crate::partial_match::MatchResult::None(available) => {
+                assert!(
+                    available.contains(&"Backend".to_string()),
+                    "None result must carry all candidates; got {available:?}"
+                );
+                assert!(
+                    available.contains(&"Frontend".to_string()),
+                    "None result must carry all candidates; got {available:?}"
+                );
+            }
+            other => panic!(
+                "Expected None for unknown component name 'Xyzzy', got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// AC-014 / BC-8.4.003: 2+ matches → MatchResult::Ambiguous with matching candidates.
+    /// The CALLER converts this to exit-64 with the exact message from BC-8.4.003.
+    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
+    #[test]
+    fn test_bc_8_4_003_resolve_component_ambiguous_name_message_and_zero_http() {
+        // "Back" is a substring of both "Backend" and "Backlog" → Ambiguous
+        let candidates = vec!["Backend".into(), "Backlog".into(), "Frontend".into()];
+        let result = resolve_component("Back", "FOO", &candidates);
+        match result {
+            crate::partial_match::MatchResult::Ambiguous(matches) => {
+                assert!(
+                    matches.contains(&"Backend".to_string()),
+                    "Ambiguous must include 'Backend'; got {matches:?}"
+                );
+                assert!(
+                    matches.contains(&"Backlog".to_string()),
+                    "Ambiguous must include 'Backlog'; got {matches:?}"
+                );
+                assert!(
+                    !matches.contains(&"Frontend".to_string()),
+                    "Ambiguous must NOT include 'Frontend'; got {matches:?}"
+                );
+            }
+            other => panic!(
+                "Expected Ambiguous for 'Back' prefix with multiple matches, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// AC-015 / BC-8.4.005: two components differing only by case within one project
+    /// both match via partial_match's ExactMultiple path — no false Ambiguous.
+    /// Since resolve_component is todo!(), this panics at runtime (Red Gate).
+    #[test]
+    fn test_bc_8_4_005_resolve_component_case_only_duplicates_exact_multiple() {
+        // "backend" exactly matches both "Backend" and "backend" (case-insensitive)
+        let candidates = vec!["Backend".into(), "backend".into()];
+        let result = resolve_component("backend", "FOO", &candidates);
+        match result {
+            crate::partial_match::MatchResult::ExactMultiple(_) => {} // expected
+            other => panic!(
+                "Expected ExactMultiple for case-only duplicates, got {:?}",
+                other
+            ),
+        }
+    }
+}
+
+// ── S-604-1: VP-COMPONENT-014 proptest (numeric bypass always Exact) ─────────
+
+#[cfg(test)]
+mod proptests_component {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// VP-COMPONENT-014: for ANY all-ASCII-digit input string, resolve_component
+        /// must return MatchResult::Exact(n) — no partial_match call, no HTTP.
+        /// Since resolve_component is todo!(), every case panics (Red Gate).
+        #[test]
+        fn prop_resolve_component_numeric_input_always_returns_exact(
+            n in "[0-9]{1,10}"
+        ) {
+            let candidates = vec!["Backend".to_string(), "Frontend".to_string()];
+            let result = resolve_component(&n, "FOO", &candidates);
+            match result {
+                crate::partial_match::MatchResult::Exact(id) => {
+                    prop_assert_eq!(id, n, "Numeric bypass must return the id unchanged");
+                }
+                other => {
+                    prop_assert!(
+                        false,
+                        "Expected Exact for all-digit input '{}', got {:?}",
+                        n,
+                        other
+                    );
+                }
+            }
+        }
+    }
 }

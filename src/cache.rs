@@ -1770,6 +1770,94 @@ mod tests {
              (model-b best-effort writer, BC-X.12.008); got: {result:?}"
         );
     }
+
+    // ── S-604-1: AC-019 / ADR-0018 Decision §2 — components cache round-trip ─
+
+    /// AC-019 / ADR-0018 Decision §2: write then read returns the same component set
+    /// within the 7-day TTL; invalidate removes it; a failed write (model-b) returns
+    /// Ok(()) and does NOT propagate an Err.
+    ///
+    /// Since read_components_cache / write_components_cache / invalidate_components_cache
+    /// are all todo!(), this test panics at runtime (Red Gate).
+    #[test]
+    fn test_adr_0018_components_cache_round_trip_and_model_b_writer() {
+        // Part 1: round-trip write → read → invalidate
+        with_temp_cache(|| {
+            let components = vec![
+                CachedComponent {
+                    id: "10001".to_string(),
+                    name: "Backend".to_string(),
+                },
+                CachedComponent {
+                    id: "10002".to_string(),
+                    name: "Frontend".to_string(),
+                },
+            ];
+
+            write_components_cache("default", "FOO", &components)
+                .expect("write_components_cache must succeed in a writable temp dir");
+
+            let entry = read_components_cache("default", "FOO")
+                .expect("read_components_cache must not error");
+            assert!(
+                entry.is_some(),
+                "read_components_cache must return Some after a write (within TTL)"
+            );
+            let entry = entry.unwrap();
+            assert_eq!(
+                entry.components.len(),
+                2,
+                "Round-trip must preserve both components"
+            );
+            assert_eq!(entry.components[0].id, "10001");
+            assert_eq!(entry.components[0].name, "Backend");
+            assert_eq!(entry.components[1].id, "10002");
+            assert_eq!(entry.components[1].name, "Frontend");
+
+            // Invalidate must clear the cache
+            invalidate_components_cache("default", "FOO");
+            let after = read_components_cache("default", "FOO")
+                .expect("read_components_cache must not error after invalidation");
+            assert!(
+                after.is_none(),
+                "read_components_cache must return None after invalidation"
+            );
+        });
+
+        // Part 2: model-b writer — I/O error must NOT propagate (swallow + warn)
+        // Force an I/O error by pointing JR_CACHE_DIR at a file (not a directory),
+        // causing create_dir_all to fail with ENOTDIR — same pattern used by
+        // test_write_cmdb_fields_cache_swallow_io_error_returns_ok above.
+        let outer_dir = tempfile::TempDir::new().unwrap();
+        let fake_cache_home = outer_dir.path().join("i_am_a_file");
+        std::fs::write(&fake_cache_home, "file, not a dir").unwrap();
+
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME / JR_CACHE_DIR.
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", &fake_cache_home);
+            std::env::set_var("JR_CACHE_DIR", &fake_cache_home);
+        }
+        let components = vec![CachedComponent {
+            id: "10001".to_string(),
+            name: "Backend".to_string(),
+        }];
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_components_cache("default", "FOO", &components)
+        }));
+        unsafe {
+            std::env::remove_var("XDG_CACHE_HOME");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
+        drop(guard);
+
+        let result = result.expect("write_components_cache must not panic on I/O error");
+        assert!(
+            result.is_ok(),
+            "Model-b writer must return Ok(()) on I/O error (ADR-0018 Decision §2 swallow-+warn); \
+             got: {result:?}"
+        );
+    }
 }
 
 #[cfg(test)]

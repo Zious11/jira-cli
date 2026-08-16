@@ -1,3 +1,7 @@
+//! Shared YAML-extraction test utilities.  Not every consumer uses every item,
+//! so dead_code warnings are false positives in binaries that include this module.
+#![allow(dead_code)]
+
 /// Extract the YAML block for a single GitHub Actions job from a workflow file.
 ///
 /// This is the canonical job-block extractor shared across CI-YAML guard tests

@@ -1,3 +1,7 @@
+//! Shared test fixture helpers.  Each integration-test binary includes only a
+//! subset of these, so unused-function warnings would be false positives.
+#![allow(dead_code)]
+
 use serde_json::{Value, json};
 
 pub fn user_response() -> Value {
@@ -481,4 +485,42 @@ pub fn write_profile_config(config_home: &std::path::Path, base_url: &str) {
         ),
     )
     .unwrap();
+}
+
+// ── S-604-1: Component fixtures ──────────────────────────────────────────────
+
+/// Build one component resource object as returned by
+/// `GET /rest/api/3/project/{key}/components` and
+/// `GET /rest/api/3/component/{id}`.
+pub fn component_response(
+    id: &str,
+    name: &str,
+    description: Option<&str>,
+    lead_name: Option<&str>,
+    assignee_type: Option<&str>,
+) -> Value {
+    let lead = lead_name.map(|n| {
+        json!({
+            "accountId": format!("acc-{}", id),
+            "displayName": n,
+        })
+    });
+    json!({
+        "id": id,
+        "name": name,
+        "description": description,
+        "lead": lead,
+        "assigneeType": assignee_type,
+    })
+}
+
+/// Array response for `GET /rest/api/3/project/{key}/components`.
+/// Jira returns a plain JSON array (no envelope wrapper).
+pub fn component_list_response(components: Vec<Value>) -> Value {
+    json!(components)
+}
+
+/// Response for `GET /rest/api/3/component/{id}/relatedIssueCounts`.
+pub fn related_issue_counts_response(id: &str, count: u64) -> Value {
+    json!({ "id": id, "issueCount": count })
 }

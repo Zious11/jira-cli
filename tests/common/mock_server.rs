@@ -1,3 +1,7 @@
+//! Shared mock-server setup helpers.  Not every consumer uses every helper,
+//! so dead_code warnings are false positives here.
+#![allow(dead_code)]
+
 use super::fixtures;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

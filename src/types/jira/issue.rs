@@ -649,4 +649,35 @@ mod tests {
         assert!(r.id.is_none());
         assert!(r.description.is_none());
     }
+
+    // ── S-604-1: BC-2.3.040 tests (AC-016, AC-017) ───────────────────────────
+
+    /// AC-016 / BC-2.3.040 postcondition 1: fixture WITH "id" key → id == Some(…).
+    /// The embedded `Component` in `issue.rs` gains `id: Option<String>` so that
+    /// existing fixtures omitting `id` still deserialize successfully (non-breaking).
+    #[test]
+    fn test_bc_2_3_040_embedded_component_id_present_deserializes_some() {
+        let json = json!({"id": "10001", "name": "Backend"});
+        let component: Component = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            component.id,
+            Some("10001".to_string()),
+            "id key present in JSON must deserialize to Some(\"10001\")"
+        );
+        assert_eq!(component.name, "Backend");
+    }
+
+    /// AC-017 / BC-2.3.040 postcondition 2: fixture WITHOUT "id" key → id == None.
+    /// No serde failure — backward-compatible with pre-BC-2.3.040 fixtures.
+    #[test]
+    fn test_bc_2_3_040_embedded_component_id_absent_deserializes_none() {
+        let json = json!({"name": "Backend"});
+        let component: Component =
+            serde_json::from_value(json).expect("Absent id must deserialize successfully");
+        assert_eq!(
+            component.id, None,
+            "Missing id key must deserialize to None (Option::None)"
+        );
+        assert_eq!(component.name, "Backend");
+    }
 }

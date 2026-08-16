@@ -1,4 +1,6 @@
-//! Shared assertion helpers for integration tests.
+//! Shared assertion helpers for integration tests.  Not every consumer uses
+//! every helper, so dead_code warnings are false positives here.
+#![allow(dead_code)]
 //!
 //! Promoted from `tests/json_error_shape.rs` (S-639-1, "Test Infrastructure — F3
 //! Story Deliverables"). The original definition in `tests/json_error_shape.rs`

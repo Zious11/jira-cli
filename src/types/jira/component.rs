@@ -59,3 +59,26 @@ pub struct RelatedIssueCounts {
     #[serde(rename = "issueCount")]
     pub issue_count: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── S-604-1: BC-2.3.040 Precondition 1 test (AC-018) ─────────────────────
+
+    /// AC-018 / BC-2.3.040 Precondition 1: the FULL resource `Component.id` is a
+    /// required `String` (NOT `Option<String>`).  A JSON fixture omitting `"id"`
+    /// MUST fail to deserialize — this type is DISTINCT from
+    /// `types/jira/issue::Component` (the embedded type that accepts absent id).
+    #[test]
+    fn test_bc_2_3_040_full_resource_component_id_required_not_optional() {
+        // JSON with no "id" key — must fail because Component.id: String (required)
+        let json = serde_json::json!({"name": "Backend"});
+        let result = serde_json::from_value::<Component>(json);
+        assert!(
+            result.is_err(),
+            "Full-resource Component.id is required (String, not Option); \
+             deserialization must fail when id is absent"
+        );
+    }
+}
