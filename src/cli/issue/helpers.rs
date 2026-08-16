@@ -623,7 +623,9 @@ pub(crate) fn resolve_component(
     candidates: &[String],
 ) -> crate::partial_match::MatchResult {
     // BC-8.4.001 step 1: all-ASCII-digit → numeric id bypass, ZERO partial_match calls.
-    if input.chars().all(|c| c.is_ascii_digit()) {
+    // Guard: empty string is vacuously all-ASCII-digit; require non-empty input first
+    // (mirrors src/cli/requesttype.rs `!name_or_id.is_empty() && …` precedent).
+    if !input.is_empty() && input.chars().all(|c| c.is_ascii_digit()) {
         return crate::partial_match::MatchResult::Exact(input.to_string());
     }
     // BC-8.4.001 step 2 + Invariant 2 + BC-X.10.001: delegate to partial_match and return
