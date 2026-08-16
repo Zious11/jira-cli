@@ -1467,11 +1467,10 @@ mod tests {
     //
     // These tests pin AC-002, AC-004, and AC-008 from S-WIN-2.
     //
-    // The seam is implemented: cache_root() reads JR_CACHE_DIR in debug builds
-    // (see src/cache.rs::cache_root, #[cfg(debug_assertions)] branch).
-    // AC-002 passes — cache_root() returns the seam value when JR_CACHE_DIR is set.
-    // AC-004 is a negative (independence) regression guard confirming JR_CONFIG_DIR
-    // does not bleed into cache_root(); passes before and after the seam.
+    // Pre-implementation Red Gate: the seam does not exist in cache_root() yet.
+    // AC-002 will FAIL because cache_root() does not read JR_CACHE_DIR at all.
+    // AC-004 is a negative (independence) test that asserts JR_CONFIG_DIR does not
+    // bleed into cache_root().
     // AC-008 (empty-string treated as unset) mirrors AC-003 in config tests.
     // -----------------------------------------------------------------------
 
@@ -1481,9 +1480,9 @@ mod tests {
     /// `JR_CACHE_DIR` is set to a non-empty string. The XDG/home-dir logic must
     /// be bypassed entirely.
     ///
-    /// The seam is implemented (AC-002, S-WIN-2): `cache_root()` returns the
-    /// `JR_CACHE_DIR` value directly in debug builds, bypassing XDG/home-dir logic.
-    /// This test passes.
+    /// Pre-implementation Red Gate: ASSERTION FAILURE — `cache_root()` does not
+    /// read `JR_CACHE_DIR` so it returns the XDG or home-dir path instead of the
+    /// seam value.
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_cache_dir_seam_overrides_path() {
@@ -1512,9 +1511,9 @@ mod tests {
     /// `cache_root()` must return the OS-determined path, not any value derived
     /// from `JR_CONFIG_DIR`. The two seams are independent.
     ///
-    /// Regression guard (AC-004, S-WIN-2): `cache_root()` never reads
-    /// `JR_CONFIG_DIR` — the two seams are independent. This test passes both
-    /// before and after the JR_CACHE_DIR seam was introduced.
+    /// Pre-implementation Red Gate: This test PASSES even without the seam
+    /// (cache_root() never reads JR_CONFIG_DIR regardless). Included as a
+    /// regression guard once the seam exists.
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_config_seam_does_not_affect_cache() {
