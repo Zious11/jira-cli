@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::Serialize;
 
 use crate::api::client::JiraClient;
 use crate::cli::OutputFormat;
@@ -6,6 +7,26 @@ use crate::cli::issue::resolve_component;
 use crate::config::Config;
 use crate::error::JrError;
 use crate::output;
+use crate::types::jira::component::ComponentLead;
+
+/// Local view type used for `--counts --output json` output.
+///
+/// Emits `issueCount` (BC-8.1.003) instead of `relatedIssueCount`, and has
+/// no `skip_serializing_if` on the optional fields so `null` is always
+/// present in the JSON (BC-8.1.002).
+#[derive(Serialize)]
+struct ComponentCountJson<'a> {
+    id: &'a str,
+    name: &'a str,
+    description: Option<&'a str>,
+    lead: Option<&'a ComponentLead>,
+    #[serde(rename = "assigneeType")]
+    assign_type: Option<&'a str>,
+    project: Option<&'a str>,
+    /// `null` when enrichment failed for this component (fail-soft per BC-8.1.003).
+    #[serde(rename = "issueCount")]
+    issue_count: Option<u64>,
+}
 
 use super::ComponentSubcommand;
 
@@ -98,6 +119,21 @@ async fn handle_list(
                 ]
             })
             .collect();
+        // Build a JSON-specific view that serializes `issueCount` (BC-8.1.003) and
+        // preserves null fields (BC-8.1.002) — distinct from Component which uses
+        // `relatedIssueCount` and may have skip_serializing_if on some fields.
+        let json_view: Vec<ComponentCountJson<'_>> = components
+            .iter()
+            .map(|c| ComponentCountJson {
+                id: &c.id,
+                name: &c.name,
+                description: c.description.as_deref(),
+                lead: c.lead.as_ref(),
+                assign_type: c.assignee_type.as_deref(),
+                project: c.project.as_deref(),
+                issue_count: c.related_issue_count,
+            })
+            .collect();
         output::print_output(
             output_format,
             &[
@@ -109,7 +145,7 @@ async fn handle_list(
                 "Issues",
             ],
             &rows,
-            &components,
+            &json_view,
         )?;
     } else {
         let rows: Vec<Vec<String>> = components
