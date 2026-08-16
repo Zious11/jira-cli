@@ -107,8 +107,8 @@ async fn handle_list(
         let json_view: Vec<serde_json::Value> = components
             .iter()
             .map(|c| {
-                let mut v = serde_json::to_value(c)
-                    .expect("Component serializes to JSON infallibly");
+                let mut v =
+                    serde_json::to_value(c).expect("Component serializes to JSON infallibly");
                 if let Some(obj) = v.as_object_mut() {
                     obj.remove("relatedIssueCount");
                     let count_val = match c.related_issue_count {
