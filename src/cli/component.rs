@@ -1,5 +1,4 @@
 use anyhow::Result;
-use serde::Serialize;
 
 use crate::api::client::JiraClient;
 use crate::cli::OutputFormat;
@@ -7,26 +6,6 @@ use crate::cli::issue::resolve_component;
 use crate::config::Config;
 use crate::error::JrError;
 use crate::output;
-use crate::types::jira::component::ComponentLead;
-
-/// Local view type used for `--counts --output json` output.
-///
-/// Emits `issueCount` (BC-8.1.003) instead of `relatedIssueCount`, and has
-/// no `skip_serializing_if` on the optional fields so `null` is always
-/// present in the JSON (BC-8.1.002).
-#[derive(Serialize)]
-struct ComponentCountJson<'a> {
-    id: &'a str,
-    name: &'a str,
-    description: Option<&'a str>,
-    lead: Option<&'a ComponentLead>,
-    #[serde(rename = "assigneeType")]
-    assign_type: Option<&'a str>,
-    project: Option<&'a str>,
-    /// `null` when enrichment failed for this component (fail-soft per BC-8.1.003).
-    #[serde(rename = "issueCount")]
-    issue_count: Option<u64>,
-}
 
 use super::ComponentSubcommand;
 
@@ -119,19 +98,26 @@ async fn handle_list(
                 ]
             })
             .collect();
-        // Build a JSON-specific view that serializes `issueCount` (BC-8.1.003) and
-        // preserves null fields (BC-8.1.002) — distinct from Component which uses
-        // `relatedIssueCount` and may have skip_serializing_if on some fields.
-        let json_view: Vec<ComponentCountJson<'_>> = components
+        // Build JSON objects that are a strict superset of the plain JSON (BC-8.1.003):
+        // serialize the full Component (which includes isAssigneeTypeValid when Some,
+        // and all other fields from BC-8.1.002), then:
+        //   - remove `relatedIssueCount` (internal name; replaced by `issueCount`)
+        //   - insert `issueCount` (integer on success, JSON null on fail-soft — key
+        //     ALWAYS present per BC-8.1.003).
+        let json_view: Vec<serde_json::Value> = components
             .iter()
-            .map(|c| ComponentCountJson {
-                id: &c.id,
-                name: &c.name,
-                description: c.description.as_deref(),
-                lead: c.lead.as_ref(),
-                assign_type: c.assignee_type.as_deref(),
-                project: c.project.as_deref(),
-                issue_count: c.related_issue_count,
+            .map(|c| {
+                let mut v = serde_json::to_value(c)
+                    .expect("Component serializes to JSON infallibly");
+                if let Some(obj) = v.as_object_mut() {
+                    obj.remove("relatedIssueCount");
+                    let count_val = match c.related_issue_count {
+                        Some(n) => serde_json::Value::from(n),
+                        None => serde_json::Value::Null,
+                    };
+                    obj.insert("issueCount".to_string(), count_val);
+                }
+                v
             })
             .collect();
         output::print_output(
