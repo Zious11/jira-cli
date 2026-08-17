@@ -54,4 +54,38 @@ impl JiraClient {
         let path = format!("/rest/api/3/component/{}", component_id);
         self.get(&path).await
     }
+
+    /// Delete a component, optionally moving its issues to another component.
+    ///
+    /// DELETEs `/rest/api/3/component/{component_id}`, appending
+    /// `?moveIssuesTo=<targetId>` when `move_issues_to` is `Some` (BC-8.2.002
+    /// `--move-to` path). When `move_issues_to` is `None` the component's
+    /// issues are orphaned (BC-8.2.006 `--orphan` path) — no query param is
+    /// sent.
+    ///
+    /// This function performs ONLY the DELETE call. Callers (`handle_delete`,
+    /// S-604-3) are responsible for: the ADR-0018 §1 numeric confirming-GET(s)
+    /// on source and/or target, the BC-8.2.007 pre-delete affected-issue
+    /// snapshot (which MUST complete successfully before this is called), the
+    /// BC-8.2.006 `--orphan` confirmation gate, and the ADR-0018 §2 components
+    /// cache invalidation after a successful call.
+    ///
+    /// A 404 here (source or `moveIssuesTo` target deleted by a concurrent
+    /// actor after a successful resolution) propagates as `JrError::ApiError`
+    /// — exit 1, per BC-8.2.008 / VP-COMPONENT-024. This is distinct from a
+    /// resolver-layer not-found (BC-8.1.008), which is the caller's ordinary
+    /// exit-64 `UserError` path and never reaches this function.
+    pub async fn delete_component(
+        &self,
+        component_id: &str,
+        move_issues_to: Option<&str>,
+    ) -> Result<()> {
+        let path = match move_issues_to {
+            Some(target_id) => {
+                format!("/rest/api/3/component/{component_id}?moveIssuesTo={target_id}")
+            }
+            None => format!("/rest/api/3/component/{component_id}"),
+        };
+        self.delete(&path).await
+    }
 }

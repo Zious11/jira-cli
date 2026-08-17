@@ -19,6 +19,7 @@ pub async fn handle(
     config: &Config,
     client: &JiraClient,
     project_flag: Option<&str>,
+    no_input: bool,
 ) -> Result<()> {
     match command {
         ComponentSubcommand::List { project, counts } => {
@@ -70,6 +71,28 @@ pub async fn handle(
                 output_format,
                 config,
                 client,
+            )
+            .await
+        }
+        ComponentSubcommand::Delete {
+            name_or_id,
+            project,
+            move_to,
+            orphan,
+            yes,
+        } => {
+            handle_delete(
+                DeleteComponentArgs {
+                    name_or_id,
+                    project,
+                    move_to,
+                    orphan,
+                    yes,
+                },
+                output_format,
+                config,
+                client,
+                no_input,
             )
             .await
         }
@@ -630,6 +653,412 @@ async fn handle_edit(
                     eprintln!("  lead \u{2192} {}", l);
                 }
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Caller-supplied arguments for `handle_delete`.
+///
+/// Bundles the command-specific parameters so `handle_delete` stays within
+/// clippy's 7-argument limit (same pattern as `CreateComponentArgs` /
+/// `EditComponentArgs`).
+struct DeleteComponentArgs {
+    name_or_id: String,
+    project: Option<String>,
+    move_to: Option<String>,
+    orphan: bool,
+    yes: bool,
+}
+
+/// Returns `true` when `e` downcasts to `JrError::ApiError { status: 404, .. }`.
+///
+/// Shared by the source and `--move-to` target numeric confirming-GET paths
+/// (ADR-0018 §1) — both treat a 404 on that GET as an ordinary resolver-layer
+/// not-found, never a race.
+fn is_404_error(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<JrError>()
+        .map(|je| matches!(je, JrError::ApiError { status: 404, .. }))
+        .unwrap_or(false)
+}
+
+/// BC-8.2.001 Postcondition 3 / DEC-188: the neither-`--move-to`-nor-`--orphan`
+/// exit-64 guard. Application-level check (never a clap `ArgGroup::required`,
+/// which would wrongly produce exit 2) — names BOTH flags, no affected-issue
+/// count (the snapshot never fires in this path per BC-8.2.007 Postcondition 1).
+fn disposition_guard_error() -> anyhow::Error {
+    JrError::UserError(
+        "Refusing to delete: no disposition supplied for this component's issues. \
+         Supply --move-to <NAME|ID> to move them to another component, or --orphan \
+         to remove the component with no replacement."
+            .into(),
+    )
+    .into()
+}
+
+/// BC-8.2.002/BC-8.2.003/BC-8.2.004: a numeric `--move-to` target that either
+/// 404s on its confirming GET or resolves to a different project than the
+/// source — treated identically to "no match in scope" (zero `DELETE`).
+fn move_to_not_found_in_project(target_input: &str, project_key: &str) -> anyhow::Error {
+    JrError::UserError(format!(
+        "--move-to target '{}' not found in project {}.",
+        target_input, project_key
+    ))
+    .into()
+}
+
+/// Handle `jr component delete NAME_OR_ID [--project KEY] (--move-to
+/// NAME_OR_ID | --orphan) [--yes]` (S-604-3).
+///
+/// BC-8.2.001 — BC-8.2.008: disposition-required guard, `--move-to`
+/// resolution (source-project-scoped, numeric-target confirming GET,
+/// self-move guard), numeric-source project confirmation (both
+/// dispositions), the `--orphan` confirmation gate, the BC-8.2.007
+/// pre-delete JQL snapshot (fully paginated, fail-closed on drift/error —
+/// reuses the `search_issue_keys`-style pagination loop from
+/// `api/jira/issues.rs`, NOT reimplemented here), and the BC-8.2.008
+/// `--output json` result shape / not-found-vs-race idempotency taxonomy.
+///
+/// Ordering (Forbidden Dependencies, story S-604-3): the snapshot search
+/// MUST complete successfully before `delete_component`'s DELETE fires.
+///
+/// `clap`'s `conflicts_with` on `ComponentSubcommand::Delete` already
+/// enforces the both-flags-supplied case (exit 2) before this handler ever
+/// runs; the neither-flag case (BC-8.2.001 Postcondition 3, DEC-188) is this
+/// handler's own application-level `JrError::UserError` guard (exit 64).
+async fn handle_delete(
+    args: DeleteComponentArgs,
+    output_format: &OutputFormat,
+    config: &Config,
+    client: &JiraClient,
+    no_input: bool,
+) -> Result<()> {
+    let DeleteComponentArgs {
+        name_or_id,
+        project,
+        move_to,
+        orphan,
+        yes,
+    } = args;
+
+    let has_disposition = move_to.is_some() || orphan;
+
+    // Resolve SOURCE. Invariant 1 (BC-8.2.001): for a NAME source, resolution
+    // fires BEFORE the disposition guard — an unresolvable name reports
+    // "not found", never the disposition-guard message. For a NUMERIC
+    // source, no HTTP call is available before a disposition is chosen (the
+    // numeric-source confirming GET only fires once a disposition is
+    // supplied), so the disposition guard fires FIRST — the documented
+    // asymmetry (EC-8.2.001-4).
+    let (component_id, project_key, component_name): (String, String, String) =
+        if !is_numeric_id(&name_or_id) {
+            let pk = config.project_key(project.as_deref()).ok_or_else(|| {
+                JrError::UserError(
+                    "No project configured. Pass --project KEY or set \
+                     project = \"...\" in .jr.toml."
+                        .into(),
+                )
+            })?;
+
+            let components = client.list_components(&pk).await?;
+            let candidate_names: Vec<String> = components.iter().map(|c| c.name.clone()).collect();
+
+            let matched_name = match resolve_component(&name_or_id, &pk, &candidate_names) {
+                MatchResult::Exact(n) => n,
+                MatchResult::ExactMultiple(matched_name) => {
+                    let ids: Vec<String> = components
+                        .iter()
+                        .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
+                        .map(|c| c.id.clone())
+                        .collect();
+                    return Err(JrError::UserError(format!(
+                        "Multiple components named \"{}\" found (IDs: {}). \
+                         Pass the numeric ID directly.",
+                        matched_name,
+                        ids.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::Ambiguous(mut candidates) => {
+                    candidates.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Ambiguous component '{}'. Matches: {}.",
+                        name_or_id,
+                        candidates.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::None(mut available) => {
+                    available.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Component '{}' not found in project {}. Available: {}.",
+                        name_or_id,
+                        pk,
+                        available.join(", ")
+                    ))
+                    .into());
+                }
+            };
+
+            let comp = components
+                .into_iter()
+                .find(|c| c.name == matched_name)
+                .ok_or_else(|| {
+                    JrError::Internal(format!(
+                        "Internal error: resolved component name '{}' not found in list.",
+                        matched_name
+                    ))
+                })?;
+
+            // Invariant 1: resolution succeeded — the disposition guard is
+            // checked only now, AFTER the not-found/ambiguous checks above.
+            if !has_disposition {
+                return Err(disposition_guard_error());
+            }
+
+            (comp.id, pk, comp.name)
+        } else {
+            // Numeric source: disposition guard fires FIRST — zero HTTP is
+            // reachable in this path to discover non-existence otherwise.
+            if !has_disposition {
+                return Err(disposition_guard_error());
+            }
+
+            // BC-8.2.002 M1 (P4-broadened to both dispositions): the SAME
+            // single-object confirming GET BC-8.1.008's numeric bypass
+            // already requires for existence, now also read for `project`.
+            let comp = match client.get_component(&name_or_id).await {
+                Ok(c) => c,
+                Err(e) => {
+                    if is_404_error(&e) {
+                        let effective_project = config.project_key(project.as_deref());
+                        let msg = match effective_project {
+                            Some(p) => format!(
+                                "Component '{}' not found in project {}. Run: jr component list",
+                                name_or_id, p
+                            ),
+                            None => format!(
+                                "Component '{}' not found. \
+                                 Run: jr component list --project <KEY> to see valid components.",
+                                name_or_id
+                            ),
+                        };
+                        return Err(JrError::UserError(msg).into());
+                    }
+                    return Err(e);
+                }
+            };
+
+            let derived_project = comp.project.clone().unwrap_or_default();
+            let final_project_key: String = if !derived_project.is_empty() {
+                derived_project.clone()
+            } else if project.is_some() {
+                return Err(JrError::UserError(format!(
+                    "Component {} returned no project field; cannot verify --project \
+                     or scope the delete. The component's project could not be determined.",
+                    name_or_id
+                ))
+                .into());
+            } else {
+                return Err(JrError::UserError(format!(
+                    "Component {} exists but Jira returned no project field. \
+                     Pass --project KEY to disambiguate.",
+                    name_or_id
+                ))
+                .into());
+            };
+
+            if let Some(ref user_project) = project {
+                if !user_project.eq_ignore_ascii_case(&derived_project) {
+                    return Err(JrError::UserError(format!(
+                        "Component {} belongs to project {}, not {}.",
+                        name_or_id, derived_project, user_project
+                    ))
+                    .into());
+                }
+            }
+
+            (comp.id, final_project_key, comp.name)
+        };
+
+    // Resolve TARGET (--move-to) — scoped EXCLUSIVELY to the source's project
+    // (BC-8.2.003), completing BEFORE any DELETE call (BC-8.2.002).
+    let target_id: Option<String> = if let Some(ref mv) = move_to {
+        if is_numeric_id(mv) {
+            // Numeric target: confirming GET validates its project matches
+            // the source's (BC-8.2.002 M2) — a mismatch or 404 is treated
+            // identically to "no match in scope" (BC-8.2.004).
+            let target = match client.get_component(mv).await {
+                Ok(c) => c,
+                Err(e) => {
+                    if is_404_error(&e) {
+                        return Err(move_to_not_found_in_project(mv, &project_key));
+                    }
+                    return Err(e);
+                }
+            };
+            let target_project = target.project.clone().unwrap_or_default();
+            if !target_project.eq_ignore_ascii_case(&project_key) {
+                return Err(move_to_not_found_in_project(mv, &project_key));
+            }
+            Some(target.id)
+        } else {
+            let components = client.list_components(&project_key).await?;
+            let candidate_names: Vec<String> = components.iter().map(|c| c.name.clone()).collect();
+
+            let matched_name = match resolve_component(mv, &project_key, &candidate_names) {
+                MatchResult::Exact(n) => n,
+                MatchResult::ExactMultiple(matched_name) => {
+                    let ids: Vec<String> = components
+                        .iter()
+                        .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
+                        .map(|c| c.id.clone())
+                        .collect();
+                    return Err(JrError::UserError(format!(
+                        "Multiple components named \"{}\" found (IDs: {}). \
+                         Pass the numeric ID directly.",
+                        matched_name,
+                        ids.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::Ambiguous(mut candidates) => {
+                    candidates.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Ambiguous component '{}'. Matches: {}.",
+                        mv,
+                        candidates.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::None(mut available) => {
+                    available.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Component '{}' not found in project {}. Available: {}.",
+                        mv,
+                        project_key,
+                        available.join(", ")
+                    ))
+                    .into());
+                }
+            };
+
+            let comp = components
+                .into_iter()
+                .find(|c| c.name == matched_name)
+                .ok_or_else(|| {
+                    JrError::Internal(format!(
+                        "Internal error: resolved component name '{}' not found in list.",
+                        matched_name
+                    ))
+                })?;
+            Some(comp.id)
+        }
+    } else {
+        None
+    };
+
+    // BC-8.2.005: self-move guard — ID equality (not name-string equality),
+    // fires BEFORE the snapshot and the DELETE.
+    if let Some(ref tid) = target_id {
+        if *tid == component_id {
+            return Err(JrError::UserError(
+                "--move-to target is the same component being deleted. \
+                 Choose a different component, or use --orphan."
+                    .into(),
+            )
+            .into());
+        }
+    }
+
+    // BC-8.2.007: pre-delete JQL snapshot — the resolved NUMERIC id, never
+    // the name, fully paginated via the reused `search_issue_keys` loop.
+    // Fail-closed on ANY non-normal-completion outcome, including the
+    // JRACLOUD-95368 anti-loop guard's successful `has_more=true` partial
+    // return (a genuine 5xx/network fetch error already fails closed via
+    // `?` below).
+    let jql = format!("component = {} ORDER BY key ASC", component_id);
+    let snapshot = client.search_issue_keys(&jql, None).await?;
+    if snapshot.has_more {
+        return Err(JrError::SnapshotIncomplete(
+            "could not reliably enumerate affected issues — aborting delete".into(),
+        )
+        .into());
+    }
+    let affected_issues = snapshot.keys;
+    let affected_count = affected_issues.len();
+
+    // BC-8.2.006: --orphan confirmation gate. --move-to NEVER prompts or
+    // requires --yes (Invariant 1) — this block is skipped entirely then.
+    if orphan && !yes {
+        if no_input {
+            return Err(JrError::UserError(format!(
+                "--orphan requires --yes when running non-interactively. This permanently \
+                 removes the component from {} issue(s) with no replacement.",
+                affected_count
+            ))
+            .into());
+        }
+
+        // Direct stdin read (not `dialoguer::Confirm::interact_on`) — mirrors
+        // `handle_comment_delete`'s DEC-174 rationale: console's `is_term()`
+        // gate returns `NotConnected` on piped stderr, as in every subprocess
+        // test here. Prompt → stderr; y/N response from stdin; EOF → Interrupted.
+        use std::io::BufRead;
+        eprint!(
+            "Delete component '{}' and remove it from {} issue(s)? This cannot be undone. [y/N] ",
+            component_name, affected_count
+        );
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+
+        let mut line = String::new();
+        match std::io::stdin().lock().read_line(&mut line) {
+            Ok(0) | Err(_) => return Err(JrError::Interrupted.into()),
+            Ok(_) => {
+                let answer = line.trim().to_ascii_lowercase();
+                if answer != "y" && answer != "yes" {
+                    // Declined (or Enter for the default N) — not itself an
+                    // error, exit 0, zero DELETE.
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    // BC-8.2.002/BC-8.2.006: the DELETE — `moveIssuesTo` when --move-to was
+    // chosen, absent under --orphan. A 404 here (source or target deleted by
+    // a concurrent actor AFTER successful resolution) propagates as
+    // `JrError::ApiError` — exit 1 — DISTINCT from the resolver-layer
+    // not-found paths above (BC-8.2.008 / VP-COMPONENT-024).
+    client
+        .delete_component(&component_id, target_id.as_deref())
+        .await?;
+
+    // ADR-0018 §2: invalidate components cache after successful mutation.
+    cache::invalidate_components_cache(&config.active_profile_name, &project_key);
+
+    // Symmetric output channel (profile 4): JSON → stdout, human → stderr.
+    match output_format {
+        OutputFormat::Json => {
+            // BC-8.2.008: exactly {"deleted","movedIssuesTo","affectedIssueCount","affectedIssues"}.
+            let json_out = serde_json::json!({
+                "deleted": component_id,
+                "movedIssuesTo": target_id,
+                "affectedIssueCount": affected_count,
+                "affectedIssues": affected_issues,
+            });
+            println!("{}", output::render_json(&json_out)?);
+        }
+        OutputFormat::Table => {
+            let disposition_desc = match &target_id {
+                Some(tid) => format!("moved to component {}", tid),
+                None => "orphaned (no replacement)".to_string(),
+            };
+            eprintln!(
+                "Deleted component \"{}\" (id {}) \u{2014} {} affected issue(s), {}.",
+                component_name, component_id, affected_count, disposition_desc
+            );
         }
     }
 

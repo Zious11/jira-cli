@@ -469,6 +469,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     &config,
                     &client,
                     cli.project.as_deref(),
+                    cli.no_input,
                 )
                 .await
             }
