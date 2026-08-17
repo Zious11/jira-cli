@@ -2088,9 +2088,14 @@ async fn test_bc_8_1_007_component_edit_numeric_project_mismatch_zero_put() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Pin the BC-8.1.007 M1 verbatim message produced by component.rs:445-449.
+    // A mutation deleting the project-check branch, or changing the format string,
+    // would fail here (loose contains("FOO") && contains("WRONG") would survive
+    // such mutations).
     assert!(
-        stderr.contains("FOO") && stderr.contains("WRONG"),
-        "Expected mismatch message naming both projects; got: {stderr}"
+        stderr.contains("Component 10001 belongs to project FOO, not WRONG."),
+        "Expected BC-8.1.007 M1 verbatim message \
+         \"Component 10001 belongs to project FOO, not WRONG.\"; got: {stderr}"
     );
 }
 
@@ -2592,5 +2597,162 @@ async fn test_adr_0018_component_create_and_edit_invalidate_cache() {
         after.get("FOO").is_none(),
         "After create, FOO entry must be removed from components cache (ADR-0018 §2); \
          cache after: {after}"
+    );
+
+    // ── Edit path (ADR-0018 §2 — edit also invalidates cache) ────────────────
+    // Use a fresh isolated cache and server so the create arm above cannot
+    // bleed state into this arm.
+    let cache2 = TempDir::new().unwrap();
+    let config2 = TempDir::new().unwrap();
+    let server2 = MockServer::start().await;
+    write_profile_config(config2.path(), &server2.uri());
+
+    // Pre-write a components cache entry for project FOO in the new cache dir.
+    let cache2_dir = cache2.path().join("v1").join("default");
+    std::fs::create_dir_all(&cache2_dir).unwrap();
+    let cache2_file = cache2_dir.join("components_default.json");
+    std::fs::write(
+        &cache2_file,
+        r#"{"FOO":{"components":[{"id":"10001","name":"Backend"}],"fetched_at":"2026-01-01T00:00:00Z"}}"#,
+    )
+    .unwrap();
+
+    // Assert the cache file has the FOO entry before the command.
+    let before_edit: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cache2_file).unwrap()).unwrap();
+    assert!(
+        before_edit.get("FOO").is_some(),
+        "Pre-condition (edit arm): FOO entry must be present in cache before edit"
+    );
+
+    // Confirming GET: component 10001 belongs to project FOO.
+    // (Numeric ID path — ADR-0018 §1: ONE confirming GET derives project.)
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server2)
+        .await;
+
+    // PUT: successful edit — cache invalidation fires only on success.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "Renamed", "FOO")),
+        )
+        .expect(1)
+        .mount(&server2)
+        .await;
+
+    let edit_output = jr_cmd(&server2.uri(), cache2.path(), config2.path())
+        .args(["component", "edit", "--name", "Renamed", "10001"])
+        .output()
+        .unwrap();
+
+    server2.verify().await;
+    assert!(
+        edit_output.status.success(),
+        "Expected exit 0 after edit (cache invalidation only happens on success); \
+         got {:?}\nstderr: {}",
+        edit_output.status.code(),
+        String::from_utf8_lossy(&edit_output.stderr)
+    );
+
+    // After successful edit, the FOO cache entry must be gone (ADR-0018 §2).
+    let after_edit_content = std::fs::read_to_string(&cache2_file).unwrap_or_default();
+    let after_edit: serde_json::Value =
+        serde_json::from_str(&after_edit_content).unwrap_or(json!({}));
+    assert!(
+        after_edit.get("FOO").is_none(),
+        "After edit, FOO entry must be removed from components cache (ADR-0018 §2); \
+         cache after: {after_edit}"
+    );
+}
+
+/// AC-018b / ADR-0018 §2: a FAILED `component edit` (PUT 500) must NOT
+/// invalidate the components cache.  The coverage pin here would catch a
+/// mutation that calls `invalidate_components_cache` unconditionally (before
+/// the PUT or in the error branch).
+///
+/// Red Gate: todo!() panics or unconditional-invalidation mutation would wipe
+/// the cache even on failure.
+#[tokio::test]
+async fn test_adr_0018_component_edit_failed_does_not_invalidate_cache() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Pre-write a components cache entry for project FOO.
+    let cache_dir_path = cache.path().join("v1").join("default");
+    std::fs::create_dir_all(&cache_dir_path).unwrap();
+    let cache_file = cache_dir_path.join("components_default.json");
+    std::fs::write(
+        &cache_file,
+        r#"{"FOO":{"components":[{"id":"10001","name":"Backend"}],"fetched_at":"2026-01-01T00:00:00Z"}}"#,
+    )
+    .unwrap();
+
+    // Confirming GET: component 10001 belongs to FOO.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT: server returns 500 — the edit fails.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "errorMessages": ["Internal server error"]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "edit", "--name", "Renamed", "10001"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+
+    // The command must NOT succeed.
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit on PUT 500; got success\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The FOO cache entry must still be present — invalidation must NOT fire on
+    // failure.
+    let cache_content = std::fs::read_to_string(&cache_file).unwrap_or_default();
+    let cache_after: serde_json::Value = serde_json::from_str(&cache_content).unwrap_or(json!({}));
+    assert!(
+        cache_after.get("FOO").is_some(),
+        "After failed edit, FOO entry must REMAIN in components cache; \
+         cache after: {cache_after}"
     );
 }
