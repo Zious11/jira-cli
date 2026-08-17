@@ -2116,6 +2116,18 @@ async fn test_bc_8_1_007_component_edit_name_input_no_fields_zero_http() {
         "AC-010 F-A6a: BC-8.1.007 no-fields guard message must contain \
          'no fields specified to update' (BC-8.1.007 exact phrasing); got: {stderr_10}"
     );
+    // F-R2-001: the UserError message must NOT include a leading "Error: " prefix
+    // (main.rs renders errors as "Error: {e}" — a message with its own "Error: "
+    // prefix produces "Error: Error: …" double-prefix).
+    assert!(
+        !stderr_10.contains("Error: Error:"),
+        "AC-010 F-R2-001: stderr must NOT contain doubled 'Error: Error:' prefix; got: {stderr_10}"
+    );
+    assert!(
+        !stderr_10.contains("Error: no fields"),
+        "AC-010 F-R2-001: message text must not start with 'Error: ' \
+         (that prefix belongs to main.rs rendering, not the UserError message); got: {stderr_10}"
+    );
 }
 
 // ── AC-011 (BC-8.1.007 P16 — numeric input, no fields → exit 64, zero HTTP) ──
@@ -2170,6 +2182,16 @@ async fn test_bc_8_1_007_component_edit_numeric_input_no_fields_zero_http() {
         stderr_11.contains("no fields specified to update"),
         "AC-011 F-A6b: BC-8.1.007 no-fields guard message must contain \
          'no fields specified to update' (BC-8.1.007 exact phrasing); got: {stderr_11}"
+    );
+    // F-R2-001: the UserError message must NOT include a leading "Error: " prefix.
+    assert!(
+        !stderr_11.contains("Error: Error:"),
+        "AC-011 F-R2-001: stderr must NOT contain doubled 'Error: Error:' prefix; got: {stderr_11}"
+    );
+    assert!(
+        !stderr_11.contains("Error: no fields"),
+        "AC-011 F-R2-001: message text must not start with 'Error: ' \
+         (that prefix belongs to main.rs rendering, not the UserError message); got: {stderr_11}"
     );
 }
 
@@ -2316,7 +2338,8 @@ async fn test_bc_8_1_007_component_edit_numeric_project_mismatch_zero_put() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // Pin the BC-8.1.007 M1 verbatim message produced by component.rs:445-449.
+    // Pin the BC-8.1.007 M1 verbatim message produced by
+    // component.rs::handle_edit § "project mismatch guard".
     // A mutation deleting the project-check branch, or changing the format string,
     // would fail here (loose contains("FOO") && contains("WRONG") would survive
     // such mutations).
@@ -3054,7 +3077,7 @@ async fn test_adr_0018_component_edit_failed_does_not_invalidate_cache() {
 /// VP-COMPONENT-002 (edit half) / EC-8.1.007-3: `--lead` returns 0 matches on
 /// the name-based edit path → exit 64, zero PUT calls.
 ///
-/// Exercises `src/cli/component.rs` lines 532-535 (0-match arm → UserError).
+/// Exercises `src/cli/component.rs::handle_edit` § "0-match arm → UserError".
 #[tokio::test]
 async fn test_bc_8_1_006_component_edit_lead_no_match_zero_put() {
     let cache = TempDir::new().unwrap();
@@ -3124,7 +3147,7 @@ async fn test_bc_8_1_006_component_edit_lead_no_match_zero_put() {
 /// the name-based edit path → exit 64, zero PUT calls.  Stderr lists each
 /// candidate's email + accountId (BC-X.7.004).
 ///
-/// Exercises `src/cli/component.rs` lines 543-553 (2+-match arm → UserError with candidate list).
+/// Exercises `src/cli/component.rs::handle_edit` § "2+-match arm → UserError with candidate list".
 #[tokio::test]
 async fn test_bc_8_1_006_component_edit_lead_ambiguous_zero_put() {
     let cache = TempDir::new().unwrap();
@@ -3206,14 +3229,10 @@ async fn test_bc_8_1_006_component_edit_lead_ambiguous_zero_put() {
 /// "Multiple components named … (IDs: …). Pass the numeric ID directly."
 /// message.  It MUST NOT silently pick the first component and call PUT.
 ///
-/// Current impl (`src/cli/component.rs` ~line 468):
-///   `MatchResult::Exact(n) | MatchResult::ExactMultiple(n) => n`
-/// collapses ExactMultiple into the Exact success path, finds the first
-/// component, and calls PUT — a non-deterministic, unsafe mutation.
-///
-/// This test is RED against the current implementation (exits 0, PUT fires).
-/// It turns GREEN once ExactMultiple is handled as a fail-closed guard that
-/// mirrors `src/cli/requesttype.rs:210` and `src/cli/queue.rs:305`.
+/// `handle_edit` in `src/cli/component.rs::handle_edit` § "ExactMultiple guard"
+/// handles this path, mirroring `src/cli/requesttype.rs::handle_list` §
+/// "ExactMultiple fail-closed" and `src/cli/queue.rs::handle_view` §
+/// "ExactMultiple fail-closed".
 #[tokio::test]
 async fn test_bc_x_10_003_component_edit_exact_multiple_fails_closed() {
     let cache = TempDir::new().unwrap();
@@ -3260,12 +3279,12 @@ async fn test_bc_x_10_003_component_edit_exact_multiple_fails_closed() {
         output.status.code(),
         Some(64),
         "BC-X.10.003: expected exit 64 for ExactMultiple; \
-         current impl picks first and PUTs (RED); got {:?}\nstderr: {}",
+         got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // Exact message shape mirrors requesttype.rs ExactMultiple (see requesttype.rs:220):
+    // Exact message shape mirrors requesttype.rs::handle_list § "ExactMultiple":
     //   Multiple components named "<first-casing>" found (IDs: 10001, 10002). Pass the numeric ID directly.
     assert!(
         stderr.contains("Multiple components named"),
@@ -3275,6 +3294,16 @@ async fn test_bc_x_10_003_component_edit_exact_multiple_fails_closed() {
         stderr.contains("10001") && stderr.contains("10002"),
         "BC-X.10.003: expected both IDs (10001, 10002) in stderr; got: {stderr}"
     );
+    // F-02: IDs must appear in LIST order (10001 before 10002).
+    {
+        let idx_10001 = stderr.find("10001").expect("10001 must appear in stderr");
+        let idx_10002 = stderr.find("10002").expect("10002 must appear in stderr");
+        assert!(
+            idx_10001 < idx_10002,
+            "BC-X.10.003 F-02: ID 10001 must appear before 10002 in stderr (list order); \
+             got: {stderr}"
+        );
+    }
     assert!(
         stderr.contains("Pass the numeric ID directly"),
         "BC-X.10.003: expected 'Pass the numeric ID directly' in stderr; got: {stderr}"
@@ -3287,13 +3316,9 @@ async fn test_bc_x_10_003_component_edit_exact_multiple_fails_closed() {
 /// The `name` positional of `component create` MUST accept leading-dash values
 /// (e.g. `-legacy`) so components with hyphen-prefixed names can be created.
 ///
-/// Current impl: `name: String` in `ComponentSubcommand::Create` lacks
-/// `allow_hyphen_values = true`, so clap treats `-legacy` as an unknown flag
-/// (exit 2) before any HTTP is attempted.
-///
-/// This test is RED against the current implementation (exits 2, no POST).
-/// It turns GREEN once `#[arg(allow_hyphen_values = true)]` is added to the
-/// `name` positional in `src/cli/mod.rs::ComponentSubcommand::Create`.
+/// `src/cli/mod.rs::ComponentSubcommand::Create` § "name positional" has
+/// `allow_hyphen_values = true` so clap passes `-legacy` through instead of
+/// treating it as an unknown flag.
 #[tokio::test]
 async fn test_bc_8_1_005_component_create_hyphen_leading_name() {
     let cache = TempDir::new().unwrap();
@@ -3321,7 +3346,6 @@ async fn test_bc_8_1_005_component_create_hyphen_leading_name() {
     assert!(
         output.status.success(),
         "BC-8.1.005: expected exit 0 for hyphen-leading name '-legacy'; \
-         current clap rejects it as an unknown flag (exit 2) → RED; \
          got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
@@ -3332,13 +3356,9 @@ async fn test_bc_8_1_005_component_create_hyphen_leading_name() {
 /// `component edit --name <value>` MUST accept a leading-dash new name
 /// (e.g. `--name -legacy`) so components can be renamed to hyphen-prefixed names.
 ///
-/// Current impl: `name: Option<String>` on `--name` in
-/// `ComponentSubcommand::Edit` lacks `allow_hyphen_values = true`, so clap
-/// treats `-legacy` as an unknown flag (exit 2) before any HTTP is attempted.
-///
-/// This test is RED against the current implementation (exits 2, no PUT).
-/// It turns GREEN once `#[arg(long, allow_hyphen_values = true)]` is added to
-/// `name` in `src/cli/mod.rs::ComponentSubcommand::Edit`.
+/// `src/cli/mod.rs::ComponentSubcommand::Edit` § "`--name` flag" has
+/// `allow_hyphen_values = true` so clap passes `-legacy` through instead of
+/// treating it as an unknown flag.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_hyphen_leading_new_name() {
     let cache = TempDir::new().unwrap();
@@ -3387,7 +3407,6 @@ async fn test_bc_8_1_007_component_edit_hyphen_leading_new_name() {
     assert!(
         output.status.success(),
         "BC-8.1.007: expected exit 0 for hyphen-leading --name '-legacy'; \
-         current clap rejects it as an unknown flag (exit 2) → RED; \
          got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
@@ -3401,16 +3420,9 @@ async fn test_bc_8_1_007_component_edit_hyphen_leading_new_name() {
 /// field AND the user supplies `--project`, the handler MUST exit 64
 /// (cannot verify the component's project) and issue ZERO PUTs.
 ///
-/// Current impl (`src/cli/component.rs` ~line 430-451):
-/// `derived_project = comp.project.clone().unwrap_or_default()` gives `""`.
-/// The mismatch guard is gated by `!derived_project.is_empty()`, so when the
-/// project field is absent the guard is SKIPPED and the supplied `--project`
-/// value is silently adopted as the final project key, allowing the PUT to
-/// proceed with an unverified project scope.
-///
-/// This test is RED against the current implementation (exits 0, PUT fires).
-/// It turns GREEN once the guard is changed to fail closed when
-/// `derived_project.is_empty() && project.is_some()`.
+/// `src/cli/component.rs::handle_edit` § "missing-project fail-closed guard"
+/// treats an absent project field + a user-supplied `--project` as an error,
+/// rather than silently adopting the supplied key as unverified scope.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_numeric_missing_project_field_fails_closed() {
     let cache = TempDir::new().unwrap();
@@ -3456,9 +3468,186 @@ async fn test_bc_8_1_007_component_edit_numeric_missing_project_field_fails_clos
         output.status.code(),
         Some(64),
         "BC-8.1.007: expected exit 64 when project field is absent but --project \
-         is supplied; current impl adopts supplied project and PUTs (RED); \
-         got {:?}\nstderr: {}",
+         is supplied; got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── F-R3-001 (BC-8.1.007 — global --project honored by edit) ─────────────────
+
+/// BC-8.1.007 / F-R3-001 (MEDIUM — coverage pin):
+/// `component edit` MUST honor the global `--project` flag (placed BEFORE the
+/// subcommand) the same way `component list` does.
+///
+/// clap's `global = true` on `Cli::project` propagates `--project FOO` from
+/// the root into `ComponentSubcommand::Edit.project` directly, so the edit
+/// subcommand receives `project = Some("FOO")` without an explicit merge in
+/// `src/cli/component.rs::handle` § "Edit dispatch".  This test pins that
+/// behavior: a mutation removing the `project` arg from `ComponentSubcommand::Edit`
+/// or blocking global propagation would cause the GET to receive no project key
+/// and fail.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_honors_global_project_flag() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    // Write a profile config with NO default project — the global --project flag
+    // is the ONLY source of the project key.
+    write_profile_config(config.path(), &server.uri());
+
+    // Name-based resolution: one component in FOO.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT MUST fire — edit proceeds with the global-flag project.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(body_json(json!({"name": "New"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "New", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Global flag BEFORE the subcommand — no per-subcommand --project.
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "--project",
+            "FOO",
+            "component",
+            "edit",
+            "Backend",
+            "--name",
+            "New",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-8.1.007 F-R3-001: expected exit 0 when project is supplied via the \
+         global --project flag; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── F-R3-002 (BC-8.1.005/007 — name-collision 400 surfaced) ──────────────────
+
+/// BC-8.1.005 / F-R3-002 (LOW — coverage pin):
+/// When `POST /rest/api/3/component` returns 400 (e.g. "A component with the
+/// name already exists"), the error body MUST be surfaced to the user.
+///
+/// Regression pin: verifies `handle_create` propagates the API error without
+/// swallowing or replacing it.
+#[tokio::test]
+async fn test_bc_8_1_005_component_create_name_collision_400_surfaced() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "errorMessages": ["A component with the name already exists."]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "create", "--project", "FOO", "Backend"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "BC-8.1.005 F-R3-002: expected non-zero exit for 400 collision; \
+         got exit 0\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("A component with the name already exists"),
+        "BC-8.1.005 F-R3-002: Jira 400 body must be surfaced in stderr; got: {stderr}"
+    );
+}
+
+/// BC-8.1.007 / F-R3-002 (LOW — coverage pin):
+/// When `PUT /rest/api/3/component/{id}` returns 400 (e.g. "A component with
+/// the name already exists"), the error body MUST be surfaced to the user.
+///
+/// Regression pin: verifies `handle_edit` propagates the API error without
+/// swallowing or replacing it.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_name_collision_400_surfaced() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Name-based resolution: one component in FOO.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT returns 400.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "errorMessages": ["A component with the name already exists."]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "Backend",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "BC-8.1.007 F-R3-002: expected non-zero exit for 400 collision; \
+         got exit 0\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("A component with the name already exists"),
+        "BC-8.1.007 F-R3-002: Jira 400 body must be surfaced in stderr; got: {stderr}"
     );
 }
