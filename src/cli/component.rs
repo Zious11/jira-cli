@@ -271,26 +271,30 @@ async fn handle_create(
         }
     }
 
-    // BC-8.2.003: resolve lead via assignable-user search when --lead is supplied.
+    // BC-8.1.006: resolve lead via assignable-user search when --lead is supplied.
     let lead_account_id: Option<String> = if let Some(ref lead_query) = lead {
         let users = client
             .search_assignable_users_by_project(lead_query, &project)
             .await?;
         match users.len() {
             0 => {
-                return Err(JrError::UserError(format!(
-                    "No user found matching '{}' in project {}.",
-                    lead_query, project
-                ))
-                .into());
+                return Err(
+                    JrError::UserError(format!("No user matching '{}'", lead_query)).into(),
+                );
             }
             1 => Some(users.into_iter().next().unwrap().account_id),
             _ => {
-                return Err(JrError::UserError(format!(
-                    "Ambiguous lead '{}': multiple users match. Provide a more specific name.",
-                    lead_query
-                ))
-                .into());
+                // BC-8.1.006 EC-8.1.006-1 / BC-X.7.004: list each candidate's
+                // email + accountId (mirrors `issue assign --to` ambiguous path).
+                let mut lines = format!("Ambiguous lead '{}'. Candidates:", lead_query);
+                for u in &users {
+                    let email = u.email_address.as_deref().unwrap_or("(no email)");
+                    lines.push_str(&format!(
+                        "\n  {} <{}> ({})",
+                        u.display_name, email, u.account_id
+                    ));
+                }
+                return Err(JrError::UserError(lines).into());
             }
         }
     } else {
@@ -327,12 +331,25 @@ async fn handle_create(
     cache::invalidate_components_cache(&config.active_profile_name, &project);
 
     // Symmetric output channel (profile 4): JSON → stdout, human → stderr.
+    // BC-8.1.005: the confirmed project key — prefer the API response field,
+    // fall back to the --project argument used in the POST body.
+    let project_key_display = component.project.as_deref().unwrap_or(&project).to_string();
     match output_format {
         OutputFormat::Json => {
-            println!("{}", output::render_json(&component)?);
+            // F-04 / BC-8.1.005: emit exactly {"id","name","project"}.
+            let json_out = serde_json::json!({
+                "id": component.id,
+                "name": component.name,
+                "project": project_key_display,
+            });
+            println!("{}", output::render_json(&json_out)?);
         }
         OutputFormat::Table => {
-            eprintln!("Component '{}' created.", component.name);
+            // F-05 / BC-8.1.005: canonical confirmation string.
+            eprintln!(
+                "Created component \"{}\" (id {}) in project {}.",
+                component.name, component.id, project_key_display
+            );
         }
     }
 
@@ -387,11 +404,19 @@ async fn handle_edit(
                     .map(|je| matches!(je, JrError::ApiError { status: 404, .. }))
                     .unwrap_or(false);
                 if is_404 {
-                    let msg = match &project {
-                        Some(p) => {
-                            format!("Component '{}' not found in project {}.", name_or_id, p)
-                        }
-                        None => format!("Component '{}' not found.", name_or_id),
+                    // F-06 / BC-8.1.008: check effective project (flag > config)
+                    // for variant selection — NOT just the --project flag.
+                    let effective_project = config.project_key(project.as_deref());
+                    let msg = match effective_project {
+                        Some(p) => format!(
+                            "Component '{}' not found in project {}. Run: jr component list",
+                            name_or_id, p
+                        ),
+                        None => format!(
+                            "Component '{}' not found. \
+                             Run: jr component list --project <KEY> to see valid components.",
+                            name_or_id
+                        ),
                     };
                     return Err(JrError::UserError(msg).into());
                 }
@@ -399,8 +424,22 @@ async fn handle_edit(
             }
         };
 
-        // BC-8.1.007: if --project supplied, verify it matches the component's project.
+        // F-07 / BC-8.1.007: fail-closed if the confirming GET returned no project
+        // field AND no --project flag was supplied.
         let derived_project = comp.project.clone().unwrap_or_default();
+        let final_project_key: String = if !derived_project.is_empty() {
+            derived_project.clone()
+        } else if let Some(ref p) = project {
+            p.clone()
+        } else {
+            return Err(JrError::UserError(format!(
+                "Component {} exists but Jira returned no project field. \
+                 Pass --project KEY to disambiguate.",
+                name_or_id
+            ))
+            .into());
+        };
+        // If --project was supplied, verify it matches.
         if let Some(ref user_project) = project {
             if !derived_project.is_empty() && !user_project.eq_ignore_ascii_case(&derived_project) {
                 return Err(JrError::UserError(format!(
@@ -411,7 +450,7 @@ async fn handle_edit(
             }
         }
 
-        (comp.id.clone(), derived_project)
+        (comp.id.clone(), final_project_key)
     } else {
         // Name-based: project is required (BC-8.1.004 — no exemption for names).
         let pk = config.project_key(project.as_deref()).ok_or_else(|| {
@@ -460,6 +499,12 @@ async fn handle_edit(
         (comp.id, pk)
     };
 
+    // Save field values for BC-3.4.012 field echo before they are moved/consumed
+    // into the PUT body map below (F-05 edit).
+    let echo_name = new_name.clone();
+    let echo_desc = description.clone();
+    let echo_lead = lead.clone();
+
     // Build partial PUT body — only supplied fields (VP-COMPONENT-023).
     let mut body = serde_json::Map::new();
     if let Some(n) = new_name {
@@ -473,17 +518,15 @@ async fn handle_edit(
             // BC-8.1.007: --lead "" → explicit clear → null
             body.insert("leadAccountId".to_string(), serde_json::Value::Null);
         } else {
-            // Resolve lead via assignable-user search.
+            // BC-8.1.006: resolve lead via assignable-user search.
             let users = client
                 .search_assignable_users_by_project(lead_val, &project_key)
                 .await?;
             match users.len() {
                 0 => {
-                    return Err(JrError::UserError(format!(
-                        "No user found matching '{}' in project {}.",
-                        lead_val, project_key
-                    ))
-                    .into());
+                    return Err(
+                        JrError::UserError(format!("No user matching '{}'", lead_val)).into(),
+                    );
                 }
                 1 => {
                     body.insert(
@@ -492,11 +535,16 @@ async fn handle_edit(
                     );
                 }
                 _ => {
-                    return Err(JrError::UserError(format!(
-                        "Ambiguous lead '{}': multiple users match. Provide a more specific name.",
-                        lead_val
-                    ))
-                    .into());
+                    // BC-8.1.006 / BC-X.7.004: list each candidate's email + accountId.
+                    let mut lines = format!("Ambiguous lead '{}'. Candidates:", lead_val);
+                    for u in &users {
+                        let email = u.email_address.as_deref().unwrap_or("(no email)");
+                        lines.push_str(&format!(
+                            "\n  {} <{}> ({})",
+                            u.display_name, email, u.account_id
+                        ));
+                    }
+                    return Err(JrError::UserError(lines).into());
                 }
             }
         }
@@ -506,22 +554,41 @@ async fn handle_edit(
 
     // PUT — BC-8.1.007 AC-016: 404 on PUT (race condition) is ApiError (exit 1),
     // not UserError (exit 64).  Let the error propagate as-is.
-    client.edit_component(&component_id, &body_value).await?;
+    // BC-8.1.007: Jira's PUT /rest/api/3/component/{id} returns the updated
+    // component body — capture it so the JSON output path can use it (F-01).
+    let updated = client.edit_component(&component_id, &body_value).await?;
 
     // ADR-0018 §2: invalidate components cache after successful mutation.
     cache::invalidate_components_cache(&config.active_profile_name, &project_key);
 
-    // Symmetric output channel (profile 4): human → stderr.
+    // Symmetric output channel (profile 4): JSON → stdout, human → stderr.
     match output_format {
         OutputFormat::Json => {
-            // Edit returns no data; emit an empty success envelope.
-            println!(
-                "{}",
-                output::render_json(&serde_json::json!({"updated": true}))?
-            );
+            // F-01 / BC-8.1.007: emit exactly {"id","name","project"} — same
+            // shape as create (BC-8.1.005).
+            let proj = updated.project.as_deref().unwrap_or(&project_key);
+            let json_out = serde_json::json!({
+                "id": updated.id,
+                "name": updated.name,
+                "project": proj,
+            });
+            println!("{}", output::render_json(&json_out)?);
         }
         OutputFormat::Table => {
-            eprintln!("Component '{}' updated.", component_id);
+            // F-05 / BC-3.4.012: one "  field → value" line per changed field.
+            if let Some(n) = echo_name {
+                eprintln!("  name \u{2192} {}", n);
+            }
+            if let Some(d) = echo_desc {
+                eprintln!("  description \u{2192} {}", d);
+            }
+            if let Some(l) = echo_lead {
+                if l.is_empty() {
+                    eprintln!("  lead \u{2192} (cleared)");
+                } else {
+                    eprintln!("  lead \u{2192} {}", l);
+                }
+            }
         }
     }
 

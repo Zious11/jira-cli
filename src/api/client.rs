@@ -343,6 +343,22 @@ impl JiraClient {
         Ok(())
     }
 
+    /// Perform a PUT request with a JSON body and deserialize the response body.
+    ///
+    /// Used for PUT endpoints that return a resource on success (e.g.
+    /// `PUT /rest/api/3/component/{id}` — BC-8.1.007).
+    pub async fn put_json<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> anyhow::Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let request = self.client.put(&url).json(body);
+        let response = self.send(request).await?;
+        let bytes = self.collect_response_body(response).await?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
     /// Perform a POST request that returns 204 No Content on success.
     pub async fn post_no_content<B: Serialize>(&self, path: &str, body: &B) -> anyhow::Result<()> {
         let url = format!("{}{}", self.base_url, path);

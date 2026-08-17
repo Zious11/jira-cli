@@ -35,12 +35,12 @@ impl JiraClient {
     /// Edit an existing component.
     ///
     /// PUTs `/rest/api/3/component/{component_id}`.
-    /// Returns `()` — the PUT endpoint's response body is not used; the
-    /// ADR-0018 §2 cache invalidation is the caller's responsibility
-    /// (BC-8.3.007).
-    pub async fn edit_component(&self, component_id: &str, body: &Value) -> Result<()> {
+    /// Returns the updated `Component` (BC-8.1.007: `--output json` returns
+    /// `{"id","name","project"}` — same shape as create).
+    /// ADR-0018 §2 cache invalidation is the caller's responsibility.
+    pub async fn edit_component(&self, component_id: &str, body: &Value) -> Result<Component> {
         let path = format!("/rest/api/3/component/{}", component_id);
-        self.put(&path, body).await
+        self.put_json(&path, body).await
     }
 
     /// Fetch a single component by ID.
