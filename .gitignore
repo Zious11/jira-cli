@@ -31,5 +31,5 @@ proptest-regressions/
 mutants.out/
 mutants.out.old/
 
-# Demo evidence (per-story VHS recordings + evidence reports) — local-only, not committed
+# Demo evidence lives in the factory-artifacts branch (.factory/demos/), not the product repo
 docs/demo-evidence/
