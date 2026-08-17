@@ -10,7 +10,12 @@ impl JiraClient {
     /// GETs `/rest/api/3/project/{project_key}/components`.
     /// Assumed non-paginated per BC-8.1.001 — pending F4 live verification.
     pub async fn list_components(&self, project_key: &str) -> Result<Vec<Component>> {
-        let path = format!("/rest/api/3/project/{}/components", project_key);
+        // CWE-116 defense-in-depth: consistent with `delete_component`'s
+        // encoding of every interpolated path segment (F5-B-LOW-1) — a
+        // project key is caller-sourced (from `--project`/config), so encode
+        // regardless of the current alphanumeric-only convention.
+        let encoded_key = urlencoding::encode(project_key);
+        let path = format!("/rest/api/3/project/{encoded_key}/components");
         self.get(&path).await
     }
 
@@ -19,7 +24,10 @@ impl JiraClient {
     /// GETs `/rest/api/3/component/{component_id}/relatedIssueCounts`.
     /// Called per-component by `jr component list --counts` (BC-8.1.003).
     pub async fn get_related_issue_counts(&self, component_id: &str) -> Result<RelatedIssueCounts> {
-        let path = format!("/rest/api/3/component/{}/relatedIssueCounts", component_id);
+        // CWE-116 defense-in-depth, consistent with `delete_component`
+        // (F5-B-LOW-1). Encoding a numeric id string is a no-op.
+        let encoded_id = urlencoding::encode(component_id);
+        let path = format!("/rest/api/3/component/{encoded_id}/relatedIssueCounts");
         self.get(&path).await
     }
 
@@ -39,7 +47,10 @@ impl JiraClient {
     /// `{"id","name","project"}` — same shape as create).
     /// ADR-0018 §2 cache invalidation is the caller's responsibility.
     pub async fn edit_component(&self, component_id: &str, body: &Value) -> Result<Component> {
-        let path = format!("/rest/api/3/component/{}", component_id);
+        // CWE-116 defense-in-depth, consistent with `delete_component`
+        // (F5-B-LOW-1). Encoding a numeric id string is a no-op.
+        let encoded_id = urlencoding::encode(component_id);
+        let path = format!("/rest/api/3/component/{encoded_id}");
         self.put_json(&path, body).await
     }
 
@@ -51,7 +62,10 @@ impl JiraClient {
     /// NOT called by `resolve_component`, which is a pure candidate-list resolver that
     /// performs no HTTP.
     pub async fn get_component(&self, component_id: &str) -> Result<Component> {
-        let path = format!("/rest/api/3/component/{}", component_id);
+        // CWE-116 defense-in-depth, consistent with `delete_component`
+        // (F5-B-LOW-1). Encoding a numeric id string is a no-op.
+        let encoded_id = urlencoding::encode(component_id);
+        let path = format!("/rest/api/3/component/{encoded_id}");
         self.get(&path).await
     }
 
