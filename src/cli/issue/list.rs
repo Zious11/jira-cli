@@ -85,6 +85,24 @@ pub(super) async fn handle_list(
         unreachable!()
     };
 
+    // Resolve project key once, before any HTTP call. Moved up from its
+    // original position (immediately before the `project_exists` check)
+    // because the S-606-1 `--component` pre-flight validation below needs it
+    // and MUST run before `project_exists`'s GET — see
+    // `validate_component_preflight`'s doc comment for why (VP-COMPONENT-013
+    // zero-HTTP guarantee for a rejected combination or missing project
+    // scope).
+    let project_key = config.project_key(project_override);
+
+    // S-606-1 (BC-2.1.018..022): --component pre-flight validation —
+    // combination/count guards and the project-scope requirement, purely
+    // CLI-arg-derived, HTTP-free. MUST run before ANY network call (including
+    // `project_exists`) so a rejected combination or missing project scope
+    // costs literally zero requests (VP-COMPONENT-013).
+    if !component.is_empty() {
+        validate_component_preflight(&component, project_key.as_deref())?;
+    }
+
     let effective_limit = resolve_effective_limit(limit, all);
 
     // Auto-enable assets display column when filtering by asset
@@ -188,9 +206,6 @@ pub(super) async fn handle_list(
     } else {
         (None, None)
     };
-
-    // Resolve project key once, before validation and JQL building
-    let project_key = config.project_key(project_override);
 
     // Validate --project exists
     if let Some(ref pk) = project_key {
@@ -362,7 +377,7 @@ pub(super) async fn handle_list(
     // Guard against unbounded query
     if all_parts.is_empty() {
         return Err(JrError::UserError(
-            "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --created-after, --created-before, --updated-after, --updated-before, --asset, or --jql. \
+            "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --created-after, --created-before, --updated-after, --updated-before, --asset, --component, or --jql. \
              You can also set a default project in .jr.toml or run \"jr init\"."
                 .into(),
         )
@@ -645,23 +660,189 @@ pub(super) async fn handle_list(
 /// Caller contract: `values` MUST be non-empty — the zero-`--component`-flags
 /// case is short-circuited by the caller (`handle_list`) before this function
 /// is reached, so it need not (and does not) special-case an empty slice.
-///
-/// STUB (S-606-1): prefix dispatch, §8.4 resolution, and clause composition
-/// are implementer work (Tasks 8-9). Deliberately does NOT implement issue
-/// #607's generalized multi-valued/negatable filter grammar — these forms are
-/// pre-composed and component-specific, not a reusable abstraction.
+/// ALSO: `validate_component_preflight(values, project_key)` MUST have
+/// already succeeded against these exact `values`/`project_key` — this
+/// function performs the ACTUAL §8.4 resolver HTTP calls only; the
+/// combination/count/project-scope guard logic lives entirely in
+/// `validate_component_preflight`, which `handle_list` calls BEFORE the
+/// `project_exists` GET so a rejected combination or missing project scope
+/// costs literally zero HTTP calls (VP-COMPONENT-013, BC-2.1.022
+/// EC-2.1.022-1/2). Deliberately does NOT implement issue #607's generalized
+/// multi-valued/negatable filter grammar — these forms are pre-composed and
+/// component-specific, not a reusable abstraction.
 async fn resolve_component_clauses(
     client: &JiraClient,
     project_key: Option<&str>,
     values: &[String],
 ) -> Result<Vec<String>> {
-    let _ = client;
-    let _ = project_key;
-    let _ = values;
-    todo!(
-        "S-606-1: parse --component bare/not:/none/all: forms, resolve names via §8.4, \
-         and compose the JQL clause(s) (BC-2.1.018..022)"
-    )
+    // `none`: zero resolver HTTP (BC-2.1.020 Postcondition 1). Project scope
+    // was already confirmed by `validate_component_preflight`.
+    if values.len() == 1 && values[0].eq_ignore_ascii_case("none") {
+        return Ok(vec!["component is EMPTY".to_string()]);
+    }
+
+    let pk = project_key.expect(
+        "validate_component_preflight guarantees a project scope for any \
+         non-`none` --component value",
+    );
+
+    // `all:` form — at most one occurrence is guaranteed by
+    // `validate_component_preflight`. Comma-separated names AND-compose into
+    // repeated equality (BC-2.1.021 Postcondition 1), NOT `IN`.
+    if let Some(all_value) = values.iter().find(|v| v.starts_with("all:")) {
+        let components = client.list_components(pk).await?;
+        let candidate_names: Vec<String> = components.iter().map(|c| c.name.clone()).collect();
+
+        let mut equality_clauses = Vec::new();
+        for name in all_value["all:".len()..].split(',') {
+            let id = resolve_one_component_id(name, pk, &components, &candidate_names)?;
+            equality_clauses.push(format!("component = {id}"));
+        }
+        return Ok(vec![equality_clauses.join(" AND ")]);
+    }
+
+    // Bare + `not:` forms — MAY coexist (BC-2.1.018 Precondition 3), composing
+    // two AND-joined clauses in bare-then-`not:` order (BC-2.1.018
+    // Postcondition 2 / BC-2.1.019 Postcondition 2).
+    let components = client.list_components(pk).await?;
+    let candidate_names: Vec<String> = components.iter().map(|c| c.name.clone()).collect();
+
+    let mut bare_ids = Vec::new();
+    let mut not_ids = Vec::new();
+    for v in values {
+        if let Some(name) = v.strip_prefix("not:") {
+            not_ids.push(resolve_one_component_id(
+                name,
+                pk,
+                &components,
+                &candidate_names,
+            )?);
+        } else {
+            bare_ids.push(resolve_one_component_id(
+                v,
+                pk,
+                &components,
+                &candidate_names,
+            )?);
+        }
+    }
+
+    let mut clauses = Vec::new();
+    if !bare_ids.is_empty() {
+        clauses.push(format!("component in ({})", bare_ids.join(", ")));
+    }
+    if !not_ids.is_empty() {
+        clauses.push(format!(
+            "(component not in ({}) OR component is EMPTY)",
+            not_ids.join(", ")
+        ));
+    }
+    Ok(clauses)
+}
+
+/// Pure, HTTP-free pre-flight validation for the `--component` flag's
+/// combination/count constraints (BC-2.1.020 Precondition 1 — `none` must be
+/// the sole occurrence; BC-2.1.021 Preconditions 1-2 — at most one `all:`
+/// occurrence, not combined with bare/`not:`/`none`) and project-scope
+/// requirement (BC-2.1.020 Precondition 2 / BC-2.1.022 EC-2.1.022-1/2 — every
+/// non-empty `--component` value list, including `none`, needs a resolved
+/// project). MUST run before any HTTP call — including `project_exists` — so
+/// a rejected combination or missing project scope costs literally zero
+/// requests (VP-COMPONENT-013).
+///
+/// Caller contract: only meaningful when `values` is non-empty — the
+/// zero-`--component`-flags case is handled by the caller before this is
+/// reached.
+fn validate_component_preflight(
+    values: &[String],
+    project_key: Option<&str>,
+) -> std::result::Result<(), JrError> {
+    let is_sole_none = values.len() == 1 && values[0].eq_ignore_ascii_case("none");
+
+    let none_count = values
+        .iter()
+        .filter(|v| v.eq_ignore_ascii_case("none"))
+        .count();
+    if none_count > 0 && values.len() > 1 {
+        return Err(JrError::UserError(
+            "--component none cannot be combined with other --component values.".into(),
+        ));
+    }
+
+    let all_count = values.iter().filter(|v| v.starts_with("all:")).count();
+    if all_count > 1 {
+        return Err(JrError::UserError(
+            "--component all: may only be specified once; comma-separate multiple names within one all: value."
+                .into(),
+        ));
+    }
+    if all_count == 1 && values.len() > 1 {
+        return Err(JrError::UserError(
+            "--component all: cannot be combined with other --component values.".into(),
+        ));
+    }
+
+    if project_key.is_none() {
+        return Err(JrError::UserError(if is_sole_none {
+            "--component none requires --project (or a configured default project) to avoid an unrestricted org-wide search."
+                .into()
+        } else {
+            "--component requires --project (or a configured default project) to resolve component names."
+                .into()
+        }));
+    }
+
+    Ok(())
+}
+
+/// Resolve one `--component` name/id (already prefix-stripped by the caller
+/// for `not:`/`all:` forms) to its numeric component id via §8.4
+/// (`helpers::resolve_component`), mapping a name match back to its id via
+/// `components`. BC-8.4.002/003 failure messages, verbatim (alphabetically
+/// sorted, case-insensitive, period-terminated) — mirrors
+/// `cli/component.rs`'s identical resolution pattern.
+fn resolve_one_component_id(
+    input: &str,
+    project: &str,
+    components: &[crate::types::jira::component::Component],
+    candidate_names: &[String],
+) -> std::result::Result<String, JrError> {
+    match helpers::resolve_component(input, project, candidate_names) {
+        MatchResult::Exact(matched) | MatchResult::ExactMultiple(matched) => {
+            if !input.is_empty() && input.chars().all(|c| c.is_ascii_digit()) {
+                // Numeric bypass (BC-8.4.001 step 1): `matched` IS the id.
+                Ok(matched)
+            } else {
+                components
+                    .iter()
+                    .find(|c| c.name == matched)
+                    .map(|c| c.id.clone())
+                    .ok_or_else(|| {
+                        JrError::Internal(format!(
+                            "Internal error: resolved component name '{}' not found in list.",
+                            matched
+                        ))
+                    })
+            }
+        }
+        MatchResult::Ambiguous(mut candidates) => {
+            candidates.sort_by_key(|s| s.to_lowercase());
+            Err(JrError::UserError(format!(
+                "Ambiguous component '{}'. Matches: {}.",
+                input,
+                candidates.join(", ")
+            )))
+        }
+        MatchResult::None(mut available) => {
+            available.sort_by_key(|s| s.to_lowercase());
+            Err(JrError::UserError(format!(
+                "Component '{}' not found in project {}. Available: {}.",
+                input,
+                project,
+                available.join(", ")
+            )))
+        }
+    }
 }
 
 /// Resolve whether to show story points. Returns the field ID if points should
@@ -729,17 +910,11 @@ fn build_filter_clauses(opts: FilterOptions<'_>) -> Vec<String> {
     if let Some(a) = opts.asset_clause {
         parts.push(a.to_string());
     }
-    if !opts.component_clauses.is_empty() {
-        // S-606-1 (BC-2.1.007 amendment): --component clause(s) slot in here —
-        // after `asset`, before the date-range clauses. `opts.component_clauses`
-        // is already fully resolved/composed by `resolve_component_clauses`; this
-        // is only the ordered-insertion point. Stubbed so any test that exercises
-        // a non-empty --component clause set is red until implemented (BC-5.38.001).
-        todo!(
-            "S-606-1: insert resolved --component clause(s) into filter_parts at \
-             the BC-2.1.007 position (after asset, before date-range clauses)"
-        )
-    }
+    // S-606-1 (BC-2.1.007 amendment): --component clause(s) slot in here —
+    // after `asset`, before the date-range clauses. `opts.component_clauses`
+    // is already fully resolved/composed by `resolve_component_clauses`; this
+    // is only the ordered-insertion point.
+    parts.extend(opts.component_clauses.iter().cloned());
     if let Some(c) = opts.created_after_clause {
         parts.push(c.to_string());
     }
