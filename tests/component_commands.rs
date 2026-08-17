@@ -1449,9 +1449,11 @@ async fn test_bc_8_1_006_component_create_empty_lead_exits_64_zero_post() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // BC-8.1.006 verbatim wording pin (pass-3 LOW-1): assert the distinctive clause
+    // including the em-dash and the trailing "Omit --lead, or supply a name." sentence.
     assert!(
-        stderr.contains("--lead") && stderr.contains("no effect on create"),
-        "Expected error message about empty --lead; got: {stderr}"
+        stderr.contains("has no effect on create \u{2014} there is no existing lead to clear. Omit --lead, or supply a name."),
+        "Expected BC-8.1.006 verbatim empty-lead guard message; got: {stderr}"
     );
 }
 
