@@ -1099,7 +1099,7 @@ pub enum RequestTypeCommand {
 /// Assignee-type policy for issues filed against a component.
 ///
 /// Maps to Jira's `assigneeType` field on the component resource
-/// (BC-8.2.004, BC-8.3.004).
+/// (BC-8.1.005 create / BC-8.1.007 edit).
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum AssigneeType {
     /// Use the component lead as the default assignee.
@@ -1130,29 +1130,29 @@ pub enum ComponentSubcommand {
         #[arg(long)]
         counts: bool,
     },
-    /// Create a new component in a project (BC-8.2.001–BC-8.2.008)
+    /// Create a new component in a project (BC-8.1.005 + BC-8.1.006 for --lead)
     Create {
-        /// Project key. Required; no config fallback (BC-8.2.001).
+        /// Project key. Required; no config fallback (BC-8.1.004 + BC-8.1.005).
         #[arg(long, required = true)]
         project: String,
-        /// Component name (BC-8.2.002).
+        /// Component name (BC-8.1.005).
         name: String,
         /// Component description (leading-dash values accepted).
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         /// Component lead: account ID, display-name substring, or email
-        /// (resolved via `search_assignable_users_by_project`; BC-8.2.003).
+        /// (resolved via `search_assignable_users_by_project`; BC-8.1.006).
         #[arg(long)]
         lead: Option<String>,
-        /// Default assignee policy for issues in this component (BC-8.2.004).
+        /// Default assignee policy for issues in this component (BC-8.1.005).
         #[arg(long)]
         assignee_type: Option<AssigneeType>,
     },
-    /// Edit an existing component's fields (BC-8.3.001–BC-8.3.007)
+    /// Edit an existing component's fields (BC-8.1.007)
     Edit {
-        /// Component name (partial match) or numeric ID (BC-8.3.001).
+        /// Component name (partial match) or numeric ID (BC-8.1.007 + BC-8.1.008 + BC-8.4.001).
         name_or_id: String,
-        /// Project key (required for name-based lookup; BC-8.3.002).
+        /// Project key (required for name-based lookup; BC-8.1.004 + BC-8.1.007).
         #[arg(long)]
         project: Option<String>,
         /// New component name.
@@ -1163,7 +1163,7 @@ pub enum ComponentSubcommand {
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         /// New lead: account ID, display-name substring, email, or empty string
-        /// to clear the lead (`--lead ""`; BC-8.3.003).
+        /// to clear the lead (`--lead ""`; BC-8.1.007).
         #[arg(long)]
         lead: Option<String>,
     },

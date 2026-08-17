@@ -241,7 +241,7 @@ fn assignee_type_to_api_str(at: &AssigneeType) -> &'static str {
 
 /// Handle `jr component create --project KEY NAME [options]`.
 ///
-/// BC-8.2.001 — BC-8.2.008 (S-604-2).
+/// BC-8.1.005 (create POST) + BC-8.1.006 (--lead resolution) (S-604-2).
 /// POSTs `/rest/api/3/component`, resolves lead via
 /// `search_assignable_users_by_project`, then invalidates the project's
 /// component cache entry (ADR-0018 §2).
@@ -364,7 +364,7 @@ fn is_numeric_id(s: &str) -> bool {
 
 /// Handle `jr component edit NAME_OR_ID [options]`.
 ///
-/// BC-8.3.001 — BC-8.3.007 (S-604-2).
+/// BC-8.1.007 (edit PUT), BC-8.1.008 (not-found), BC-8.4.001 (name resolver), BC-8.1.004 (numeric-id exemption) (S-604-2).
 /// Resolves the component by name (via project component list + partial_match)
 /// or by numeric ID (via confirming GET), PUTs `/rest/api/3/component/{id}`,
 /// then invalidates the project's component cache entry (ADR-0018 §2).
