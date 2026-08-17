@@ -1154,6 +1154,8 @@ pub enum ComponentSubcommand {
     /// Edit an existing component's fields (BC-8.1.007)
     Edit {
         /// Component name (partial match) or numeric ID (BC-8.1.007 + BC-8.1.008 + BC-8.4.001).
+        /// Leading-dash names accepted (e.g. `-legacy`).
+        #[arg(allow_hyphen_values = true)]
         name_or_id: String,
         /// Project key (required for name-based lookup; BC-8.1.004 + BC-8.1.007).
         #[arg(long)]
