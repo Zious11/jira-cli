@@ -3086,6 +3086,64 @@ async fn test_bc_2_1_018_issue_list_component_repeated_or_composed_single_clause
     );
 }
 
+/// Step-4.5 LOW-1: `--component Frontend --component Backend` (input order
+/// INVERTED relative to id-ascending order) must compose `component in
+/// (10002, 10001)` — INPUT order preserved, not sorted to id-ascending
+/// `(10001, 10002)`. Every other multi-value test in this suite supplies
+/// Backend before Frontend, where input order happens to coincide with
+/// id-ascending order, so a wrong impl that sorted ids (e.g. via a
+/// `BTreeSet`/`.sort()`) would still pass those tests undetected. This test
+/// inverts the order to catch exactly that regression.
+#[tokio::test]
+async fn test_bc_2_1_018_issue_list_component_or_preserves_input_order_not_sorted() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--component",
+            "Frontend",
+            "--component",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "LOW-1: expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("component in (10002, 10001)"),
+        "LOW-1: expected input-order-preserved clause 'component in (10002, 10001)' in jql: {jql}"
+    );
+    assert!(
+        !jql.contains("component in (10001, 10002)"),
+        "LOW-1: must NOT sort ids to id-ascending order, got jql: {jql}"
+    );
+}
+
 // ── AC-002 (BC-2.1.018 EC-2.1.018-1 — single value) ───────────────────────
 
 /// `--component Backend` alone → `component in (10001)`, NOT rewritten to
@@ -3182,10 +3240,21 @@ async fn test_bc_2_1_019_issue_list_component_not_composes_or_empty_form() {
         jql.contains("(component not in (10002) OR component is EMPTY)"),
         "AC-003: expected full OR-EMPTY form in jql: {jql}"
     );
-    assert!(
-        !jql.contains("component not in (10002) OR component is EMPTY )")
-            && !jql.contains("component not in (10002))"),
-        "AC-003: sanity check on parenthesization, got jql: {jql}"
+    // Step-4.5 AC-003 tidy: the two negatives this replaced (a stray-space
+    // variant and a double-paren variant) could never match regardless of
+    // correctness, so they added no protection. This meaningful negative
+    // instead proves the OR-EMPTY wrapper is actually present: every
+    // occurrence of the bare inner clause `component not in (10002)` must
+    // be part of the full wrapped form — a regression that emitted the bare
+    // `not in` clause without the OR-EMPTY wrapper would desync these two
+    // counts.
+    let bare_not_count = jql.matches("component not in (10002)").count();
+    let wrapped_count = jql
+        .matches("(component not in (10002) OR component is EMPTY)")
+        .count();
+    assert_eq!(
+        bare_not_count, wrapped_count,
+        "AC-003: every 'component not in (10002)' occurrence must be wrapped in the OR-EMPTY form, got jql: {jql}"
     );
 }
 
@@ -3804,8 +3873,10 @@ async fn test_bc_2_1_022_issue_list_component_no_project_scope_exits_64_before_g
         output.status.code()
     );
     assert!(
-        stderr.contains("--project"),
-        "AC-015: expected stderr to name --project, got: {stderr}"
+        stderr.contains(
+            "--component requires --project (or a configured default project) to resolve component names."
+        ),
+        "AC-015: expected exact BC-2.1.022 message, got stderr: {stderr}"
     );
 }
 
