@@ -17,7 +17,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::fixtures::{
     component_create_response, component_edit_response, component_list_response,
-    component_response, component_response_with_flags, multi_project_user_search_response,
+    component_list_two_same_name, component_response, component_response_no_project_field,
+    component_response_with_flags, multi_project_user_search_response,
     multi_project_user_search_response_with_email, related_issue_counts_response,
     write_profile_config,
 };
@@ -3194,5 +3195,270 @@ async fn test_bc_8_1_006_component_edit_lead_ambiguous_zero_put() {
     assert!(
         stderr.contains("alice.jones@example.com") || stderr.contains("acc-002"),
         "Expected second candidate (alice.jones@example.com or acc-002) in stderr; got: {stderr}"
+    );
+}
+
+// ── PR#704 Finding A (BC-X.10.003 — ExactMultiple fail-closed) ───────────────
+
+/// BC-X.10.003 / PR#704 Finding A (HIGH):
+/// When `partial_match` returns `ExactMultiple` — two components share the same
+/// name case-insensitively — `handle_edit` MUST exit 64 and emit a
+/// "Multiple components named … (IDs: …). Pass the numeric ID directly."
+/// message.  It MUST NOT silently pick the first component and call PUT.
+///
+/// Current impl (`src/cli/component.rs` ~line 468):
+///   `MatchResult::Exact(n) | MatchResult::ExactMultiple(n) => n`
+/// collapses ExactMultiple into the Exact success path, finds the first
+/// component, and calls PUT — a non-deterministic, unsafe mutation.
+///
+/// This test is RED against the current implementation (exits 0, PUT fires).
+/// It turns GREEN once ExactMultiple is handled as a fail-closed guard that
+/// mirrors `src/cli/requesttype.rs:210` and `src/cli/queue.rs:305`.
+#[tokio::test]
+async fn test_bc_x_10_003_component_edit_exact_multiple_fails_closed() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Two components share the same name case-insensitively:
+    // "Backend" (10001) and "backend" (10002).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_two_same_name(
+                "10001", "Backend", "10002", "backend",
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT MUST NOT be called — ExactMultiple fail-closed guard fires before any
+    // mutation.  Current impl violates this (picks first, calls PUT).
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "Renamed",
+            "backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-X.10.003: expected exit 64 for ExactMultiple; \
+         current impl picks first and PUTs (RED); got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Exact message shape mirrors requesttype.rs ExactMultiple (see requesttype.rs:220):
+    //   Multiple components named "<first-casing>" found (IDs: 10001, 10002). Pass the numeric ID directly.
+    assert!(
+        stderr.contains("Multiple components named"),
+        "BC-X.10.003: expected 'Multiple components named' in stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("10001") && stderr.contains("10002"),
+        "BC-X.10.003: expected both IDs (10001, 10002) in stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("Pass the numeric ID directly"),
+        "BC-X.10.003: expected 'Pass the numeric ID directly' in stderr; got: {stderr}"
+    );
+}
+
+// ── PR#704 Finding B (allow_hyphen_values asymmetry — hyphen-leading names) ───
+
+/// BC-8.1.005 / PR#704 Finding B (MINOR):
+/// The `name` positional of `component create` MUST accept leading-dash values
+/// (e.g. `-legacy`) so components with hyphen-prefixed names can be created.
+///
+/// Current impl: `name: String` in `ComponentSubcommand::Create` lacks
+/// `allow_hyphen_values = true`, so clap treats `-legacy` as an unknown flag
+/// (exit 2) before any HTTP is attempted.
+///
+/// This test is RED against the current implementation (exits 2, no POST).
+/// It turns GREEN once `#[arg(allow_hyphen_values = true)]` is added to the
+/// `name` positional in `src/cli/mod.rs::ComponentSubcommand::Create`.
+#[tokio::test]
+async fn test_bc_8_1_005_component_create_hyphen_leading_name() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .and(body_json(json!({"name": "-legacy", "project": "FOO"})))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10001", "-legacy", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "create", "--project", "FOO", "-legacy"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "BC-8.1.005: expected exit 0 for hyphen-leading name '-legacy'; \
+         current clap rejects it as an unknown flag (exit 2) → RED; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// BC-8.1.007 / PR#704 Finding B (MINOR):
+/// `component edit --name <value>` MUST accept a leading-dash new name
+/// (e.g. `--name -legacy`) so components can be renamed to hyphen-prefixed names.
+///
+/// Current impl: `name: Option<String>` on `--name` in
+/// `ComponentSubcommand::Edit` lacks `allow_hyphen_values = true`, so clap
+/// treats `-legacy` as an unknown flag (exit 2) before any HTTP is attempted.
+///
+/// This test is RED against the current implementation (exits 2, no PUT).
+/// It turns GREEN once `#[arg(long, allow_hyphen_values = true)]` is added to
+/// `name` in `src/cli/mod.rs::ComponentSubcommand::Edit`.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_hyphen_leading_new_name() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Name-based lookup: resolve "Backend" to id 10001.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT body must carry exactly {"name": "-legacy"}.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(body_json(json!({"name": "-legacy"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "-legacy", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "Backend",
+            "--project",
+            "FOO",
+            "--name",
+            "-legacy",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "BC-8.1.007: expected exit 0 for hyphen-leading --name '-legacy'; \
+         current clap rejects it as an unknown flag (exit 2) → RED; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── PR#704 Finding C (numeric-edit fail-open when GET returns no project field) ─
+
+/// BC-8.1.007 / PR#704 Finding C (MINOR):
+/// When a numeric `component edit` GET returns a component with NO `project`
+/// field AND the user supplies `--project`, the handler MUST exit 64
+/// (cannot verify the component's project) and issue ZERO PUTs.
+///
+/// Current impl (`src/cli/component.rs` ~line 430-451):
+/// `derived_project = comp.project.clone().unwrap_or_default()` gives `""`.
+/// The mismatch guard is gated by `!derived_project.is_empty()`, so when the
+/// project field is absent the guard is SKIPPED and the supplied `--project`
+/// value is silently adopted as the final project key, allowing the PUT to
+/// proceed with an unverified project scope.
+///
+/// This test is RED against the current implementation (exits 0, PUT fires).
+/// It turns GREEN once the guard is changed to fail closed when
+/// `derived_project.is_empty() && project.is_some()`.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_numeric_missing_project_field_fails_closed() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Confirming GET: component exists but Jira returned no `"project"` key.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_response_no_project_field("10001", "Backend")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT MUST NOT fire — missing-project guard fires first.
+    // Current impl violates this (adopts --project value, calls PUT).
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "10001",
+            "--project",
+            "WRONG",
+            "--name",
+            "X",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-8.1.007: expected exit 64 when project field is absent but --project \
+         is supplied; current impl adopts supplied project and PUTs (RED); \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
