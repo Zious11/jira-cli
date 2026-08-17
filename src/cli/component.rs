@@ -387,7 +387,9 @@ async fn handle_edit(
     let has_fields = new_name.is_some() || description.is_some() || lead.is_some();
     if !has_fields {
         return Err(JrError::UserError(
-            "no fields specified to update. Supply --name, --description, or --lead.".into(),
+            "Supply --name, --description, or --lead \
+             \u{2014} no fields specified to update."
+                .into(),
         )
         .into());
     }
