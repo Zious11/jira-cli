@@ -581,7 +581,14 @@ async fn handle_edit(
             println!("{}", output::render_json(&json_out)?);
         }
         OutputFormat::Table => {
-            // F-05 / BC-3.4.012: one "  field → value" line per changed field.
+            // F-05 / BC-8.1.007: confirmation header matching `create` profile (symmetric).
+            eprintln!(
+                "Updated component \"{}\" (id {}) in project {}.",
+                updated.name,
+                updated.id,
+                updated.project.as_deref().unwrap_or(&project_key)
+            );
+            // BC-3.4.012: one "  field → value" line per changed field.
             if let Some(n) = echo_name {
                 eprintln!("  name \u{2192} {}", n);
             }
