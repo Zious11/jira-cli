@@ -2,7 +2,7 @@
 
 **Story:** S-604-2 — `jr component create` and `jr component edit`
 **Branch:** feature/S-604-2-component-create-edit
-**Date:** 2026-08-16
+**Date:** 2026-08-17
 **Binary:** `jr` (debug build, `cargo build` on this branch)
 
 ---
@@ -49,23 +49,27 @@ Create a new component in a project (BC-8.1.005 + BC-8.1.006 for --lead)
 Usage: jr component create [OPTIONS] --project <PROJECT> <NAME>
 
 Arguments:
-  <NAME>          Component name (BC-8.1.005)
+  <NAME>
+          Component name (BC-8.1.005). Leading-dash values accepted (e.g. `-legacy`)
 
 Options:
       --project <PROJECT>
           Project key. Required; no config fallback (BC-8.1.004 + BC-8.1.005)
+
       --description <DESCRIPTION>
           Component description (leading-dash values accepted)
+
       --lead <LEAD>
-          Component lead: account ID, display-name substring, or email
-          (resolved via `search_assignable_users_by_project`; BC-8.1.006)
+          Component lead: account ID, display-name substring, or email (resolved via `search_assignable_users_by_project`; BC-8.1.006)
+
       --assignee-type <ASSIGNEE_TYPE>
           Default assignee policy for issues in this component (BC-8.1.005)
+
           Possible values:
-          - component-lead:  Use the component lead as the default assignee
-          - project-lead:    Use the project lead as the default assignee
-          - unassigned:      Leave issues unassigned by default
-          - project-default: Inherit the project's default assignee policy
+          - COMPONENT_LEAD:  Use the component lead as the default assignee
+          - PROJECT_LEAD:    Use the project lead as the default assignee
+          - UNASSIGNED:      Leave issues unassigned by default
+          - PROJECT_DEFAULT: Inherit the project's default assignee policy
 ```
 
 ### AC-HELP: `jr component edit --help` (edit subcommand flag surface)
@@ -102,7 +106,7 @@ NOT this codebase's own exit 64.
 **Actual binary output (stderr, exit 2):**
 ```
 error: invalid value 'BOGUS' for '--assignee-type <ASSIGNEE_TYPE>'
-  [possible values: component-lead, project-lead, unassigned, project-default]
+  [possible values: COMPONENT_LEAD, PROJECT_LEAD, UNASSIGNED, PROJECT_DEFAULT]
 
 For more information, try '--help'.
 ```
@@ -130,7 +134,7 @@ calls on both paths.
 
 **Actual binary output (stderr, exit 64, both commands):**
 ```
-Error: No fields to update. Supply --name, --description, or --lead.
+Error: no fields specified to update. Supply --name, --description, or --lead.
 ```
 Exit code: 64 for both `jr component edit Backend --project FOO --no-input` (NAME path) and
 `jr component edit 10042 --no-input` (numeric path — zero confirming GET). Confirmed by both
@@ -197,9 +201,15 @@ Two sub-cases:
 **Test result:** PASS
 
 ### AC-005 — `--assignee-type BOGUS` → clap exit 2, zero HTTP
-**Test:** `test_bc_8_1_005_component_create_bad_assignee_type_exits_2`
+**Tests:** `test_bc_8_1_005_component_create_bad_assignee_type_exits_2` (invalid value → exit 2)
+and `test_bc_8_1_005_component_create_assignee_type_*` variants (AC-005a-d: each of the four
+valid SCREAMING_SNAKE values `COMPONENT_LEAD`, `PROJECT_LEAD`, `UNASSIGNED`, `PROJECT_DEFAULT`
+maps correctly to the wire value in the POST body)
 
-Wiremock pins `POST /rest/api/3/component` with `.expect(0)`. Asserts `output.status.code() == Some(2)`. Clap's `ValueEnum` validation fires before the handler — this test legitimately passes against `todo!()` stubs (VHS evidence confirms the binary path independently).
+Wiremock pins `POST /rest/api/3/component` with `.expect(0)` for the bad-value case. Asserts
+`output.status.code() == Some(2)`. Clap's `ValueEnum` validation fires before the handler —
+this test legitimately passes against `todo!()` stubs (VHS evidence confirms the binary path
+independently).
 
 **Test result:** PASS
 
@@ -246,14 +256,14 @@ Two sub-cases:
 ### AC-010 — NAME edit with no field flags → exit 64, zero component-list GET
 **Test:** `test_bc_8_1_007_component_edit_name_input_no_fields_zero_http`
 
-`GET /rest/api/3/project/FOO/components` pinned `.expect(0)`. Asserts exit 64 and "No fields to update" in stderr. Precondition 1 fires before Precondition 2 (component list GET) per BC-8.1.007 P16 ordering.
+`GET /rest/api/3/project/FOO/components` pinned `.expect(0)`. Asserts exit 64 and "no fields specified to update" in stderr. Precondition 1 fires before Precondition 2 (component list GET) per BC-8.1.007 P16 ordering.
 
 **Test result:** PASS
 
 ### AC-011 — Numeric edit with no field flags → exit 64, zero confirming GET
 **Test:** `test_bc_8_1_007_component_edit_numeric_input_no_fields_zero_http`
 
-`GET /rest/api/3/component/10042` (confirming GET) pinned `.expect(0)`. Asserts exit 64 and "No fields to update". Precondition 1 fires before the confirming GET per BC-8.1.007 P16 — zero HTTP even for numeric input.
+`GET /rest/api/3/component/10042` (confirming GET) pinned `.expect(0)`. Asserts exit 64 and "no fields specified to update". Precondition 1 fires before the confirming GET per BC-8.1.007 P16 — zero HTTP even for numeric input.
 
 **Test result:** PASS
 
