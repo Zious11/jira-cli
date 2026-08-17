@@ -466,17 +466,23 @@ async fn handle_edit(
 
         let matched_name = match resolve_component(&name_or_id, &pk, &candidate_names) {
             MatchResult::Exact(n) | MatchResult::ExactMultiple(n) => n,
-            MatchResult::Ambiguous(candidates) => {
+            MatchResult::Ambiguous(mut candidates) => {
+                // BC-8.4.003: Matches list must be alphabetically sorted (case-insensitive)
+                // and terminated with a period.
+                candidates.sort_by_key(|s| s.to_lowercase());
                 return Err(JrError::UserError(format!(
-                    "Ambiguous component '{}'. Matches: {}",
+                    "Ambiguous component '{}'. Matches: {}.",
                     name_or_id,
                     candidates.join(", ")
                 ))
                 .into());
             }
-            MatchResult::None(available) => {
+            MatchResult::None(mut available) => {
+                // BC-8.4.002: Available list must be alphabetically sorted (case-insensitive)
+                // and terminated with a period.
+                available.sort_by_key(|s| s.to_lowercase());
                 return Err(JrError::UserError(format!(
-                    "Component '{}' not found in project {}. Available: {}",
+                    "Component '{}' not found in project {}. Available: {}.",
                     name_or_id,
                     pk,
                     available.join(", ")
