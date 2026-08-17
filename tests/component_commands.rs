@@ -1087,10 +1087,8 @@ async fn test_bc_8_4_004_resolve_component_never_spans_projects() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// S-604-2: component create / edit tests (all FAIL — Red Gate)
-// Handlers are todo!() stubs; all tests below MUST fail until implemented.
-// Exception: AC-005 (clap ValueEnum rejection) legitimately PASSES against
-// stubs because clap rejects --assignee-type BOGUS before the handler runs.
+// S-604-2: component create / edit tests
+// Handlers are fully implemented; all tests below exercise the live handler.
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── AC-001 (BC-8.1.005 — minimal create body via body_json matcher) ───────────
@@ -1099,7 +1097,6 @@ async fn test_bc_8_4_004_resolve_component_never_spans_projects() {
 /// optional flags) POSTs exactly `{"name":"Backend","project":"FOO"}`.
 /// Verified via wiremock `body_json` matcher — absent optional keys must NOT
 /// appear in the body (VP-COMPONENT-022, omit-if-absent invariant).
-/// Red Gate: todo!() handler panics → exit ≠ 0 → assertion fails.
 #[tokio::test]
 async fn test_bc_8_1_005_component_create_minimal_body() {
     let cache = TempDir::new().unwrap();
@@ -1147,7 +1144,9 @@ async fn test_bc_8_1_005_component_create_minimal_body() {
 /// AC-002 / BC-8.1.005: when all optional flags are supplied, the POST body
 /// contains all of them: description, leadAccountId (resolved accountId),
 /// assigneeType (API string from clap ValueEnum mapping).
-/// Red Gate: todo!() handler panics before any HTTP.
+/// `--assignee-type` takes SCREAMING_SNAKE values (AC-002 literal: PROJECT_LEAD /
+/// COMPONENT_LEAD / UNASSIGNED / PROJECT_DEFAULT) per story S-604-2 Behavior
+/// Summary and BC-8.1.005.  Kebab-case variants (project-lead, etc.) are INVALID.
 #[tokio::test]
 async fn test_bc_8_1_005_component_create_all_optional_fields_present() {
     let cache = TempDir::new().unwrap();
@@ -1218,7 +1217,6 @@ async fn test_bc_8_1_005_component_create_all_optional_fields_present() {
 /// keys (never send `"description":null`).  Verified by `body_json` with exact
 /// JSON — if the implementation sends extra null-valued keys, the matcher will
 /// reject the request, `.expect(1)` will fail at `server.verify()`.
-/// Red Gate: todo!() panics before HTTP.
 #[tokio::test]
 async fn test_bc_8_1_005_component_create_omits_absent_optional_keys() {
     let cache = TempDir::new().unwrap();
@@ -1269,7 +1267,6 @@ async fn test_bc_8_1_005_component_create_omits_absent_optional_keys() {
 /// AC-004 / BC-8.1.005: on 201 success, JSON mode (`--output json`) returns
 /// `{"id","name","project"}` on stdout; human mode writes a confirmation line
 /// to stderr (symmetric output channel profile 4).
-/// Red Gate: todo!() panics → exit ≠ 0.
 #[tokio::test]
 async fn test_bc_8_1_005_component_create_success_output_both_modes() {
     let cache = TempDir::new().unwrap();
@@ -1355,10 +1352,9 @@ async fn test_bc_8_1_005_component_create_success_output_both_modes() {
 /// AC-005 / BC-8.1.005 EC-8.1.005-2: `--assignee-type BOGUS` triggers a clap
 /// ValueEnum parse failure (exit 2) BEFORE the handler runs.
 ///
-/// NOTE: This test LEGITIMATELY PASSES against todo!() stubs.  clap validates
-/// the enum before dispatching to the handler, so the todo!() code is never
-/// reached.  This is intentional and correct behavior; the test is included
-/// as a compile + regression guard.
+/// This test passes before and after handler implementation because clap
+/// validates the enum at parse time — the handler is never reached for an
+/// invalid value.  Included as a compile + regression guard.
 #[tokio::test]
 async fn test_bc_8_1_005_component_create_bad_assignee_type_exits_2() {
     let cache = TempDir::new().unwrap();
@@ -1397,13 +1393,210 @@ async fn test_bc_8_1_005_component_create_bad_assignee_type_exits_2() {
     );
 }
 
+// ── AC-005a (BC-8.1.005 — PROJECT_LEAD accepted, maps to "PROJECT_LEAD" on wire) ──
+
+/// AC-005a / BC-8.1.005 INFO-3: `--assignee-type PROJECT_LEAD` is accepted (not
+/// exit 2) and the POST body contains `"assigneeType":"PROJECT_LEAD"`.
+/// FAILS against a kebab-case impl because clap rejects PROJECT_LEAD → exit 2 → mock
+/// `.expect(1)` never fires and the `output.status.success()` assertion fails.
+#[tokio::test]
+async fn test_bc_8_1_005_assignee_type_project_lead_accepted_and_wired() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .and(body_json(json!({
+            "name": "Backend",
+            "project": "FOO",
+            "assigneeType": "PROJECT_LEAD"
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10001", "Backend", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--assignee-type",
+            "PROJECT_LEAD",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "AC-005a: --assignee-type PROJECT_LEAD must be accepted (exit 0); \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-005b (BC-8.1.005 — COMPONENT_LEAD accepted, maps to "COMPONENT_LEAD" on wire) ──
+
+/// AC-005b / BC-8.1.005 INFO-3: `--assignee-type COMPONENT_LEAD` is accepted
+/// and the POST body contains `"assigneeType":"COMPONENT_LEAD"`.
+#[tokio::test]
+async fn test_bc_8_1_005_assignee_type_component_lead_accepted_and_wired() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .and(body_json(json!({
+            "name": "Backend",
+            "project": "FOO",
+            "assigneeType": "COMPONENT_LEAD"
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10001", "Backend", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--assignee-type",
+            "COMPONENT_LEAD",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "AC-005b: --assignee-type COMPONENT_LEAD must be accepted (exit 0); \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-005c (BC-8.1.005 — UNASSIGNED accepted, maps to "UNASSIGNED" on wire) ────
+
+/// AC-005c / BC-8.1.005 INFO-3: `--assignee-type UNASSIGNED` is accepted
+/// and the POST body contains `"assigneeType":"UNASSIGNED"`.
+#[tokio::test]
+async fn test_bc_8_1_005_assignee_type_unassigned_accepted_and_wired() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .and(body_json(json!({
+            "name": "Backend",
+            "project": "FOO",
+            "assigneeType": "UNASSIGNED"
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10001", "Backend", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--assignee-type",
+            "UNASSIGNED",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "AC-005c: --assignee-type UNASSIGNED must be accepted (exit 0); \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-005d (BC-8.1.005 — PROJECT_DEFAULT accepted, maps to "PROJECT_DEFAULT" on wire) ──
+
+/// AC-005d / BC-8.1.005 INFO-3: `--assignee-type PROJECT_DEFAULT` is accepted
+/// and the POST body contains `"assigneeType":"PROJECT_DEFAULT"`.
+#[tokio::test]
+async fn test_bc_8_1_005_assignee_type_project_default_accepted_and_wired() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .and(body_json(json!({
+            "name": "Backend",
+            "project": "FOO",
+            "assigneeType": "PROJECT_DEFAULT"
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10001", "Backend", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--assignee-type",
+            "PROJECT_DEFAULT",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "AC-005d: --assignee-type PROJECT_DEFAULT must be accepted (exit 0); \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // ── AC-006 (BC-8.1.006 — empty --lead on create → exit 64, zero POST) ────────
 
 /// AC-006 / BC-8.1.006: `--lead ""` on `component create` exits 64 with a
 /// descriptive error message (app-level guard, not clap).  Zero POST calls.
 /// Message must contain the exact substring
 /// `"--lead \"\" has no effect on create"`.
-/// Red Gate: todo!() panics before the guard fires → exit ≠ 64.
 #[tokio::test]
 async fn test_bc_8_1_006_component_create_empty_lead_exits_64_zero_post() {
     let cache = TempDir::new().unwrap();
@@ -1461,7 +1654,6 @@ async fn test_bc_8_1_006_component_create_empty_lead_exits_64_zero_post() {
 
 /// AC-007 / BC-8.1.006 VP-COMPONENT-002: when `--lead` resolution returns no
 /// matches or multiple matches, the command exits 64 and issues zero POST calls.
-/// Red Gate: todo!() panics before lead resolution fires.
 #[tokio::test]
 async fn test_bc_8_1_006_component_create_lead_ambiguous_and_no_match_zero_post() {
     let cache = TempDir::new().unwrap();
@@ -1579,7 +1771,6 @@ async fn test_bc_8_1_006_component_create_lead_ambiguous_and_no_match_zero_post(
 /// AC-008 / BC-8.1.007 VP-COMPONENT-023: a partial edit supplying only `--name`
 /// sends `{"name":"New Name"}` in the PUT body.  No other keys (description,
 /// leadAccountId) may appear.  Enforced via `body_json` exact matching.
-/// Red Gate: todo!() panics before HTTP.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_put_contains_only_supplied_fields() {
     let cache = TempDir::new().unwrap();
@@ -1640,9 +1831,8 @@ async fn test_bc_8_1_007_component_edit_put_contains_only_supplied_fields() {
 /// The API response contains more fields (description, lead, assigneeType) that
 /// the handler MUST project away.
 ///
-/// Part B: table mode emits `  name \u{2192} New Name` on stderr (BC-3.4.012 field-echo).
-///
-/// Red Gate: todo!() panics before HTTP.
+/// Part B: table mode emits a header line `Updated component "<name>" (id <id>) in project <key>.`
+/// followed by `  name \u{2192} New Name` on stderr (BC-3.4.012 field-echo).
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_success_output_json_shape() {
     let cache = TempDir::new().unwrap();
@@ -1761,6 +1951,13 @@ async fn test_bc_8_1_007_component_edit_success_output_json_shape() {
         String::from_utf8_lossy(&table_output.stderr)
     );
     let stderr_b = String::from_utf8_lossy(&table_output.stderr);
+    // F-A2 (PR#704 finding 2): BC-8.1.007 header line must appear before the field echoes.
+    // FAILS against impl that emits only field echoes with no header.
+    assert!(
+        stderr_b.contains("Updated component \"New Name\" (id 10001) in project FOO."),
+        "F-A2: BC-8.1.007 edit table mode must emit header line \
+         'Updated component \"New Name\" (id 10001) in project FOO.' on stderr; got: {stderr_b}"
+    );
     // F-05: BC-3.4.012 field-echo format "  field \u{2192} value"
     assert!(
         stderr_b.contains("  name \u{2192} New Name"),
@@ -1774,7 +1971,6 @@ async fn test_bc_8_1_007_component_edit_success_output_json_shape() {
 /// AC-009 / BC-8.1.007: `--lead ""` sends `{"leadAccountId":null}` (explicit
 /// clear); omitting `--lead` means `leadAccountId` is absent from the PUT body
 /// (no-op — existing lead unchanged).
-/// Red Gate: todo!() panics before HTTP.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_lead_empty_string_clears_vs_omitted() {
     let cache = TempDir::new().unwrap();
@@ -1882,7 +2078,6 @@ async fn test_bc_8_1_007_component_edit_lead_empty_string_clears_vs_omitted() {
 /// component NAME and no edit fields (--name, --description, --lead) are
 /// supplied, the handler exits 64 BEFORE making any HTTP call — including zero
 /// component-list GETs.  Precondition 1 fires before Precondition 2 (resolution).
-/// Red Gate: todo!() panics → exit ≠ 64.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_name_input_no_fields_zero_http() {
     let cache = TempDir::new().unwrap();
@@ -1912,6 +2107,14 @@ async fn test_bc_8_1_007_component_edit_name_input_no_fields_zero_http() {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
+    // F-A6a (PR#704 finding 6): BC-8.1.007 no-fields guard exact phrase.
+    // FAILS against impl that uses a differently-worded message.
+    let stderr_10 = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr_10.contains("no fields specified to update"),
+        "AC-010 F-A6a: BC-8.1.007 no-fields guard message must contain \
+         'no fields specified to update' (BC-8.1.007 exact phrasing); got: {stderr_10}"
+    );
 }
 
 // ── AC-011 (BC-8.1.007 P16 — numeric input, no fields → exit 64, zero HTTP) ──
@@ -1920,7 +2123,6 @@ async fn test_bc_8_1_007_component_edit_name_input_no_fields_zero_http() {
 /// is a NUMERIC component ID and no edit fields are supplied, exit 64 fires
 /// BEFORE the confirming GET — not after.  This is the critical ordering
 /// invariant that P16 enforces: no-fields guard > confirming GET.
-/// Red Gate: todo!() panics → exit ≠ 64.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_numeric_input_no_fields_zero_http() {
     let cache = TempDir::new().unwrap();
@@ -1959,6 +2161,14 @@ async fn test_bc_8_1_007_component_edit_numeric_input_no_fields_zero_http() {
         "Expected exit 64 when numeric input with no fields; got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
+    );
+    // F-A6b (PR#704 finding 6): BC-8.1.007 no-fields guard exact phrase (numeric path).
+    // FAILS against impl that uses a differently-worded message.
+    let stderr_11 = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr_11.contains("no fields specified to update"),
+        "AC-011 F-A6b: BC-8.1.007 no-fields guard message must contain \
+         'no fields specified to update' (BC-8.1.007 exact phrasing); got: {stderr_11}"
     );
 }
 
@@ -2048,7 +2258,6 @@ async fn test_bc_8_1_007_component_edit_numeric_derives_project_for_lead_resolut
 /// confirming GET reveals the component belongs to project "FOO", the handler
 /// exits 64 BEFORE the PUT.  Message: "Component 10001 belongs to project FOO,
 /// not WRONG."  Zero PUT calls.
-/// Red Gate: todo!() panics before HTTP.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_numeric_project_mismatch_zero_put() {
     let cache = TempDir::new().unwrap();
@@ -2117,12 +2326,81 @@ async fn test_bc_8_1_007_component_edit_numeric_project_mismatch_zero_put() {
     );
 }
 
+// ── AC-013a (BC-8.1.007 — --project case-insensitive leniency, coverage pin) ────
+
+/// AC-013a / BC-8.1.007: when the user supplies `--project eng` (lowercase) but
+/// the confirming GET reveals the component belongs to project `"ENG"` (uppercase),
+/// the mismatch check uses `eq_ignore_ascii_case`, so the lowercase form is treated
+/// as a MATCH — the PUT proceeds and exits 0.
+///
+/// This test PASSES against the current impl (which uses `eq_ignore_ascii_case`) and
+/// pins that behavior so a mutation to strict `==` is caught.
+/// (PR#704 finding 5 — coverage pin.)
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_numeric_project_case_insensitive_match_proceeds() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Confirming GET: component belongs to "ENG" (uppercase).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("ENG"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT must fire (case-insensitive match → not a mismatch).
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "Renamed", "ENG")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // User passes --project eng (all lowercase) — should be accepted as ENG.
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "eng",
+            "--name",
+            "Renamed",
+            "10001",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "AC-013a: --project case-insensitive leniency: 'eng' must match 'ENG' → exit 0; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // ── AC-014 (BC-8.1.008 — numeric not-found message variants) ─────────────────
 
 /// AC-014 / BC-8.1.008: 404 on the confirming GET produces two message variants:
 /// (A) with `--project`: "Component '99999' not found in project FOO."
 /// (B) without `--project`: "Component '99999' not found." (project-less)
-/// Red Gate: todo!() panics before HTTP.
 #[tokio::test]
 async fn test_bc_8_1_008_component_edit_numeric_notfound_message_variants() {
     let cache = TempDir::new().unwrap();
@@ -2228,8 +2506,6 @@ async fn test_bc_8_1_008_component_edit_numeric_notfound_message_variants() {
 /// F-06 / BC-8.1.008: numeric edit with NO --project but `.jr.toml` in CWD
 /// supplies `project = "FOO"`.  GET 404 → project-qualified not-found message,
 /// NOT the project-less variant (which tells the user to supply --project).
-///
-/// Red Gate: todo!() panics before HTTP.
 #[tokio::test]
 async fn test_bc_8_1_008_component_edit_numeric_notfound_config_project_qualified() {
     let cache = TempDir::new().unwrap();
@@ -2284,7 +2560,6 @@ async fn test_bc_8_1_008_component_edit_numeric_notfound_config_project_qualifie
 /// list) produces:
 /// (A) Not found → "Component 'xyz' not found in project FOO. Available: Backend, Frontend."
 /// (B) Ambiguous → "Ambiguous component 'back'. Matches: Backend, Backoffice."
-/// Red Gate: todo!() panics before HTTP.
 #[tokio::test]
 async fn test_bc_8_1_008_component_edit_name_notfound_and_ambiguous_messages() {
     let cache = TempDir::new().unwrap();
@@ -2409,7 +2684,6 @@ async fn test_bc_8_1_008_component_edit_name_notfound_and_ambiguous_messages() {
 /// resolution) is a racing delete — the component existed at resolve time but
 /// is gone by mutation time.  This is ApiError (exit 1), NOT UserError (exit 64).
 /// Distinct from resolver 404 which is exit 64 (BC-8.1.008).
-/// Red Gate: todo!() panics before HTTP.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_put_race_404_exits_1_distinct_from_resolver_404() {
     let cache = TempDir::new().unwrap();
@@ -2468,7 +2742,7 @@ async fn test_bc_8_1_007_component_edit_put_race_404_exits_1_distinct_from_resol
 /// AC-017 / BC-8.1.004: all-ASCII-digit component IDs bypass the no-project
 /// guard (numeric-id exemption).  A name-based input without `--project` exits
 /// 64 before any HTTP.
-/// Red Gate for numeric case: todo!() panics.  Name case exits 64 (passes).
+/// Numeric case: handler proceeds and exits 0.  Name case: exits 64 (project guard fires before HTTP).
 #[tokio::test]
 async fn test_bc_8_1_004_component_edit_numeric_id_exemption_vs_name_requires_project() {
     let cache = TempDir::new().unwrap();
@@ -2508,7 +2782,7 @@ async fn test_bc_8_1_004_component_edit_numeric_id_exemption_vs_name_requires_pr
         .output()
         .unwrap();
 
-    // Red Gate: todo!() panics → exit ≠ 0.  With implementation: should be exit 0.
+    // Handler proceeds for numeric input; expected exit 0.
     assert!(
         numeric_output.status.success(),
         "Case A: numeric exempt from --project guard; expected exit 0; got {:?}\nstderr: {}",
@@ -2557,7 +2831,7 @@ async fn test_bc_8_1_004_component_edit_numeric_id_exemption_vs_name_requires_pr
 /// called, removing the cached entry for that project.
 ///
 /// The test pre-writes a cache file, runs the command, then asserts the cache
-/// entry for the project is absent.  Red Gate: todo!() panics → exit ≠ 0.
+/// entry for the project is absent.
 #[tokio::test]
 async fn test_adr_0018_component_create_and_edit_invalidate_cache() {
     let cache = TempDir::new().unwrap();
@@ -2599,7 +2873,6 @@ async fn test_adr_0018_component_create_and_edit_invalidate_cache() {
         .output()
         .unwrap();
 
-    // Red Gate: todo!() panics → exit ≠ 0.
     assert!(
         output.status.success(),
         "Expected exit 0 after create (cache invalidation only happens on success); \
@@ -2703,8 +2976,8 @@ async fn test_adr_0018_component_create_and_edit_invalidate_cache() {
 /// mutation that calls `invalidate_components_cache` unconditionally (before
 /// the PUT or in the error branch).
 ///
-/// Red Gate: todo!() panics or unconditional-invalidation mutation would wipe
-/// the cache even on failure.
+/// A mutation calling `invalidate_components_cache` unconditionally would wipe
+/// the cache even on failure, which this test catches.
 #[tokio::test]
 async fn test_adr_0018_component_edit_failed_does_not_invalidate_cache() {
     let cache = TempDir::new().unwrap();
