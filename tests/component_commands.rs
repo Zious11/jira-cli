@@ -1,7 +1,7 @@
 //! CLI-level integration tests for `jr component` commands (S-604-1 + S-604-2).
 //!
 //! S-604-1 tests (handle_list): all PASS — fully implemented.
-//! S-604-2 tests (handle_create, handle_edit): all FAIL — todo!() stubs.
+//! S-604-2 tests (handle_create, handle_edit): all PASS — fully implemented.
 //!
 //! BC anchors: BC-8.1.001–BC-8.1.008, BC-8.4.002–BC-8.4.004
 //! Stories: S-604-1 (list), S-604-2 (create/edit)
@@ -1197,7 +1197,7 @@ async fn test_bc_8_1_005_component_create_all_optional_fields_present() {
             "--lead",
             "Alice",
             "--assignee-type",
-            "component-lead",
+            "COMPONENT_LEAD",
             "Backend",
         ])
         .output()

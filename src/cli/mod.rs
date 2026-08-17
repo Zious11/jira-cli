@@ -1101,6 +1101,7 @@ pub enum RequestTypeCommand {
 /// Maps to Jira's `assigneeType` field on the component resource
 /// (BC-8.1.005 create / BC-8.1.007 edit).
 #[derive(clap::ValueEnum, Clone, Debug)]
+#[clap(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AssigneeType {
     /// Use the component lead as the default assignee.
     ComponentLead,
