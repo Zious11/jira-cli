@@ -14,7 +14,7 @@ src/
 │   ├── issue/           # issue commands (split by operation theme)
 │   │   ├── mod.rs           # dispatch + re-exports
 │   │   ├── format.rs        # row formatting, headers, points display
-│   │   ├── list.rs          # list only (JQL composition, filter application)
+│   │   ├── list.rs          # list only (JQL composition, filter application); `--component` filter (bare/`not:`/`all:`/`none`, resolved via §8.4, S-606-1)
 │   │   ├── view.rs          # issue view handler, detailed single-issue rendering (~287 LOC)
 │   │   ├── comments.rs      # comment list formatting and display (~61 LOC)
 │   │   ├── create.rs        # issue create (platform path + JSM dispatch fork); parse_field_kv helper
@@ -54,6 +54,7 @@ src/
 │   ├── user.rs          # user search/list/view (thin wrapper over api/jira/users.rs)
 │   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
 │   ├── project.rs       # project fields (types, priorities, statuses, CMDB fields)
+│   ├── component.rs     # jr component list/create/edit/delete (~1066 LOC; see Known Size Deviations)
 │   ├── queue.rs         # queue list/view (JSM service desks)
 │   └── requesttype.rs   # requesttype list/fields (JSM request-type discovery + 7d cache)
 ├── api/
@@ -85,6 +86,7 @@ src/
 │   │   ├── worklogs.rs  # add/list worklogs
 │   │   ├── projects.rs  # project details
 │   │   ├── attachments.rs # list attachments on an issue (S-576-1; GET ?fields=attachment)
+│   │   ├── components.rs # list/get/create/edit/delete component API calls (ADR-0018)
 │   │   └── users.rs     # current user, user search, assignable users, single-user lookup
 │   └── jsm/             # JSM-specific API call implementations
 │       ├── mod.rs           # module re-exports for api/jsm/
@@ -105,13 +107,14 @@ src/
 │   ├── issue.rs, board.rs, sprint.rs, user.rs, team.rs, project.rs, worklog.rs  # core types
 │   ├── bulk.rs          # serde structs for bulk operations
 │   ├── changelog.rs     # serde structs for changelog API
+│   ├── component.rs     # Component, RelatedIssueCounts serde types (ADR-0018)
 │   └── editmeta.rs      # serde structs for editmeta
 ├── types/jsm/           # Serde structs for JSM API responses
 │   ├── mod.rs           # re-exports
 │   ├── servicedesk.rs   # ServiceDesk, project meta types
 │   ├── queue.rs         # Queue, queue issue list types
 │   └── request_type.rs  # RequestType, request type fields types
-├── cache.rs             # Per-profile XDG cache (~/.cache/jr/v1/<profile>/) — team list, project meta, workspace ID, CMDB fields, object-type attrs, resolutions (all 7-day TTL). Versioned root (`v1/`) lets a future schema bump orphan stale files cleanly.
+├── cache.rs             # Per-profile XDG cache (~/.cache/jr/v1/<profile>/) — team list, project meta, workspace ID, CMDB fields, object-type attrs, resolutions (all 7-day TTL). Versioned root (`v1/`) lets a future schema bump orphan stale files cleanly. Also holds `{read,write,invalidate}_components_cache` — ADR-0018 §2 foundation for `jr component rename` (S-608-1), not yet wired into any read/resolve path this cycle (see the rustdoc on those functions).
 ├── config.rs            # Global (~/.config/jr/config.toml) [profiles.<name>] + default_profile + per-project (.jr.toml), figment layering. Auto-migrates legacy [instance]/[fields] shape on first load. Active profile resolved at load via Config::load_with(cli_profile) (cli flag threaded through as a parameter, NOT an env-var seam) > JR_PROFILE env > default_profile field > "default".
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
@@ -131,6 +134,7 @@ Product-namespaced `api/jira/` and `types/jira/` so future Confluence/JSM/Assets
 - `cli/issue/create.rs`: 394 LOC post-Seam-B split (was 2,447; edit cluster extracted to `edit.rs`). Handles `issue create` platform path + JSM dispatch fork + `parse_field_kv`. ADR-0012. (PF-016)
 - `cli/issue/edit.rs`: 2,067 LOC (Seam B extraction of `handle_edit` cluster from `create.rs`; ~2× the ADR-0012 1,000-LOC threshold). Handles `issue edit`: single-key + bulk field/label/type paths, dry-run, type-error enrichment. ADR-0012. (PF-016)
 - `cli/issue/workflow.rs`: ~1,277 LOC — covers move/transitions/assign/open; 28% over the threshold. `handle_comment` extracted to `interactions.rs` (S-577-1). DOCUMENT-AS-IS. ADR-0012. (PF-017)
+- `cli/component.rs`: ~1,066 LOC — covers `jr component list/create/edit/delete` (S-604-1/2/3), 6.6% over ADR-0012's 1,000-LOC shard threshold. ADR-0018 §1/§2 anticipated this size (numeric-vs-name resolution paths, disposition-required delete, snapshot-before-delete safety, and ADR-0018 §2 cache-invalidation call sites are all in this one file by design, for a single command family). DOCUMENT-AS-IS. (F5-C-002)
 
 ## Build & Test
 
