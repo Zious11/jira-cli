@@ -263,8 +263,8 @@ async fn handle_create(
     if let Some(ref lead_val) = lead {
         if lead_val.is_empty() {
             return Err(JrError::UserError(
-                "--lead \"\" has no effect on create. \
-                 To set a lead, provide a name or account ID."
+                "--lead \"\" has no effect on create \u{2014} there is no existing lead to clear. \
+                 Omit --lead, or supply a name."
                     .into(),
             )
             .into());
