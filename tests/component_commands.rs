@@ -6182,3 +6182,93 @@ async fn test_ec_8_2_006_3_component_delete_orphan_no_input_flag_parity() {
          as the plain (non-TTY) case; got: {stderr}"
     );
 }
+
+// ── Security LOW-1 (CWE-116) — delete_component percent-encoding ────────────
+
+/// Security LOW-1 (CWE-116, S-604-3 hardening): `delete_component` MUST
+/// percent-encode both `component_id` (path segment) and `target_id` (query
+/// value) via `urlencoding::encode`, matching the established convention in
+/// `src/api/client.rs`, `src/api/jira/links.rs`, `src/api/jira/users.rs`, and
+/// `src/api/jira/teams.rs`. Production ids are API-sourced numeric strings,
+/// so encoding is a no-op there — this is defense-in-depth, not a live bug.
+///
+/// This is an API-layer test (`JiraClient::new_for_test` against a wiremock
+/// `MockServer`, the pattern used in `tests/comment_crud_api.rs` and
+/// `tests/issue_commands.rs`), not a CLI-level one, because it must inspect
+/// the exact bytes on the wire.
+///
+/// Mutation-resistance note: a bare space does NOT distinguish
+/// `urlencoding::encode` from no encoding at all — the `url` crate
+/// percent-encodes a raw space to `%20` at parse time regardless (see
+/// `tests/comment_crud_api.rs::test_delete_comment_encodes_key_with_space_in_url`'s
+/// doc comment for the same finding). This test instead uses characters that
+/// are STRUCTURALLY significant to URL parsing when left raw:
+/// - `component_id = "10/25"` — an unencoded `/` is read as a path-segment
+///   separator, so the request path splits into an extra segment
+///   (`/rest/api/3/component/10/25`) instead of staying one segment
+///   (`/rest/api/3/component/10%2F25`).
+/// - `target_id = "20&x=1"` — an unencoded `&` is read as a query-parameter
+///   delimiter, so `moveIssuesTo` decodes to `"20"` with a smuggled `x=1`
+///   pair instead of the single pair `moveIssuesTo=20&x=1`.
+///
+/// If `urlencoding::encode` were removed from `delete_component`, the mock
+/// below (which asserts on the exact encoded path and the exact decoded
+/// query pair) would not match the resulting request, and this test would
+/// fail as a genuine assertion failure — not merely miss a request count.
+#[tokio::test]
+async fn test_delete_component_percent_encodes_ids_in_url() {
+    let server = MockServer::start().await;
+
+    // Loose method-only matcher — assertions below inspect the received
+    // request's raw URL directly, so we don't pre-encode the expected path
+    // in the mock matcher itself (that would make the mock's own encoding
+    // logic part of what's under test).
+    Mock::given(method("DELETE"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    client
+        .delete_component("10/25", Some("20&x=1"))
+        .await
+        .unwrap();
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1, "expected exactly 1 DELETE request");
+
+    let url = &reqs[0].url;
+    assert_eq!(
+        url.path(),
+        "/rest/api/3/component/10%2F25",
+        "component_id's '/' must be percent-encoded to %2F so it stays one \
+         path segment; got path: {}",
+        url.path()
+    );
+    assert!(
+        !url.path().contains("/10/25"),
+        "component_id must NOT appear as raw, unencoded '/' splitting the \
+         path into extra segments; got path: {}",
+        url.path()
+    );
+
+    let target_pair = url
+        .query_pairs()
+        .find(|(k, _)| k == "moveIssuesTo")
+        .map(|(_, v)| v.into_owned());
+    assert_eq!(
+        target_pair.as_deref(),
+        Some("20&x=1"),
+        "target_id's '&'/'=' must be percent-encoded so moveIssuesTo decodes \
+         back to the full raw value \"20&x=1\", not truncated at the first \
+         '&'; got query: {:?}",
+        url.query()
+    );
+    assert!(
+        !url.query_pairs().any(|(k, _)| k == "x"),
+        "an unencoded '&' in target_id must not smuggle in an extra 'x' \
+         query parameter; got query: {:?}",
+        url.query()
+    );
+}

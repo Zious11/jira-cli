@@ -80,11 +80,15 @@ impl JiraClient {
         component_id: &str,
         move_issues_to: Option<&str>,
     ) -> Result<()> {
+        // CWE-116 defense-in-depth: ids are API-sourced numeric strings, but
+        // encode regardless (S-604-3 security LOW-1).
+        let encoded_id = urlencoding::encode(component_id);
         let path = match move_issues_to {
             Some(target_id) => {
-                format!("/rest/api/3/component/{component_id}?moveIssuesTo={target_id}")
+                let encoded_target = urlencoding::encode(target_id);
+                format!("/rest/api/3/component/{encoded_id}?moveIssuesTo={encoded_target}")
             }
-            None => format!("/rest/api/3/component/{component_id}"),
+            None => format!("/rest/api/3/component/{encoded_id}"),
         };
         self.delete(&path).await
     }
