@@ -433,22 +433,20 @@ async fn handle_edit(
         let derived_project = comp.project.clone().unwrap_or_default();
         let final_project_key: String = if !derived_project.is_empty() {
             derived_project.clone()
+        } else if project.is_some() {
+            return Err(JrError::UserError(format!(
+                "Component {} returned no project field; cannot verify --project \
+                 or scope the update. The component's project could not be determined.",
+                name_or_id
+            ))
+            .into());
         } else {
-            if project.is_some() {
-                return Err(JrError::UserError(format!(
-                    "Component {} returned no project field; cannot verify --project \
-                     or scope the update. The component's project could not be determined.",
-                    name_or_id
-                ))
-                .into());
-            } else {
-                return Err(JrError::UserError(format!(
-                    "Component {} exists but Jira returned no project field. \
-                     Pass --project KEY to disambiguate.",
-                    name_or_id
-                ))
-                .into());
-            }
+            return Err(JrError::UserError(format!(
+                "Component {} exists but Jira returned no project field. \
+                 Pass --project KEY to disambiguate.",
+                name_or_id
+            ))
+            .into());
         };
         // If --project was supplied, verify it matches the derived project.
         // (Only reached when derived_project is non-empty per the guard above.)
