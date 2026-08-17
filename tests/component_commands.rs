@@ -3660,8 +3660,9 @@ async fn test_bc_8_1_007_component_edit_name_collision_400_surfaced() {
 // S-604-3: `jr component delete` — disposition-required, snapshot-before-delete
 // safety (DEC-279). SAFETY-CRITICAL — tdd_mode: strict.
 //
-// BC anchors: BC-8.2.001–BC-8.2.008. All tests below are RED at Red Gate:
-// `handle_delete` is `todo!()`.
+// BC anchors: BC-8.2.001–BC-8.2.008. `handle_delete` (`src/cli/component.rs`)
+// is fully implemented; all tests below are green against the shipped
+// disposition-required, snapshot-before-delete handler.
 //
 // Ordering assertions (BC-8.2.007 "a mutant that reorders snapshot/DELETE
 // must fail") use `server.received_requests()` position comparison — the
@@ -3771,14 +3772,12 @@ async fn test_bc_8_2_001_component_delete_neither_flag_exits_64_zero_http() {
 /// `conflicts_with` violation, structurally distinct from AC-001's
 /// application-level exit-64 guard.
 ///
-/// NOTE (Red Gate): unlike every other S-604-3 test, this one PASSES both
-/// before and after `handle_delete` is implemented — `conflicts_with` on
-/// `ComponentSubcommand::Delete` (`src/cli/mod.rs`) is clap-derive parse-time
-/// validation, already wired independently of the still-`todo!()` handler
-/// body; the handler is never reached for a conflicting pair. Same
-/// pre-existing pattern as `test_bc_8_1_005_component_create_bad_assignee_type_exits_2`
-/// above. This is the one test in this Red Gate report that is expected to
-/// be green at Red Gate, not a false/tautological pass.
+/// NOTE: this case is enforced entirely at the clap-derive layer —
+/// `conflicts_with` on `ComponentSubcommand::Delete` (`src/cli/mod.rs`) is
+/// parse-time validation, independent of `handle_delete`'s (now fully
+/// implemented, `src/cli/component.rs`) body; the handler is never reached
+/// for a conflicting pair. Same pre-existing pattern as
+/// `test_bc_8_1_005_component_create_bad_assignee_type_exits_2` above.
 #[tokio::test]
 async fn test_bc_8_2_001_component_delete_both_flags_clap_exit_2() {
     let cache = TempDir::new().unwrap();

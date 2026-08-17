@@ -4107,6 +4107,245 @@ async fn test_bc_2_1_019_020_021_reserved_syntax_collisions_short_circuit_docume
     }
 }
 
+// ── F5-A-M1/F5-C-001 (2026-08-17, human-adjudicated: UNION) — ExactMultiple
+//    read-path disposition (BC-2.1.018 Postcondition 3, BC-2.1.019
+//    Postcondition 3, BC-2.1.021 Postcondition 2, BC-2.1.022
+//    EC-2.1.022-3 / "ExactMultiple read-path disposition") ────────────────
+//
+// Fixture shared across all four tests below: project FOO has a case-only
+// duplicate component pair — `Backend` (id 10001) and `backend` (id 10005)
+// — plus a benign, non-duplicated `Frontend` (id 10002). `partial_match`
+// resolves any of `Backend`/`backend` to `MatchResult::ExactMultiple`
+// ("Backend" — the first-encountered spelling); the current (pre-fix)
+// implementation silently first-picks a single id from that result, which
+// is the exact silent-incomplete-filter defect this amendment closes. Each
+// test below MUST fail red against that first-pick implementation.
+
+/// BC-2.1.018 Postcondition 3 / EC-2.1.018-3: a single bare `--component
+/// Backend` value that resolves to `MatchResult::ExactMultiple` (case-only
+/// duplicate `Backend`/10001 + `backend`/10005) must UNION both ids into the
+/// `in (...)` clause — `component in (10001, 10005)` — never silently
+/// first-pick a single id.
+#[tokio::test]
+async fn test_bc_2_1_018_issue_list_component_exactmultiple_unions_all_ids() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10005", "backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--component",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "EC-2.1.018-3: expected exit 0 (UNION, not an ambiguity error), stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("component in (10001, 10005)"),
+        "EC-2.1.018-3: expected UNIONed clause 'component in (10001, 10005)' \
+         (ascending numeric order within the ExactMultiple value's own slot), \
+         got jql: {jql}"
+    );
+    assert!(
+        !jql.contains("component in (10001)"),
+        "EC-2.1.018-3: must NOT silently first-pick a single-id clause \
+         'component in (10001)' — that is the exact silent-incomplete-filter \
+         defect this amendment closes, got jql: {jql}"
+    );
+}
+
+/// BC-2.1.019 Postcondition 3 / EC-2.1.019-4: a single `--component
+/// not:Backend` value that resolves to `MatchResult::ExactMultiple` must
+/// UNION both duplicate ids into the exclusion set — `(component not in
+/// (10001, 10005) OR component is EMPTY)` — never exclude only one
+/// duplicate.
+#[tokio::test]
+async fn test_bc_2_1_019_issue_list_component_not_exactmultiple_unions_all_ids() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10005", "backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--component",
+            "not:backend",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "EC-2.1.019-4: expected exit 0 (UNION, not an ambiguity error), stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("(component not in (10001, 10005) OR component is EMPTY)"),
+        "EC-2.1.019-4: expected UNIONed exclusion clause '(component not in \
+         (10001, 10005) OR component is EMPTY)', got jql: {jql}"
+    );
+    assert!(
+        !jql.contains("(component not in (10001) OR component is EMPTY)"),
+        "EC-2.1.019-4: must NOT silently first-pick a single-id exclusion — \
+         an issue carrying only the other duplicate would incorrectly match \
+         under that defect, got jql: {jql}"
+    );
+}
+
+/// BC-2.1.021 Postcondition 2 / EC-2.1.021-4: a name within an `all:` list
+/// that resolves to `MatchResult::ExactMultiple` becomes a parenthesized
+/// OR-of-equalities term — `(component = 10001 OR component = 10005)` —
+/// standing in for that one name's position in the AND-chain, never a bare
+/// single-id equality.
+#[tokio::test]
+async fn test_bc_2_1_021_issue_list_component_all_exactmultiple_or_of_equalities() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10005", "backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--component",
+            "all:backend",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "EC-2.1.021-4: expected exit 0 (UNION, not an ambiguity error), stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("(component = 10001 OR component = 10005)"),
+        "EC-2.1.021-4: expected parenthesized OR-of-equalities term \
+         '(component = 10001 OR component = 10005)', got jql: {jql}"
+    );
+    assert!(
+        jql.contains("OR component = 10005"),
+        "EC-2.1.021-4: must NOT silently first-pick a bare 'component = \
+         10001' equality with no OR-group — that is the exact \
+         silent-incomplete-filter defect this amendment closes, got jql: {jql}"
+    );
+}
+
+/// BC-2.1.021 Postcondition 2 mixed case: `all:backend,Frontend` — the first
+/// comma-separated name (`backend`) resolves ExactMultiple and becomes a
+/// parenthesized OR-of-equalities term; the second (`Frontend`) resolves to
+/// a single id and stays a bare equality. Both AND-join in comma-supplied
+/// order: `(component = 10001 OR component = 10005) AND component = 10002`.
+#[tokio::test]
+async fn test_bc_2_1_021_issue_list_component_all_mixed_exactmultiple_and_ordinary() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10005", "backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--component",
+            "all:backend,Frontend",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "EC-2.1.021-4 (mixed): expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("(component = 10001 OR component = 10005) AND component = 10002"),
+        "EC-2.1.021-4 (mixed): expected \
+         '(component = 10001 OR component = 10005) AND component = 10002' \
+         (ExactMultiple OR-group first, in comma-supplied order, AND-joined \
+         with the ordinary single-id term), got jql: {jql}"
+    );
+}
+
 // ── SEC-707-1 (PR #707 fast-follow, LOW — injection-safety regression pin) ─
 
 /// Pins the injection-safety guarantee noted in the PR #707 review: only the
