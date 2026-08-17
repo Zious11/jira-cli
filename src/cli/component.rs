@@ -481,12 +481,11 @@ async fn handle_edit(
                 // duplicate-named components is non-deterministic and unsafe.
                 // Fail closed with all matching IDs so the caller can use a
                 // numeric ID to disambiguate.
-                let mut ids: Vec<String> = components
+                let ids: Vec<String> = components
                     .iter()
-                    .filter(|c| c.name.eq_ignore_ascii_case(&matched_name))
+                    .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
                     .map(|c| c.id.clone())
                     .collect();
-                ids.sort();
                 return Err(JrError::UserError(format!(
                     "Multiple components named \"{}\" found (IDs: {}). \
                      Pass the numeric ID directly.",
