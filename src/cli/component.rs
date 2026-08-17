@@ -1,12 +1,14 @@
 use anyhow::Result;
 
 use crate::api::client::JiraClient;
+use crate::cache;
 use crate::cli::AssigneeType;
 use crate::cli::OutputFormat;
 use crate::cli::issue::resolve_component;
 use crate::config::Config;
 use crate::error::JrError;
 use crate::output;
+use crate::partial_match::MatchResult;
 
 use super::ComponentSubcommand;
 
@@ -200,11 +202,6 @@ async fn handle_list(
         )?;
     }
 
-    // `resolve_component` is imported for reuse by future component/issue
-    // `--component` handlers (S-604-2/-3, S-605, S-606); this `let _` suppresses
-    // the unused-import lint until those land.
-    let _ = resolve_component;
-
     Ok(())
 }
 
@@ -232,46 +229,301 @@ struct EditComponentArgs {
     lead: Option<String>,
 }
 
+/// Maps a clap `AssigneeType` variant to the Jira API string value.
+fn assignee_type_to_api_str(at: &AssigneeType) -> &'static str {
+    match at {
+        AssigneeType::ComponentLead => "COMPONENT_LEAD",
+        AssigneeType::ProjectLead => "PROJECT_LEAD",
+        AssigneeType::Unassigned => "UNASSIGNED",
+        AssigneeType::ProjectDefault => "PROJECT_DEFAULT",
+    }
+}
+
 /// Handle `jr component create --project KEY NAME [options]`.
 ///
 /// BC-8.2.001 — BC-8.2.008 (S-604-2).
-/// Implementer: POSTs `/rest/api/3/component`, resolves lead via
-/// `search_assignable_users_by_project`, then calls the ADR-0018
-/// confirming-GET (`get_component`).
+/// POSTs `/rest/api/3/component`, resolves lead via
+/// `search_assignable_users_by_project`, then invalidates the project's
+/// component cache entry (ADR-0018 §2).
 async fn handle_create(
     args: CreateComponentArgs,
-    _output_format: &OutputFormat,
-    _config: &Config,
-    _client: &JiraClient,
+    output_format: &OutputFormat,
+    config: &Config,
+    client: &JiraClient,
 ) -> Result<()> {
     let CreateComponentArgs {
-        project: _project,
-        name: _name,
-        description: _description,
-        lead: _lead,
-        assignee_type: _assignee_type,
+        project,
+        name,
+        description,
+        lead,
+        assignee_type,
     } = args;
-    todo!()
+
+    // BC-8.1.006: `--lead ""` has no effect on create — exit 64 before any HTTP.
+    if let Some(ref lead_val) = lead {
+        if lead_val.is_empty() {
+            return Err(JrError::UserError(
+                "--lead \"\" has no effect on create. \
+                 To set a lead, provide a name or account ID."
+                    .into(),
+            )
+            .into());
+        }
+    }
+
+    // BC-8.2.003: resolve lead via assignable-user search when --lead is supplied.
+    let lead_account_id: Option<String> = if let Some(ref lead_query) = lead {
+        let users = client
+            .search_assignable_users_by_project(lead_query, &project)
+            .await?;
+        match users.len() {
+            0 => {
+                return Err(JrError::UserError(format!(
+                    "No user found matching '{}' in project {}.",
+                    lead_query, project
+                ))
+                .into());
+            }
+            1 => Some(users.into_iter().next().unwrap().account_id),
+            _ => {
+                return Err(JrError::UserError(format!(
+                    "Ambiguous lead '{}': multiple users match. Provide a more specific name.",
+                    lead_query
+                ))
+                .into());
+            }
+        }
+    } else {
+        None
+    };
+
+    // BC-8.1.005 / VP-COMPONENT-022: build body omitting absent optional keys.
+    let mut body = serde_json::Map::new();
+    body.insert("name".to_string(), serde_json::Value::String(name.clone()));
+    body.insert(
+        "project".to_string(),
+        serde_json::Value::String(project.clone()),
+    );
+    if let Some(desc) = description {
+        body.insert("description".to_string(), serde_json::Value::String(desc));
+    }
+    if let Some(account_id) = lead_account_id {
+        body.insert(
+            "leadAccountId".to_string(),
+            serde_json::Value::String(account_id),
+        );
+    }
+    if let Some(ref at) = assignee_type {
+        body.insert(
+            "assigneeType".to_string(),
+            serde_json::Value::String(assignee_type_to_api_str(at).to_string()),
+        );
+    }
+
+    let body_value = serde_json::Value::Object(body);
+    let component = client.create_component(&body_value).await?;
+
+    // ADR-0018 §2: invalidate components cache after successful mutation.
+    cache::invalidate_components_cache(&config.active_profile_name, &project);
+
+    // Symmetric output channel (profile 4): JSON → stdout, human → stderr.
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", output::render_json(&component)?);
+        }
+        OutputFormat::Table => {
+            eprintln!("Component '{}' created.", component.name);
+        }
+    }
+
+    Ok(())
+}
+
+/// Returns `true` when `s` is a non-empty all-ASCII-digit string (numeric
+/// component ID path — BC-8.1.004 numeric-ID exemption).
+fn is_numeric_id(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Handle `jr component edit NAME_OR_ID [options]`.
 ///
 /// BC-8.3.001 — BC-8.3.007 (S-604-2).
-/// Implementer: resolves the component via `resolve_component`, PUTs
-/// `/rest/api/3/component/{id}`, then calls the ADR-0018 confirming-GET
-/// (`get_component`).
+/// Resolves the component by name (via project component list + partial_match)
+/// or by numeric ID (via confirming GET), PUTs `/rest/api/3/component/{id}`,
+/// then invalidates the project's component cache entry (ADR-0018 §2).
 async fn handle_edit(
     args: EditComponentArgs,
-    _output_format: &OutputFormat,
-    _config: &Config,
-    _client: &JiraClient,
+    output_format: &OutputFormat,
+    config: &Config,
+    client: &JiraClient,
 ) -> Result<()> {
     let EditComponentArgs {
-        name_or_id: _name_or_id,
-        project: _project,
-        new_name: _new_name,
-        description: _description,
-        lead: _lead,
+        name_or_id,
+        project,
+        new_name,
+        description,
+        lead,
     } = args;
-    todo!()
+
+    // BC-8.1.007 P16: no-fields guard fires BEFORE any HTTP (for both name
+    // and numeric paths).
+    let has_fields = new_name.is_some() || description.is_some() || lead.is_some();
+    if !has_fields {
+        return Err(JrError::UserError(
+            "No fields to update. Supply --name, --description, or --lead.".into(),
+        )
+        .into());
+    }
+
+    // Determine whether input is a numeric ID or a component name.
+    let (component_id, project_key) = if is_numeric_id(&name_or_id) {
+        // BC-8.1.004: numeric ID exempts from the no-project guard.
+        // ADR-0018 §1: ONE confirming GET derives both existence and project.
+        let comp = match client.get_component(&name_or_id).await {
+            Ok(c) => c,
+            Err(e) => {
+                let is_404 = e
+                    .downcast_ref::<JrError>()
+                    .map(|je| matches!(je, JrError::ApiError { status: 404, .. }))
+                    .unwrap_or(false);
+                if is_404 {
+                    let msg = match &project {
+                        Some(p) => {
+                            format!("Component '{}' not found in project {}.", name_or_id, p)
+                        }
+                        None => format!("Component '{}' not found.", name_or_id),
+                    };
+                    return Err(JrError::UserError(msg).into());
+                }
+                return Err(e);
+            }
+        };
+
+        // BC-8.1.007: if --project supplied, verify it matches the component's project.
+        let derived_project = comp.project.clone().unwrap_or_default();
+        if let Some(ref user_project) = project {
+            if !derived_project.is_empty() && !user_project.eq_ignore_ascii_case(&derived_project) {
+                return Err(JrError::UserError(format!(
+                    "Component {} belongs to project {}, not {}.",
+                    name_or_id, derived_project, user_project
+                ))
+                .into());
+            }
+        }
+
+        (comp.id.clone(), derived_project)
+    } else {
+        // Name-based: project is required (BC-8.1.004 — no exemption for names).
+        let pk = config.project_key(project.as_deref()).ok_or_else(|| {
+            JrError::UserError(
+                "No project configured. Pass --project KEY or set \
+                 project = \"...\" in .jr.toml."
+                    .into(),
+            )
+        })?;
+
+        let components = client.list_components(&pk).await?;
+        let candidate_names: Vec<String> = components.iter().map(|c| c.name.clone()).collect();
+
+        let matched_name = match resolve_component(&name_or_id, &pk, &candidate_names) {
+            MatchResult::Exact(n) | MatchResult::ExactMultiple(n) => n,
+            MatchResult::Ambiguous(candidates) => {
+                return Err(JrError::UserError(format!(
+                    "Ambiguous component '{}'. Matches: {}",
+                    name_or_id,
+                    candidates.join(", ")
+                ))
+                .into());
+            }
+            MatchResult::None(available) => {
+                return Err(JrError::UserError(format!(
+                    "Component '{}' not found in project {}. Available: {}",
+                    name_or_id,
+                    pk,
+                    available.join(", ")
+                ))
+                .into());
+            }
+        };
+
+        // Find the matching component to get its ID.
+        let comp = components
+            .into_iter()
+            .find(|c| c.name == matched_name)
+            .ok_or_else(|| {
+                JrError::Internal(format!(
+                    "Internal error: resolved component name '{}' not found in list.",
+                    matched_name
+                ))
+            })?;
+
+        (comp.id, pk)
+    };
+
+    // Build partial PUT body — only supplied fields (VP-COMPONENT-023).
+    let mut body = serde_json::Map::new();
+    if let Some(n) = new_name {
+        body.insert("name".to_string(), serde_json::Value::String(n));
+    }
+    if let Some(desc) = description {
+        body.insert("description".to_string(), serde_json::Value::String(desc));
+    }
+    if let Some(ref lead_val) = lead {
+        if lead_val.is_empty() {
+            // BC-8.1.007: --lead "" → explicit clear → null
+            body.insert("leadAccountId".to_string(), serde_json::Value::Null);
+        } else {
+            // Resolve lead via assignable-user search.
+            let users = client
+                .search_assignable_users_by_project(lead_val, &project_key)
+                .await?;
+            match users.len() {
+                0 => {
+                    return Err(JrError::UserError(format!(
+                        "No user found matching '{}' in project {}.",
+                        lead_val, project_key
+                    ))
+                    .into());
+                }
+                1 => {
+                    body.insert(
+                        "leadAccountId".to_string(),
+                        serde_json::Value::String(users.into_iter().next().unwrap().account_id),
+                    );
+                }
+                _ => {
+                    return Err(JrError::UserError(format!(
+                        "Ambiguous lead '{}': multiple users match. Provide a more specific name.",
+                        lead_val
+                    ))
+                    .into());
+                }
+            }
+        }
+    }
+
+    let body_value = serde_json::Value::Object(body);
+
+    // PUT — BC-8.1.007 AC-016: 404 on PUT (race condition) is ApiError (exit 1),
+    // not UserError (exit 64).  Let the error propagate as-is.
+    client.edit_component(&component_id, &body_value).await?;
+
+    // ADR-0018 §2: invalidate components cache after successful mutation.
+    cache::invalidate_components_cache(&config.active_profile_name, &project_key);
+
+    // Symmetric output channel (profile 4): human → stderr.
+    match output_format {
+        OutputFormat::Json => {
+            // Edit returns no data; emit an empty success envelope.
+            println!(
+                "{}",
+                output::render_json(&serde_json::json!({"updated": true}))?
+            );
+        }
+        OutputFormat::Table => {
+            eprintln!("Component '{}' updated.", component_id);
+        }
+    }
+
+    Ok(())
 }
