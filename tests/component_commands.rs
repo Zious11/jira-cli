@@ -1,9 +1,10 @@
-//! CLI-level integration tests for `jr component` commands (S-604-1).
+//! CLI-level integration tests for `jr component` commands (S-604-1 + S-604-2).
 //!
-//! All tests in this file PASS — `handle_list` is fully implemented.
+//! S-604-1 tests (handle_list): all PASS — fully implemented.
+//! S-604-2 tests (handle_create, handle_edit): all FAIL — todo!() stubs.
 //!
-//! BC anchors: BC-8.1.001, BC-8.1.002, BC-8.1.003, BC-8.1.004, BC-8.4.004
-//! Story: S-604-1, GitHub issue #604
+//! BC anchors: BC-8.1.001–BC-8.1.008, BC-8.4.002–BC-8.4.004
+//! Stories: S-604-1 (list), S-604-2 (create/edit)
 
 #[allow(dead_code)]
 mod common;
@@ -11,11 +12,12 @@ mod common;
 use assert_cmd::Command;
 use serde_json::json;
 use tempfile::TempDir;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::fixtures::{
-    component_list_response, component_response, component_response_with_flags,
+    component_create_response, component_edit_response, component_list_response,
+    component_response, component_response_with_flags, multi_project_user_search_response,
     related_issue_counts_response, write_profile_config,
 };
 
@@ -1080,5 +1082,1267 @@ async fn test_bc_8_4_004_resolve_component_never_spans_projects() {
         "Expected exit 0 for PRJA list; got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// S-604-2: component create / edit tests (all FAIL — Red Gate)
+// Handlers are todo!() stubs; all tests below MUST fail until implemented.
+// Exception: AC-005 (clap ValueEnum rejection) legitimately PASSES against
+// stubs because clap rejects --assignee-type BOGUS before the handler runs.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── AC-001 (BC-8.1.005 — minimal create body via body_json matcher) ───────────
+
+/// AC-001 / BC-8.1.005: `jr component create --project FOO Backend` (no
+/// optional flags) POSTs exactly `{"name":"Backend","project":"FOO"}`.
+/// Verified via wiremock `body_json` matcher — absent optional keys must NOT
+/// appear in the body (VP-COMPONENT-022, omit-if-absent invariant).
+/// Red Gate: todo!() handler panics → exit ≠ 0 → assertion fails.
+#[tokio::test]
+async fn test_bc_8_1_005_component_create_minimal_body() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // The exact POST body must equal {"name":"Backend","project":"FOO"} — no
+    // extra keys like "description":null.  body_json enforces equality.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .and(body_json(json!({"name": "Backend", "project": "FOO"})))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10001", "Backend", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // No assignable-users call must fire when --lead is absent.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "create", "--project", "FOO", "Backend"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-002 (BC-8.1.005 — all optional fields present in POST body) ───────────
+
+/// AC-002 / BC-8.1.005: when all optional flags are supplied, the POST body
+/// contains all of them: description, leadAccountId (resolved accountId),
+/// assigneeType (API string from clap ValueEnum mapping).
+/// Red Gate: todo!() handler panics before any HTTP.
+#[tokio::test]
+async fn test_bc_8_1_005_component_create_all_optional_fields_present() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Lead resolver: "Alice" resolves to accountId "acc-alice".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(multi_project_user_search_response(vec![(
+                "acc-alice",
+                "Alice",
+            )])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Full POST body including all optional fields.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .and(body_json(json!({
+            "name": "Backend",
+            "project": "FOO",
+            "description": "Backend services",
+            "leadAccountId": "acc-alice",
+            "assigneeType": "COMPONENT_LEAD"
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10001", "Backend", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--description",
+            "Backend services",
+            "--lead",
+            "Alice",
+            "--assignee-type",
+            "component-lead",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-003 (BC-8.1.005 — absent optional keys OMITTED from POST body) ────────
+
+/// AC-003 / BC-8.1.005 VP-COMPONENT-022: POST body must omit absent optional
+/// keys (never send `"description":null`).  Verified by `body_json` with exact
+/// JSON — if the implementation sends extra null-valued keys, the matcher will
+/// reject the request, `.expect(1)` will fail at `server.verify()`.
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_005_component_create_omits_absent_optional_keys() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Only name and description supplied — leadAccountId and assigneeType absent.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .and(body_json(json!({
+            "name": "API",
+            "project": "FOO",
+            "description": "API gateway"
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10002", "API", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--description",
+            "API gateway",
+            "API",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-004 (BC-8.1.005 — success output: JSON stdout + stderr table line) ────
+
+/// AC-004 / BC-8.1.005: on 201 success, JSON mode (`--output json`) returns
+/// `{"id","name","project"}` on stdout; human mode writes a confirmation line
+/// to stderr (symmetric output channel profile 4).
+/// Red Gate: todo!() panics → exit ≠ 0.
+#[tokio::test]
+async fn test_bc_8_1_005_component_create_success_output_both_modes() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10001", "Backend", "FOO")),
+        )
+        .mount(&server)
+        .await;
+
+    // ── Part A: --output json ──────────────────────────────────────────────
+    let json_output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--output",
+            "json",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        json_output.status.success(),
+        "Part A: expected exit 0 with --output json; got {:?}\nstderr: {}",
+        json_output.status.code(),
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&json_output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("--output json stdout must be valid JSON");
+    let obj = parsed.as_object().expect("JSON output must be an object");
+    assert!(
+        obj.contains_key("id"),
+        "JSON output must contain 'id'; keys: {:?}",
+        obj.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        obj.contains_key("name"),
+        "JSON output must contain 'name'; keys: {:?}",
+        obj.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        obj.contains_key("project"),
+        "JSON output must contain 'project'; keys: {:?}",
+        obj.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(parsed["id"], "10001");
+    assert_eq!(parsed["name"], "Backend");
+    assert_eq!(parsed["project"], "FOO");
+
+    // ── Part B: human output → confirmation to stderr ─────────────────────
+    let human_output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "create", "--project", "FOO", "Backend"])
+        .output()
+        .unwrap();
+
+    assert!(
+        human_output.status.success(),
+        "Part B: expected exit 0 for human mode; got {:?}\nstderr: {}",
+        human_output.status.code(),
+        String::from_utf8_lossy(&human_output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&human_output.stderr);
+    assert!(
+        stderr.contains("Backend"),
+        "Part B: stderr must contain component name 'Backend'; got: {stderr}"
+    );
+}
+
+// ── AC-005 (BC-8.1.005 EC-8.1.005-2 — bad assignee-type → clap exit 2) ──────
+
+/// AC-005 / BC-8.1.005 EC-8.1.005-2: `--assignee-type BOGUS` triggers a clap
+/// ValueEnum parse failure (exit 2) BEFORE the handler runs.
+///
+/// NOTE: This test LEGITIMATELY PASSES against todo!() stubs.  clap validates
+/// the enum before dispatching to the handler, so the todo!() code is never
+/// reached.  This is intentional and correct behavior; the test is included
+/// as a compile + regression guard.
+#[tokio::test]
+async fn test_bc_8_1_005_component_create_bad_assignee_type_exits_2() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // No HTTP calls expected — clap fails before any network access.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--assignee-type",
+            "BOGUS",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Expected clap exit 2 for bad assignee-type; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-006 (BC-8.1.006 — empty --lead on create → exit 64, zero POST) ────────
+
+/// AC-006 / BC-8.1.006: `--lead ""` on `component create` exits 64 with a
+/// descriptive error message (app-level guard, not clap).  Zero POST calls.
+/// Message must contain the exact substring
+/// `"--lead \"\" has no effect on create"`.
+/// Red Gate: todo!() panics before the guard fires → exit ≠ 64.
+#[tokio::test]
+async fn test_bc_8_1_006_component_create_empty_lead_exits_64_zero_post() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Zero POST calls — guard must fire before any HTTP.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Zero assignable-users calls — lead resolver must not run.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--lead",
+            "",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for empty --lead on create; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--lead") && stderr.contains("no effect on create"),
+        "Expected error message about empty --lead; got: {stderr}"
+    );
+}
+
+// ── AC-007 (BC-8.1.006 — ambiguous/no-match lead → exit 64, zero POST) ───────
+
+/// AC-007 / BC-8.1.006 VP-COMPONENT-002: when `--lead` resolution returns no
+/// matches or multiple matches, the command exits 64 and issues zero POST calls.
+/// Red Gate: todo!() panics before lead resolution fires.
+#[tokio::test]
+async fn test_bc_8_1_006_component_create_lead_ambiguous_and_no_match_zero_post() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── Case A: no match ──────────────────────────────────────────────────
+    let server_a = MockServer::start().await;
+    write_profile_config(config.path(), &server_a.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(multi_project_user_search_response(vec![])),
+        )
+        .expect(1)
+        .mount(&server_a)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server_a)
+        .await;
+
+    let no_match = jr_cmd(&server_a.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--lead",
+            "nonexistent-person",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server_a.verify().await;
+    assert_eq!(
+        no_match.status.code(),
+        Some(64),
+        "Case A: expected exit 64 for no-match lead; got {:?}\nstderr: {}",
+        no_match.status.code(),
+        String::from_utf8_lossy(&no_match.stderr)
+    );
+
+    // ── Case B: ambiguous match ───────────────────────────────────────────
+    let server_b = MockServer::start().await;
+    write_profile_config(config.path(), &server_b.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(multi_project_user_search_response(vec![
+                ("acc-001", "Alice Smith"),
+                ("acc-002", "Alice Jones"),
+            ])),
+        )
+        .expect(1)
+        .mount(&server_b)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server_b)
+        .await;
+
+    let ambiguous = jr_cmd(&server_b.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "create",
+            "--project",
+            "FOO",
+            "--lead",
+            "alice",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server_b.verify().await;
+    assert_eq!(
+        ambiguous.status.code(),
+        Some(64),
+        "Case B: expected exit 64 for ambiguous lead; got {:?}\nstderr: {}",
+        ambiguous.status.code(),
+        String::from_utf8_lossy(&ambiguous.stderr)
+    );
+}
+
+// ── AC-008 (BC-8.1.007 — edit PUT contains ONLY supplied fields) ─────────────
+
+/// AC-008 / BC-8.1.007 VP-COMPONENT-023: a partial edit supplying only `--name`
+/// sends `{"name":"New Name"}` in the PUT body.  No other keys (description,
+/// leadAccountId) may appear.  Enforced via `body_json` exact matching.
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_put_contains_only_supplied_fields() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Resolution: name-based via project component list.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Exact PUT body: only name, no description or leadAccountId.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(body_json(json!({"name": "New Name"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "New Name", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "New Name",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-009 (BC-8.1.007 — --lead "" clears vs omitting --lead keeps unchanged) ─
+
+/// AC-009 / BC-8.1.007: `--lead ""` sends `{"leadAccountId":null}` (explicit
+/// clear); omitting `--lead` means `leadAccountId` is absent from the PUT body
+/// (no-op — existing lead unchanged).
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_lead_empty_string_clears_vs_omitted() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── Case A: --lead "" sends leadAccountId:null ─────────────────────
+    let server_a = MockServer::start().await;
+    write_profile_config(config.path(), &server_a.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_a)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(body_json(json!({"name": "Backend", "leadAccountId": null})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "Backend", "FOO")),
+        )
+        .expect(1)
+        .mount(&server_a)
+        .await;
+
+    let clear_output = jr_cmd(&server_a.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "Backend",
+            "--lead",
+            "",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server_a.verify().await;
+    assert!(
+        clear_output.status.success(),
+        "Case A: expected exit 0 for --lead \"\"; got {:?}\nstderr: {}",
+        clear_output.status.code(),
+        String::from_utf8_lossy(&clear_output.stderr)
+    );
+
+    // ── Case B: no --lead flag → leadAccountId absent ─────────────────
+    let server_b = MockServer::start().await;
+    write_profile_config(config.path(), &server_b.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_b)
+        .await;
+
+    // Exact body: only name, no leadAccountId key at all.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(body_json(json!({"name": "Backend"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "Backend", "FOO")),
+        )
+        .expect(1)
+        .mount(&server_b)
+        .await;
+
+    let omit_output = jr_cmd(&server_b.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "Backend",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server_b.verify().await;
+    assert!(
+        omit_output.status.success(),
+        "Case B: expected exit 0 when --lead omitted; got {:?}\nstderr: {}",
+        omit_output.status.code(),
+        String::from_utf8_lossy(&omit_output.stderr)
+    );
+}
+
+// ── AC-010 (BC-8.1.007 P16 — name input, no fields → exit 64, zero HTTP) ─────
+
+/// AC-010 / BC-8.1.007 Precondition 1 (P16 fix-burst): when the input is a
+/// component NAME and no edit fields (--name, --description, --lead) are
+/// supplied, the handler exits 64 BEFORE making any HTTP call — including zero
+/// component-list GETs.  Precondition 1 fires before Precondition 2 (resolution).
+/// Red Gate: todo!() panics → exit ≠ 64.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_name_input_no_fields_zero_http() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Component list MUST NOT be called (Precondition 1 fires first).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(component_list_response(vec![])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "edit", "--project", "FOO", "Backend"])
+        // No --name, --description, or --lead
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when no fields supplied; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-011 (BC-8.1.007 P16 — numeric input, no fields → exit 64, zero HTTP) ──
+
+/// AC-011 / BC-8.1.007 Precondition 1 (P16 fix-burst ordering): when the input
+/// is a NUMERIC component ID and no edit fields are supplied, exit 64 fires
+/// BEFORE the confirming GET — not after.  This is the critical ordering
+/// invariant that P16 enforces: no-fields guard > confirming GET.
+/// Red Gate: todo!() panics → exit ≠ 64.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_numeric_input_no_fields_zero_http() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Confirming GET MUST NOT be called when no fields supplied.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "edit", "10001"])
+        // No --name, --description, or --lead
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when numeric input with no fields; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-012 (BC-8.1.007 M1 — numeric input derives project from ONE GET) ───────
+
+/// AC-012 / BC-8.1.007 M1 (ADR-0018 §1): for numeric component ID, ONE
+/// confirming GET (`/rest/api/3/component/{id}`) both validates existence and
+/// derives the project key for lead resolution.  `.expect(1)` enforces no
+/// duplicate GET; the resolved project must be used for lead lookup.
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_numeric_derives_project_for_lead_resolution() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Exactly ONE confirming GET — reused for both existence + project.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "New Name", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--name",
+            "New Name",
+            "10001", // numeric — no --project required
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for numeric edit; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-013 (BC-8.1.007 — --project mismatch → exit 64, zero PUT) ─────────────
+
+/// AC-013 / BC-8.1.007: when the user supplies `--project WRONG` but the
+/// confirming GET reveals the component belongs to project "FOO", the handler
+/// exits 64 BEFORE the PUT.  Message: "Component 10001 belongs to project FOO,
+/// not WRONG."  Zero PUT calls.
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_numeric_project_mismatch_zero_put() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Confirming GET: component belongs to FOO.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT MUST NOT be called — mismatch guard fires first.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_edit_response("10001", "X", "FOO")),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "WRONG",
+            "--name",
+            "Renamed",
+            "10001",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for project mismatch; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("FOO") && stderr.contains("WRONG"),
+        "Expected mismatch message naming both projects; got: {stderr}"
+    );
+}
+
+// ── AC-014 (BC-8.1.008 — numeric not-found message variants) ─────────────────
+
+/// AC-014 / BC-8.1.008: 404 on the confirming GET produces two message variants:
+/// (A) with `--project`: "Component '99999' not found in project FOO."
+/// (B) without `--project`: "Component '99999' not found." (project-less)
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_008_component_edit_numeric_notfound_message_variants() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── Case A: --project FOO supplied, confirming GET → 404 ─────────────
+    let server_a = MockServer::start().await;
+    write_profile_config(config.path(), &server_a.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/99999"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(json!({"errorMessages": ["Not found"]})),
+        )
+        .expect(1)
+        .mount(&server_a)
+        .await;
+
+    let with_project = jr_cmd(&server_a.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "X",
+            "99999",
+        ])
+        .output()
+        .unwrap();
+
+    server_a.verify().await;
+    assert_eq!(
+        with_project.status.code(),
+        Some(64),
+        "Case A: expected exit 64 for not-found with --project; got {:?}\nstderr: {}",
+        with_project.status.code(),
+        String::from_utf8_lossy(&with_project.stderr)
+    );
+    let stderr_a = String::from_utf8_lossy(&with_project.stderr);
+    assert!(
+        stderr_a.contains("not found in project FOO"),
+        "Case A: expected 'not found in project FOO' in message; got: {stderr_a}"
+    );
+
+    // ── Case B: no --project, confirming GET → 404 (project-less message) ─
+    let server_b = MockServer::start().await;
+    write_profile_config(config.path(), &server_b.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/99999"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(json!({"errorMessages": ["Not found"]})),
+        )
+        .expect(1)
+        .mount(&server_b)
+        .await;
+
+    let without_project = jr_cmd(&server_b.uri(), cache.path(), config.path())
+        .args(["component", "edit", "--name", "X", "99999"])
+        .output()
+        .unwrap();
+
+    server_b.verify().await;
+    assert_eq!(
+        without_project.status.code(),
+        Some(64),
+        "Case B: expected exit 64 for not-found without --project; got {:?}\nstderr: {}",
+        without_project.status.code(),
+        String::from_utf8_lossy(&without_project.stderr)
+    );
+    let stderr_b = String::from_utf8_lossy(&without_project.stderr);
+    // Project-less message: "not found" but NOT "not found in project"
+    assert!(
+        stderr_b.contains("not found"),
+        "Case B: expected 'not found' in message; got: {stderr_b}"
+    );
+    assert!(
+        !stderr_b.contains("not found in project"),
+        "Case B: message must NOT say 'not found in project' (no project known); got: {stderr_b}"
+    );
+}
+
+// ── AC-015 (BC-8.4.002/003 — name not-found and ambiguous messages) ───────────
+
+/// AC-015 / BC-8.4.002+BC-8.4.003: name-based resolution (via project component
+/// list) produces:
+/// (A) Not found → "Component 'xyz' not found in project FOO. Available: Backend, Frontend."
+/// (B) Ambiguous → "Ambiguous component 'back'. Matches: Backend, Backoffice."
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_008_component_edit_name_notfound_and_ambiguous_messages() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── Case A: not found ─────────────────────────────────────────────────
+    let server_a = MockServer::start().await;
+    write_profile_config(config.path(), &server_a.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10002", "Frontend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server_a)
+        .await;
+
+    let not_found = jr_cmd(&server_a.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "X",
+            "xyz",
+        ])
+        .output()
+        .unwrap();
+
+    server_a.verify().await;
+    assert_eq!(
+        not_found.status.code(),
+        Some(64),
+        "Case A: expected exit 64 for not-found; got {:?}\nstderr: {}",
+        not_found.status.code(),
+        String::from_utf8_lossy(&not_found.stderr)
+    );
+    let stderr_a = String::from_utf8_lossy(&not_found.stderr);
+    assert!(
+        stderr_a.contains("not found in project FOO"),
+        "Case A: expected 'not found in project FOO'; got: {stderr_a}"
+    );
+    // BC-8.4.002: Available list
+    assert!(
+        stderr_a.contains("Backend") && stderr_a.contains("Frontend"),
+        "Case A: expected available list with Backend, Frontend; got: {stderr_a}"
+    );
+
+    // ── Case B: ambiguous match ───────────────────────────────────────────
+    let server_b = MockServer::start().await;
+    write_profile_config(config.path(), &server_b.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10003", "Backoffice", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server_b)
+        .await;
+
+    let ambiguous = jr_cmd(&server_b.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "X",
+            "back",
+        ])
+        .output()
+        .unwrap();
+
+    server_b.verify().await;
+    assert_eq!(
+        ambiguous.status.code(),
+        Some(64),
+        "Case B: expected exit 64 for ambiguous; got {:?}\nstderr: {}",
+        ambiguous.status.code(),
+        String::from_utf8_lossy(&ambiguous.stderr)
+    );
+    let stderr_b = String::from_utf8_lossy(&ambiguous.stderr);
+    // BC-8.4.003: "Ambiguous component..."
+    assert!(
+        stderr_b.contains("Ambiguous") || stderr_b.contains("ambiguous"),
+        "Case B: expected ambiguous message; got: {stderr_b}"
+    );
+    assert!(
+        stderr_b.contains("Backend") && stderr_b.contains("Backoffice"),
+        "Case B: expected candidate list with Backend, Backoffice; got: {stderr_b}"
+    );
+}
+
+// ── AC-016 (BC-8.1.007/BC-8.1.008 — PUT-race 404 exits 1, not 64) ────────────
+
+/// AC-016 / VP-COMPONENT-024: a 404 on the mutating PUT (after successful
+/// resolution) is a racing delete — the component existed at resolve time but
+/// is gone by mutation time.  This is ApiError (exit 1), NOT UserError (exit 64).
+/// Distinct from resolver 404 which is exit 64 (BC-8.1.008).
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_put_race_404_exits_1_distinct_from_resolver_404() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Resolution succeeds — component found.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT races and returns 404 — component deleted between resolve and mutate.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(json!({"errorMessages": ["Not found"]})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "Renamed",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    // Must be exit 1 (ApiError), NOT exit 64 (UserError).
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Expected exit 1 for PUT-race 404 (ApiError, not UserError); got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-017 (BC-8.1.004 — numeric exemption vs name requires project) ─────────
+
+/// AC-017 / BC-8.1.004: all-ASCII-digit component IDs bypass the no-project
+/// guard (numeric-id exemption).  A name-based input without `--project` exits
+/// 64 before any HTTP.
+/// Red Gate for numeric case: todo!() panics.  Name case exits 64 (passes).
+#[tokio::test]
+async fn test_bc_8_1_004_component_edit_numeric_id_exemption_vs_name_requires_project() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── Case A: numeric input, no --project → should proceed (needs confirming GET)
+    let server_a = MockServer::start().await;
+    write_profile_config(config.path(), &server_a.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .mount(&server_a)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "New Name", "FOO")),
+        )
+        .mount(&server_a)
+        .await;
+
+    let numeric_output = jr_cmd(&server_a.uri(), cache.path(), config.path())
+        .args(["component", "edit", "--name", "New Name", "10001"])
+        .output()
+        .unwrap();
+
+    // Red Gate: todo!() panics → exit ≠ 0.  With implementation: should be exit 0.
+    assert!(
+        numeric_output.status.success(),
+        "Case A: numeric exempt from --project guard; expected exit 0; got {:?}\nstderr: {}",
+        numeric_output.status.code(),
+        String::from_utf8_lossy(&numeric_output.stderr)
+    );
+
+    // ── Case B: name input, no --project → exit 64, zero HTTP ────────────
+    let server_b = MockServer::start().await;
+    write_profile_config(config.path(), &server_b.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(component_list_response(vec![])))
+        .expect(0)
+        .mount(&server_b)
+        .await;
+
+    let cwd = TempDir::new().unwrap(); // no .jr.toml → no configured project
+
+    let name_output = jr_cmd(&server_b.uri(), cache.path(), config.path())
+        .args(["component", "edit", "--name", "New Name", "backend"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+
+    server_b.verify().await;
+    assert_eq!(
+        name_output.status.code(),
+        Some(64),
+        "Case B: name input without --project must exit 64; got {:?}\nstderr: {}",
+        name_output.status.code(),
+        String::from_utf8_lossy(&name_output.stderr)
+    );
+    let stderr_b = String::from_utf8_lossy(&name_output.stderr);
+    assert!(
+        stderr_b.contains("--project"),
+        "Case B: expected '--project' mentioned in error; got: {stderr_b}"
+    );
+}
+
+// ── AC-018 (ADR-0018 §2 — create/edit invalidate components cache) ───────────
+
+/// AC-018 / ADR-0018 §2: after a successful `component create` or
+/// `component edit`, `invalidate_components_cache(profile, project_key)` is
+/// called, removing the cached entry for that project.
+///
+/// The test pre-writes a cache file, runs the command, then asserts the cache
+/// entry for the project is absent.  Red Gate: todo!() panics → exit ≠ 0.
+#[tokio::test]
+async fn test_adr_0018_component_create_and_edit_invalidate_cache() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Pre-write a components cache entry for project FOO.
+    // Path: {JR_CACHE_DIR}/v1/default/components_default.json
+    let cache_dir_path = cache.path().join("v1").join("default");
+    std::fs::create_dir_all(&cache_dir_path).unwrap();
+    let cache_file = cache_dir_path.join("components_default.json");
+    std::fs::write(
+        &cache_file,
+        r#"{"FOO":{"components":[{"id":"10001","name":"Backend"}],"fetched_at":"2026-01-01T00:00:00Z"}}"#,
+    )
+    .unwrap();
+
+    // Assert the cache file has the FOO entry before the command.
+    let before: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cache_file).unwrap()).unwrap();
+    assert!(
+        before.get("FOO").is_some(),
+        "Pre-condition: FOO entry must be present in cache before command"
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/component"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(component_create_response("10002", "API", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "create", "--project", "FOO", "API"])
+        .output()
+        .unwrap();
+
+    // Red Gate: todo!() panics → exit ≠ 0.
+    assert!(
+        output.status.success(),
+        "Expected exit 0 after create (cache invalidation only happens on success); \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // After successful create, the FOO cache entry must be gone.
+    let after_content = std::fs::read_to_string(&cache_file).unwrap_or_default();
+    let after: serde_json::Value = serde_json::from_str(&after_content).unwrap_or(json!({}));
+    assert!(
+        after.get("FOO").is_none(),
+        "After create, FOO entry must be removed from components cache (ADR-0018 §2); \
+         cache after: {after}"
     );
 }

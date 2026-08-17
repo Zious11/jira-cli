@@ -577,3 +577,34 @@ pub fn component_response_with_flags(
     }
     obj
 }
+
+// ── S-604-2: Component create/edit fixtures ───────────────────────────────────
+
+/// 201 response body returned by `POST /rest/api/3/component` on success.
+///
+/// Used by BC-8.1.005 create tests to satisfy the wiremock mock and to verify
+/// the success output shape (`{"id","name","project"}`).
+pub fn component_create_response(id: &str, name: &str, project_key: &str) -> Value {
+    json!({
+        "id": id,
+        "name": name,
+        "description": Value::Null,
+        "lead": Value::Null,
+        "assigneeType": Value::Null,
+        "project": project_key,
+    })
+}
+
+/// 200 response body returned by `PUT /rest/api/3/component/{id}` on success.
+///
+/// Used by BC-8.1.007 edit tests.
+pub fn component_edit_response(id: &str, name: &str, project_key: &str) -> Value {
+    json!({
+        "id": id,
+        "name": name,
+        "description": Value::Null,
+        "lead": Value::Null,
+        "assigneeType": Value::Null,
+        "project": project_key,
+    })
+}
