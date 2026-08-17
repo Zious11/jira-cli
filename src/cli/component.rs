@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::api::client::JiraClient;
+use crate::cli::AssigneeType;
 use crate::cli::OutputFormat;
 use crate::cli::issue::resolve_component;
 use crate::config::Config;
@@ -22,6 +23,48 @@ pub async fn handle(
             handle_list(
                 project.as_deref().or(project_flag),
                 counts,
+                output_format,
+                config,
+                client,
+            )
+            .await
+        }
+        ComponentSubcommand::Create {
+            project,
+            name,
+            description,
+            lead,
+            assignee_type,
+        } => {
+            handle_create(
+                CreateComponentArgs {
+                    project,
+                    name,
+                    description,
+                    lead,
+                    assignee_type,
+                },
+                output_format,
+                config,
+                client,
+            )
+            .await
+        }
+        ComponentSubcommand::Edit {
+            name_or_id,
+            project,
+            name,
+            description,
+            lead,
+        } => {
+            handle_edit(
+                EditComponentArgs {
+                    name_or_id,
+                    project,
+                    new_name: name,
+                    description,
+                    lead,
+                },
                 output_format,
                 config,
                 client,
@@ -163,4 +206,72 @@ async fn handle_list(
     let _ = resolve_component;
 
     Ok(())
+}
+
+/// Caller-supplied arguments for `handle_create`.
+///
+/// Bundles the five command-specific parameters so `handle_create` stays
+/// within clippy's 7-argument limit (same pattern as `JsmUploadOpts`).
+struct CreateComponentArgs {
+    project: String,
+    name: String,
+    description: Option<String>,
+    lead: Option<String>,
+    assignee_type: Option<AssigneeType>,
+}
+
+/// Caller-supplied arguments for `handle_edit`.
+///
+/// Bundles the five command-specific parameters so `handle_edit` stays
+/// within clippy's 7-argument limit.
+struct EditComponentArgs {
+    name_or_id: String,
+    project: Option<String>,
+    new_name: Option<String>,
+    description: Option<String>,
+    lead: Option<String>,
+}
+
+/// Handle `jr component create --project KEY NAME [options]`.
+///
+/// BC-8.2.001 — BC-8.2.008 (S-604-2).
+/// Implementer: POSTs `/rest/api/3/component`, resolves lead via
+/// `search_assignable_users_by_project`, then calls the ADR-0018
+/// confirming-GET (`get_component`).
+async fn handle_create(
+    args: CreateComponentArgs,
+    _output_format: &OutputFormat,
+    _config: &Config,
+    _client: &JiraClient,
+) -> Result<()> {
+    let CreateComponentArgs {
+        project: _project,
+        name: _name,
+        description: _description,
+        lead: _lead,
+        assignee_type: _assignee_type,
+    } = args;
+    todo!()
+}
+
+/// Handle `jr component edit NAME_OR_ID [options]`.
+///
+/// BC-8.3.001 — BC-8.3.007 (S-604-2).
+/// Implementer: resolves the component via `resolve_component`, PUTs
+/// `/rest/api/3/component/{id}`, then calls the ADR-0018 confirming-GET
+/// (`get_component`).
+async fn handle_edit(
+    args: EditComponentArgs,
+    _output_format: &OutputFormat,
+    _config: &Config,
+    _client: &JiraClient,
+) -> Result<()> {
+    let EditComponentArgs {
+        name_or_id: _name_or_id,
+        project: _project,
+        new_name: _new_name,
+        description: _description,
+        lead: _lead,
+    } = args;
+    todo!()
 }
