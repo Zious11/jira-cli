@@ -39,6 +39,12 @@ pub async fn handle(
             lead,
             assignee_type,
         } => {
+            // F5-A-L2: `--project` supplied locally (subcommand position)
+            // takes precedence; falls back to the global `--project` flag.
+            // NO `.jr.toml` config fallback (BC-8.1.004/BC-8.1.005) —
+            // `handle_create` enforces presence itself and exits 64 if
+            // neither position supplied a value.
+            let project = project.or_else(|| project_flag.map(str::to_string));
             handle_create(
                 CreateComponentArgs {
                     project,
@@ -233,7 +239,7 @@ async fn handle_list(
 /// Bundles the five command-specific parameters so `handle_create` stays
 /// within clippy's 7-argument limit (same pattern as `JsmUploadOpts`).
 struct CreateComponentArgs {
-    project: String,
+    project: Option<String>,
     name: String,
     description: Option<String>,
     lead: Option<String>,
@@ -281,6 +287,19 @@ async fn handle_create(
         lead,
         assignee_type,
     } = args;
+
+    // F5-A-L2 / BC-8.1.004 + BC-8.1.005: --project is required for create with
+    // NO `.jr.toml` config fallback — it must come from either the local
+    // `--project` flag or the global `--project` flag (merged by the caller).
+    // Exit 64 before any HTTP call, mirroring BC-8.1.004's other no-project
+    // guards.
+    let project = project.ok_or_else(|| {
+        JrError::UserError(
+            "No project configured. Pass --project KEY (component create has no \
+             .jr.toml config fallback)."
+                .into(),
+        )
+    })?;
 
     // BC-8.1.006: `--lead ""` has no effect on create — exit 64 before any HTTP.
     if let Some(ref lead_val) = lead {
