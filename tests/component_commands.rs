@@ -3244,7 +3244,7 @@ async fn test_bc_x_10_003_component_edit_exact_multiple_fails_closed() {
         .await;
 
     // PUT MUST NOT be called — ExactMultiple fail-closed guard fires before any
-    // mutation.  Current impl violates this (picks first, calls PUT).
+    // mutation.
     Mock::given(method("PUT"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .expect(0)
@@ -3432,7 +3432,6 @@ async fn test_bc_8_1_007_component_edit_numeric_missing_project_field_fails_clos
         .await;
 
     // PUT MUST NOT fire — missing-project guard fires first.
-    // Current impl violates this (adopts --project value, calls PUT).
     Mock::given(method("PUT"))
         .and(path("/rest/api/3/component/10001"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
@@ -3477,6 +3476,17 @@ async fn test_bc_8_1_007_component_edit_numeric_missing_project_field_fails_clos
 /// behavior: a mutation removing the `project` arg from `ComponentSubcommand::Edit`
 /// or blocking global propagation would cause the GET to receive no project key
 /// and fail.
+///
+/// **Regression pin against a recurring false-positive:** two independent
+/// adversary passes wrongly claimed `component edit` drops the global
+/// `--project` flag because `handle_edit` has no explicit `.or(project_flag)`
+/// call.  It does NOT drop it — clap's `global = true` definition on the
+/// top-level `Cli::project` field makes the parsed value available directly
+/// inside `ComponentSubcommand::Edit.project` before `handle_edit` is even
+/// called.  `jr --project FOO component edit …` therefore resolves against
+/// FOO even though `--project` appears BEFORE the subcommand.  Do NOT add a
+/// redundant `.or(project_flag)` merge to silence that concern — it would be
+/// a no-op at best and could mask a future clap API change at worst.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_honors_global_project_flag() {
     let cache = TempDir::new().unwrap();
