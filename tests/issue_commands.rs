@@ -2908,10 +2908,9 @@ async fn test_queue_view_no_due_date_column_regardless_of_duedate_value() {
 // `MockServer::received_requests()`, mirroring the pattern established in
 // `tests/component_commands.rs` (AC-017 snapshot-JQL assertion).
 //
-// RED GATE: both `resolve_component_clauses` and `build_filter_clauses`'s
-// component branch are `todo!()` as of the S-606-1 stub commit — every test
-// below panics (exit 101, `unwrap()` on a non-existent status or a stderr
-// substring mismatch) until Task 8/9 implement the real behavior.
+// Implementation status: `resolve_component_clauses` and `build_filter_clauses`'s
+// component branch are implemented; all 19 tests below are green, exercising
+// the shipped `--component` filter behavior (BC-2.1.018..022).
 
 /// Shared harness: `jr` CLI invocation pre-wired with an isolated cache and
 /// config directory (per-test tempdirs) so the ADR-0018 components-cache
