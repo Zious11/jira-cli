@@ -2269,12 +2269,16 @@ async fn test_bc_8_1_008_component_edit_name_notfound_and_ambiguous_messages() {
     let server_a = MockServer::start().await;
     write_profile_config(config.path(), &server_a.uri());
 
+    // B-01: fixture supplies components in NON-alphabetical order so the impl
+    // must sort them before rendering.  The expected sorted list is:
+    // Api, Backend, Zebra (case-insensitive alphabetical).
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/FOO/components"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(component_list_response(vec![
-                component_response("10001", "Backend", None, None, None),
-                component_response("10002", "Frontend", None, None, None),
+                component_response("10001", "Zebra", None, None, None),
+                component_response("10002", "Api", None, None, None),
+                component_response("10003", "Backend", None, None, None),
             ])),
         )
         .expect(1)
@@ -2309,10 +2313,13 @@ async fn test_bc_8_1_008_component_edit_name_notfound_and_ambiguous_messages() {
         "AC-015 F-08: Case A stderr must contain BC-8.4.002 exact prefix \
          \"Component 'xyz' not found in project FOO. Available:\"; got: {stderr_a}"
     );
-    // BC-8.4.002: Available list contains both components (alphabetical)
+    // B-01 / BC-8.4.002: Available list must be ALPHABETICALLY SORTED (case-insensitive).
+    // B-02 / BC-8.4.002: Available list must end with a trailing period.
+    // Fixture returns ["Zebra","Api","Backend"] (non-alphabetical); impl must sort and terminate with ".".
     assert!(
-        stderr_a.contains("Backend") && stderr_a.contains("Frontend"),
-        "AC-015 F-08: Case A BC-8.4.002 Available list must include Backend and Frontend; got: {stderr_a}"
+        stderr_a.contains("Available: Api, Backend, Zebra."),
+        "AC-015 F-08 B-01/B-02: Case A stderr must contain alphabetically-sorted Available list \
+         with trailing period \"Available: Api, Backend, Zebra.\"; got: {stderr_a}"
     );
 
     // ── Case B: ambiguous match ───────────────────────────────────────────
@@ -2362,6 +2369,12 @@ async fn test_bc_8_1_008_component_edit_name_notfound_and_ambiguous_messages() {
     assert!(
         stderr_b.contains("Backend") && stderr_b.contains("Backoffice"),
         "AC-015 F-08: Case B BC-8.4.003 Matches list must include Backend and Backoffice; got: {stderr_b}"
+    );
+    // B-02 / BC-8.4.003: Matches list must end with a trailing period.
+    assert!(
+        stderr_b.contains("Matches: Backend, Backoffice."),
+        "AC-015 F-08 B-02: Case B stderr must contain Matches list with trailing period \
+         \"Matches: Backend, Backoffice.\"; got: {stderr_b}"
     );
 }
 
