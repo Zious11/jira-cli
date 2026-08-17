@@ -442,6 +442,25 @@ pub fn multi_project_user_search_response(users: Vec<(&str, &str)>) -> Value {
     json!(user_objects)
 }
 
+/// Multi-project assignable user search response with emailAddress fields.
+/// Like `multi_project_user_search_response` but each entry includes an
+/// `emailAddress`, enabling BC-X.7.004 "email + accountId" candidate list
+/// assertions (used in BC-8.1.006 ambiguous-lead tests).
+pub fn multi_project_user_search_response_with_email(users: Vec<(&str, &str, &str)>) -> Value {
+    let user_objects: Vec<Value> = users
+        .into_iter()
+        .map(|(account_id, display_name, email)| {
+            json!({
+                "accountId": account_id,
+                "displayName": display_name,
+                "emailAddress": email,
+                "active": true,
+            })
+        })
+        .collect();
+    json!(user_objects)
+}
+
 /// Create issue response.
 pub fn create_issue_response(key: &str) -> Value {
     json!({

@@ -18,7 +18,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use common::fixtures::{
     component_create_response, component_edit_response, component_list_response,
     component_response, component_response_with_flags, multi_project_user_search_response,
-    related_issue_counts_response, write_profile_config,
+    multi_project_user_search_response_with_email, related_issue_counts_response,
+    write_profile_config,
 };
 
 // ── Harness ──────────────────────────────────────────────────────────────────
@@ -1309,21 +1310,21 @@ async fn test_bc_8_1_005_component_create_success_output_both_modes() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("--output json stdout must be valid JSON");
     let obj = parsed.as_object().expect("JSON output must be an object");
-    assert!(
-        obj.contains_key("id"),
-        "JSON output must contain 'id'; keys: {:?}",
-        obj.keys().collect::<Vec<_>>()
-    );
-    assert!(
-        obj.contains_key("name"),
-        "JSON output must contain 'name'; keys: {:?}",
-        obj.keys().collect::<Vec<_>>()
-    );
-    assert!(
-        obj.contains_key("project"),
-        "JSON output must contain 'project'; keys: {:?}",
-        obj.keys().collect::<Vec<_>>()
-    );
+    // F-04: key-set equality — exactly {"id","name","project"}, no extras
+    {
+        let actual_keys: std::collections::BTreeSet<&str> =
+            obj.keys().map(|s| s.as_str()).collect();
+        let expected_keys: std::collections::BTreeSet<&str> =
+            ["id", "name", "project"].iter().copied().collect();
+        assert_eq!(
+            actual_keys,
+            expected_keys,
+            "AC-004 F-04: --output json must return EXACTLY {{\"id\",\"name\",\"project\"}} \
+             (BC-8.1.005 §JSON); no extra keys like description/lead/assigneeType; \
+             got keys: {:?}",
+            obj.keys().collect::<Vec<_>>(),
+        );
+    }
     assert_eq!(parsed["id"], "10001");
     assert_eq!(parsed["name"], "Backend");
     assert_eq!(parsed["project"], "FOO");
@@ -1341,9 +1342,11 @@ async fn test_bc_8_1_005_component_create_success_output_both_modes() {
         String::from_utf8_lossy(&human_output.stderr)
     );
     let stderr = String::from_utf8_lossy(&human_output.stderr);
+    // F-05: exact BC-8.1.005 confirmation line
     assert!(
-        stderr.contains("Backend"),
-        "Part B: stderr must contain component name 'Backend'; got: {stderr}"
+        stderr.contains("Created component \"Backend\" (id 10001) in project FOO."),
+        "AC-004 F-05: stderr must contain exact BC-8.1.005 confirmation line \
+         'Created component \"Backend\" (id 10001) in project FOO.'; got: {stderr}"
     );
 }
 
@@ -1503,6 +1506,13 @@ async fn test_bc_8_1_006_component_create_lead_ambiguous_and_no_match_zero_post(
         no_match.status.code(),
         String::from_utf8_lossy(&no_match.stderr)
     );
+    // F-02: BC-8.1.006 EC-8.1.006-2 exact no-match message
+    let stderr_a = String::from_utf8_lossy(&no_match.stderr);
+    assert!(
+        stderr_a.contains("No user matching 'nonexistent-person'"),
+        "AC-007 F-02: Case A stderr must contain BC-8.1.006 EC-8.1.006-2 exact message \
+         \"No user matching 'nonexistent-person'\"; got: {stderr_a}"
+    );
 
     // ── Case B: ambiguous match ───────────────────────────────────────────
     let server_b = MockServer::start().await;
@@ -1510,12 +1520,12 @@ async fn test_bc_8_1_006_component_create_lead_ambiguous_and_no_match_zero_post(
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(multi_project_user_search_response(vec![
-                ("acc-001", "Alice Smith"),
-                ("acc-002", "Alice Jones"),
-            ])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            multi_project_user_search_response_with_email(vec![
+                ("acc-001", "Alice Smith", "alice.smith@example.com"),
+                ("acc-002", "Alice Jones", "alice.jones@example.com"),
+            ]),
+        ))
         .expect(1)
         .mount(&server_b)
         .await;
@@ -1547,6 +1557,18 @@ async fn test_bc_8_1_006_component_create_lead_ambiguous_and_no_match_zero_post(
         "Case B: expected exit 64 for ambiguous lead; got {:?}\nstderr: {}",
         ambiguous.status.code(),
         String::from_utf8_lossy(&ambiguous.stderr)
+    );
+    // F-02: BC-8.1.006 EC-8.1.006-1 — both candidate emails/accountIds must appear
+    let stderr_b = String::from_utf8_lossy(&ambiguous.stderr);
+    assert!(
+        stderr_b.contains("alice.smith@example.com") || stderr_b.contains("acc-001"),
+        "AC-007 F-02: Case B BC-8.1.006 EC-8.1.006-1 ambiguous message must name first \
+         candidate (email alice.smith@example.com or accountId acc-001); got: {stderr_b}"
+    );
+    assert!(
+        stderr_b.contains("alice.jones@example.com") || stderr_b.contains("acc-002"),
+        "AC-007 F-02: Case B BC-8.1.006 EC-8.1.006-1 ambiguous message must name second \
+         candidate (email alice.jones@example.com or accountId acc-002); got: {stderr_b}"
     );
 }
 
@@ -1606,6 +1628,142 @@ async fn test_bc_8_1_007_component_edit_put_contains_only_supplied_fields() {
         "Expected exit 0; got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── F-01 / F-05-edit (BC-8.1.007 — edit --output json exact shape + field-echo) ─
+
+/// F-01+F-05 / BC-8.1.007: `component edit --output json` returns EXACTLY
+/// `{"id","name","project"}` — same 3-key shape as create (BC-8.1.005).
+/// The API response contains more fields (description, lead, assigneeType) that
+/// the handler MUST project away.
+///
+/// Part B: table mode emits `  name \u{2192} New Name` on stderr (BC-3.4.012 field-echo).
+///
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_007_component_edit_success_output_json_shape() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Resolution via project component list.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // PUT returns the full 6-key API response; output must project to 3 keys.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "New Name", "FOO")),
+        )
+        .mount(&server)
+        .await;
+
+    // ── Part A: --output json → exactly {"id","name","project"} ──────────────
+    let json_output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "New Name",
+            "--output",
+            "json",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        json_output.status.success(),
+        "F-01 Part A: expected exit 0 with --output json; got {:?}\nstderr: {}",
+        json_output.status.code(),
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&json_output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("F-01: --output json stdout must be valid JSON");
+    let obj = parsed
+        .as_object()
+        .expect("F-01: JSON output must be an object");
+    // F-01: key-set equality — exactly {"id","name","project"}, no extras
+    {
+        let actual_keys: std::collections::BTreeSet<&str> =
+            obj.keys().map(|s| s.as_str()).collect();
+        let expected_keys: std::collections::BTreeSet<&str> =
+            ["id", "name", "project"].iter().copied().collect();
+        assert_eq!(
+            actual_keys,
+            expected_keys,
+            "F-01: edit --output json must return EXACTLY {{\"id\",\"name\",\"project\"}} \
+             (BC-8.1.007 same shape as create); no extra keys like description/lead/assigneeType; \
+             got keys: {:?}",
+            obj.keys().collect::<Vec<_>>(),
+        );
+    }
+    assert_eq!(parsed["id"], "10001");
+    assert_eq!(parsed["name"], "New Name");
+    assert_eq!(parsed["project"], "FOO");
+
+    // ── Part B: table mode → field-echo on stderr (BC-3.4.012) ───────────────
+    let server_b = MockServer::start().await;
+    write_profile_config(config.path(), &server_b.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_b)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "New Name", "FOO")),
+        )
+        .mount(&server_b)
+        .await;
+
+    let table_output = jr_cmd(&server_b.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "FOO",
+            "--name",
+            "New Name",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        table_output.status.success(),
+        "F-05 edit Part B: expected exit 0 for table mode; got {:?}\nstderr: {}",
+        table_output.status.code(),
+        String::from_utf8_lossy(&table_output.stderr)
+    );
+    let stderr_b = String::from_utf8_lossy(&table_output.stderr);
+    // F-05: BC-3.4.012 field-echo format "  field \u{2192} value"
+    assert!(
+        stderr_b.contains("  name \u{2192} New Name"),
+        "F-05 edit Part B: stderr must contain BC-3.4.012 field-echo \
+         '  name \u{2192} New Name'; got: {stderr_b}"
     );
 }
 
@@ -1984,6 +2142,12 @@ async fn test_bc_8_1_008_component_edit_numeric_notfound_message_variants() {
         stderr_a.contains("not found in project FOO"),
         "Case A: expected 'not found in project FOO' in message; got: {stderr_a}"
     );
+    // F-03: BC-8.1.008 exact message with Run: suffix
+    assert!(
+        stderr_a.contains("Component '99999' not found in project FOO. Run: jr component list"),
+        "AC-014 F-03: Case A stderr must contain BC-8.1.008 exact message with Run: suffix \
+         \"Component '99999' not found in project FOO. Run: jr component list\"; got: {stderr_a}"
+    );
 
     // ── Case B: no --project, confirming GET → 404 (project-less message) ─
     let server_b = MockServer::start().await;
@@ -2012,14 +2176,80 @@ async fn test_bc_8_1_008_component_edit_numeric_notfound_message_variants() {
         String::from_utf8_lossy(&without_project.stderr)
     );
     let stderr_b = String::from_utf8_lossy(&without_project.stderr);
-    // Project-less message: "not found" but NOT "not found in project"
+    // F-03: BC-8.1.008 project-less variant — exact message + Run: suffix
     assert!(
-        stderr_b.contains("not found"),
-        "Case B: expected 'not found' in message; got: {stderr_b}"
+        stderr_b.contains("Component '99999' not found."),
+        "AC-014 F-03: Case B stderr must match BC-8.1.008 project-less message \
+         \"Component '99999' not found.\"; got: {stderr_b}"
     );
     assert!(
         !stderr_b.contains("not found in project"),
-        "Case B: message must NOT say 'not found in project' (no project known); got: {stderr_b}"
+        "AC-014 F-03: Case B message must NOT say 'not found in project' (no project known); got: {stderr_b}"
+    );
+    assert!(
+        stderr_b.contains("Run: jr component list --project"),
+        "AC-014 F-03: Case B stderr must contain BC-8.1.008 Run: hint \
+         'Run: jr component list --project'; got: {stderr_b}"
+    );
+    assert!(
+        stderr_b.contains("to see valid components."),
+        "AC-014 F-03: Case B stderr must end with BC-8.1.008 suffix \
+         'to see valid components.'; got: {stderr_b}"
+    );
+}
+
+// ── F-06 (BC-8.1.008 — numeric 404 with .jr.toml project → project-qualified) ─
+
+/// F-06 / BC-8.1.008: numeric edit with NO --project but `.jr.toml` in CWD
+/// supplies `project = "FOO"`.  GET 404 → project-qualified not-found message,
+/// NOT the project-less variant (which tells the user to supply --project).
+///
+/// Red Gate: todo!() panics before HTTP.
+#[tokio::test]
+async fn test_bc_8_1_008_component_edit_numeric_notfound_config_project_qualified() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // .jr.toml in CWD supplies the project without --project flag.
+    std::fs::write(cwd.path().join(".jr.toml"), "project = \"FOO\"\n").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/99999"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(json!({"errorMessages": ["Not found"]})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "edit", "--name", "X", "99999"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F-06: expected exit 64 for numeric not-found with .jr.toml project; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Must use the project-qualified variant since project is known from .jr.toml
+    assert!(
+        stderr.contains("Component '99999' not found in project FOO. Run: jr component list"),
+        "F-06: stderr must contain BC-8.1.008 project-qualified message \
+         \"Component '99999' not found in project FOO. Run: jr component list\"; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("to see valid components."),
+        "F-06: project-qualified variant must NOT contain the project-less suffix \
+         'to see valid components.'; got: {stderr}"
     );
 }
 
@@ -2073,14 +2303,16 @@ async fn test_bc_8_1_008_component_edit_name_notfound_and_ambiguous_messages() {
         String::from_utf8_lossy(&not_found.stderr)
     );
     let stderr_a = String::from_utf8_lossy(&not_found.stderr);
+    // F-08: BC-8.4.002 exact prefix (name not-found message)
     assert!(
-        stderr_a.contains("not found in project FOO"),
-        "Case A: expected 'not found in project FOO'; got: {stderr_a}"
+        stderr_a.contains("Component 'xyz' not found in project FOO. Available:"),
+        "AC-015 F-08: Case A stderr must contain BC-8.4.002 exact prefix \
+         \"Component 'xyz' not found in project FOO. Available:\"; got: {stderr_a}"
     );
-    // BC-8.4.002: Available list
+    // BC-8.4.002: Available list contains both components (alphabetical)
     assert!(
         stderr_a.contains("Backend") && stderr_a.contains("Frontend"),
-        "Case A: expected available list with Backend, Frontend; got: {stderr_a}"
+        "AC-015 F-08: Case A BC-8.4.002 Available list must include Backend and Frontend; got: {stderr_a}"
     );
 
     // ── Case B: ambiguous match ───────────────────────────────────────────
@@ -2121,14 +2353,15 @@ async fn test_bc_8_1_008_component_edit_name_notfound_and_ambiguous_messages() {
         String::from_utf8_lossy(&ambiguous.stderr)
     );
     let stderr_b = String::from_utf8_lossy(&ambiguous.stderr);
-    // BC-8.4.003: "Ambiguous component..."
+    // F-08: BC-8.4.003 exact prefix — case-sensitive "Ambiguous component"
     assert!(
-        stderr_b.contains("Ambiguous") || stderr_b.contains("ambiguous"),
-        "Case B: expected ambiguous message; got: {stderr_b}"
+        stderr_b.contains("Ambiguous component 'back'. Matches:"),
+        "AC-015 F-08: Case B stderr must contain BC-8.4.003 exact prefix \
+         \"Ambiguous component 'back'. Matches:\"; got: {stderr_b}"
     );
     assert!(
         stderr_b.contains("Backend") && stderr_b.contains("Backoffice"),
-        "Case B: expected candidate list with Backend, Backoffice; got: {stderr_b}"
+        "AC-015 F-08: Case B BC-8.4.003 Matches list must include Backend and Backoffice; got: {stderr_b}"
     );
 }
 
