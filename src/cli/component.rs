@@ -387,7 +387,7 @@ async fn handle_edit(
     let has_fields = new_name.is_some() || description.is_some() || lead.is_some();
     if !has_fields {
         return Err(JrError::UserError(
-            "No fields to update. Supply --name, --description, or --lead.".into(),
+            "Error: no fields specified to update. Supply --name, --description, or --lead.".into(),
         )
         .into());
     }
@@ -425,23 +425,35 @@ async fn handle_edit(
         };
 
         // F-07 / BC-8.1.007: fail-closed if the confirming GET returned no project
-        // field AND no --project flag was supplied.
+        // field, regardless of whether --project was supplied.
+        // FIX 4 (PR#704 Finding C): adopting a user-supplied --project value
+        // when the confirming GET returned no project field is unsafe — we
+        // cannot verify the component's actual project scope. Exit 64 in both
+        // cases (--project supplied or not).
         let derived_project = comp.project.clone().unwrap_or_default();
         let final_project_key: String = if !derived_project.is_empty() {
             derived_project.clone()
-        } else if let Some(ref p) = project {
-            p.clone()
         } else {
-            return Err(JrError::UserError(format!(
-                "Component {} exists but Jira returned no project field. \
-                 Pass --project KEY to disambiguate.",
-                name_or_id
-            ))
-            .into());
+            if project.is_some() {
+                return Err(JrError::UserError(format!(
+                    "Component {} returned no project field; cannot verify --project \
+                     or scope the update. The component's project could not be determined.",
+                    name_or_id
+                ))
+                .into());
+            } else {
+                return Err(JrError::UserError(format!(
+                    "Component {} exists but Jira returned no project field. \
+                     Pass --project KEY to disambiguate.",
+                    name_or_id
+                ))
+                .into());
+            }
         };
-        // If --project was supplied, verify it matches.
+        // If --project was supplied, verify it matches the derived project.
+        // (Only reached when derived_project is non-empty per the guard above.)
         if let Some(ref user_project) = project {
-            if !derived_project.is_empty() && !user_project.eq_ignore_ascii_case(&derived_project) {
+            if !user_project.eq_ignore_ascii_case(&derived_project) {
                 return Err(JrError::UserError(format!(
                     "Component {} belongs to project {}, not {}.",
                     name_or_id, derived_project, user_project
@@ -465,7 +477,26 @@ async fn handle_edit(
         let candidate_names: Vec<String> = components.iter().map(|c| c.name.clone()).collect();
 
         let matched_name = match resolve_component(&name_or_id, &pk, &candidate_names) {
-            MatchResult::Exact(n) | MatchResult::ExactMultiple(n) => n,
+            MatchResult::Exact(n) => n,
+            MatchResult::ExactMultiple(matched_name) => {
+                // BC-X.10.003 / hardened issue #288 H-3: picking the first of
+                // duplicate-named components is non-deterministic and unsafe.
+                // Fail closed with all matching IDs so the caller can use a
+                // numeric ID to disambiguate.
+                let mut ids: Vec<String> = components
+                    .iter()
+                    .filter(|c| c.name.eq_ignore_ascii_case(&matched_name))
+                    .map(|c| c.id.clone())
+                    .collect();
+                ids.sort();
+                return Err(JrError::UserError(format!(
+                    "Multiple components named \"{}\" found (IDs: {}). \
+                     Pass the numeric ID directly.",
+                    matched_name,
+                    ids.join(", ")
+                ))
+                .into());
+            }
             MatchResult::Ambiguous(mut candidates) => {
                 // BC-8.4.003: Matches list must be alphabetically sorted (case-insensitive)
                 // and terminated with a period.

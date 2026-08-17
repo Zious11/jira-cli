@@ -1099,7 +1099,7 @@ pub enum RequestTypeCommand {
 /// Assignee-type policy for issues filed against a component.
 ///
 /// Maps to Jira's `assigneeType` field on the component resource
-/// (BC-8.1.005 create / BC-8.1.007 edit).
+/// (BC-8.1.005 — component create only; `component edit` has no `--assignee-type` flag).
 #[derive(clap::ValueEnum, Clone, Debug)]
 #[clap(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AssigneeType {
@@ -1137,6 +1137,8 @@ pub enum ComponentSubcommand {
         #[arg(long, required = true)]
         project: String,
         /// Component name (BC-8.1.005).
+        /// Leading-dash values accepted (e.g. `-legacy`).
+        #[arg(allow_hyphen_values = true)]
         name: String,
         /// Component description (leading-dash values accepted).
         #[arg(long, allow_hyphen_values = true)]
@@ -1156,8 +1158,8 @@ pub enum ComponentSubcommand {
         /// Project key (required for name-based lookup; BC-8.1.004 + BC-8.1.007).
         #[arg(long)]
         project: Option<String>,
-        /// New component name.
-        #[arg(long)]
+        /// New component name (leading-dash values accepted, e.g. `--name -legacy`).
+        #[arg(long, allow_hyphen_values = true)]
         name: Option<String>,
         /// New description (leading-dash values accepted).
         /// Pass an empty string (`--description ""`) to clear the description.
