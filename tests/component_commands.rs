@@ -10,17 +10,21 @@
 mod common;
 
 use assert_cmd::Command;
-use serde_json::json;
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use std::time::Duration;
 use tempfile::TempDir;
-use wiremock::matchers::{body_json, method, path};
+use wiremock::matchers::{
+    body_json, body_partial_json, method, path, query_param, query_param_is_missing,
+};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::fixtures::{
-    component_create_response, component_edit_response, component_list_response,
-    component_list_two_same_name, component_response, component_response_no_project_field,
-    component_response_with_flags, multi_project_user_search_response,
-    multi_project_user_search_response_with_email, related_issue_counts_response,
-    write_profile_config,
+    component_create_response, component_delete_snapshot_page, component_edit_response,
+    component_list_response, component_list_two_same_name, component_response,
+    component_response_no_project_field, component_response_with_flags,
+    multi_project_user_search_response, multi_project_user_search_response_with_email,
+    related_issue_counts_response, write_profile_config,
 };
 
 // ── Harness ──────────────────────────────────────────────────────────────────
@@ -3649,5 +3653,2286 @@ async fn test_bc_8_1_007_component_edit_name_collision_400_surfaced() {
     assert!(
         stderr.contains("A component with the name already exists"),
         "BC-8.1.007 F-R3-002: Jira 400 body must be surfaced in stderr; got: {stderr}"
+    );
+}
+
+// =============================================================================
+// S-604-3: `jr component delete` — disposition-required, snapshot-before-delete
+// safety (DEC-279). SAFETY-CRITICAL — tdd_mode: strict.
+//
+// BC anchors: BC-8.2.001–BC-8.2.008. All tests below are RED at Red Gate:
+// `handle_delete` is `todo!()`.
+//
+// Ordering assertions (BC-8.2.007 "a mutant that reorders snapshot/DELETE
+// must fail") use `server.received_requests()` position comparison — the
+// same idiom already established in `tests/attachment_upload.rs` for
+// VP-576-003's DELETE-before-POST pin.
+//
+// Verbatim-pin discipline (drift LOOSE-CONTAINS-MASKS-BC-VERBATIM-MESSAGE-
+// DRIFT): every BC-specified exact string below is asserted as a full
+// substring match on the EXACT sentence, not a subset of loosely related
+// words. Where BC gives no exact string (e.g. BC-8.2.002's numeric-target-
+// mismatch message, BC-8.2.008's table-mode echo), only structural/content
+// assertions are made — never invented and asserted as if verbatim.
+// =============================================================================
+
+/// Build a `jr component delete` command with a fixed harness (mirrors
+/// `jr_cmd` but scoped to this section's doc so a reader doesn't have to
+/// scroll up to find it).
+fn delete_cmd(
+    server_uri: &str,
+    cache_dir: &std::path::Path,
+    config_dir: &std::path::Path,
+) -> Command {
+    jr_cmd(server_uri, cache_dir, config_dir)
+}
+
+// ── AC-001 (BC-8.2.001 postcondition 1 / VP-COMPONENT-003) ───────────────────
+
+/// AC-001 / EC-8.2.001-1: neither `--move-to` nor `--orphan` supplied → exit 64,
+/// stderr names BOTH flags, ZERO `DELETE`/snapshot-search calls.
+///
+/// Invariant 1 (BC-8.2.001): the NAME|ID resolution (§8.4) still fires BEFORE
+/// the disposition guard — so the project component-list GET IS expected here
+/// (`.expect(1)`), even though the command ultimately fails.
+///
+/// This test also covers EC-8.2.001-1 verbatim (the story's own worked
+/// example is this exact command shape).
+#[tokio::test]
+async fn test_bc_8_2_001_component_delete_neither_flag_exits_64_zero_http() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Invariant 1: resolution happens even without a disposition.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "delete", "Backend", "--project", "FOO"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-001: expected exit 64 for neither-flag; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--move-to <NAME|ID>"),
+        "AC-001: stderr must name --move-to <NAME|ID>; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--orphan"),
+        "AC-001: stderr must name --orphan; got: {stderr}"
+    );
+    // BC-8.2.001 Postcondition 1 (corrected M3 fix-burst): the message does
+    // NOT include an affected-issue count — the snapshot never fired.
+    assert!(
+        !stderr.contains("issue(s)"),
+        "AC-001: no-disposition message must NOT include an affected-issue \
+         count (the snapshot never fires in this path); got: {stderr}"
+    );
+}
+
+// ── AC-002 (BC-8.2.001 postcondition 2/3, DEC-188 mechanism) ─────────────────
+
+/// AC-002 / EC-8.2.001-2: `--move-to X --orphan` together → clap exit 2
+/// (mutual exclusion), before any resolution or HTTP call whatsoever.
+///
+/// Also asserts the DEC-188 mechanism split: this exit-2 case is a clap
+/// `conflicts_with` violation, structurally distinct from AC-001's
+/// application-level exit-64 guard.
+///
+/// NOTE (Red Gate): unlike every other S-604-3 test, this one PASSES both
+/// before and after `handle_delete` is implemented — `conflicts_with` on
+/// `ComponentSubcommand::Delete` (`src/cli/mod.rs`) is clap-derive parse-time
+/// validation, already wired independently of the still-`todo!()` handler
+/// body; the handler is never reached for a conflicting pair. Same
+/// pre-existing pattern as `test_bc_8_1_005_component_create_bad_assignee_type_exits_2`
+/// above. This is the one test in this Red Gate report that is expected to
+/// be green at Red Gate, not a false/tautological pass.
+#[tokio::test]
+async fn test_bc_8_2_001_component_delete_both_flags_clap_exit_2() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(component_list_response(vec![])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "Frontend",
+            "--orphan",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "AC-002: both flags together must be a clap mutual-exclusion exit 2, \
+         NOT the app-level exit 64; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-003 (BC-8.2.001 Invariant 1 / EC-8.2.001-3) ────────────────────────────
+
+/// AC-003: `jr component delete Nonexistent --orphan` (NAME, unresolvable)
+/// → exit 64 "not found" (Invariant 1 ordering), NOT the disposition-guard
+/// message — even though `--orphan` alone would otherwise satisfy the guard.
+#[tokio::test]
+async fn test_bc_8_2_001_component_delete_name_notfound_before_disposition_guard() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Nonexistent",
+            "--project",
+            "FOO",
+            "--orphan",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-003: expected exit 64 not-found; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // BC-8.4.002 verbatim message (Invariant 1: the not-found path, not the
+    // disposition guard, must fire).
+    assert!(
+        stderr.contains("Component 'Nonexistent' not found in project FOO. Available: Backend."),
+        "AC-003: expected BC-8.4.002 verbatim not-found message; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--move-to <NAME|ID>"),
+        "AC-003: must NOT show the disposition-guard message (Invariant 1 \
+         ordering — not-found reports first); got: {stderr}"
+    );
+}
+
+// ── AC-004 (BC-8.2.001 Invariant 1 documented exception / EC-8.2.001-4) ──────
+
+/// AC-004: `jr component delete 999999999` (numeric, nonexistent, NEITHER
+/// flag) → exit 64 disposition-guard message, NOT "not found" — the inverse
+/// of AC-003. Per the documented numeric/no-disposition asymmetry, there is
+/// NO HTTP call available in this path to discover the id's non-existence
+/// (the numeric-source confirming GET only fires once a disposition is
+/// chosen) — so ZERO HTTP calls of any kind occur.
+#[tokio::test]
+async fn test_bc_8_2_001_component_delete_numeric_no_disposition_asymmetry() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Zero HTTP whatsoever — no confirming GET is reachable in this path.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/999999999"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(json!({"errorMessages": ["Not found"]})),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/999999999"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "delete", "999999999"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-004: expected exit 64 disposition-guard (not not-found); \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--move-to <NAME|ID>") && stderr.contains("--orphan"),
+        "AC-004: stderr must be the disposition-guard message naming both \
+         flags (the inverse of AC-003); got: {stderr}"
+    );
+    assert!(
+        !stderr.to_lowercase().contains("not found"),
+        "AC-004: must NOT report 'not found' — no HTTP call in this path \
+         could have discovered non-existence; got: {stderr}"
+    );
+}
+
+// ── AC-005 (BC-8.2.002 postcondition 2 — move-to success) ────────────────────
+
+/// AC-005: `--move-to Frontend` → target resolves BEFORE `DELETE`; `DELETE
+/// /rest/api/3/component/{sourceId}?moveIssuesTo=<targetId>` fires exactly
+/// once on success. Ordering pinned via `received_requests()` position:
+/// the snapshot search must precede the DELETE.
+#[tokio::test]
+async fn test_bc_8_2_002_component_delete_move_to_success_delete_after_resolution() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10002", "Frontend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(
+            json!({"jql": "component = 10001 ORDER BY key ASC"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1", "FOO-2"], None)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param("moveIssuesTo", "10002"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "Frontend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "AC-005: expected exit 0 on move-to success; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let received = server.received_requests().await.unwrap();
+    let search_pos = received
+        .iter()
+        .position(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("AC-005: snapshot search must have fired");
+    let delete_pos = received
+        .iter()
+        .position(|r| r.method == wiremock::http::Method::DELETE)
+        .expect("AC-005: DELETE must have fired");
+    assert!(
+        search_pos < delete_pos,
+        "AC-005: snapshot search (pos {search_pos}) must fire BEFORE DELETE \
+         (pos {delete_pos})"
+    );
+}
+
+// ── AC-006 (BC-8.2.003 Behavior / EC-8.2.003-1) ───────────────────────────────
+
+/// AC-006: `--move-to Backend` where the SAME-named component exists ONLY in
+/// a different project (BAR) → target resolution is scoped EXCLUSIVELY to the
+/// source's project (FOO); BAR's component-list endpoint is never called
+/// (`.expect(0)`) — a cross-project name collision must never be silently
+/// considered a match.
+#[tokio::test]
+async fn test_bc_8_2_003_component_delete_move_to_never_spans_projects() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // FOO's own component list does NOT contain "Backend" — only "Widget"
+    // (the component being deleted).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10005", "Widget", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // BAR has a component named "Backend" — MUST NEVER be considered.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/BAR/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("20007", "Backend", None, None, None),
+            ])),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10005"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Widget",
+            "--project",
+            "FOO",
+            "--move-to",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-006: expected exit 64 (target not found in scope); got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Component 'Backend' not found in project FOO. Available: Widget."),
+        "AC-006: expected BC-8.4.002 verbatim not-found message scoped to \
+         FOO only; got: {stderr}"
+    );
+}
+
+// ── AC-007 (BC-8.2.002 numeric-target confirmation / EC-8.2.003-2) ───────────
+
+/// AC-007: `--move-to 20007` (numeric, belonging to a DIFFERENT project than
+/// the source) → confirming `GET /rest/api/3/component/20007` returns the
+/// mismatching project → exit 64, ZERO `DELETE`.
+#[tokio::test]
+async fn test_bc_8_2_002_component_delete_move_to_numeric_target_project_mismatch() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // Numeric target confirming GET: belongs to project BAR, not FOO.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/20007"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "20007",
+                "Other",
+                None,
+                None,
+                None,
+                Some("BAR"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "20007",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-007: expected exit 64 for numeric target project mismatch; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("20007"),
+        "AC-007: stderr should reference the mismatching target id 20007; \
+         got: {stderr}"
+    );
+}
+
+// ── AC-008 (BC-8.2.004 postcondition — unknown/ambiguous target) ─────────────
+
+/// AC-008: `--move-to BadName` (zero matches) and `--move-to Amb` (2+
+/// matches) both → exit 64 via §8.4's BC-8.4.002/003 messages, ZERO `DELETE`
+/// calls (VP-COMPONENT-004).
+#[tokio::test]
+async fn test_bc_8_2_004_component_delete_move_to_unknown_ambiguous_zero_delete() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── Case A: unknown target (zero matches) ─────────────────────────────
+    let server_a = MockServer::start().await;
+    write_profile_config(config.path(), &server_a.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_a)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server_a)
+        .await;
+
+    let unknown = delete_cmd(&server_a.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "BadName",
+        ])
+        .output()
+        .unwrap();
+
+    server_a.verify().await;
+    assert_eq!(
+        unknown.status.code(),
+        Some(64),
+        "AC-008 Case A: expected exit 64 for unknown target; got {:?}\nstderr: {}",
+        unknown.status.code(),
+        String::from_utf8_lossy(&unknown.stderr)
+    );
+    let stderr_a = String::from_utf8_lossy(&unknown.stderr);
+    assert!(
+        stderr_a.contains("Component 'BadName' not found in project FOO. Available: Backend."),
+        "AC-008 Case A: expected BC-8.4.002 verbatim message; got: {stderr_a}"
+    );
+
+    // ── Case B: ambiguous target (2+ matches) ─────────────────────────────
+    let server_b = MockServer::start().await;
+    write_profile_config(config.path(), &server_b.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10010", "AmbOne", None, None, None),
+                component_response("10011", "AmbTwo", None, None, None),
+            ])),
+        )
+        .mount(&server_b)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server_b)
+        .await;
+
+    let ambiguous = delete_cmd(&server_b.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "Amb",
+        ])
+        .output()
+        .unwrap();
+
+    server_b.verify().await;
+    assert_eq!(
+        ambiguous.status.code(),
+        Some(64),
+        "AC-008 Case B: expected exit 64 for ambiguous target; got {:?}\nstderr: {}",
+        ambiguous.status.code(),
+        String::from_utf8_lossy(&ambiguous.stderr)
+    );
+    let stderr_b = String::from_utf8_lossy(&ambiguous.stderr);
+    assert!(
+        stderr_b.contains("Ambiguous component 'Amb'. Matches: AmbOne, AmbTwo."),
+        "AC-008 Case B: expected BC-8.4.003 verbatim message; got: {stderr_b}"
+    );
+}
+
+// ── AC-009 (BC-8.2.005 postcondition / VP-COMPONENT-005) ─────────────────────
+
+/// AC-009: `--move-to Backend` (same name given twice) and `--move-to 10001`
+/// (mixed name/numeric self-reference, `Backend` IS id `10001`) both → exit
+/// 64, zero `DELETE` calls. ID-equality catches both forms identically.
+#[tokio::test]
+async fn test_bc_8_2_005_component_delete_self_move_guard_name_and_numeric() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    const SELF_MOVE_MSG: &str = "--move-to target is the same component being deleted. \
+        Choose a different component, or use --orphan.";
+
+    // ── Case A: same name given twice ──────────────────────────────────────
+    let server_a = MockServer::start().await;
+    write_profile_config(config.path(), &server_a.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_a)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server_a)
+        .await;
+
+    let case_a = delete_cmd(&server_a.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server_a.verify().await;
+    assert_eq!(
+        case_a.status.code(),
+        Some(64),
+        "AC-009 Case A: expected exit 64 for same-name self-move; got {:?}\nstderr: {}",
+        case_a.status.code(),
+        String::from_utf8_lossy(&case_a.stderr)
+    );
+    let stderr_a = String::from_utf8_lossy(&case_a.stderr);
+    assert!(
+        stderr_a.contains(SELF_MOVE_MSG),
+        "AC-009 Case A: expected verbatim self-move message; got: {stderr_a}"
+    );
+
+    // ── Case B: mixed name/numeric self-reference ──────────────────────────
+    let server_b = MockServer::start().await;
+    write_profile_config(config.path(), &server_b.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_b)
+        .await;
+    // Numeric --move-to target confirming GET: same id, same project.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server_b)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server_b)
+        .await;
+
+    let case_b = delete_cmd(&server_b.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "10001",
+        ])
+        .output()
+        .unwrap();
+
+    server_b.verify().await;
+    assert_eq!(
+        case_b.status.code(),
+        Some(64),
+        "AC-009 Case B: expected exit 64 for mixed name/numeric self-move; \
+         got {:?}\nstderr: {}",
+        case_b.status.code(),
+        String::from_utf8_lossy(&case_b.stderr)
+    );
+    let stderr_b = String::from_utf8_lossy(&case_b.stderr);
+    assert!(
+        stderr_b.contains(SELF_MOVE_MSG),
+        "AC-009 Case B: expected verbatim self-move message (ID-equality \
+         catches the mixed form too); got: {stderr_b}"
+    );
+}
+
+// ── AC-010 (BC-8.2.002 M1 numeric-SOURCE confirmation — --move-to) ───────────
+
+/// AC-010: `jr component delete 20007 --project A --move-to Frontend` where
+/// `20007` actually belongs to project B → source-confirmation GET returns
+/// `"project":"B"`, mismatching `--project A` → exit 64 pre-flight, ZERO HTTP
+/// beyond the one confirming GET (no `--move-to` resolution GET, no `DELETE`).
+#[tokio::test]
+async fn test_bc_8_2_002_component_delete_numeric_source_project_mismatch_move_to() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/20007"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "20007",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("B"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // No --move-to resolution GET for either project.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(component_list_response(vec![])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/B/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(component_list_response(vec![])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/20007"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "20007",
+            "--project",
+            "A",
+            "--move-to",
+            "Frontend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-010: expected exit 64 for numeric-source project mismatch; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Component 20007 belongs to project B, not A."),
+        "AC-010: expected BC-8.2.002 M1 verbatim mismatch message; got: {stderr}"
+    );
+}
+
+// ── AC-011 (BC-8.2.002 M1, P4-broadened to --orphan) ──────────────────────────
+
+/// AC-011: `jr component delete 20007 --project A --orphan --yes` where
+/// `20007` belongs to project B → identical mismatch check fires under
+/// `--orphan` too → exit 64 pre-flight, ZERO snapshot search, ZERO
+/// confirmation prompt, ZERO `DELETE`.
+#[tokio::test]
+async fn test_bc_8_2_002_component_delete_numeric_source_project_mismatch_orphan() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/20007"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "20007",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("B"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/20007"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "20007",
+            "--project",
+            "A",
+            "--orphan",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-011: expected exit 64 for numeric-source project mismatch under \
+         --orphan; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Component 20007 belongs to project B, not A."),
+        "AC-011: expected BC-8.2.002 M1 verbatim mismatch message (shared \
+         mechanism with --move-to, P4-broadened to --orphan); got: {stderr}"
+    );
+}
+
+// ── AC-012 (BC-8.2.006 Postconditions — interactive) ──────────────────────────
+
+/// AC-012: `--orphan` on a TTY (no `--yes`) → `dialoguer`-style confirm
+/// prompt names the component and the snapshot-derived affected-issue count;
+/// decline/Enter default → exit 0, ZERO `DELETE`; confirm → proceeds to
+/// `DELETE` (VP-COMPONENT-007).
+#[tokio::test]
+async fn test_bc_8_2_006_component_delete_orphan_interactive_prompt_decline_and_confirm() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    const PROMPT: &str =
+        "Delete component 'Backend' and remove it from 2 issue(s)? This cannot be undone.";
+
+    // ── Decline ─────────────────────────────────────────────────────────────
+    let server_decline = MockServer::start().await;
+    write_profile_config(config.path(), &server_decline.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_decline)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1", "FOO-2"], None)),
+        )
+        .expect(1)
+        .mount(&server_decline)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server_decline)
+        .await;
+
+    let decline = delete_cmd(&server_decline.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+        ])
+        .write_stdin("N\n")
+        .timeout(Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    server_decline.verify().await;
+    assert_eq!(
+        decline.status.code(),
+        Some(0),
+        "AC-012 decline: expected exit 0; got {:?}\nstderr: {}",
+        decline.status.code(),
+        String::from_utf8_lossy(&decline.stderr)
+    );
+    let stderr_decline = String::from_utf8_lossy(&decline.stderr);
+    assert!(
+        stderr_decline.contains(PROMPT),
+        "AC-012 decline: expected verbatim BC-8.2.006 prompt naming the \
+         component and the real count; got: {stderr_decline}"
+    );
+
+    // ── Confirm ─────────────────────────────────────────────────────────────
+    let server_confirm = MockServer::start().await;
+    write_profile_config(config.path(), &server_confirm.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_confirm)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1", "FOO-2"], None)),
+        )
+        .expect(1)
+        .mount(&server_confirm)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param_is_missing("moveIssuesTo"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server_confirm)
+        .await;
+
+    let confirm = delete_cmd(&server_confirm.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+        ])
+        .write_stdin("y\n")
+        .timeout(Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    server_confirm.verify().await;
+    assert_eq!(
+        confirm.status.code(),
+        Some(0),
+        "AC-012 confirm: expected exit 0 after DELETE succeeds; got {:?}\nstderr: {}",
+        confirm.status.code(),
+        String::from_utf8_lossy(&confirm.stderr)
+    );
+}
+
+// ── AC-013 (BC-8.2.006 Postconditions — non-interactive / VP-COMPONENT-006) ──
+
+/// AC-013 / EC-8.2.006-4: non-interactive `--orphan` without `--yes` → exit
+/// 64, message contains the REAL, snapshot-derived affected-issue count `<N>`
+/// (7, not a placeholder), ZERO `DELETE`. `--yes` present → proceeds without
+/// a prompt.
+#[tokio::test]
+async fn test_bc_8_2_006_component_delete_orphan_noninteractive_requires_yes_real_count() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── --yes absent: exit 64 with real count ──────────────────────────────
+    let server_no_yes = MockServer::start().await;
+    write_profile_config(config.path(), &server_no_yes.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_no_yes)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_delete_snapshot_page(
+                &[
+                    "FOO-1", "FOO-2", "FOO-3", "FOO-4", "FOO-5", "FOO-6", "FOO-7",
+                ],
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server_no_yes)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server_no_yes)
+        .await;
+
+    let no_yes = delete_cmd(&server_no_yes.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+        ])
+        .output()
+        .unwrap();
+
+    server_no_yes.verify().await;
+    assert_eq!(
+        no_yes.status.code(),
+        Some(64),
+        "AC-013: expected exit 64 for non-interactive --orphan without --yes; \
+         got {:?}\nstderr: {}",
+        no_yes.status.code(),
+        String::from_utf8_lossy(&no_yes.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&no_yes.stderr);
+    assert!(
+        stderr.contains(
+            "--orphan requires --yes when running non-interactively. This permanently \
+             removes the component from 7 issue(s) with no replacement."
+        ),
+        "AC-013: expected BC-8.2.006 verbatim non-interactive message with \
+         the REAL count 7 (not a placeholder); got: {stderr}"
+    );
+
+    // ── --yes present: proceeds without a prompt ────────────────────────────
+    let server_yes = MockServer::start().await;
+    write_profile_config(config.path(), &server_yes.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_yes)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1"], None)),
+        )
+        .expect(1)
+        .mount(&server_yes)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param_is_missing("moveIssuesTo"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server_yes)
+        .await;
+
+    let yes = delete_cmd(&server_yes.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    server_yes.verify().await;
+    assert_eq!(
+        yes.status.code(),
+        Some(0),
+        "AC-013: --yes present must proceed directly (exit 0); got {:?}\nstderr: {}",
+        yes.status.code(),
+        String::from_utf8_lossy(&yes.stderr)
+    );
+}
+
+// ── AC-014 (BC-8.2.006 Invariant 1) ───────────────────────────────────────────
+
+/// AC-014: `--move-to` NEVER shows a confirmation prompt or requires `--yes`,
+/// regardless of TTY state. Empty stdin on a TTY is fed; if a prompt DID
+/// attempt to read stdin it would hit EOF → `JrError::Interrupted` (exit
+/// 130) — exit 0 here proves no prompt was ever shown.
+#[tokio::test]
+async fn test_bc_8_2_006_component_delete_move_to_never_prompts() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10002", "Frontend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1"], None)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param("moveIssuesTo", "10002"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "Frontend",
+        ])
+        .write_stdin("")
+        .timeout(Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "AC-014: --move-to must never prompt — exit 0 (not 130/EOF-Interrupted) \
+         proves no stdin read was attempted; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── AC-015 (BC-8.2.006 Edge Case EC-8.2.006-2) ────────────────────────────────
+
+/// AC-015: `--orphan` on a component with ZERO affected issues → the
+/// non-interactive `--yes`-absent message STILL fires, showing `0 issue(s)`
+/// — deleting the component itself is still permanent regardless of current
+/// usage.
+#[tokio::test]
+async fn test_bc_8_2_006_component_delete_orphan_zero_affected_issues_still_prompts() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_delete_snapshot_page(&[], None)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-015: expected exit 64 even with zero affected issues; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "--orphan requires --yes when running non-interactively. This permanently \
+             removes the component from 0 issue(s) with no replacement."
+        ),
+        "AC-015: expected BC-8.2.006 verbatim message showing '0 issue(s)'; \
+         got: {stderr}"
+    );
+}
+
+// ── AC-016 (BC-8.2.007 Postcondition 1 — firing boundary) ────────────────────
+
+/// AC-016: the snapshot search fires exactly once for a chosen, guard-cleared
+/// disposition and does NOT fire in (a) the no-disposition exit-64 path, (b)
+/// an unknown `--move-to` target, or (c) a self-reference — any pre-flight
+/// exit-64 path before a disposition is confirmed.
+#[tokio::test]
+async fn test_bc_8_2_007_component_delete_snapshot_fires_only_after_disposition_cleared() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── (a) no-disposition path ─────────────────────────────────────────────
+    let server_a = MockServer::start().await;
+    write_profile_config(config.path(), &server_a.uri());
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_a)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server_a)
+        .await;
+
+    let no_disposition = delete_cmd(&server_a.uri(), cache.path(), config.path())
+        .args(["component", "delete", "Backend", "--project", "FOO"])
+        .output()
+        .unwrap();
+    server_a.verify().await;
+    assert_eq!(no_disposition.status.code(), Some(64));
+
+    // ── (b) unknown --move-to target ────────────────────────────────────────
+    let server_b = MockServer::start().await;
+    write_profile_config(config.path(), &server_b.uri());
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_b)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server_b)
+        .await;
+
+    let unknown_target = delete_cmd(&server_b.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "BadName",
+        ])
+        .output()
+        .unwrap();
+    server_b.verify().await;
+    assert_eq!(unknown_target.status.code(), Some(64));
+
+    // ── (c) self-reference ───────────────────────────────────────────────────
+    let server_c = MockServer::start().await;
+    write_profile_config(config.path(), &server_c.uri());
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_c)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server_c)
+        .await;
+
+    let self_ref = delete_cmd(&server_c.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+    server_c.verify().await;
+    assert_eq!(
+        self_ref.status.code(),
+        Some(64),
+        "AC-016 (c): expected exit 64 for self-reference before snapshot; \
+         got {:?}\nstderr: {}",
+        self_ref.status.code(),
+        String::from_utf8_lossy(&self_ref.stderr)
+    );
+}
+
+// ── AC-017 (BC-8.2.007 Postcondition 4 — JQL clause shape) ───────────────────
+
+/// AC-017: the composed snapshot JQL is ALWAYS `component = <resolvedId>
+/// ORDER BY key ASC` — a fixture with two projects sharing a same-named
+/// component asserts the snapshot body contains the resolved NUMERIC id,
+/// never the shared name string. Asserted via EXACT `serde_json::Value`
+/// equality on the parsed request body (not a wiremock partial match alone),
+/// so a mutant swapping the id for the name string is caught even if the
+/// mock's own matcher were loosened.
+#[tokio::test]
+async fn test_bc_8_2_007_component_delete_snapshot_jql_uses_resolved_id_not_name() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // FOO's "Backend" is id 10001; BAR ALSO has a "Backend" (id 20007) —
+    // proves the snapshot JQL cannot be using the bare name string, which
+    // would be ambiguous across the two same-named components.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1"], None)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "AC-017: expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let received = server.received_requests().await.unwrap();
+    let search_req = received
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("AC-017: snapshot search must have fired");
+    let body: Value = serde_json::from_slice(&search_req.body).expect("body must be valid JSON");
+    assert_eq!(
+        body["jql"],
+        json!("component = 10001 ORDER BY key ASC"),
+        "AC-017: snapshot JQL must be EXACTLY 'component = 10001 ORDER BY \
+         key ASC' — the resolved numeric id, never the shared name \
+         'Backend'; got jql: {:?}",
+        body["jql"]
+    );
+}
+
+// ── AC-018 (BC-8.2.007 Postcondition 5 — full pagination) ────────────────────
+
+/// AC-018: a wiremock fixture returning ≥2 pages via `nextPageToken` → every
+/// page is fetched; `affectedIssueCount`/`affectedIssues` reflect the FULL
+/// multi-page result (3 keys), not just page one (which alone would be 2).
+#[tokio::test]
+async fn test_bc_8_2_007_component_delete_snapshot_paginates_to_completion() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // Page 1: no nextPageToken in the REQUEST body (initial fetch).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(
+            json!({"jql": "component = 10001 ORDER BY key ASC"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_delete_snapshot_page(
+                &["FOO-1", "FOO-2"],
+                Some("cursor-2"),
+            )),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    // Page 2: request body carries nextPageToken "cursor-2" — terminal.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(json!({"nextPageToken": "cursor-2"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-3"], None)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param_is_missing("moveIssuesTo"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "AC-018: expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("AC-018: stdout must be valid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(
+        parsed["affectedIssueCount"],
+        json!(3),
+        "AC-018: affectedIssueCount must reflect the FULL multi-page result \
+         (3), not just page one (2); got: {parsed}"
+    );
+    assert_eq!(
+        parsed["affectedIssues"],
+        json!(["FOO-1", "FOO-2", "FOO-3"]),
+        "AC-018: affectedIssues must contain all keys across both pages in \
+         order; got: {parsed}"
+    );
+}
+
+// ── AC-019 (BC-8.2.007 Postcondition 5 — fail-closed on drift/error) ─────────
+
+/// AC-019: a fixture simulating the JRACLOUD-95368 anti-loop drift condition
+/// (`has_more=true` partial return) → `.expect(0)` on `DELETE`, process
+/// exits 1, stderr contains "could not reliably enumerate affected issues —
+/// aborting delete" (VP-COMPONENT-017). A genuine snapshot-search 5xx
+/// failure produces the same fail-closed outcome (zero DELETE).
+#[tokio::test]
+async fn test_bc_8_2_007_component_delete_snapshot_drift_and_fetch_error_fail_closed() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── (a) JRACLOUD-95368 drift: repeated nextPageToken triggers the
+    // anti-loop guard's has_more=true partial return. ──────────────────────
+    let server_drift = MockServer::start().await;
+    write_profile_config(config.path(), &server_drift.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_drift)
+        .await;
+    // Both pages return the SAME nextPageToken "loop" — the anti-loop guard
+    // fires on the second hit before a third request is ever made.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1"], Some("loop"))),
+        )
+        .expect(2)
+        .mount(&server_drift)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server_drift)
+        .await;
+
+    let drift = delete_cmd(&server_drift.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    server_drift.verify().await;
+    assert_eq!(
+        drift.status.code(),
+        Some(1),
+        "AC-019 (a): drift-abort must exit 1 (JrError::SnapshotIncomplete), \
+         NOT 64; got {:?}\nstderr: {}",
+        drift.status.code(),
+        String::from_utf8_lossy(&drift.stderr)
+    );
+    let stderr_drift = String::from_utf8_lossy(&drift.stderr);
+    assert!(
+        stderr_drift.contains("could not reliably enumerate affected issues — aborting delete"),
+        "AC-019 (a): stderr must contain the verbatim fail-closed message; \
+         got: {stderr_drift}"
+    );
+
+    // ── (b) genuine snapshot-search 5xx failure ─────────────────────────────
+    let server_5xx = MockServer::start().await;
+    write_profile_config(config.path(), &server_5xx.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_5xx)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server_5xx)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server_5xx)
+        .await;
+
+    let fetch_err = delete_cmd(&server_5xx.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    server_5xx.verify().await;
+    assert_ne!(
+        fetch_err.status.code(),
+        Some(0),
+        "AC-019 (b): a genuine snapshot-search 5xx must abort before DELETE \
+         (fail-closed, non-zero exit); got exit 0\nstderr: {}",
+        String::from_utf8_lossy(&fetch_err.stderr)
+    );
+}
+
+// ── AC-020 (BC-8.2.008 Behavior — success shape) ──────────────────────────────
+
+/// AC-020: on success, `--output json` returns EXACTLY `{"deleted",
+/// "movedIssuesTo", "affectedIssueCount", "affectedIssues"}` (verbatim key
+/// set, BTreeSet comparison) matching the snapshot, for both the `--move-to`
+/// (`movedIssuesTo` = target id string) and `--orphan` (`movedIssuesTo` =
+/// JSON null) shapes. Table mode echoes a one-line confirmation naming the
+/// disposition and count (no BC-specified exact string for this line, so
+/// only content — not verbatim wording — is asserted).
+#[tokio::test]
+async fn test_bc_8_2_008_component_delete_success_json_shape_matches_snapshot() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── --move-to shape: movedIssuesTo is the target id string ─────────────
+    let server_move = MockServer::start().await;
+    write_profile_config(config.path(), &server_move.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10002", "Frontend", None, None, None),
+            ])),
+        )
+        .mount(&server_move)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1", "FOO-2"], None)),
+        )
+        .expect(1)
+        .mount(&server_move)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param("moveIssuesTo", "10002"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server_move)
+        .await;
+
+    let move_out = delete_cmd(&server_move.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "Frontend",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server_move.verify().await;
+    assert_eq!(
+        move_out.status.code(),
+        Some(0),
+        "AC-020 move-to: expected exit 0; got {:?}\nstderr: {}",
+        move_out.status.code(),
+        String::from_utf8_lossy(&move_out.stderr)
+    );
+    let stdout_move = String::from_utf8_lossy(&move_out.stdout);
+    let parsed_move: Value = serde_json::from_str(&stdout_move).unwrap_or_else(|e| {
+        panic!("AC-020 move-to: stdout must be valid JSON: {e}\nstdout: {stdout_move}")
+    });
+    let keys_move: BTreeSet<&str> = parsed_move
+        .as_object()
+        .expect("AC-020 move-to: stdout must be a JSON object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        keys_move,
+        BTreeSet::from([
+            "deleted",
+            "movedIssuesTo",
+            "affectedIssueCount",
+            "affectedIssues"
+        ]),
+        "AC-020 move-to: top-level key set must be EXACTLY \
+         {{deleted, movedIssuesTo, affectedIssueCount, affectedIssues}}; got: {keys_move:?}"
+    );
+    assert_eq!(parsed_move["deleted"], json!("10001"));
+    assert_eq!(parsed_move["movedIssuesTo"], json!("10002"));
+    assert_eq!(parsed_move["affectedIssueCount"], json!(2));
+    assert_eq!(parsed_move["affectedIssues"], json!(["FOO-1", "FOO-2"]));
+
+    // ── --orphan shape: movedIssuesTo is JSON null ──────────────────────────
+    let server_orphan = MockServer::start().await;
+    write_profile_config(config.path(), &server_orphan.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_orphan)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1"], None)),
+        )
+        .expect(1)
+        .mount(&server_orphan)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param_is_missing("moveIssuesTo"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server_orphan)
+        .await;
+
+    let orphan_out = delete_cmd(&server_orphan.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server_orphan.verify().await;
+    let stdout_orphan = String::from_utf8_lossy(&orphan_out.stdout);
+    let parsed_orphan: Value = serde_json::from_str(&stdout_orphan).unwrap_or_else(|e| {
+        panic!("AC-020 orphan: stdout must be valid JSON: {e}\nstdout: {stdout_orphan}")
+    });
+    assert_eq!(
+        parsed_orphan["movedIssuesTo"],
+        Value::Null,
+        "AC-020 orphan: movedIssuesTo must be JSON null (no --move-to \
+         target); got: {parsed_orphan}"
+    );
+    assert_eq!(parsed_orphan["deleted"], json!("10001"));
+    assert_eq!(parsed_orphan["affectedIssueCount"], json!(1));
+
+    // ── Table mode: one-line confirmation naming disposition and count ─────
+    let server_table = MockServer::start().await;
+    write_profile_config(config.path(), &server_table.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_table)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1"], None)),
+        )
+        .expect(1)
+        .mount(&server_table)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server_table)
+        .await;
+
+    let table_out = delete_cmd(&server_table.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    server_table.verify().await;
+    assert_eq!(table_out.status.code(), Some(0));
+    let stderr_table = String::from_utf8_lossy(&table_out.stderr);
+    assert!(
+        stderr_table.contains("Backend") && stderr_table.contains('1'),
+        "AC-020 table mode: confirmation echo must name the component and \
+         the affected-issue count; got: {stderr_table}"
+    );
+}
+
+// ── AC-021 (BC-8.2.008 Idempotency — not-found vs race, VP-COMPONENT-024) ────
+
+/// AC-021: SOURCE resolution returning not-found (BC-8.1.008) → ordinary
+/// exit-64 not-found path, NEVER exit-0/idempotent-skip, ZERO `DELETE`
+/// calls. A `DELETE` that itself races to 404 AFTER a successful resolution
+/// → `ApiError(404)`, exit 1 — DISTINGUISHABLE by exit code from the
+/// resolver-layer not-found. Both paths pinned in ONE test per
+/// VP-COMPONENT-024's own "asserts the exit-code divergence" requirement.
+#[tokio::test]
+async fn test_bc_8_2_008_component_delete_resolver_notfound_vs_delete_race_exit_code_divergence() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+
+    // ── Resolver-layer not-found: exit 64 ───────────────────────────────────
+    let server_notfound = MockServer::start().await;
+    write_profile_config(config.path(), &server_notfound.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_notfound)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server_notfound)
+        .await;
+
+    let notfound = delete_cmd(&server_notfound.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Ghost",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    server_notfound.verify().await;
+    assert_eq!(
+        notfound.status.code(),
+        Some(64),
+        "AC-021 resolver-not-found: expected exit 64 (ordinary not-found), \
+         NEVER exit 0/idempotent-skip; got {:?}\nstderr: {}",
+        notfound.status.code(),
+        String::from_utf8_lossy(&notfound.stderr)
+    );
+
+    // ── DELETE-layer race: 404 AFTER successful resolution → exit 1 ────────
+    let server_race = MockServer::start().await;
+    write_profile_config(config.path(), &server_race.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server_race)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1"], None)),
+        )
+        .expect(1)
+        .mount(&server_race)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(json!({"errorMessages": ["Not found"]})),
+        )
+        .expect(1)
+        .mount(&server_race)
+        .await;
+
+    let race = delete_cmd(&server_race.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    server_race.verify().await;
+    assert_eq!(
+        race.status.code(),
+        Some(1),
+        "AC-021 delete-race: a DELETE 404 AFTER successful resolution must \
+         exit 1 (ApiError), DISTINGUISHABLE from the resolver's exit 64 \
+         above; got {:?}\nstderr: {}",
+        race.status.code(),
+        String::from_utf8_lossy(&race.stderr)
+    );
+    assert_ne!(
+        notfound.status.code(),
+        race.status.code(),
+        "AC-021: the two 404 sources (resolver-layer vs DELETE-call-layer) \
+         MUST NOT be collapsed into a single exit code"
+    );
+}
+
+// ── AC-022 (BC-8.2.008 Edge Case EC-8.2.008-1) ────────────────────────────────
+
+/// AC-022: `--move-to` target is deleted by a concurrent actor between
+/// BC-8.2.002's resolution and the `DELETE` call → the `DELETE` itself 404s
+/// on the `moveIssuesTo` id → `ApiError(404)`, exit 1 (a genuine race, not a
+/// resolver-layer not-found).
+#[tokio::test]
+async fn test_bc_8_2_008_component_delete_move_to_target_race_404_exits_1() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10002", "Frontend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1"], None)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    // moveIssuesTo target was deleted concurrently — the DELETE itself 404s.
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param("moveIssuesTo", "10002"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(json!({"errorMessages": ["Not found"]})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--move-to",
+            "Frontend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "AC-022: a moveIssuesTo-target race 404 on DELETE must exit 1 \
+         (ApiError), NOT 64 (resolver-layer not-found); got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// =============================================================================
+// Expanded Edge Case coverage (story S-604-3: "Additional ECs to cover in
+// test-writer's expanded suite... trace to the parent BC directly").
+//
+// EC-8.2.001-1/2 are already covered verbatim by AC-001/AC-002 above (the
+// story's own worked examples for those ECs ARE those ACs' command shapes —
+// see the doc comments on those two tests). EC-8.2.006-4 (real-count message
+// text) is covered by AC-013 (uses the story's own "7 issues" example
+// verbatim). EC-8.2.006-5 (numeric-source --orphan mismatch) is covered by
+// AC-011. The two facets below are NOT otherwise covered by any AC test.
+// =============================================================================
+
+/// EC-8.2.006-1: `--orphan --yes` on a TTY → no prompt shown even though
+/// stdin IS a terminal; proceeds directly. Empty stdin proves no prompt read
+/// was attempted (would otherwise EOF → exit 130).
+#[tokio::test]
+async fn test_ec_8_2_006_1_component_delete_orphan_yes_bypasses_prompt_on_tty() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1"], None)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param_is_missing("moveIssuesTo"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+            "--yes",
+        ])
+        .write_stdin("")
+        .timeout(Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "EC-8.2.006-1: --yes on a TTY must bypass the prompt entirely \
+         (exit 0, not 130/EOF-Interrupted); got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// EC-8.2.006-3: `--no-input` + `--orphan` (no `--yes`) → exit 64, the SAME
+/// message as plain non-interactive without `--yes` — `--no-input` and
+/// "stdin is not a TTY" are treated identically. Set on a TTY seam to prove
+/// `--no-input` alone (not merely the auto-no-input piped-stdin flip)
+/// enforces the gate.
+#[tokio::test]
+async fn test_ec_8_2_006_3_component_delete_orphan_no_input_flag_parity() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_delete_snapshot_page(&["FOO-1", "FOO-2"], None)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "--no-input",
+            "component",
+            "delete",
+            "Backend",
+            "--project",
+            "FOO",
+            "--orphan",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "EC-8.2.006-3: --no-input must force the same exit-64 gate as a \
+         non-TTY, even though JR_STDIN_IS_TTY=1 is set; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "--orphan requires --yes when running non-interactively. This permanently \
+             removes the component from 2 issue(s) with no replacement."
+        ),
+        "EC-8.2.006-3: expected the SAME verbatim non-interactive message \
+         as the plain (non-TTY) case; got: {stderr}"
     );
 }

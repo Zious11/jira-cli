@@ -72,6 +72,24 @@ pub enum JrError {
     #[error("{0}")]
     Internal(String),
 
+    /// Pre-delete JQL snapshot could not be reliably completed (BC-8.2.007).
+    ///
+    /// Raised by `jr component delete`'s affected-issue snapshot when the
+    /// pagination loop that reuses `search_issue_keys`-style iteration detects
+    /// a non-normal-completion outcome — including `search_issue_keys`'s own
+    /// JRACLOUD-95368 anti-loop guard returning `has_more=true` (a
+    /// SUCCESSFUL partial return, not an `Err`, so this variant exists to
+    /// synthesize a fail-closed error from it) — before the destructive
+    /// `DELETE` fires. A genuine fetch error (5xx/network) during the
+    /// snapshot is a separate, ordinary propagation path and does NOT need
+    /// this variant.
+    ///
+    /// Falls to `exit_code()`'s `_ => 1` default (not `UserError`'s 64):
+    /// this is not malformed user input, it's an environmental read-
+    /// reliability failure that aborted a safety-critical pre-flight check.
+    #[error("{0}")]
+    SnapshotIncomplete(String),
+
     #[error("Interrupted")]
     Interrupted,
 

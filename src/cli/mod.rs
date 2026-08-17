@@ -1172,6 +1172,42 @@ pub enum ComponentSubcommand {
         #[arg(long)]
         lead: Option<String>,
     },
+    /// Delete a component — requires an explicit disposition for its issues
+    /// (BC-8.2.001 — BC-8.2.008, S-604-3).
+    ///
+    /// Irreversible: no trash/archive/undelete endpoint exists. Snapshots
+    /// every affected issue key via a fully-paginated JQL search BEFORE the
+    /// DELETE fires. Exactly one of `--move-to`/`--orphan` is required —
+    /// neither supplied is an application-level exit-64 guard (NOT a clap
+    /// `ArgGroup::required`, which would wrongly produce exit 2); both
+    /// supplied is a clap `conflicts_with` exit 2.
+    Delete {
+        /// Component name (partial match) or numeric ID (BC-8.1.007/008 +
+        /// BC-8.4.001 resolution semantics, reused here). Leading-dash names
+        /// accepted (e.g. `-legacy`).
+        #[arg(allow_hyphen_values = true)]
+        name_or_id: String,
+        /// Project key (required for name-based lookup; BC-8.1.004).
+        #[arg(long)]
+        project: Option<String>,
+        /// Move this component's issues to another component (by name or
+        /// numeric ID) before deleting it. Must resolve within the SAME
+        /// project as the component being deleted (BC-8.2.002/003).
+        /// Mutually exclusive with `--orphan`.
+        #[arg(long, conflicts_with = "orphan")]
+        move_to: Option<String>,
+        /// Delete the component without moving its issues — they are left
+        /// with no replacement component. Requires interactive confirmation
+        /// (or `--yes` when non-interactive; BC-8.2.006). Mutually exclusive
+        /// with `--move-to`.
+        #[arg(long, conflicts_with = "move_to")]
+        orphan: bool,
+        /// Skip the `--orphan` interactive confirmation prompt (required when
+        /// running non-interactively with `--orphan`; BC-8.2.006). No effect
+        /// on `--move-to`, which never prompts (BC-8.2.006 Invariant 1).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 pub(crate) const DEFAULT_LIMIT: u32 = 30;

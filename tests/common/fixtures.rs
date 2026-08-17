@@ -675,3 +675,40 @@ pub fn component_response_no_project_field(id: &str, name: &str) -> Value {
         // "project" key intentionally absent — triggers the null-project path
     })
 }
+
+// ── S-604-3: Component delete-safety fixtures ─────────────────────────────────
+
+/// Build one `/rest/api/3/search/jql` response page for the BC-8.2.007
+/// pre-delete affected-issue snapshot (`component = <id> ORDER BY key ASC`).
+///
+/// Mirrors the minimal wire shape `tests/search_issue_keys.rs::jql_keys_response`
+/// uses for the underlying `search_issue_keys`-style pagination the snapshot
+/// reuses (top-level `key`, empty `fields {}`, `isLast` + `nextPageToken`
+/// cursor metadata). Kept as a separate, S-604-3-scoped fixture rather than
+/// exporting the private helper in `search_issue_keys.rs`, per that file's
+/// own comment explaining the shape is intentionally minimal/local.
+///
+/// `next_page_token: None` → terminal page (`isLast: true`, no `nextPageToken`
+/// key). `next_page_token: Some(token)` → non-terminal page carrying that
+/// cursor for the next fetch.
+pub fn component_delete_snapshot_page(keys: &[&str], next_page_token: Option<&str>) -> Value {
+    let issues: Vec<Value> = keys
+        .iter()
+        .map(|k| {
+            json!({
+                "id": "90000",
+                "key": k,
+                "self": format!("https://example.atlassian.net/rest/api/3/issue/{}", k),
+                "fields": {}
+            })
+        })
+        .collect();
+    let mut body = json!({
+        "issues": issues,
+        "isLast": next_page_token.is_none(),
+    });
+    if let Some(t) = next_page_token {
+        body["nextPageToken"] = json!(t);
+    }
+    body
+}
