@@ -75,6 +75,7 @@ pub(super) async fn handle_list(
         assets: show_assets,
         duedate: show_duedate,
         asset: asset_key,
+        component,
         created_after,
         created_before,
         updated_after,
@@ -255,6 +256,16 @@ pub(super) async fn handle_list(
         None
     };
 
+    // Resolve --component filter (bare/not:/none/all: forms) — BC-2.1.018..022.
+    // Zero-value case (no --component flags at all) matches pre-S-606-1 behavior
+    // exactly: no resolver HTTP, no clause contributed, existing filters/tests
+    // are unaffected by this guard.
+    let component_clauses: Vec<String> = if component.is_empty() {
+        Vec::new()
+    } else {
+        resolve_component_clauses(client, project_key.as_deref(), &component).await?
+    };
+
     // Build filter clauses from all flag values
     let filter_parts = build_filter_clauses(FilterOptions {
         assignee_jql: assignee_jql.as_deref(),
@@ -264,6 +275,7 @@ pub(super) async fn handle_list(
         recent: recent.as_deref(),
         open,
         asset_clause: asset_clause.as_deref(),
+        component_clauses: &component_clauses,
         created_after_clause: created_after_clause.as_deref(),
         created_before_clause: created_before_clause.as_deref(),
         updated_after_clause: updated_after_clause.as_deref(),
@@ -612,6 +624,46 @@ pub(super) async fn handle_list(
     Ok(())
 }
 
+/// Resolve the repeatable `--component` flag's raw values into zero, one, or
+/// two composed JQL clause fragments (bare-then-`not:` order per BC-2.1.018
+/// Precondition 3 / BC-2.1.019 Postcondition 2), per BC-2.1.018..022:
+///
+/// - Bare `--component <NAME>` (repeatable) → OR-combined `component in (...)`.
+/// - `--component not:<NAME>` → the full `(component not in (...) OR component
+///   is EMPTY)` form — never a bare `not in`.
+/// - `--component none` → `component is EMPTY`, ZERO resolver HTTP; must be the
+///   ONLY occurrence; still requires `project_key` (project-scope guard).
+/// - `--component all:<N1>,<N2>` → AND-combined `component = id1 AND component
+///   = id2 ...`; at most one `all:` occurrence; not combinable with
+///   bare/`not:`/`none`.
+/// - Any non-`none` value resolves via `helpers::resolve_component` (§8.4)
+///   BEFORE composition; zero/ambiguous matches → exit 64 with ZERO
+///   `POST /rest/api/3/search/jql` calls (BC-2.1.022, VP-COMPONENT-013).
+/// - No `project_key` for a bare/`not:`/`all:`/`none` value → exit 64
+///   pre-flight, naming `--project`, before any resolver GET.
+///
+/// Caller contract: `values` MUST be non-empty — the zero-`--component`-flags
+/// case is short-circuited by the caller (`handle_list`) before this function
+/// is reached, so it need not (and does not) special-case an empty slice.
+///
+/// STUB (S-606-1): prefix dispatch, §8.4 resolution, and clause composition
+/// are implementer work (Tasks 8-9). Deliberately does NOT implement issue
+/// #607's generalized multi-valued/negatable filter grammar — these forms are
+/// pre-composed and component-specific, not a reusable abstraction.
+async fn resolve_component_clauses(
+    client: &JiraClient,
+    project_key: Option<&str>,
+    values: &[String],
+) -> Result<Vec<String>> {
+    let _ = client;
+    let _ = project_key;
+    let _ = values;
+    todo!(
+        "S-606-1: parse --component bare/not:/none/all: forms, resolve names via §8.4, \
+         and compose the JQL clause(s) (BC-2.1.018..022)"
+    )
+}
+
 /// Resolve whether to show story points. Returns the field ID if points should
 /// be shown, or None. Emits a warning to stderr if --points was requested but
 /// config is missing.
@@ -642,6 +694,11 @@ struct FilterOptions<'a> {
     recent: Option<&'a str>,
     open: bool,
     asset_clause: Option<&'a str>,
+    /// Zero, one, or two pre-composed `--component` clause fragments, already
+    /// resolved and formatted by `resolve_component_clauses` (bare-then-`not:`
+    /// order per BC-2.1.018 Precondition 3). Slots in after `asset_clause`,
+    /// before the date-range clauses (BC-2.1.007 amendment).
+    component_clauses: &'a [String],
     created_after_clause: Option<&'a str>,
     created_before_clause: Option<&'a str>,
     updated_after_clause: Option<&'a str>,
@@ -671,6 +728,17 @@ fn build_filter_clauses(opts: FilterOptions<'_>) -> Vec<String> {
     }
     if let Some(a) = opts.asset_clause {
         parts.push(a.to_string());
+    }
+    if !opts.component_clauses.is_empty() {
+        // S-606-1 (BC-2.1.007 amendment): --component clause(s) slot in here —
+        // after `asset`, before the date-range clauses. `opts.component_clauses`
+        // is already fully resolved/composed by `resolve_component_clauses`; this
+        // is only the ordered-insertion point. Stubbed so any test that exercises
+        // a non-empty --component clause set is red until implemented (BC-5.38.001).
+        todo!(
+            "S-606-1: insert resolved --component clause(s) into filter_parts at \
+             the BC-2.1.007 position (after asset, before date-range clauses)"
+        )
     }
     if let Some(c) = opts.created_after_clause {
         parts.push(c.to_string());
@@ -721,6 +789,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -739,6 +808,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -757,6 +827,7 @@ mod tests {
             recent: Some("7d"),
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -775,6 +846,7 @@ mod tests {
             recent: Some("30d"),
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -798,6 +870,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -816,6 +889,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -837,6 +911,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -855,6 +930,7 @@ mod tests {
             recent: None,
             open: true,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -873,6 +949,7 @@ mod tests {
             recent: None,
             open: true,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -893,6 +970,7 @@ mod tests {
             recent: Some("30d"),
             open: true,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -917,6 +995,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: Some(clause),
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -936,6 +1015,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: Some(clause),
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: None,
@@ -956,6 +1036,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: Some("created >= \"2026-03-18\""),
             created_before_clause: None,
             updated_after_clause: None,
@@ -974,6 +1055,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: None,
             created_before_clause: None,
             updated_after_clause: Some("updated >= \"2026-03-01\""),
@@ -994,6 +1076,7 @@ mod tests {
             recent: None,
             open: false,
             asset_clause: None,
+            component_clauses: &[],
             created_after_clause: Some("created >= \"2026-03-01\""),
             created_before_clause: Some("created < \"2026-04-01\""),
             updated_after_clause: None,

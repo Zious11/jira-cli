@@ -340,6 +340,13 @@ pub enum IssueCommand {
         /// Filter by linked asset object key (e.g., CUST-5)
         #[arg(long)]
         asset: Option<String>,
+        /// Filter by component name (repeatable, OR-combined). Prefix forms:
+        /// `not:<NAME>` excludes (issues with no component are still included),
+        /// `none` matches issues with zero components (must be the only
+        /// occurrence), `all:<N1>,<N2>` requires every listed component
+        /// (AND-combined; at most one `all:` occurrence). See BC-2.1.018..022.
+        #[arg(long = "component")]
+        component: Vec<String>,
         /// Show issues created on or after this date (YYYY-MM-DD)
         #[arg(long, conflicts_with = "recent")]
         created_after: Option<String>,
