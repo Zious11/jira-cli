@@ -2909,8 +2909,8 @@ async fn test_queue_view_no_due_date_column_regardless_of_duedate_value() {
 // `tests/component_commands.rs` (AC-017 snapshot-JQL assertion).
 //
 // Implementation status: `resolve_component_clauses` and `build_filter_clauses`'s
-// component branch are implemented; all 19 tests below are green, exercising
-// the shipped `--component` filter behavior (BC-2.1.018..022).
+// component branch are implemented; all 18 integration tests below are green,
+// exercising the shipped `--component` filter behavior (BC-2.1.018..022).
 
 /// Shared harness: `jr` CLI invocation pre-wired with an isolated cache and
 /// config directory (per-test tempdirs) so the ADR-0018 components-cache
@@ -3613,6 +3613,10 @@ async fn test_bc_2_1_021_issue_list_component_all_mixed_with_bare_rejected() {
         !stderr.is_empty(),
         "AC-011: expected a non-empty rejection message"
     );
+    assert!(
+        stderr.contains("--component all: cannot be combined with other --component values."),
+        "AC-011: expected exact all:+bare-combination rejection message, got stderr: {stderr}"
+    );
 }
 
 // ── AC-012 (BC-2.1.021 EC-2.1.021-1 — single-name all: degenerates) ──────
@@ -3730,12 +3734,17 @@ async fn test_bc_2_1_022_issue_list_component_ambiguous_name_zero_search() {
     let config_dir = tempfile::tempdir().unwrap();
 
     s606_1_mock_project_exists(&server, "FOO").await;
+    // Deliberately reverse-alphabetical fixture order (mirrors AC-013's
+    // "Available:" test above) so the "Matches:" assertion below can only
+    // pass if the implementation actually sorts the candidates — with the
+    // fixture already alphabetical, deleting `candidates.sort_by_key` at
+    // `list.rs`'s ambiguous-match branch would go undetected.
     s606_1_mock_components(
         &server,
         "FOO",
         vec![
-            common::fixtures::component_response("20001", "Amber", None, None, None),
             common::fixtures::component_response("20002", "Ambition", None, None, None),
+            common::fixtures::component_response("20001", "Amber", None, None, None),
         ],
     )
     .await;
