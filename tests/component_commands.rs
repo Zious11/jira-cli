@@ -4595,6 +4595,154 @@ async fn test_bc_8_2_002_component_delete_numeric_source_project_mismatch_orphan
     );
 }
 
+// ── ADV pass-1 LOW-1 (BC-8.2.002 M1 — numeric-source missing-project field) ──
+
+/// ADV pass-1 LOW-1: a NUMERIC source whose confirming GET
+/// (`GET /rest/api/3/component/{sourceId}`) returns a component body that
+/// OMITS the `project` field entirely, under `--orphan --yes` with NO
+/// `--project` supplied. `src/cli/component.rs::handle_delete`'s numeric-
+/// source branch (~line 853) must fail closed with exit 64 BEFORE any
+/// snapshot search or `DELETE` — previously uncovered, so a mutant dropping
+/// the `return Err(...)` (falling through with an empty derived project key)
+/// would compile and pass all existing tests. BC-8.2.002 M1 / ADR-0018 §1.
+#[tokio::test]
+async fn test_bc_8_2_002_component_delete_numeric_source_missing_project_field_fail_closed_orphan()
+{
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Confirming GET: component exists but Jira returned no `"project"` key.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/20007"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_response_no_project_field("20007", "Backend")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/20007"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "delete", "20007", "--orphan", "--yes"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "ADV pass-1 LOW-1 (orphan, no --project): expected exit 64 when the \
+         numeric-source confirming GET omits the project field; got {:?}\n\
+         stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Component 20007 exists but Jira returned no project field. \
+             Pass --project KEY to disambiguate."
+        ),
+        "ADV pass-1 LOW-1 (orphan, no --project): expected the BC-8.2.002 M1 \
+         verbatim no-project-field message; got: {stderr}"
+    );
+}
+
+/// ADV pass-1 LOW-1 (companion, `--project`-supplied sub-case): same NUMERIC
+/// source + confirming GET omitting `project`, this time invoked with
+/// `--project A --move-to Frontend`. `handle_delete`'s numeric-source branch
+/// must fail closed with exit 64 BEFORE resolving `--move-to` (zero
+/// target-resolution component-list GET), the snapshot search, or `DELETE`.
+/// Covers the sibling `derived_project.is_empty() && project.is_some()`
+/// arm the orphan/no-`--project` test above does not exercise.
+#[tokio::test]
+async fn test_bc_8_2_002_component_delete_numeric_source_missing_project_field_fail_closed_move_to()
+{
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Confirming GET: component exists but Jira returned no `"project"` key.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/20007"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_response_no_project_field("20007", "Backend")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // --move-to target resolution MUST NOT fire — the guard fires first.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(component_list_response(vec![])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/20007"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "delete",
+            "20007",
+            "--project",
+            "A",
+            "--move-to",
+            "Frontend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "ADV pass-1 LOW-1 (move-to, --project supplied): expected exit 64 \
+         when the numeric-source confirming GET omits the project field; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Component 20007 returned no project field; cannot verify --project \
+             or scope the delete. The component's project could not be determined."
+        ),
+        "ADV pass-1 LOW-1 (move-to, --project supplied): expected the \
+         BC-8.2.002 M1 verbatim no-project-field message; got: {stderr}"
+    );
+}
+
 // ── AC-012 (BC-8.2.006 Postconditions — interactive) ──────────────────────────
 
 /// AC-012: `--orphan` on a TTY (no `--yes`) → `dialoguer`-style confirm
@@ -5392,11 +5540,13 @@ async fn test_bc_8_2_007_component_delete_snapshot_drift_and_fetch_error_fail_cl
         .unwrap();
 
     server_5xx.verify().await;
-    assert_ne!(
+    assert_eq!(
         fetch_err.status.code(),
-        Some(0),
+        Some(1),
         "AC-019 (b): a genuine snapshot-search 5xx must abort before DELETE \
-         (fail-closed, non-zero exit); got exit 0\nstderr: {}",
+         with exit 1 (JrError::ApiError), for parity with sub-case (a)'s \
+         drift-abort exit code; got {:?}\nstderr: {}",
+        fetch_err.status.code(),
         String::from_utf8_lossy(&fetch_err.stderr)
     );
 }
