@@ -51,6 +51,13 @@ All notable changes to jr will be documented here.
 - **Due date visibility (S-668-1):** `jr issue view` and `jr issue list --output json`
   now include the `duedate` field. `jr issue view` shows a Due Date row; `jr issue list
   --duedate` adds an opt-in Due Date column. (#668)
+- **`jr component create` and `jr component edit`** (S-604-2, BC-8.1.005/006/007):
+  two new subcommands for managing Jira project components.
+  `jr component create --project KEY NAME [--description …] [--lead …] [--assignee-type …]`
+  creates a component; `jr component edit NAME_OR_ID [--project KEY] [--name …]
+  [--description …] [--lead …]` renames or updates an existing one. Numeric component IDs
+  bypass the project-component list lookup. Leading-dash component names (e.g. `-legacy`)
+  are accepted on both subcommands. (#604)
 
 ### Internal
 
