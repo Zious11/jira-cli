@@ -4106,3 +4106,143 @@ async fn test_bc_2_1_019_020_021_reserved_syntax_collisions_short_circuit_docume
         );
     }
 }
+
+// ── SEC-707-1 (PR #707 fast-follow, LOW — injection-safety regression pin) ─
+
+/// Pins the injection-safety guarantee noted in the PR #707 review: only the
+/// resolved NUMERIC `Component.id` ever reaches the composed JQL — never a
+/// raw, potentially attacker-influenced component NAME — even when that name
+/// is itself crafted with JQL metacharacters. A component whose NAME embeds
+/// a JQL-breakout attempt (`Back"end) OR 1=1--`) must still resolve to
+/// nothing but its numeric id (10001) in the final clause; none of the raw
+/// metachar substrings from the name may leak into the composed JQL string.
+/// This is injection-safe by construction today (`resolve_one_component_id`
+/// only ever pushes the resolved `id` into the clause, never `name`) — this
+/// test pins that guarantee as a regression check.
+#[tokio::test]
+async fn test_bc_2_1_018_issue_list_component_name_with_jql_metachars_uses_numeric_id_only() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    let metachar_name = "Back\"end) OR 1=1--";
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", metachar_name, None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--component",
+            metachar_name,
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "SEC-707-1: expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("component in (10001)"),
+        "SEC-707-1: expected the resolved numeric-id clause \
+         'component in (10001)' in jql: {jql}"
+    );
+    assert!(
+        !jql.contains("OR 1=1"),
+        "SEC-707-1: raw JQL-breakout substring 'OR 1=1' from the component \
+         NAME must never reach the composed JQL, got jql: {jql}"
+    );
+    assert!(
+        !jql.contains("Back\"end"),
+        "SEC-707-1: raw component NAME substring 'Back\"end' must never \
+         reach the composed JQL, got jql: {jql}"
+    );
+    assert!(
+        !jql.contains("Back\"end)"),
+        "SEC-707-1: raw component NAME substring 'Back\"end)' (including the \
+         literal ')' embedded in the attacker-controlled name) must never \
+         reach the composed JQL verbatim, got jql: {jql}"
+    );
+}
+
+// ── --component + --jql interaction (PR #707 fast-follow, LOW) ───────────
+
+/// Pins the CURRENT `--component` + `--jql` interaction (pr-reviewer LOW
+/// finding — previously untested): both flags compose via a plain AND —
+/// `--jql` does NOT silently override or ignore `--component`, nor does
+/// `--component` ever suppress `--jql`. `handle_list` (`src/cli/issue/
+/// list.rs`) builds the JQL base from `--jql` unconditionally of
+/// `--component`'s presence (`build_jql_base_parts`: project-scope-prefixed,
+/// then the user's raw `--jql` expression parenthesized), and separately
+/// resolves `--component` into `component_clauses` before ever branching on
+/// whether `--jql` was supplied; `all_parts = base_parts + filter_parts`
+/// (which includes `component_clauses`) is then AND-joined unconditionally.
+/// There is no `if jql.is_some() { skip component }`-shaped special case —
+/// `--component` composes with `--jql` exactly the same way every other
+/// filter flag already does (`--assignee`, `--status`, `--created-after`,
+/// ...; see the BC-2.1.007 clause-ordering test above and
+/// `tests/issue_read_holdouts.rs::test_s_2_01_h_035_...`).
+#[tokio::test]
+async fn test_bc_2_1_018_issue_list_component_with_jql_flag_current_behavior() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--component",
+            "Backend",
+            "--jql",
+            "status = \"Open\"",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert_eq!(
+        jql,
+        "project = \"FOO\" AND (status = \"Open\") AND component in (10001) ORDER BY updated DESC",
+        "current behavior: --component and --jql compose via AND, neither \
+         overrides the other; got jql: {jql}"
+    );
+}
