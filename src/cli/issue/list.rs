@@ -695,8 +695,21 @@ async fn resolve_component_clauses(
 
         let mut equality_clauses = Vec::new();
         for name in all_value["all:".len()..].split(',') {
-            let id = resolve_one_component_id(name, pk, &components, &candidate_names)?;
-            equality_clauses.push(format!("component = {id}"));
+            let ids = resolve_one_component_id(name, pk, &components, &candidate_names)?;
+            if ids.len() == 1 {
+                equality_clauses.push(format!("component = {}", ids[0]));
+            } else {
+                // F5-A-M1/F5-C-001 (human-adjudicated: UNION) — ExactMultiple
+                // becomes a parenthesized OR-of-equalities term standing in
+                // for this one name's position in the AND-chain (BC-2.1.021
+                // Postcondition 2 / EC-2.1.021-4).
+                let or_group = ids
+                    .iter()
+                    .map(|id| format!("component = {id}"))
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                equality_clauses.push(format!("({or_group})"));
+            }
         }
         return Ok(vec![equality_clauses.join(" AND ")]);
     }
@@ -707,18 +720,21 @@ async fn resolve_component_clauses(
     let components = client.list_components(pk).await?;
     let candidate_names: Vec<String> = components.iter().map(|c| c.name.clone()).collect();
 
-    let mut bare_ids = Vec::new();
-    let mut not_ids = Vec::new();
+    let mut bare_ids: Vec<String> = Vec::new();
+    let mut not_ids: Vec<String> = Vec::new();
     for v in values {
         if let Some(name) = v.strip_prefix("not:") {
-            not_ids.push(resolve_one_component_id(
+            // F5-A-M1/F5-C-001: each value's resolved ids (ascending numeric
+            // for an ExactMultiple union) are appended in comma-supplied
+            // value order (BC-2.1.019 PC3 / EC-2.1.019-4).
+            not_ids.extend(resolve_one_component_id(
                 name,
                 pk,
                 &components,
                 &candidate_names,
             )?);
         } else {
-            bare_ids.push(resolve_one_component_id(
+            bare_ids.extend(resolve_one_component_id(
                 v,
                 pk,
                 &components,
@@ -796,27 +812,37 @@ fn validate_component_preflight(
 }
 
 /// Resolve one `--component` name/id (already prefix-stripped by the caller
-/// for `not:`/`all:` forms) to its numeric component id via §8.4
+/// for `not:`/`all:` forms) to its numeric component id(s) via §8.4
 /// (`helpers::resolve_component`), mapping a name match back to its id via
 /// `components`. BC-8.4.002/003 failure messages, verbatim (alphabetically
 /// sorted, case-insensitive, period-terminated) — mirrors
 /// `cli/component.rs`'s identical resolution pattern.
+///
+/// F5-A-M1/F5-C-001 (2026-08-17, human-adjudicated: UNION) — `Exact` and the
+/// numeric-id bypass always resolve to a single-element `Vec`; a case-only
+/// duplicate name (`MatchResult::ExactMultiple`) resolves to EVERY
+/// case-insensitively-name-matching component id in `components` (a re-scan
+/// of the already-fetched list — zero extra HTTP), ascending numeric order,
+/// per BC-2.1.018 Postcondition 3 / BC-2.1.019 Postcondition 3 / BC-2.1.021
+/// Postcondition 2. This is a READ-PATH-ONLY divergence from
+/// `cli/component.rs`'s fail-closed mutating behavior on `ExactMultiple`
+/// (BC-2.1.022 EC-2.1.022-3) — do NOT change the mutating commands to match.
 fn resolve_one_component_id(
     input: &str,
     project: &str,
     components: &[crate::types::jira::component::Component],
     candidate_names: &[String],
-) -> std::result::Result<String, JrError> {
+) -> std::result::Result<Vec<String>, JrError> {
     match helpers::resolve_component(input, project, candidate_names) {
-        MatchResult::Exact(matched) | MatchResult::ExactMultiple(matched) => {
+        MatchResult::Exact(matched) => {
             if !input.is_empty() && input.chars().all(|c| c.is_ascii_digit()) {
                 // Numeric bypass (BC-8.4.001 step 1): `matched` IS the id.
-                Ok(matched)
+                Ok(vec![matched])
             } else {
                 components
                     .iter()
                     .find(|c| c.name == matched)
-                    .map(|c| c.id.clone())
+                    .map(|c| vec![c.id.clone()])
                     .ok_or_else(|| {
                         JrError::Internal(format!(
                             "Internal error: resolved component name '{}' not found in list.",
@@ -824,6 +850,25 @@ fn resolve_one_component_id(
                         ))
                     })
             }
+        }
+        MatchResult::ExactMultiple(matched) => {
+            // Numeric bypass never produces ExactMultiple (it short-circuits
+            // to Exact in `helpers::resolve_component` step 1), so `matched`
+            // here is always a name — re-scan `components` for every
+            // case-insensitive name match and union their ids.
+            let mut ids: Vec<String> = components
+                .iter()
+                .filter(|c| c.name.to_lowercase() == matched.to_lowercase())
+                .map(|c| c.id.clone())
+                .collect();
+            if ids.is_empty() {
+                return Err(JrError::Internal(format!(
+                    "Internal error: resolved component name '{}' not found in list.",
+                    matched
+                )));
+            }
+            ids.sort_by_key(|id| id.parse::<u64>().unwrap_or(u64::MAX));
+            Ok(ids)
         }
         MatchResult::Ambiguous(mut candidates) => {
             candidates.sort_by_key(|s| s.to_lowercase());
