@@ -4041,6 +4041,102 @@ async fn test_bc_8_2_002_component_delete_move_to_success_delete_after_resolutio
     );
 }
 
+// ── S-604-3 coverage pin (BC-8.2.002 — global --project flag propagation) ────
+
+/// S-604-3 coverage pin / refutes ADV pass-4 LOW-1
+/// (`ADVERSARY-READONLY-CLAP-INFERENCE-FALSE-POSITIVE`): this is the
+/// delete-side analog of `test_bc_8_1_007_component_edit_honors_global_project_flag`.
+///
+/// Adversarial pass-4 claimed `handle_delete`'s `ComponentSubcommand::Delete`
+/// dispatch arm drops the GLOBAL `--project` flag because it doesn't
+/// explicitly forward a `project_flag` parameter. This was empirically
+/// REFUTED: the top-level `--project` is `#[arg(long, global = true)]`
+/// (`src/cli/mod.rs:29`), so clap propagates it directly into
+/// `ComponentSubcommand::Delete`'s OWN `project` field, which `handle_delete`
+/// reads via `config.project_key(args.project.as_deref())` — no separate
+/// forwarding is needed or possible. A live binary run of
+/// `jr --project FOO component delete Backend --orphan --yes` reached the
+/// HTTP layer (network error), NOT the "No project configured" exit-64
+/// guard, proving propagation works end to end.
+///
+/// This test is the durable coverage pin for that empirical finding: config
+/// carries NO default project — the global `--project` flag is the ONLY
+/// source of the project key — and `--project` is placed BEFORE the
+/// subcommand (no per-subcommand `--project`). If a future refactor ever
+/// broke global-flag propagation into the delete dispatch arm,
+/// `handle_delete` would see `project: None`, exit 64 ("No project
+/// configured") before any HTTP call, and BOTH the components-GET
+/// `.expect(1)` and the DELETE `.expect(1)` below would go unmet — failing
+/// this test (and `server.verify()` would panic).
+#[tokio::test]
+async fn test_bc_8_2_002_component_delete_honors_global_project_flag() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    // Write a profile config with NO default project — the global --project
+    // flag is the ONLY source of the project key.
+    write_profile_config(config.path(), &server.uri());
+
+    // Name-based resolution: one component in FOO.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Zero affected issues — orphan --yes proceeds without a prompt.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(
+            json!({"jql": "component = 10001 ORDER BY key ASC"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_delete_snapshot_page(&[], None)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // DELETE MUST fire (no moveIssuesTo) — proceeds with the global-flag project.
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(query_param_is_missing("moveIssuesTo"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Global flag BEFORE the subcommand — no per-subcommand --project.
+    let output = delete_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "--project",
+            "FOO",
+            "component",
+            "delete",
+            "Backend",
+            "--orphan",
+            "--yes",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-8.2.002 S-604-3: expected exit 0 when project is supplied via the \
+         global --project flag; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // ── AC-006 (BC-8.2.003 Behavior / EC-8.2.003-1) ───────────────────────────────
 
 /// AC-006: `--move-to Backend` where the SAME-named component exists ONLY in
