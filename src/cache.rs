@@ -690,6 +690,14 @@ pub struct ComponentsCacheEntry {
 /// Returns `Ok(None)` on missing file, missing key, expired entry, or corrupt
 /// JSON (self-heal via cache-miss → re-fetch). ADR-0018 Decision §2.
 /// Profile is FIRST arg per ADR-0007 multi-profile invariant.
+///
+/// **FOUNDATION, not yet wired (F5-A-L1/C-003):** as of this cycle, no
+/// production code path calls this function — `helpers::resolve_component`
+/// and every `jr component`/`jr issue list --component` resolver always
+/// performs a fresh `list_components` GET, never consulting this cache. It
+/// exists ahead of its consumer per ADR-0018 §2, laid down for `jr component
+/// rename` (S-608-1), which is expected to read through it. Do not treat its
+/// presence as evidence that component resolution is currently cached.
 pub fn read_components_cache(
     profile: &str,
     project_key: &str,
@@ -731,6 +739,16 @@ pub fn read_components_cache(
 /// failed cache write must never break a successful `component list`. Callers
 /// MUST use `.ok()` to discard the infallible return value.
 /// Profile is FIRST arg per ADR-0007 multi-profile invariant.
+///
+/// **FOUNDATION, not yet wired (F5-A-L1/C-003):** no production code path
+/// calls this function today — `jr component list` and every `--component`
+/// resolver fetch fresh from the API on every invocation rather than
+/// populating this cache. It is laid down ahead of its consumer per ADR-0018
+/// §2, intended for `jr component rename` (S-608-1). Only
+/// `invalidate_components_cache` has real production call sites right now
+/// (`cli/component.rs` create/edit/delete), and since nothing writes this
+/// cache in production those calls currently have no cached entry to remove
+/// — see that function's doc comment.
 pub fn write_components_cache(
     profile: &str,
     project_key: &str,
@@ -783,6 +801,18 @@ pub fn write_components_cache(
 /// **Model-b invalidator:** disk errors are swallowed with `eprintln!` so a
 /// failed invalidation never breaks the mutating command. Returns `()`.
 /// Profile is FIRST arg per ADR-0007 multi-profile invariant.
+///
+/// **Currently a no-op in practice (F5-A-L1/C-003):** this function DOES have
+/// real production call sites (`cli/component.rs`'s create/edit/delete
+/// handlers, S-604-2/S-604-3) and does execute on every mutating command —
+/// but because `write_components_cache` has no production caller, there is
+/// never an on-disk entry for it to find and remove; `map.remove(project_key)`
+/// returns `None` and the function short-circuits before rewriting the file.
+/// It is FOUNDATION for `jr component rename` (S-608-1) per ADR-0018 §2: once
+/// a future read path starts populating this cache via `write_components_cache`,
+/// these already-wired invalidation call sites make it correct immediately,
+/// with no further caller-side changes needed. Do not read its call sites as
+/// evidence that component list results are cached today.
 pub fn invalidate_components_cache(profile: &str, project_key: &str) {
     let path = cache_dir(profile).join(format!("components_{profile}.json"));
     if !path.exists() {
