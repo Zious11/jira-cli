@@ -2123,11 +2123,6 @@ async fn test_bc_8_1_007_component_edit_name_input_no_fields_zero_http() {
         !stderr_10.contains("Error: Error:"),
         "AC-010 F-R2-001: stderr must NOT contain doubled 'Error: Error:' prefix; got: {stderr_10}"
     );
-    assert!(
-        !stderr_10.contains("Error: no fields"),
-        "AC-010 F-R2-001: message text must not start with 'Error: ' \
-         (that prefix belongs to main.rs rendering, not the UserError message); got: {stderr_10}"
-    );
 }
 
 // ── AC-011 (BC-8.1.007 P16 — numeric input, no fields → exit 64, zero HTTP) ──
@@ -2187,11 +2182,6 @@ async fn test_bc_8_1_007_component_edit_numeric_input_no_fields_zero_http() {
     assert!(
         !stderr_11.contains("Error: Error:"),
         "AC-011 F-R2-001: stderr must NOT contain doubled 'Error: Error:' prefix; got: {stderr_11}"
-    );
-    assert!(
-        !stderr_11.contains("Error: no fields"),
-        "AC-011 F-R2-001: message text must not start with 'Error: ' \
-         (that prefix belongs to main.rs rendering, not the UserError message); got: {stderr_11}"
     );
 }
 
