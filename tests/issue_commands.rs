@@ -3347,6 +3347,64 @@ async fn test_bc_2_1_020_issue_list_component_none_zero_resolver_http() {
     );
 }
 
+// INFO-1 (Step-4.5 adversarial finding, cheap coverage add): BC-2.1.020's
+// `none` keyword match is documented case-insensitive, but AC-006 only
+// exercises the exact lowercase spelling `"none"`. Pins `--component NONE`
+// (uppercase) and `--component None` (mixed case) against the same
+// zero-resolver-HTTP / `component is EMPTY` behavior as AC-006.
+
+/// `--component NONE` (uppercase) and `--component None` (mixed case) both
+/// compose `component is EMPTY` with ZERO §8.4 resolver HTTP, identically to
+/// `--component none` (AC-006) — BC-2.1.020 case-insensitivity.
+#[tokio::test]
+async fn test_bc_2_1_020_issue_list_component_none_case_insensitive() {
+    for spelling in ["NONE", "None"] {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+
+        s606_1_mock_project_exists(&server, "FOO").await;
+        // The resolver GET must NEVER fire for any case-variant of `none` —
+        // VP-COMPONENT-015 / BC-2.1.020 case-insensitivity.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/project/FOO/components"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                common::fixtures::component_list_response(vec![
+                    common::fixtures::component_response("10001", "Backend", None, None, None),
+                ]),
+            ))
+            .expect(0)
+            .mount(&server)
+            .await;
+        s606_1_mock_search_empty(&server).await;
+
+        let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+            .args([
+                "--no-input",
+                "issue",
+                "list",
+                "--project",
+                "FOO",
+                "--component",
+                spelling,
+            ])
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "INFO-1 ({spelling}): expected exit 0, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let jql = s606_1_composed_jql(&server).await;
+        assert!(
+            jql.contains("component is EMPTY"),
+            "INFO-1 ({spelling}): expected 'component is EMPTY' in jql: {jql}"
+        );
+    }
+}
+
 // ── AC-007 (BC-2.1.020 Behavior — combination rejection) ─────────────────
 
 /// `--component none --component Backend` → exit 64 pre-flight, ZERO HTTP —

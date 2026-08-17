@@ -1201,6 +1201,47 @@ mod tests {
         assert!(parts.contains(&clause.to_string()));
     }
 
+    /// F-1 (Step-4.5 adversarial finding, coverage gap): pins BC-2.1.007's
+    /// clause-ordering amendment / VP-COMPONENT-015 with BOTH the asset
+    /// clause slot AND `component_clauses` non-empty in the same call — no
+    /// pre-existing test in this module exercised that combination, so a
+    /// reorder placing `component_clauses` before `asset_clause` (or after a
+    /// date-range clause) would have stayed green. Asserts exact positional
+    /// Vec equality, not a loose `contains`/`len` check, so the pin actually
+    /// catches a reorder.
+    #[test]
+    fn test_bc_2_1_007_build_filter_clauses_component_immediately_after_asset() {
+        let asset_clause = r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#;
+        let component_clauses = vec![
+            "component in (10001)".to_string(),
+            "(component not in (10002) OR component is EMPTY)".to_string(),
+        ];
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: Some("currentUser()"),
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: Some(asset_clause),
+            component_clauses: &component_clauses,
+            created_after_clause: Some("created >= \"2026-03-01\""),
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
+        assert_eq!(
+            parts,
+            vec![
+                "assignee = currentUser()".to_string(),
+                asset_clause.to_string(),
+                "component in (10001)".to_string(),
+                "(component not in (10002) OR component is EMPTY)".to_string(),
+                "created >= \"2026-03-01\"".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn build_jql_parts_created_after_clause() {
         let parts = build_filter_clauses(FilterOptions {
