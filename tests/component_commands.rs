@@ -1962,13 +1962,16 @@ async fn test_bc_8_1_007_component_edit_numeric_input_no_fields_zero_http() {
     );
 }
 
-// ── AC-012 (BC-8.1.007 M1 — numeric input derives project from ONE GET) ───────
+// ── AC-012 (BC-8.1.007 / EC-8.1.007-3 — numeric edit derives project for --lead) ─
 
-/// AC-012 / BC-8.1.007 M1 (ADR-0018 §1): for numeric component ID, ONE
-/// confirming GET (`/rest/api/3/component/{id}`) both validates existence and
-/// derives the project key for lead resolution.  `.expect(1)` enforces no
-/// duplicate GET; the resolved project must be used for lead lookup.
-/// Red Gate: todo!() panics before HTTP.
+/// AC-012 / BC-8.1.007 / EC-8.1.007-3: for numeric component ID, ONE confirming
+/// GET (`/rest/api/3/component/{id}`) derives the project key.  `--lead` is then
+/// resolved via `multiProjectSearch` scoped to THAT derived project.  The PUT body
+/// carries `{"leadAccountId":"acc-eng-lead"}` — verified via `body_json` exact
+/// matching.  `.expect(1)` on both GET and PUT enforces no extra calls.
+///
+/// This covers VP-COMPONENT-002 (edit half) and EC-8.1.007-3: derived-project
+/// scoping + correct `leadAccountId` wire key.
 #[tokio::test]
 async fn test_bc_8_1_007_component_edit_numeric_derives_project_for_lead_resolution() {
     let cache = TempDir::new().unwrap();
@@ -1976,7 +1979,7 @@ async fn test_bc_8_1_007_component_edit_numeric_derives_project_for_lead_resolut
     let server = MockServer::start().await;
     write_profile_config(config.path(), &server.uri());
 
-    // Exactly ONE confirming GET — reused for both existence + project.
+    // Exactly ONE confirming GET — derives project key "ENG" for lead lookup.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/component/10001"))
         .respond_with(
@@ -1986,7 +1989,7 @@ async fn test_bc_8_1_007_component_edit_numeric_derives_project_for_lead_resolut
                 None,
                 None,
                 None,
-                Some("FOO"),
+                Some("ENG"),
                 None,
             )),
         )
@@ -1994,11 +1997,26 @@ async fn test_bc_8_1_007_component_edit_numeric_derives_project_for_lead_resolut
         .mount(&server)
         .await;
 
+    // Lead resolver: "Alice" resolves to accountId "acc-eng-lead" scoped to ENG.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(multi_project_user_search_response(vec![(
+                "acc-eng-lead",
+                "Alice",
+            )])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT must carry exactly {"leadAccountId":"acc-eng-lead"} — body_json enforces equality.
     Mock::given(method("PUT"))
         .and(path("/rest/api/3/component/10001"))
+        .and(body_json(json!({"leadAccountId": "acc-eng-lead"})))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(component_edit_response("10001", "New Name", "FOO")),
+                .set_body_json(component_edit_response("10001", "Backend", "ENG")),
         )
         .expect(1)
         .mount(&server)
@@ -2008,9 +2026,9 @@ async fn test_bc_8_1_007_component_edit_numeric_derives_project_for_lead_resolut
         .args([
             "component",
             "edit",
-            "--name",
-            "New Name",
-            "10001", // numeric — no --project required
+            "--lead",
+            "Alice",
+            "10001", // numeric — no --project required; project derived from GET
         ])
         .output()
         .unwrap();
@@ -2018,7 +2036,7 @@ async fn test_bc_8_1_007_component_edit_numeric_derives_project_for_lead_resolut
     server.verify().await;
     assert!(
         output.status.success(),
-        "Expected exit 0 for numeric edit; got {:?}\nstderr: {}",
+        "Expected exit 0 for numeric edit with --lead; got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -2754,5 +2772,154 @@ async fn test_adr_0018_component_edit_failed_does_not_invalidate_cache() {
         cache_after.get("FOO").is_some(),
         "After failed edit, FOO entry must REMAIN in components cache; \
          cache after: {cache_after}"
+    );
+}
+
+// ── Pass-7/8 coverage: edit --lead resolution paths ──────────────────────────
+
+/// VP-COMPONENT-002 (edit half) / EC-8.1.007-3: `--lead` returns 0 matches on
+/// the name-based edit path → exit 64, zero PUT calls.
+///
+/// Exercises `src/cli/component.rs` lines 532-535 (0-match arm → UserError).
+#[tokio::test]
+async fn test_bc_8_1_006_component_edit_lead_no_match_zero_put() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Name-based resolution: list components for project ENG.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/ENG/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Lead resolver returns no users.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(multi_project_user_search_response(vec![])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT MUST NOT be called — guard fires before the PUT.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "ENG",
+            "--lead",
+            "Alice",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for no-match --lead on edit; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No user matching 'Alice'"),
+        "Expected BC-8.1.006 no-match message; got: {stderr}"
+    );
+}
+
+/// VP-COMPONENT-002 (edit half) / BC-8.1.006: `--lead` returns 2+ matches on
+/// the name-based edit path → exit 64, zero PUT calls.  Stderr lists each
+/// candidate's email + accountId (BC-X.7.004).
+///
+/// Exercises `src/cli/component.rs` lines 543-553 (2+-match arm → UserError with candidate list).
+#[tokio::test]
+async fn test_bc_8_1_006_component_edit_lead_ambiguous_zero_put() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Name-based resolution: list components for project ENG.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/ENG/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Lead resolver returns 2 matches — ambiguous.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            multi_project_user_search_response_with_email(vec![
+                ("acc-001", "Alice Smith", "alice.smith@example.com"),
+                ("acc-002", "Alice Jones", "alice.jones@example.com"),
+            ]),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT MUST NOT be called — ambiguity guard fires before the PUT.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "edit",
+            "--project",
+            "ENG",
+            "--lead",
+            "alice",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for ambiguous --lead on edit; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // BC-8.1.006 / BC-X.7.004: both candidate emails or accountIds must appear.
+    assert!(
+        stderr.contains("alice.smith@example.com") || stderr.contains("acc-001"),
+        "Expected first candidate (alice.smith@example.com or acc-001) in stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("alice.jones@example.com") || stderr.contains("acc-002"),
+        "Expected second candidate (alice.jones@example.com or acc-002) in stderr; got: {stderr}"
     );
 }
