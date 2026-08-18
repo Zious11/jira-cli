@@ -1463,6 +1463,7 @@ async fn handle_rename_all_projects(
     // BC-8.3.003: per-project atomic, continue-on-error, no rollback.
     let mut renamed: Vec<serde_json::Value> = Vec::new();
     let mut failed: Vec<serde_json::Value> = Vec::new();
+    let mut failed_projects: Vec<String> = Vec::new();
     let mut table_lines: Vec<String> = Vec::new();
 
     for t in &targets {
@@ -1482,6 +1483,7 @@ async fn handle_rename_all_projects(
                     "project": t.project,
                     "error": error_text,
                 }));
+                failed_projects.push(t.project.clone());
                 table_lines.push(format!("{}: FAILED — {}", t.project, error_text));
             }
         }
@@ -1505,12 +1507,23 @@ async fn handle_rename_all_projects(
 
     // BC-8.3.003 Postcondition 2: exit 0 iff every attempted project
     // succeeded; exit 1 if ≥1 failed (partial success must not look
-    // identical to full success to an automated caller).
+    // identical to full success to an automated caller). The error stays a
+    // bare `anyhow::anyhow!` (not `JrError::UserError`) so it falls through
+    // to `main.rs`'s default exit code (1), not `UserError`'s 64 — AC-009
+    // requires 1 for a partial-failure batch. Per CLAUDE.md's "always
+    // suggest what to do next" convention, the message names the specific
+    // failed projects and how to retry them (see the failed[] entries
+    // above/the "FAILED —" table lines for each project's underlying error).
     if any_failed {
         return Err(anyhow::anyhow!(
-            "{} of {} project rename(s) failed",
+            "{} of {} project rename(s) failed ({}). Retry the failed projects individually: \
+             jr component rename {} {} --project <KEY> — see the failed[] entries above for \
+             each project's error.",
             failed.len(),
-            targets.len()
+            targets.len(),
+            failed_projects.join(", "),
+            old,
+            new
         ));
     }
 
