@@ -6797,3 +6797,84 @@ async fn test_bc_3_4_022_issue_edit_component_rmw_retains_duplicate_named_by_id(
          entries would silently dedupe to one on Jira's side (data loss)"
     );
 }
+
+// =============================================================================
+// Step-4.5 Round 5 — B-LOW-1: RMW fallback add-before-remove parity with the
+// native path
+// =============================================================================
+
+/// RMW fallback (editmeta lacks add/remove) with `--component add:Backend
+/// --component remove:Backend` (the SAME component both added and
+/// removed) → the set-verb body must NOT contain Backend, matching the
+/// native update-verb path's add-before-remove semantics (BC-3.4.022 Post
+/// 2: Jira applies `[{"add":X},{"remove":X}]` in order, leaving X absent).
+/// An untouched pre-existing component survives unaffected.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_add_remove_same_matches_native() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    let mut issue_with_other = common::fixtures::issue_response("FOO-1", "Test", "To Do");
+    issue_with_other["fields"]["components"] = serde_json::json!([
+        {"name": "Other", "id": "50001"}
+    ]);
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_other))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Backend",
+            "--component",
+            "remove:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "B-LOW-1: expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(puts.len(), 1, "B-LOW-1: expected exactly 1 PUT; got {puts:?}");
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": [
+                    {"id": "50001"}
+                ]
+            }
+        }),
+        "B-LOW-1: add:Backend + remove:Backend (same component) must leave \
+         Backend ABSENT from the set-verb body, matching the native \
+         add-before-remove wire semantics; the untouched 'Other' component \
+         must survive"
+    );
+}
