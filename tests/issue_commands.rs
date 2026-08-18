@@ -7047,6 +7047,85 @@ async fn test_bc_3_4_022_issue_edit_component_editmeta_add_only_uses_fallback() 
     );
 }
 
+/// editmeta advertises `remove` ONLY (no `add`) for `components` → the RMW
+/// fallback fires, NOT the native update-verb path. Mirror of the add-only
+/// test above (Step-4.5 Round 6, LOW/Lens C): without this, a mutation
+/// replacing the first conjunct of `native_supported = ops.any(=="add") &&
+/// ops.any(=="remove")` with `true` would survive every other editmeta
+/// test (add-only→fallback still holds via the second conjunct, set→
+/// fallback still holds, add+remove→native still holds).
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_editmeta_remove_only_uses_fallback() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    // editmeta advertises "remove" ONLY -- no "add" -- must select the
+    // fallback, not the native path.
+    s605_1_mock_editmeta(&server, "FOO-1", &["remove"]).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_components("FOO-1", "Test", &["Backend"]),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "LOW (Lens C): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "LOW (Lens C): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": []
+            }
+        }),
+        "LOW (Lens C): editmeta advertising 'remove' only (no 'add') must \
+         use the set-verb RMW fallback shape (fields.components), NOT the \
+         native update-verb PUT shape (update.components) -- pins the && \
+         (not a first-conjunct-elided variant) in the native_supported \
+         gate. The GET current-issue call's .expect(1) above independently \
+         proves the fallback path actually ran."
+    );
+}
+
 // =============================================================================
 // Step-4.5 Round 6 — HIGH-1 (F-A-001): RMW fallback silently failed to
 // remove a NAME-specified component against a live (id-bearing) issue
