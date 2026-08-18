@@ -57,8 +57,8 @@ impl JiraClient {
     /// Fetch a single component by ID.
     ///
     /// GETs `/rest/api/3/component/{component_id}`.
-    /// Used as the ADR-0018 §1 numeric confirming-GET for the `jr component edit` numeric
-    /// path (`handle_edit`). Future delete/rename numeric paths (S-604-3/S-608-1) reuse it.
+    /// Reused as the ADR-0018 §1 numeric confirming-GET by `handle_edit`,
+    /// `handle_delete` (S-604-3), and `resolve_rename_source` (S-608-1).
     /// NOT called by `resolve_component`, which is a pure candidate-list resolver that
     /// performs no HTTP.
     pub async fn get_component(&self, component_id: &str) -> Result<Component> {
