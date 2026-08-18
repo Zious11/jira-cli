@@ -12,6 +12,7 @@ use crate::error::JrError;
 use crate::output;
 
 use super::create::parse_field_kv;
+use super::format;
 use super::helpers;
 use super::json_output;
 
@@ -41,6 +42,7 @@ pub(super) async fn handle_edit(
         issue_type,
         priority,
         label: labels,
+        component: components,
         team,
         points,
         no_points,
@@ -107,6 +109,7 @@ pub(super) async fn handle_edit(
             || priority.is_some()
             || issue_type.is_some()
             || !labels.is_empty()
+            || !components.is_empty() // BC-3.4.022: --component add:/remove:
             || team.is_some()
             || points.is_some()
             || no_points
@@ -118,8 +121,8 @@ pub(super) async fn handle_edit(
         if !has_any_field_change {
             return Err(JrError::UserError(
                 "No fields specified to update. Use --summary, --type, --priority, --label, \
-                 --team, --points, --no-points, --parent, --no-parent, --description, \
-                 --description-stdin, or --field NAME=VALUE."
+                 --component, --team, --points, --no-points, --parent, --no-parent, \
+                 --description, --description-stdin, or --field NAME=VALUE."
                     .into(),
             )
             .into());
@@ -159,6 +162,15 @@ pub(super) async fn handle_edit(
         if priority.is_some() && field_keys_lower.contains("priority") {
             return Err(JrError::UserError(
                 "priority is set by both --priority and --field; use only one.".into(),
+            )
+            .into());
+        }
+        // BC-3.4.017 amendment (AC-014): `components` joins the flag-overlap
+        // set as the 5th member. `--field Components=Y` (any case) also
+        // trips this guard — field_keys_lower is already lowercased above.
+        if !components.is_empty() && field_keys_lower.contains("components") {
+            return Err(JrError::UserError(
+                "components is set by both --component and --field; use only one.".into(),
             )
             .into());
         }
@@ -214,6 +226,15 @@ pub(super) async fn handle_edit(
         }
         if !field_pairs.is_empty() {
             conflicting.push("--field");
+        }
+        // BC-3.4.020 amendment (AC-015): --component joins the 13-flag
+        // conflict list --label cannot be combined with, on ANY key count.
+        // Without this guard the --label-bulk routing fork below would
+        // silently drop a concurrent --component write (data-loss hazard,
+        // VP-COMPONENT-027) — the same silent-drop shape the rest of this
+        // block already guards against for the other 12 flags.
+        if !components.is_empty() {
+            conflicting.push("--component");
         }
         if !conflicting.is_empty() {
             return Err(JrError::UserError(format!(
@@ -321,6 +342,14 @@ pub(super) async fn handle_edit(
         }
         if !field_pairs.is_empty() {
             unsupported.push("--field");
+        }
+        // BC-3.4.022: --component is single-key path ONLY — 2+ keys route to
+        // S-605-2's BC-3.4.023 bulk wire shape (not implemented by this
+        // story). Reject here rather than silently dropping the flag when
+        // forwarded to handle_edit_bulk_fields, which has no components
+        // parameter (mirrors the --field precedent immediately above).
+        if !components.is_empty() {
+            unsupported.push("--component");
         }
         if !unsupported.is_empty() {
             return Err(JrError::UserError(format!(
@@ -481,6 +510,17 @@ pub(super) async fn handle_edit(
                         .collect();
                     planned.insert("labels".into(), json!(label_entries));
                 }
+                if !components.is_empty() {
+                    // BC-3.4.021 amendment (AC-016): structured
+                    // `[{"action":"ADD","name":"X"},{"action":"REMOVE","name":"Y"}]`
+                    // array — DIFFERENT shape from the comma-joined live-echo
+                    // string (format::format_component_changes_echo).
+                    let component_changes = format::normalize_component_changes(&components);
+                    planned.insert(
+                        "components".into(),
+                        json!(format::component_changes_dry_run_json(&component_changes)),
+                    );
+                }
                 if let Some(ref t) = issue_type {
                     planned.insert("issueType".into(), json!(t));
                 }
@@ -546,6 +586,16 @@ pub(super) async fn handle_edit(
                 }
                 if !labels.is_empty() {
                     println!("  labels → {}", labels.join(", "));
+                }
+                if !components.is_empty() {
+                    // BC-3.4.021 amendment (AC-017): identical normalization
+                    // to the live-edit echo (AC-012) — bare `X` renders as
+                    // `add:X`, never bare.
+                    let component_changes = format::normalize_component_changes(&components);
+                    println!(
+                        "  components → {}",
+                        format::format_component_changes_echo(&component_changes)
+                    );
                 }
                 if let Some(ref t) = issue_type {
                     println!("  type → {t}");
@@ -770,6 +820,21 @@ pub(super) async fn handle_edit(
         changed_fields.insert("parent".into(), "(cleared)".into());
     }
 
+    // BC-3.4.022 (single-key path ONLY — effective_keys.len() == 1 is
+    // guaranteed here by the C-1 rejection block above): components use a
+    // DEDICATED wire shape (`update` verb, editmeta-gated fallback) that
+    // cannot be merged into the generic `fields` object PUT below, so this
+    // fires its own HTTP call(s) via `edit_issue_components` BEFORE
+    // `client.edit_issue(key, fields)` runs.
+    if !components.is_empty() {
+        let component_changes = edit_issue_components(client, key, &components).await?;
+        has_updates = true;
+        changed_fields.insert(
+            "components".into(),
+            format::format_component_changes_echo(&component_changes),
+        );
+    }
+
     // BC-3.4.015 invariant 10 (live path): resolve_edit_fields on the live path.
     // Errors here (field not found, absent from editmeta, bad type, etc.) exit 64
     // BEFORE the PUT is issued (all-or-nothing semantics per EC-3.4.015-12).
@@ -788,7 +853,7 @@ pub(super) async fn handle_edit(
 
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --no-parent, --description, --description-stdin, or --field NAME=VALUE."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --component, --team, --points, --no-points, --parent, --no-parent, --description, --description-stdin, or --field NAME=VALUE."
         );
     }
 
@@ -897,6 +962,46 @@ pub(super) async fn handle_edit(
     }
 
     Ok(())
+}
+
+/// Single-key `--component` add:/remove: wire-shape handler (BC-3.4.022).
+///
+/// Called ONLY from the single-key path of [`handle_edit`] (`effective_keys.len()
+/// == 1` is guaranteed by the caller's C-1 rejection block, which rejects
+/// multi-key + `--component` upfront — 2+ keys route to S-605-2's
+/// BC-3.4.023 bulk wire shape, out of scope here).
+///
+/// Behavior (BC-3.4.022):
+/// 1. Parse/normalize `components` via [`format::normalize_component_changes`]
+///    (add:/remove: prefix grammar, bare → ADD, ADD-before-REMOVE ordering).
+/// 2. Resolve each component NAME via `helpers::resolve_component` (BC-8.4.001),
+///    scoped to the issue's own project — extracted from `key` via the
+///    last-hyphen split (BC-3.4.018 Invariant 4 precedent) — using the
+///    project component-list GET (BC-3.4.025), never editmeta, for name
+///    validation. Unknown name → exit 64, zero PUT (AC-006).
+/// 3. Evaluate the editmeta gate ONCE (`client.get_editmeta(key)`,
+///    `fields.components.operations` containing `add`/`remove`):
+///    - Present → native `update`-verb PUT via
+///      [`JiraClient::update_issue_components`] directly, zero extra GET for
+///      current components (AC-004).
+///    - Absent → read-modify-write fallback: GET current `fields.components`
+///      (`client.get_issue`), compute the new full array client-side, PUT via
+///      the `set` verb (`client.edit_issue`) (AC-005).
+///    No retry-with-different-shape on a subsequent 400 (Invariant 2).
+///
+/// Returns the normalized changes (ADD before REMOVE) so the caller can build
+/// `changed_fields`/table echo via [`format::format_component_changes_echo`]
+/// without re-deriving the ordering.
+async fn edit_issue_components(
+    client: &JiraClient,
+    key: &str,
+    components: &[String],
+) -> Result<Vec<format::ComponentChange>> {
+    todo!(
+        "BC-3.4.022: resolve component names (BC-8.4.001, project component-list \
+         GET), editmeta-gated native update-verb PUT vs read-modify-write fallback \
+         (evaluated once, no retry-with-different-shape)"
+    )
 }
 
 /// Build the `editedFieldsInput` JSON object for a multi-key bulk-labels edit.
@@ -1470,6 +1575,7 @@ mod tests {
             "description_stdin",
             "markdown",
             "field", // --field NAME=VALUE (S-396): single-key only (BC-3.4.017 Gate A)
+            "component", // --component add:/remove: (S-605-1): single-key only (BC-3.4.022)
         ]
         .into_iter()
         .collect();
