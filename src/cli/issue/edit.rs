@@ -10,6 +10,7 @@ use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
 use crate::error::JrError;
 use crate::output;
+use crate::partial_match::MatchResult;
 
 use super::create::parse_field_kv;
 use super::format;
@@ -857,7 +858,16 @@ pub(super) async fn handle_edit(
         );
     }
 
-    let edit_result = client.edit_issue(key, fields).await;
+    // BC-3.4.022: when --component is the only flag supplied, `fields`
+    // stays an empty object -- edit_issue_components already fired its own
+    // dedicated PUT above, so skip this generic PUT entirely rather than
+    // sending a second, no-op `{"fields":{}}` request (AC-001/AC-004/AC-005
+    // all assert exactly ONE PUT to the issue in that scenario).
+    let edit_result = if fields.as_object().is_some_and(|m| m.is_empty()) {
+        Ok(())
+    } else {
+        client.edit_issue(key, fields).await
+    };
     if let Err(ref e) = edit_result {
         // --type arm: evaluated FIRST (dual-gate precedence, BC-3.4.010 invariant).
         // HTTP-400 gate: downcast to JrError::ApiError { status: 400, .. }.
@@ -997,11 +1007,105 @@ async fn edit_issue_components(
     key: &str,
     components: &[String],
 ) -> Result<Vec<format::ComponentChange>> {
-    todo!(
-        "BC-3.4.022: resolve component names (BC-8.4.001, project component-list \
-         GET), editmeta-gated native update-verb PUT vs read-modify-write fallback \
-         (evaluated once, no retry-with-different-shape)"
-    )
+    // Step 1: parse/normalize add:/remove: entries (ADD before REMOVE).
+    let changes = format::normalize_component_changes(components);
+
+    // Step 2: resolve each component NAME via BC-8.4.001, scoped to the
+    // issue's own project (last-hyphen split, BC-3.4.018 Invariant 4) using
+    // the project component-list GET (BC-3.4.025) -- NEVER editmeta.
+    let project_key = project_key_from_issue_key(key);
+    let component_list = client.list_components(project_key).await?;
+    let candidate_names: Vec<String> = component_list.iter().map(|c| c.name.clone()).collect();
+
+    let mut resolved_changes: Vec<format::ComponentChange> = Vec::with_capacity(changes.len());
+    for change in &changes {
+        let matched_name = match helpers::resolve_component(&change.name, project_key, &candidate_names) {
+            MatchResult::Exact(matched) => matched,
+            MatchResult::ExactMultiple(matched_name) => {
+                let ids: Vec<String> = component_list
+                    .iter()
+                    .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
+                    .map(|c| c.id.clone())
+                    .collect();
+                return Err(JrError::UserError(format!(
+                    "Multiple components named \"{}\" found (IDs: {}). \
+                     Pass the numeric ID directly.",
+                    matched_name,
+                    ids.join(", ")
+                ))
+                .into());
+            }
+            MatchResult::Ambiguous(mut candidates) => {
+                candidates.sort_by_key(|s| s.to_lowercase());
+                return Err(JrError::UserError(format!(
+                    "Ambiguous component '{}'. Matches: {}.",
+                    change.name,
+                    candidates.join(", ")
+                ))
+                .into());
+            }
+            MatchResult::None(mut available) => {
+                available.sort_by_key(|s| s.to_lowercase());
+                return Err(JrError::UserError(format!(
+                    "Component '{}' not found in project {}. Available: {}.",
+                    change.name,
+                    project_key,
+                    available.join(", ")
+                ))
+                .into());
+            }
+        };
+        resolved_changes.push(format::ComponentChange {
+            action: change.action.clone(),
+            name: matched_name,
+        });
+    }
+
+    let adds: Vec<String> = resolved_changes
+        .iter()
+        .filter(|c| c.action == format::ComponentAction::Add)
+        .map(|c| c.name.clone())
+        .collect();
+    let removes: Vec<String> = resolved_changes
+        .iter()
+        .filter(|c| c.action == format::ComponentAction::Remove)
+        .map(|c| c.name.clone())
+        .collect();
+
+    // Step 3: evaluate the editmeta gate ONCE -- no retry-with-different-shape
+    // on a subsequent 400 (Invariant 2).
+    let editmeta = client.get_editmeta(key).await?;
+    let native_supported = editmeta
+        .fields
+        .get("components")
+        .is_some_and(|f| f.operations.iter().any(|op| op == "add") && f.operations.iter().any(|op| op == "remove"));
+
+    if native_supported {
+        client.update_issue_components(key, &adds, &removes).await?;
+    } else {
+        // Read-modify-write fallback: GET current fields.components, compute
+        // the new full array client-side (existing minus removed names, plus
+        // newly-resolved adds appended), PUT via the `set` verb.
+        let issue = client.get_issue(key, &[]).await?;
+        let mut current: Vec<String> = issue
+            .fields
+            .components
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        current.retain(|name| !removes.contains(name));
+        for name in &adds {
+            current.push(name.clone());
+        }
+        let new_components: Vec<serde_json::Value> =
+            current.iter().map(|name| json!({"name": name})).collect();
+        client
+            .edit_issue(key, json!({"components": new_components}))
+            .await?;
+    }
+
+    Ok(resolved_changes)
 }
 
 /// Build the `editedFieldsInput` JSON object for a multi-key bulk-labels edit.
