@@ -1219,6 +1219,48 @@ pub enum ComponentSubcommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Rename a component — single-project or `--all-projects` fan-out
+    /// (BC-8.3.001 — BC-8.3.007, S-608-1).
+    ///
+    /// Single-project form (`--project KEY`): `--project` is UNCONDITIONALLY
+    /// required (BC-8.3.001 Precondition 1) — no `.jr.toml` config fallback,
+    /// no numeric-ID exemption (unlike `edit`/`delete`). `--all-projects`
+    /// fans out across every accessible project containing a component named
+    /// `OLD`, matched by EXACT case-insensitive equality — NOT the §8.4
+    /// `partial_match` substring semantics used elsewhere in this command
+    /// family (BC-8.3.002). Exactly one of `--project`/`--all-projects` is
+    /// required — neither supplied is an application-level exit-64 guard
+    /// (BC-8.3.005, DEC-188, mechanically identical to `delete`'s
+    /// `--move-to`/`--orphan` split); both supplied is a clap
+    /// `conflicts_with` exit 2. `--dry-run` is valid with either scope and
+    /// performs the identical read-only discovery with zero mutating HTTP
+    /// (BC-8.3.004).
+    Rename {
+        /// Current component name (partial match, single-project form only)
+        /// or numeric ID. Leading-dash values accepted.
+        #[arg(allow_hyphen_values = true)]
+        old: String,
+        /// New component name. Leading-dash values accepted.
+        #[arg(allow_hyphen_values = true)]
+        new: String,
+        /// Project key — required for the single-project form (BC-8.3.001
+        /// Precondition 1: unconditional, no `.jr.toml` fallback, no
+        /// numeric-ID exemption). Mutually exclusive with `--all-projects`.
+        #[arg(long, conflicts_with = "all_projects")]
+        project: Option<String>,
+        /// Fan out across every accessible project containing a component
+        /// named `OLD`, matched by exact case-insensitive equality
+        /// (BC-8.3.002). A numeric `OLD` is rejected pre-flight under this
+        /// flag (BC-8.3.002 Precondition 2). Mutually exclusive with
+        /// `--project`.
+        #[arg(long, conflicts_with = "project")]
+        all_projects: bool,
+        /// Preview the rename set with zero mutating HTTP calls, using the
+        /// identical discovery scope as the corresponding live run
+        /// (BC-8.3.004).
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub(crate) const DEFAULT_LIMIT: u32 = 30;

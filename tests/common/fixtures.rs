@@ -712,3 +712,27 @@ pub fn component_delete_snapshot_page(keys: &[&str], next_page_token: Option<&st
     }
     body
 }
+
+// ── S-608-1: `jr component rename` --all-projects fan-out fixtures ───────────
+
+/// Build a `GET /rest/api/3/project/search` response containing one project
+/// per given key (all `projectTypeKey: "software"`, no lead) — reduces
+/// `project_response` boilerplate across BC-8.3.002/003/004/006's
+/// `--all-projects` fan-out tests, which only care about the set of
+/// accessible project KEYS `list_projects` returns, not project metadata.
+pub fn projects_search_response_for_keys(keys: &[&str]) -> Value {
+    let projects: Vec<Value> = keys
+        .iter()
+        .map(|k| project_response(k, &format!("Project {k}"), "software", None))
+        .collect();
+    project_search_response(projects)
+}
+
+/// Build a `GET /rest/api/3/project/search` response containing `n` projects
+/// with keys `P0`..`P{n-1}` — used by AC-018's O(N)-scale fixture (S-608-1,
+/// BC-8.3.002 Behavior "genuinely O(N) HTTP calls").
+pub fn n_projects_search_response(n: u32) -> Value {
+    let keys: Vec<String> = (0..n).map(|i| format!("P{i}")).collect();
+    let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+    projects_search_response_for_keys(&key_refs)
+}
