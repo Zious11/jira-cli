@@ -106,4 +106,40 @@ impl JiraClient {
         };
         self.delete(&path).await
     }
+
+    /// Rename a component (S-608-1, BC-8.3.001 Postcondition 1).
+    ///
+    /// PUTs `/rest/api/3/component/{component_id}` with body EXACTLY
+    /// `{"name": new_name}` — no other fields. This is a pure rename; reuses
+    /// `edit_component`'s PUT mechanics at the implementation layer (see this
+    /// story's Architecture Mapping table) but is kept as its own function
+    /// because the caller-facing contract (single-project resolution
+    /// unconditionally requiring `--project`, plus the `--all-projects`
+    /// fan-out calling this once per matched project — BC-8.3.002/BC-8.3.003)
+    /// is distinct from `edit_component`'s multi-field partial-PUT contract.
+    ///
+    /// Returns the updated `Component`. Component `id` is unchanged by the
+    /// rename (BC-8.3.001). A 404 here (component deleted by a concurrent
+    /// actor after a successful resolution — either the single-project
+    /// resolver or the `--all-projects` per-project discovery loop)
+    /// propagates as `JrError::ApiError` — exit 1, distinct from a
+    /// resolver-layer not-found (BC-8.1.008 / AC-017). A 400 name collision
+    /// (BC-8.3.007) is surfaced verbatim and is NOT pre-validated here or by
+    /// any caller.
+    ///
+    /// Callers (`handle_rename`, S-608-1) are responsible for: the ADR-0018
+    /// §1 numeric confirming-GET on `OLD` (single-project form only —
+    /// BC-8.3.001 M1), the `--all-projects` per-project exact-equality
+    /// discovery loop (BC-8.3.002 — NOT `resolve_component`/`partial_match`),
+    /// per-project continue-on-error accumulation (BC-8.3.003), the
+    /// `--dry-run` short-circuit that must issue ZERO calls to this function
+    /// (BC-8.3.004), and the ADR-0018 §2 components cache invalidation after
+    /// each successful call.
+    pub async fn rename_component(&self, component_id: &str, new_name: &str) -> Result<Component> {
+        let body = serde_json::json!({ "name": new_name });
+        // Reuses `edit_component`'s PUT mechanics (URL-encoding included) —
+        // see this function's own rustdoc for why it stays a separate
+        // caller-facing function despite the implementation-layer reuse.
+        self.edit_component(component_id, &body).await
+    }
 }
