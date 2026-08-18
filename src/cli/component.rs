@@ -102,6 +102,27 @@ pub async fn handle(
             )
             .await
         }
+        ComponentSubcommand::Rename {
+            old,
+            new,
+            project,
+            all_projects,
+            dry_run,
+        } => {
+            handle_rename(
+                RenameComponentArgs {
+                    old,
+                    new,
+                    project,
+                    all_projects,
+                    dry_run,
+                },
+                output_format,
+                config,
+                client,
+            )
+            .await
+        }
     }
 }
 
@@ -1079,6 +1100,418 @@ async fn handle_delete(
                 component_name, component_id, affected_count, disposition_desc
             );
         }
+    }
+
+    Ok(())
+}
+
+/// Caller-supplied arguments for `handle_rename`.
+///
+/// Bundles the command-specific parameters so `handle_rename` stays within
+/// clippy's 7-argument limit (same pattern as `CreateComponentArgs` /
+/// `EditComponentArgs` / `DeleteComponentArgs`).
+struct RenameComponentArgs {
+    /// Current component name (single-project form: partial-matched via
+    /// §8.4; `--all-projects` form: exact case-insensitive equality per
+    /// BC-8.3.002) or numeric ID.
+    old: String,
+    /// New component name.
+    new: String,
+    /// Single-project scope selector. `--project` and `--all-projects` are
+    /// clap `conflicts_with`-paired (BC-8.3.005) — at most one of
+    /// `project`/`all_projects` is meaningfully populated at a time, but
+    /// both are threaded through so `handle_rename` can apply the
+    /// application-level neither-supplied exit-64 guard itself.
+    project: Option<String>,
+    /// `--all-projects` fan-out scope selector (BC-8.3.002).
+    all_projects: bool,
+    /// `--dry-run` preview mode — zero mutating HTTP (BC-8.3.004).
+    dry_run: bool,
+}
+
+/// Handle `jr component rename OLD NEW (--project KEY | --all-projects)
+/// [--dry-run]` (S-608-1).
+///
+/// BC-8.3.001 (single-project PUT + numeric-`OLD` project confirmation M1),
+/// BC-8.3.002 (`--all-projects` exact-equality fan-out discovery + numeric-
+/// `OLD` pre-flight rejection), BC-8.3.003 (per-project continue-on-error
+/// atomicity, exit code reflects any failure), BC-8.3.004 (`--dry-run`
+/// zero-mutation preview with identical discovery scope to the live run),
+/// BC-8.3.005 (scope-selection guard — clap `conflicts_with` for
+/// both-supplied, application-level `JrError::UserError` for
+/// neither-supplied), BC-8.3.006 (case-only rename is never short-circuited
+/// in either scope), BC-8.3.007 (`NEW` name-collision surfaced verbatim, not
+/// pre-validated).
+///
+/// Single-project form resolves `OLD` scoped to `--project` (name via §8.4
+/// `resolve_component`/`partial_match`, numeric via the ADR-0018 §1
+/// confirming-GET reused from `handle_edit`/`handle_delete`) then calls
+/// `JiraClient::rename_component` once. `--all-projects` iterates
+/// `JiraClient::list_projects` (paginated, reused as-is — no pagination
+/// logic is reimplemented here) and, per accessible project, lists that
+/// project's components looking for an EXACT case-insensitive name match
+/// (deliberately NOT `resolve_component`'s substring semantics — BC-8.3.002),
+/// calling `rename_component` once per match with continue-on-error
+/// semantics (BC-8.3.003). `--dry-run` performs the identical discovery
+/// (single target resolution, or the full per-project fan-out loop) but
+/// issues zero calls to `rename_component`. On success, invalidates the
+/// affected project(s)' components cache entries (ADR-0018 §2) — for
+/// `--all-projects`, only for projects that actually renamed.
+async fn handle_rename(
+    args: RenameComponentArgs,
+    output_format: &OutputFormat,
+    config: &Config,
+    client: &JiraClient,
+) -> Result<()> {
+    let RenameComponentArgs {
+        old,
+        new,
+        project,
+        all_projects,
+        dry_run,
+    } = args;
+
+    // BC-8.3.005 Postcondition: both-supplied is already a clap
+    // `conflicts_with` exit-2 rejection (never reaches here). Neither
+    // supplied is this application-level exit-64 guard — DEC-188, NOT a
+    // clap `ArgGroup::required(true)` (which would wrongly exit 2).
+    if project.is_none() && !all_projects {
+        return Err(JrError::UserError(
+            "rename requires either --project <KEY> or --all-projects — supply exactly one.".into(),
+        )
+        .into());
+    }
+
+    if all_projects {
+        handle_rename_all_projects(&old, &new, dry_run, output_format, config, client).await
+    } else {
+        // Precondition 1 guarantees `project` is `Some` here (the neither-
+        // guard above already excluded the `None` case for this branch).
+        let project_key = project.expect("project.is_some() checked above");
+        handle_rename_single_project(
+            &old,
+            &new,
+            &project_key,
+            dry_run,
+            output_format,
+            config,
+            client,
+        )
+        .await
+    }
+}
+
+/// Resolve `old` to a component id scoped to `project_key` for the
+/// single-project form of `rename` (BC-8.3.001).
+///
+/// Numeric `old`: fires the ADR-0018 §1 confirming `GET` (BC-8.3.001 M1),
+/// comparing the confirmed `project` field against the REQUIRED
+/// `project_key` — a mismatch exits 64 pre-flight (EC-8.3.001-1), ZERO `PUT`
+/// calls. A 404 on the confirming `GET` is the ordinary not-found path,
+/// ALWAYS the project-qualified message variant (EC-8.3.001-2) — `--project`
+/// is Precondition 1's unconditional requirement, so it is always known here.
+///
+/// Name `old`: uses the §8.4 resolver (`resolve_component`/`partial_match`)
+/// scoped to `project_key` — structurally identical to `handle_edit`'s
+/// name-based branch (S-604-2 precedent, reused not duplicated).
+async fn resolve_rename_source(
+    old: &str,
+    project_key: &str,
+    client: &JiraClient,
+) -> Result<String> {
+    if is_numeric_id(old) {
+        let comp = match client.get_component(old).await {
+            Ok(c) => c,
+            Err(e) => {
+                if is_404_error(&e) {
+                    return Err(JrError::UserError(format!(
+                        "Component '{}' not found in project {}. Run: jr component list",
+                        old, project_key
+                    ))
+                    .into());
+                }
+                return Err(e);
+            }
+        };
+        let derived_project = comp.project.clone().unwrap_or_default();
+        if !derived_project.eq_ignore_ascii_case(project_key) {
+            return Err(JrError::UserError(format!(
+                "Component {} belongs to project {}, not {}.",
+                old, derived_project, project_key
+            ))
+            .into());
+        }
+        Ok(comp.id)
+    } else {
+        let components = client.list_components(project_key).await?;
+        let candidate_names: Vec<String> = components.iter().map(|c| c.name.clone()).collect();
+
+        let matched_name = match resolve_component(old, project_key, &candidate_names) {
+            MatchResult::Exact(n) => n,
+            MatchResult::ExactMultiple(matched_name) => {
+                let ids: Vec<String> = components
+                    .iter()
+                    .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
+                    .map(|c| c.id.clone())
+                    .collect();
+                return Err(JrError::UserError(format!(
+                    "Multiple components named \"{}\" found (IDs: {}). \
+                     Pass the numeric ID directly.",
+                    matched_name,
+                    ids.join(", ")
+                ))
+                .into());
+            }
+            MatchResult::Ambiguous(mut candidates) => {
+                candidates.sort_by_key(|s| s.to_lowercase());
+                return Err(JrError::UserError(format!(
+                    "Ambiguous component '{}'. Matches: {}.",
+                    old,
+                    candidates.join(", ")
+                ))
+                .into());
+            }
+            MatchResult::None(mut available) => {
+                available.sort_by_key(|s| s.to_lowercase());
+                return Err(JrError::UserError(format!(
+                    "Component '{}' not found in project {}. Available: {}.",
+                    old,
+                    project_key,
+                    available.join(", ")
+                ))
+                .into());
+            }
+        };
+
+        let comp = components
+            .into_iter()
+            .find(|c| c.name == matched_name)
+            .ok_or_else(|| {
+                JrError::Internal(format!(
+                    "Internal error: resolved component name '{}' not found in list.",
+                    matched_name
+                ))
+            })?;
+
+        Ok(comp.id)
+    }
+}
+
+/// Single-project form of `rename` (BC-8.3.001 — including M1's numeric
+/// confirming-GET; BC-8.3.004's `--dry-run` short-circuit; BC-8.3.006's
+/// case-only-rename non-short-circuit — the PUT always fires once resolved,
+/// regardless of `old.eq_ignore_ascii_case(new)`; BC-8.3.007's verbatim
+/// collision passthrough — no client-side pre-check for `new`).
+async fn handle_rename_single_project(
+    old: &str,
+    new: &str,
+    project_key: &str,
+    dry_run: bool,
+    output_format: &OutputFormat,
+    config: &Config,
+    client: &JiraClient,
+) -> Result<()> {
+    let component_id = resolve_rename_source(old, project_key, client).await?;
+
+    if dry_run {
+        match output_format {
+            OutputFormat::Json => {
+                let json_out = serde_json::json!({
+                    "dryRun": true,
+                    "targets": [
+                        {"project": project_key, "id": component_id, "from": old, "to": new}
+                    ]
+                });
+                println!("{}", output::render_json(&json_out)?);
+            }
+            OutputFormat::Table => {
+                eprintln!("DRY RUN — no changes will be made.");
+                eprintln!(
+                    "  {}: {} \u{2192} {} (id {})",
+                    project_key, old, new, component_id
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    // BC-8.3.007: no pre-flight existence check for `new` — the server
+    // validates authoritatively; a 400 collision propagates verbatim.
+    // BC-8.3.001 Idempotency: a 404 here (component deleted concurrently
+    // after a successful resolution) propagates as `JrError::ApiError`
+    // (exit 1), distinct from `resolve_rename_source`'s exit-64 not-found.
+    let updated = client.rename_component(&component_id, new).await?;
+
+    // ADR-0018 §2: invalidate the project's components cache after a
+    // successful mutation.
+    cache::invalidate_components_cache(&config.active_profile_name, project_key);
+
+    match output_format {
+        OutputFormat::Json => {
+            // BC-8.3.001 Postcondition 2: exact JSON shape.
+            let json_out = serde_json::json!({
+                "renamed": {
+                    "id": updated.id,
+                    "from": old,
+                    "to": new,
+                    "project": project_key,
+                }
+            });
+            println!("{}", output::render_json(&json_out)?);
+        }
+        OutputFormat::Table => {
+            eprintln!(
+                "Renamed component \"{}\" to \"{}\" (id {}) in project {}.",
+                old, new, updated.id, project_key
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Verbatim rejection message for a numeric `OLD` under `--all-projects`
+/// (BC-8.3.002 Precondition 2) — a numeric component id is inherently
+/// single-project-scoped and cannot select across multiple projects.
+const ALL_PROJECTS_NUMERIC_OLD_REJECTED_MSG: &str = "rename --all-projects requires OLD to be a component NAME, not a numeric id (component ids are project-scoped and cannot be used to select across multiple projects). Use rename OLD NEW --project KEY to target a single project by id.";
+
+/// One project's discovered rename target under `--all-projects`
+/// (BC-8.3.002 Postcondition 3).
+struct RenameTarget {
+    project: String,
+    id: String,
+}
+
+/// `--all-projects` fan-out discovery (BC-8.3.002): iterates
+/// `list_projects` (paginated, reused as-is) and, per accessible project,
+/// looks for a component whose name EXACTLY case-insensitively equals `old`
+/// — deliberately NOT `resolve_component`/`partial_match`'s substring
+/// semantics (BC-8.3.002 Matching-semantics divergence). Shared by both the
+/// live and `--dry-run` paths so discovery scope is IDENTICAL between them
+/// (BC-8.3.004 Invariant 1).
+async fn discover_rename_targets(old: &str, client: &JiraClient) -> Result<Vec<RenameTarget>> {
+    let projects = client.list_projects(None, None).await?;
+    let mut targets = Vec::new();
+    for p in &projects {
+        let components = client.list_components(&p.key).await?;
+        if let Some(comp) = components
+            .iter()
+            .find(|c| c.name.to_lowercase() == old.to_lowercase())
+        {
+            targets.push(RenameTarget {
+                project: p.key.clone(),
+                id: comp.id.clone(),
+            });
+        }
+    }
+    Ok(targets)
+}
+
+/// `--all-projects` form of `rename` (BC-8.3.002 discovery + numeric-`OLD`
+/// pre-flight rejection, BC-8.3.003 per-project continue-on-error atomicity,
+/// BC-8.3.004 `--dry-run` zero-mutation preview, BC-8.3.006 case-only-rename
+/// non-short-circuit — every discovered target's PUT always fires).
+async fn handle_rename_all_projects(
+    old: &str,
+    new: &str,
+    dry_run: bool,
+    output_format: &OutputFormat,
+    config: &Config,
+    client: &JiraClient,
+) -> Result<()> {
+    // BC-8.3.002 Precondition 2 / EC-8.3.002-2 / EC-8.3.004-2: a numeric OLD
+    // is rejected pre-flight, BEFORE list_projects — zero HTTP of any kind,
+    // in both the live and --dry-run forms (mutually exclusive with the
+    // dry-run preview for this input).
+    if is_numeric_id(old) {
+        return Err(JrError::UserError(ALL_PROJECTS_NUMERIC_OLD_REJECTED_MSG.into()).into());
+    }
+
+    let targets = discover_rename_targets(old, client).await?;
+
+    if dry_run {
+        match output_format {
+            OutputFormat::Json => {
+                let targets_json: Vec<serde_json::Value> = targets
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "project": t.project,
+                            "id": t.id,
+                            "from": old,
+                            "to": new,
+                        })
+                    })
+                    .collect();
+                let json_out = serde_json::json!({"dryRun": true, "targets": targets_json});
+                println!("{}", output::render_json(&json_out)?);
+            }
+            OutputFormat::Table => {
+                eprintln!("DRY RUN — no changes will be made.");
+                if targets.is_empty() {
+                    eprintln!("0 components would be renamed.");
+                } else {
+                    for t in &targets {
+                        eprintln!("  {}: {} \u{2192} {} (id {})", t.project, old, new, t.id);
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // BC-8.3.003: per-project atomic, continue-on-error, no rollback.
+    let mut renamed: Vec<serde_json::Value> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+    let mut table_lines: Vec<String> = Vec::new();
+
+    for t in &targets {
+        match client.rename_component(&t.id, new).await {
+            Ok(updated) => {
+                cache::invalidate_components_cache(&config.active_profile_name, &t.project);
+                renamed.push(serde_json::json!({
+                    "project": t.project,
+                    "id": updated.id,
+                    "status": "ok",
+                }));
+                table_lines.push(format!("{}: renamed", t.project));
+            }
+            Err(e) => {
+                let error_text = e.to_string();
+                failed.push(serde_json::json!({
+                    "project": t.project,
+                    "error": error_text,
+                }));
+                table_lines.push(format!("{}: FAILED — {}", t.project, error_text));
+            }
+        }
+    }
+
+    let any_failed = !failed.is_empty();
+    let renamed_count = renamed.len();
+
+    match output_format {
+        OutputFormat::Json => {
+            let json_out = serde_json::json!({"renamed": renamed, "failed": failed});
+            println!("{}", output::render_json(&json_out)?);
+        }
+        OutputFormat::Table => {
+            for line in &table_lines {
+                eprintln!("{line}");
+            }
+            eprintln!("{renamed_count} renamed");
+        }
+    }
+
+    // BC-8.3.003 Postcondition 2: exit 0 iff every attempted project
+    // succeeded; exit 1 if ≥1 failed (partial success must not look
+    // identical to full success to an automated caller).
+    if any_failed {
+        return Err(anyhow::anyhow!(
+            "{} of {} project rename(s) failed",
+            failed.len(),
+            targets.len()
+        ));
     }
 
     Ok(())
