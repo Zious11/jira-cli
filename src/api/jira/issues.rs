@@ -539,6 +539,52 @@ impl JiraClient {
         self.put(&path, &body).await
     }
 
+    /// Update a single issue's components using the native `update` verb
+    /// (BC-3.4.022 Postcondition 1).
+    ///
+    /// Sends `PUT /rest/api/3/issue/{key}` with body:
+    /// ```json
+    /// {"update":{"components":[{"add":{"name":"X"}},{"remove":{"name":"Y"}}]}}
+    /// ```
+    ///
+    /// Component entries are name-keyed **objects** (`{"add":{"name":...}}`)
+    /// — NOT bare strings (contrast [`Self::update_issue_labels`]). `adds`
+    /// entries are emitted before `removes` entries in the wire array
+    /// (BC-3.4.022 Postcondition 2); callers should pass already-resolved,
+    /// already-ordered component names (see
+    /// `cli::issue::format::normalize_component_changes`).
+    ///
+    /// This method implements ONLY the native-shape PUT. The caller
+    /// (`cli::issue::edit::edit_issue_components`) is responsible for the
+    /// editmeta-gated decision between this native shape and the
+    /// read-modify-write `set`-verb fallback (BC-3.4.022 Postcondition 3),
+    /// evaluated ONCE per invocation — no retry-with-different-shape on a
+    /// subsequent 400.
+    ///
+    /// Returns `Ok(())` on HTTP 204 No Content. Any other status propagates
+    /// as an error.
+    pub async fn update_issue_components(
+        &self,
+        key: &str,
+        adds: &[String],
+        removes: &[String],
+    ) -> Result<()> {
+        let mut component_ops: Vec<serde_json::Value> = Vec::new();
+        for name in adds {
+            component_ops.push(serde_json::json!({"add": {"name": name}}));
+        }
+        for name in removes {
+            component_ops.push(serde_json::json!({"remove": {"name": name}}));
+        }
+        let path = format!("/rest/api/3/issue/{}", urlencoding::encode(key));
+        let body = serde_json::json!({
+            "update": {
+                "components": component_ops
+            }
+        });
+        self.put(&path, &body).await
+    }
+
     /// Fetch the editmeta for an issue.
     ///
     /// `GET /rest/api/3/issue/{key}/editmeta` returns the set of fields that
