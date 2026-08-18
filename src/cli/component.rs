@@ -1751,10 +1751,14 @@ async fn handle_rename_all_projects(
         // alone (Step-4.5 fix burst 3, LOW-2) — an ambiguous project never
         // entered `targets` (zero `PUT` attempted for it), but it is still
         // one of the projects this fan-out considered and failed on.
+        // Step-4.5 fix burst 7, Lens B LOW finding: `old`/`new` are quoted in
+        // the retry hint so a space-containing component name (e.g. "My
+        // Backend") stays copy-pasteable — an unquoted interpolation would
+        // hand the user a command clap parses as too many positionals.
         return Err(anyhow::anyhow!(
             "{} of {} project rename(s) failed ({}). Retry the failed projects individually: \
-             jr component rename {} {} --project <KEY> — see the failed[] entries above for \
-             each project's error.",
+             jr component rename \"{}\" \"{}\" --project <KEY> — see the failed[] entries above \
+             for each project's error.",
             failed.len(),
             targets.len() + ambiguous.len(),
             failed_projects.join(", "),

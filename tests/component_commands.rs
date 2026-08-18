@@ -9487,3 +9487,83 @@ async fn test_bc_8_3_005_component_rename_global_position_project_all_projects_c
         received.len()
     );
 }
+
+// ── Lens B (LOW — retry hint quoting for space-containing component names) ──
+
+/// Step-4.5 fix burst 7, Lens B finding: `handle_rename_all_projects`'s
+/// partial-failure retry hint (`src/cli/component.rs`) previously
+/// interpolated `old`/`new` UNQUOTED into the suggested retry command
+/// (`jr component rename {old} {new} --project <KEY>`). For a
+/// space-containing component name (e.g. "My Backend"), the emitted hint was
+/// not copy-pasteable — clap would see too many positionals. Fixed by
+/// quoting both interpolated values (`jr component rename "{old}" "{new}"
+/// --project <KEY>`).
+///
+/// This test drives a single-project, single-failure `--all-projects` batch
+/// with a space-containing OLD name and asserts the stderr retry hint
+/// contains the QUOTED form.
+#[tokio::test]
+async fn test_bc_8_3_003_component_rename_all_projects_retry_hint_quotes_space_containing_name() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    let keys = ["A"];
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(projects_search_response_for_keys(&keys)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("40001", "My Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/40001"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "errorMessages": ["A component with the name 'New Name' already exists in project A."]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "My Backend",
+            "New Name",
+            "--all-projects",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Lens B: expected exit 1 for a partial-failure batch; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("jr component rename \"My Backend\" \"New Name\" --project <KEY>"),
+        "Lens B: retry hint must quote space-containing OLD/NEW so the \
+         suggested command is copy-pasteable; expected substring \
+         'jr component rename \"My Backend\" \"New Name\" --project <KEY>'; \
+         got: {stderr}"
+    );
+}
