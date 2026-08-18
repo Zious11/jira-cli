@@ -7844,6 +7844,85 @@ async fn test_bc_8_3_004_component_rename_dry_run_numeric_old_rejection_precedes
     );
 }
 
+/// Step-4.5 fix burst 9, Finding LOW-1 (VP-COMPONENT-008 zero-mutation gap):
+/// every OTHER single-project dry-run test uses a NAME `OLD` (e.g.
+/// "Backend") — none exercised a NUMERIC `OLD`. The numeric single-project
+/// dry-run path fires a confirming `GET /rest/api/3/component/{id}` during
+/// `resolve_rename_source`, then `handle_rename_single_project` short-circuits
+/// on `if dry_run` BEFORE the `rename_component` PUT — this is the one
+/// dry-run entry that first performs a mutating-adjacent confirming GET, so a
+/// regression that leaked a PUT (or failed to short-circuit) on the numeric
+/// path only would pass every existing dry-run test (all name-based) while
+/// still mutating live Jira. Pins: exactly one confirming GET, ZERO PUT, exit
+/// 0, and the exact BC-8.3.001-shaped dry-run JSON (`targets[].id` echoes the
+/// numeric OLD's resolved id, `targets[].from` echoes OLD verbatim — mirrors
+/// `handle_rename_single_project`'s dry-run JSON branch).
+#[tokio::test]
+async fn test_bc_8_3_004_component_rename_numeric_old_single_project_dry_run_zero_mutation() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10042"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10042",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "10042",
+            "NewName",
+            "--project",
+            "FOO",
+            "--dry-run",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "LOW-1: numeric-OLD single-project dry-run must exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    assert_eq!(
+        stdout,
+        json!({
+            "dryRun": true,
+            "targets": [
+                {"project": "FOO", "id": "10042", "from": "10042", "to": "NewName"}
+            ]
+        }),
+        "LOW-1: verbatim dry-run JSON shape for a numeric OLD; got: {stdout}"
+    );
+}
+
 // ── AC-013 (BC-8.3.005 — clap conflict + app-level neither-guard) ───────────
 
 /// AC-013 / BC-8.3.005 Behavior: `--project X --all-projects` together → clap
