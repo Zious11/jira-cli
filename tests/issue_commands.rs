@@ -5230,16 +5230,18 @@ async fn test_bc_3_4_025_issue_create_component_resolution_one_get_not_duplicate
         .mount(&server)
         .await;
 
-    // create never consults editmeta for --component resolution (BC-3.4.025).
-    Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/FOO/issuetypes/components",
-        ))
-        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
-        .expect(0)
-        .mount(&server)
-        .await;
-
+    // Step-4.5 Round 2 LOW-1: the prior decoy here mounted
+    // `GET /rest/api/3/issue/createmeta/FOO/issuetypes/components` with
+    // `.expect(0)` to "prove create never consults editmeta" -- but that path
+    // is not the real editmeta shape (`GET /rest/api/3/issue/{key}/editmeta`)
+    // and no create code path could ever construct or call it (create has no
+    // issue key before the POST succeeds), so the guard passed vacuously
+    // under every implementation. There is no real editmeta-shaped path to
+    // repoint the decoy at (no key exists pre-POST), so it is deleted rather
+    // than fabricated at a fake path -- the load-bearing `.expect(1)` on the
+    // component-list GET above is what actually proves the resolution
+    // mechanism (BC-3.4.025), and `.expect(1)` on the POST below is the only
+    // other HTTP call this invocation may make.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue"))
         .respond_with(
