@@ -7911,6 +7911,12 @@ async fn test_bc_8_3_005_component_rename_scope_selection_clap_conflict_and_app_
         "AC-013 Part B: neither-flag error must name BOTH --project and \
          --all-projects; got: {stderr_b}"
     );
+    assert!(
+        stderr_b.contains("supply exactly one"),
+        "AC-013 Part B: neither-flag error must include the actionable \
+         remediation \"supply exactly one\", not merely name the flags; \
+         got: {stderr_b}"
+    );
     let received_b = server_b.received_requests().await.unwrap();
     assert!(
         received_b.is_empty(),
@@ -9401,6 +9407,11 @@ async fn test_bc_8_3_001_component_rename_no_config_fallback_for_project_neither
         "Test 2: neither-flag error must name BOTH --project and \
          --all-projects even with a configured default project; got: {stderr}"
     );
+    assert!(
+        stderr.contains("supply exactly one"),
+        "Test 2: neither-flag error must include the actionable remediation \
+         \"supply exactly one\", not merely name the flags; got: {stderr}"
+    );
     let received = server.received_requests().await.unwrap();
     assert!(
         received.is_empty(),
@@ -9651,6 +9662,11 @@ async fn test_bc_8_3_005_component_rename_global_position_project_all_projects_c
         stderr.contains("--project") && stderr.contains("--all-projects"),
         "Lens A: rejection message must name both --project and \
          --all-projects; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("supply exactly one"),
+        "Lens A: rejection message must include the actionable remediation \
+         \"supply exactly one\", not merely name the flags; got: {stderr}"
     );
     let received = server.received_requests().await.unwrap();
     assert!(
