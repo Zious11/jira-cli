@@ -7969,7 +7969,7 @@ async fn test_bc_3_4_022_issue_edit_component_rmw_add_already_present_deduped() 
 /// either path.
 #[tokio::test]
 async fn test_bc_3_4_022_issue_edit_component_rmw_cross_identifier_add_remove_accepted_divergence()
- {
+{
     let server = MockServer::start().await;
 
     s605_1_mock_components(
@@ -8052,8 +8052,7 @@ async fn test_bc_3_4_022_issue_edit_component_rmw_cross_identifier_add_remove_ac
 /// -- Jira applies this in order, so Backend ends net ABSENT. Pins the
 /// OTHER side of the F-LOW-001 accepted divergence.
 #[tokio::test]
-async fn test_bc_3_4_022_issue_edit_component_native_cross_identifier_add_remove_nets_absent()
- {
+async fn test_bc_3_4_022_issue_edit_component_native_cross_identifier_add_remove_nets_absent() {
     let server = MockServer::start().await;
 
     s605_1_mock_components(
