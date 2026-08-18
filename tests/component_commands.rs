@@ -8459,3 +8459,102 @@ async fn test_bc_8_3_004_component_rename_dry_run_all_projects_table_mode() {
         "F-2: expected verbatim dry-run row for project B; got stderr:\n{stderr}"
     );
 }
+
+// ── F-A-LOW-001 (spec-silent, LOW — discovery-phase fail-closed posture) ───
+
+/// F-A-LOW-001: `discover_rename_targets` (`src/cli/component.rs`) is
+/// intentionally FAIL-CLOSED on a discovery-phase HTTP error — a single
+/// project's `GET /project/{key}/components` failure aborts the WHOLE
+/// `--all-projects` fan-out before any `PUT` is attempted, unlike the
+/// mutation phase's per-project continue-on-error (BC-8.3.003, no
+/// rollback). This is the SAFE direction for a mutation command (both
+/// adversary lenses agreed): BC-8.3.003's continue-on-error contract is
+/// scoped to the PUT phase only, never to discovery. This test locks that
+/// intentional behavior against silent regression — see the rustdoc on
+/// `discover_rename_targets` for the full rationale.
+#[tokio::test]
+async fn test_bc_8_3_002_component_rename_all_projects_discovery_phase_error_aborts_fanout_zero_put()
+ {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    let keys = ["A", "B", "C"];
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(projects_search_response_for_keys(&keys)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // B's component-list call fails mid-fan-out.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/B/components"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "errorMessages": ["Internal server error"]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/C/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("30001", "Backend", None, None, None),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // Zero PUT calls of ANY kind — discovery must abort before mutation.
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "Backend",
+            "NewName",
+            "--all-projects",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "F-A-LOW-001: a discovery-phase list_components error must abort \
+         the whole fan-out with exit 1, zero PUT calls; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // No renamed/failed JSON should ever reach stdout — discovery failed
+    // before the mutation phase (and its stdout-printing) was ever reached.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim().is_empty(),
+        "F-A-LOW-001: no renamed/failed JSON should be printed when \
+         discovery itself fails; got stdout: {stdout}"
+    );
+}

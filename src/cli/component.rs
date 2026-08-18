@@ -1389,6 +1389,24 @@ struct RenameTarget {
 /// semantics (BC-8.3.002 Matching-semantics divergence). Shared by both the
 /// live and `--dry-run` paths so discovery scope is IDENTICAL between them
 /// (BC-8.3.004 Invariant 1).
+///
+/// **Fail-closed discovery, by design (F-A-LOW-001):** an error from either
+/// HTTP call here (`list_projects` or a single project's `list_components`)
+/// propagates via `?` and aborts the ENTIRE fan-out before any mutation —
+/// even if 4 of 5 projects were already successfully enumerated. This is
+/// intentionally the opposite posture of the PUT/mutation phase in
+/// `handle_rename_all_projects`, which is per-project continue-on-error (no
+/// rollback, BC-8.3.003): BC-8.3.003's continue-on-error contract is scoped
+/// to the mutation phase only, not to discovery. For a mutating command,
+/// failing closed before any write is the safer default — a discovery-phase
+/// error on one project must not silently narrow the rename set for the
+/// others and proceed to rename them anyway. If a future story wants
+/// discovery to be resilient to a single project's listing failure (e.g.
+/// skip-and-continue like the PUT phase), that is a deliberate behavior
+/// change requiring its own BC amendment — not implied by BC-8.3.003 as
+/// currently worded. See `test_bc_8_3_002_component_rename_all_projects_discovery_phase_error_aborts_fanout_zero_put`
+/// for the regression pin (one project's `list_components` 500 → exit 1,
+/// zero `PUT` calls).
 async fn discover_rename_targets(old: &str, client: &JiraClient) -> Result<Vec<RenameTarget>> {
     let projects = client.list_projects(None, None).await?;
     let mut targets = Vec::new();
