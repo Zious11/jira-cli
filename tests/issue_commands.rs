@@ -5729,9 +5729,9 @@ async fn test_bc_3_4_021_issue_edit_component_dry_run_unknown_name_exits_64() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/FOO/components"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
-            common::fixtures::component_list_response(vec![
-                common::fixtures::component_response("10001", "Backend", None, None, None),
-            ]),
+            common::fixtures::component_list_response(vec![common::fixtures::component_response(
+                "10001", "Backend", None, None, None,
+            )]),
         ))
         .expect(1)
         .mount(&server)

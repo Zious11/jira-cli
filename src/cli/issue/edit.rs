@@ -473,8 +473,7 @@ pub(super) async fn handle_edit(
         // ordering rationale as dr_desc_text/dr_desc_adf). The preview then
         // renders the RESOLVED canonical name -- parity with the live echo,
         // which also renders resolved names, never the raw CLI input.
-        let dr_component_changes: Option<Vec<format::ComponentChange>> = if !components.is_empty()
-        {
+        let dr_component_changes: Option<Vec<format::ComponentChange>> = if !components.is_empty() {
             let dr_key = &effective_keys[0];
             let dr_project_key = project_key_from_issue_key(dr_key);
             let dr_changes = format::normalize_component_changes(&components);
