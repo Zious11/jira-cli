@@ -192,6 +192,108 @@ pub(super) fn comment_visibility(comment: &Comment) -> Option<&'static str> {
         })
 }
 
+/// A single normalized `--component` add:/remove: entry (BC-3.4.022,
+/// BC-3.4.012/BC-3.4.021 amendments). Bare `--component X` input (no prefix)
+/// always normalizes to `Add` — it is NEVER rendered as a bare name in any
+/// echo/preview surface (BC-3.4.012 EC-3.4.012-17, BC-3.4.021 amendment).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ComponentAction {
+    Add,
+    Remove,
+}
+
+impl ComponentAction {
+    /// Uppercase wire-verb string used both in the native `update`-verb PUT
+    /// body's `add`/`remove` keys (BC-3.4.022 Postcondition 1) and the
+    /// `--dry-run --output json` `plannedChanges.components[].action` field
+    /// (BC-3.4.021 amendment, AC-016) — `"ADD"` / `"REMOVE"`.
+    pub(super) fn as_wire_str(&self) -> &'static str {
+        match self {
+            ComponentAction::Add => "ADD",
+            ComponentAction::Remove => "REMOVE",
+        }
+    }
+}
+
+/// One normalized `--component` change: an action (ADD/REMOVE) paired with
+/// the (not-yet-resolved) component name as supplied on the CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ComponentChange {
+    pub(super) action: ComponentAction,
+    pub(super) name: String,
+}
+
+/// Parse the repeatable `--component` flag's raw values into normalized
+/// add:/remove: entries (BC-3.4.022).
+///
+/// - `add:<NAME>` / `remove:<NAME>` — explicit prefix grammar (edit-only;
+///   `issue create` does NOT interpret this grammar — see
+///   `create::resolve_create_components`).
+/// - A bare value (no prefix) normalizes to `Add` (BC-3.4.022 Edge Case
+///   EC-3.4.022-2 / BC-3.4.012 amendment EC-3.4.012-17).
+/// - The returned `Vec` is REORDERED so every `Add` entry precedes every
+///   `Remove` entry, regardless of CLI input order (BC-3.4.022
+///   Postcondition 2, AC-003) — this is the single source of truth for that
+///   ordering; callers (the native-shape PUT body, the live echo, and the
+///   dry-run preview) must not re-derive it.
+pub(super) fn normalize_component_changes(values: &[String]) -> Vec<ComponentChange> {
+    let mut adds: Vec<ComponentChange> = Vec::new();
+    let mut removes: Vec<ComponentChange> = Vec::new();
+    for value in values {
+        if let Some(name) = value.strip_prefix("add:") {
+            adds.push(ComponentChange {
+                action: ComponentAction::Add,
+                name: name.to_string(),
+            });
+        } else if let Some(name) = value.strip_prefix("remove:") {
+            removes.push(ComponentChange {
+                action: ComponentAction::Remove,
+                name: name.to_string(),
+            });
+        } else {
+            // Bare value (no prefix) normalizes to Add (EC-3.4.022-2).
+            adds.push(ComponentChange {
+                action: ComponentAction::Add,
+                name: value.clone(),
+            });
+        }
+    }
+    adds.extend(removes);
+    adds
+}
+
+/// Render normalized component changes as the comma-joined echo string used
+/// by BOTH the live table/JSON echo (BC-3.4.012/BC-3.4.013 amendments,
+/// AC-011/AC-012/AC-013) and the `--dry-run` table preview (BC-3.4.021
+/// amendment, AC-016/AC-017) — ONE shared formatter, per the story's
+/// Architecture Compliance Rules ("identical string, one shared formatting
+/// function"). Example: `"add:Backend, remove:Frontend"`.
+pub(super) fn format_component_changes_echo(changes: &[ComponentChange]) -> String {
+    changes
+        .iter()
+        .map(|c| match c.action {
+            ComponentAction::Add => format!("add:{}", c.name),
+            ComponentAction::Remove => format!("remove:{}", c.name),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Render normalized component changes as the STRUCTURED
+/// `plannedChanges.components` array shape used ONLY by
+/// `--dry-run --output json` (BC-3.4.021 amendment, AC-016):
+/// `[{"action":"ADD","name":"X"},{"action":"REMOVE","name":"Y"}]`. This is a
+/// DIFFERENT shape from the comma-joined live-echo string built by
+/// [`format_component_changes_echo`] — see BC-3.4.021 Behavior Summary.
+pub(super) fn component_changes_dry_run_json(
+    changes: &[ComponentChange],
+) -> Vec<serde_json::Value> {
+    changes
+        .iter()
+        .map(|c| serde_json::json!({"action": c.action.as_wire_str(), "name": c.name}))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
