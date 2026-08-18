@@ -133,10 +133,11 @@ pub(super) async fn handle_edit(
 
     // --- Gate B: flag-overlap detection (BC-3.4.017). ---
     // Fires before any HTTP call when a dedicated flag AND --field target the same
-    // system field. Covers exactly 4 first-party flags: summary, description,
-    // issuetype (--type flag), priority. Team and points use dynamically-resolved
-    // IDs; overlap detection for those is deferred to v2 (requires an API call,
-    // breaking the "no HTTP before the guard" invariant).
+    // system field. Covers exactly 5 first-party flags: summary, description,
+    // issuetype (--type flag), priority, components (BC-3.4.017 amendment,
+    // S-605-1, extended from four fields to five). Team and points use
+    // dynamically-resolved IDs; overlap detection for those is deferred to v2
+    // (requires an API call, breaking the "no HTTP before the guard" invariant).
     if !field_pairs.is_empty() {
         let field_keys_lower: std::collections::HashSet<String> =
             field_pairs.keys().map(|k| k.to_lowercase()).collect();
