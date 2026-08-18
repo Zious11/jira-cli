@@ -8558,3 +8558,63 @@ async fn test_bc_8_3_002_component_rename_all_projects_discovery_phase_error_abo
          discovery itself fails; got stdout: {stdout}"
     );
 }
+
+// ── Step-4.5 fix burst 2, Finding 1 (LOW, sibling consistency) ───────────────
+
+/// F-08 / BC-8.3.001: `rename 10042 NewName --project A` where the
+/// confirming GET `/rest/api/3/component/10042` returns a component with NO
+/// `project` field at all (`null`/absent) → `resolve_rename_source` must
+/// fail closed BEFORE the mismatch comparison, with a clear "no project
+/// field" message — not the misleading "belongs to project , not A."
+/// message an empty `unwrap_or_default()` would otherwise produce. Mirrors
+/// `handle_edit`'s F-07 / PR#704 Finding C guard and `handle_delete`'s
+/// identical guard (both in `src/cli/component.rs`). Exit 64, ZERO `PUT`.
+#[tokio::test]
+async fn test_bc_8_3_001_component_rename_numeric_no_project_field_fails_closed() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10042"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_response_no_project_field("10042", "Backend")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10042"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10042", "NewName", "A")),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "rename", "10042", "NewName", "--project", "A"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F-08: expected exit 64 when the confirming GET returns no project \
+         field; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Component 10042 returned no project field; cannot verify --project A for the rename."
+        ),
+        "F-08: expected the verbatim no-project-field guard message; got: {stderr}"
+    );
+}
