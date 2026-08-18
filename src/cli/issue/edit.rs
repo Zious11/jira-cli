@@ -843,24 +843,19 @@ pub(super) async fn handle_edit(
         changed_fields.insert("parent".into(), "(cleared)".into());
     }
 
-    // BC-3.4.022 (single-key path ONLY — effective_keys.len() == 1 is
-    // guaranteed here by the C-1 rejection block above): components use a
-    // DEDICATED wire shape (`update` verb, editmeta-gated fallback) that
-    // cannot be merged into the generic `fields` object PUT below, so this
-    // fires its own HTTP call(s) via `edit_issue_components` BEFORE
-    // `client.edit_issue(key, fields)` runs.
-    if !components.is_empty() {
-        let component_changes = edit_issue_components(client, key, &components).await?;
-        has_updates = true;
-        changed_fields.insert(
-            "components".into(),
-            format::format_component_changes_echo(&component_changes),
-        );
-    }
-
     // BC-3.4.015 invariant 10 (live path): resolve_edit_fields on the live path.
     // Errors here (field not found, absent from editmeta, bad type, etc.) exit 64
     // BEFORE the PUT is issued (all-or-nothing semantics per EC-3.4.015-12).
+    //
+    // Step-4.5 Round 3, F2 fix: this block MUST run BEFORE the --component
+    // mutation block below. resolve_edit_fields only POPULATES `fields`/
+    // `changed_fields` and can exit 64 on an unknown field or bad type --
+    // it never itself issues a PUT. `edit_issue_components` DOES issue a
+    // PUT immediately. Running --component's mutation first meant an
+    // invalid --field (e.g. `--component add:X --field bogus=Y`) landed
+    // the component change, THEN exited 64 -- a partial write. Reordering
+    // so field validation runs first means an invalid --field now exits 64
+    // with ZERO component mutation.
     if !field_pairs.is_empty() {
         helpers::resolve_edit_fields(
             client,
@@ -872,6 +867,24 @@ pub(super) async fn handle_edit(
         )
         .await?;
         has_updates = true;
+    }
+
+    // BC-3.4.022 (single-key path ONLY — effective_keys.len() == 1 is
+    // guaranteed here by the C-1 rejection block above): components use a
+    // DEDICATED wire shape (`update` verb, editmeta-gated fallback) that
+    // cannot be merged into the generic `fields` object PUT below, so this
+    // fires its own HTTP call(s) via `edit_issue_components` BEFORE
+    // `client.edit_issue(key, fields)` runs. (F2 fix: --field validation
+    // above already ran, so reaching here means --field -- if supplied --
+    // was valid; this component PUT is no longer at risk of a subsequent
+    // --field-caused exit 64.)
+    if !components.is_empty() {
+        let component_changes = edit_issue_components(client, key, &components).await?;
+        has_updates = true;
+        changed_fields.insert(
+            "components".into(),
+            format::format_component_changes_echo(&component_changes),
+        );
     }
 
     if !has_updates {
