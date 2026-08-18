@@ -5219,6 +5219,16 @@ async fn test_bc_3_4_024_issue_create_component_request_type_guard_zero_http() {
         stderr.contains("--request-type"),
         "AC-009: stderr must name --request-type; stderr={stderr}"
     );
+    // Step-4.5 Round 6 (INFO, Lens C): BC-3.4.024's Behavior Summary
+    // requires the guard to "suggest a follow-up `jr issue edit
+    // --component`" (SOUL: "always suggest what to do next") -- pin the
+    // exact suggestion substring the code emits, not just that the two
+    // flags are named.
+    assert!(
+        stderr.contains("`jr issue edit --component`"),
+        "AC-009: stderr must suggest the follow-up `jr issue edit \
+         --component` path per BC-3.4.024's Behavior Summary; stderr={stderr}"
+    );
 }
 
 // ── AC-010 (BC-3.4.025 Invariant 1 — one GET, not duplicated) ─────────────
