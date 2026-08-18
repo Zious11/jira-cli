@@ -1319,6 +1319,21 @@ async fn resolve_rename_source(
                 ))
             })?;
 
+        // Cache-invalidation key intentionally stays flag-cased here (DEFERRED,
+        // Lens B LOW, fix-burst-6): the numeric branch above canonicalizes to
+        // the confirming-GET-derived project key, mirroring `handle_edit`'s
+        // precedent — but the name branch has no confirming GET of its own to
+        // derive a canonical key from; its only read is the `list_components`
+        // call above, which was itself scoped by this same flag-cased
+        // `project_key`. Returning that same casing here is consistent with
+        // what was actually read, not an inconsistency to silently "fix."
+        // Also latent this cycle: the components cache is not wired into any
+        // read/resolve path yet (see `cache.rs` rustdoc), so there is no
+        // observable stale-read bug today. The real fix — a single
+        // cache-key-canonicalization discipline applied uniformly across every
+        // invalidation call site (list/create/edit/delete/rename numeric+name+
+        // all-projects) — belongs to the future ADR-0018 §2 cache-wiring story,
+        // not a piecemeal change scoped to rename alone.
         Ok((comp.id, project_key.to_string()))
     }
 }
