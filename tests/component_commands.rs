@@ -8114,3 +8114,79 @@ async fn test_bc_8_3_002_component_rename_all_projects_scale_no_new_rate_limit_l
             .collect::<Vec<_>>()
     );
 }
+
+// ── Consistency: global --project flag (F5-A-L2 precedent) ──────────────────
+
+/// `rename`-side analog of `test_bc_8_1_007_component_edit_honors_global_project_flag`
+/// / `test_bc_8_2_002_component_delete_honors_global_project_flag`: the
+/// single-project form's `--project` is honored whether it is supplied
+/// locally (after `rename`) or in the global position (before `component`).
+/// Clap's `global = true` top-level `--project` flag (`src/cli/mod.rs`)
+/// already propagates into any subcommand variant with its own `project:
+/// Option<String>` field of the same name — verified here for `Rename`
+/// exactly as it already is for `Edit`/`Delete`, with no additional merge
+/// code required in the dispatch arm (unlike `create`'s F5-A-L2 fix, which
+/// merges explicitly because `handle_create` enforces `--project` presence
+/// itself before any HTTP call).
+///
+/// Config carries NO default project — the global `--project` flag is the
+/// ONLY source of the project key — and `--project` is placed BEFORE the
+/// subcommand (no per-subcommand `--project`). If a future refactor ever
+/// broke global-flag propagation into the rename dispatch arm,
+/// `handle_rename`'s single-project branch would see `project: None` and
+/// hit BC-8.3.005's neither-supplied exit-64 guard before any HTTP call —
+/// failing both `.expect(1)` mocks below.
+#[tokio::test]
+async fn test_bc_8_3_001_component_rename_honors_global_project_flag() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    // Write a profile config with NO default project — the global --project
+    // flag is the ONLY source of the project key.
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT MUST fire — rename proceeds with the global-flag project.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .and(body_json(json!({"name": "NewName"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "NewName", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Global flag BEFORE the subcommand — no per-subcommand --project.
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "--project",
+            "FOO",
+            "component",
+            "rename",
+            "Backend",
+            "NewName",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "expected exit 0 when project is supplied via the global --project \
+         flag; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
