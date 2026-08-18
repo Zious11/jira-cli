@@ -778,3 +778,28 @@ pub fn issue_response_with_components(key: &str, summary: &str, component_names:
     response["fields"]["components"] = json!(components);
     response
 }
+
+/// `GET /rest/api/3/issue/{key}` response carrying `fields.components` as an
+/// array of `{"name":..., "id":...}` objects -- the LIVE-Jira-CORRECT shape
+/// (real Jira ALWAYS returns an id for an issue's embedded components; only
+/// a minimal/stripped fixture omits it). Distinct from
+/// `issue_response_with_components` (name-only, `id` absent → `None`) --
+/// that function's id=None coverage is intentionally preserved, not
+/// replaced, by this one. Added for Step-4.5 Round 6 (HIGH-1): the
+/// name-only fixture masked a FIX-576-DL-class mock-vs-live drift bug in
+/// the RMW fallback's remove-matching, because it could never exercise a
+/// NAME remove target against an id-bearing existing component (the
+/// production-common case).
+pub fn issue_response_with_components_and_ids(
+    key: &str,
+    summary: &str,
+    components: &[(&str, &str)],
+) -> Value {
+    let mut response = issue_response(key, summary, "To Do");
+    let components: Vec<Value> = components
+        .iter()
+        .map(|(name, id)| json!({"name": name, "id": id}))
+        .collect();
+    response["fields"]["components"] = json!(components);
+    response
+}
