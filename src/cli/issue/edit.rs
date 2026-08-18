@@ -1088,11 +1088,25 @@ async fn edit_issue_components(
         // components, plus newly-resolved adds appended), PUT via the `set`
         // verb. F1 fix: a numeric remove target matches an existing
         // component by ID (`c.id`, `Option<String>`), NOT by name -- a
-        // name-kind remove target still matches by name, unchanged. A
-        // retained existing component is re-emitted as `{"name": c.name}`
-        // regardless of whether it has an id (unchanged pre-F1 behavior,
-        // AC-005) -- only NEWLY-added targets carry the id-vs-name
-        // discriminator on the wire.
+        // name-kind remove target still matches by name, unchanged.
+        //
+        // MED-1 fix (Step-4.5 Round 4, supersedes the F1-round instruction
+        // to re-emit retained components by name): Jira allows multiple
+        // components with the SAME name in one project (the entire reason
+        // F1 added numeric-id targeting). Re-emitting a RETAINED component
+        // as a bare `{"name": ...}` is ambiguous when a same-named sibling
+        // also survives -- Jira's `set` verb resolves a bare name
+        // arbitrarily (observed: the lowest id), so the wrong component can
+        // survive a same-named remove, and two name-identical retained
+        // entries silently dedupe to one on Jira's side (a component
+        // silently dropped, exit 0). Retained components are therefore
+        // re-emitted by IDENTITY -- `{"id": ...}` when the component has an
+        // id (the normal case for a real Jira component), falling back to
+        // `{"name": ...}` only when `id` is `None`. This does not change
+        // the SET computation (existing minus removed, plus adds appended,
+        // BC-3.4.022 Post 3) -- it only makes the survivor set unambiguous
+        // on the wire. Newly-added targets are unaffected: they still carry
+        // their own id-vs-name discriminator via `ComponentRef`.
         let issue = client.get_issue(key, &[]).await?;
         let mut current: Vec<crate::types::jira::issue::Component> =
             issue.fields.components.unwrap_or_default();
@@ -1102,8 +1116,13 @@ async fn edit_issue_components(
                 ComponentRef::Name(name) => &c.name == name,
             })
         });
-        let mut new_components: Vec<serde_json::Value> =
-            current.iter().map(|c| json!({"name": &c.name})).collect();
+        let mut new_components: Vec<serde_json::Value> = current
+            .iter()
+            .map(|c| match &c.id {
+                Some(id) => json!({"id": id}),
+                None => json!({"name": &c.name}),
+            })
+            .collect();
         for r in &adds {
             new_components.push(r.to_wire_object());
         }
