@@ -9410,3 +9410,80 @@ async fn test_bc_8_3_001_component_rename_no_config_fallback_for_project_neither
         received.len()
     );
 }
+
+// =============================================================================
+// Step-4.5 fix burst 7 (fresh-context adversarial review, 1 MEDIUM coverage
+// gap + 2 LOW findings — one code fix, one test-only). New, additive tests
+// only — no existing rename test above this marker was modified for these
+// findings.
+// =============================================================================
+
+// ── Lens A (LOW — global-position --project + --all-projects conflict) ──────
+
+/// Step-4.5 fix burst 7, Lens A finding: the pre-existing AC-013
+/// (`test_bc_8_3_005_component_rename_scope_selection_clap_conflict_and_app_guard`)
+/// only covered the LOCAL-position form of `--project X --all-projects`
+/// (clap `conflicts_with`, exit 2). It did NOT cover the GLOBAL-position
+/// form `jr --project FOO component rename A B --all-projects`.
+///
+/// Empirically verified (Step-4.5 fix burst 7): this was a REAL BUG, not
+/// merely a test gap. `--project` is ALSO a `global = true` flag on `Cli`;
+/// clap copies a global-position value down into a subcommand's same-named
+/// local field automatically, so `project` was already `Some("FOO")` by the
+/// time `ComponentSubcommand::Rename`'s handler ran — but clap's
+/// `conflicts_with` does NOT fire for that value source (it only rejects a
+/// LOCALLY, directly-matched `--project`). Pre-fix, this exited 0 and
+/// silently fanned the rename out across EVERY accessible project while
+/// `--project FOO` sat completely unused — the exact "silently proceeds"
+/// outcome this finding was written to catch, verified via a temporary
+/// debug print during triage (since removed) showing `project=Some("FOO")`
+/// reaching the handler with no clap rejection.
+///
+/// Fixed by an explicit application-level guard in `src/cli/component.rs`'s
+/// `ComponentSubcommand::Rename` dispatch arm (`component::handle`):
+/// `project.is_some() && all_projects` → `JrError::UserError` (exit 64) —
+/// this condition can, by construction, only be reached via the
+/// global-inherited path, since the genuine local-both-flags case is already
+/// intercepted by clap itself (exit 2) before this code ever runs.
+#[tokio::test]
+async fn test_bc_8_3_005_component_rename_global_position_project_all_projects_conflict_exit_64() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "--project",
+            "FOO",
+            "component",
+            "rename",
+            "Backend",
+            "NewName",
+            "--all-projects",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Lens A: global-position --project combined with --all-projects must \
+         be rejected exit 64 (application-level guard) before any HTTP; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--project") && stderr.contains("--all-projects"),
+        "Lens A: rejection message must name both --project and \
+         --all-projects; got: {stderr}"
+    );
+    let received = server.received_requests().await.unwrap();
+    assert!(
+        received.is_empty(),
+        "Lens A: the guard must fire before any HTTP call; got {} request(s)",
+        received.len()
+    );
+}

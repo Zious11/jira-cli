@@ -109,6 +109,52 @@ pub async fn handle(
             all_projects,
             dry_run,
         } => {
+            // Step-4.5 fix burst 7, Lens A finding: `ComponentSubcommand::
+            // Rename`'s LOCAL `--project` carries `conflicts_with =
+            // "all_projects"`, so `jr component rename A B --project FOO
+            // --all-projects` (`--project` supplied INSIDE the subcommand's
+            // own arg list) is already a clap exit-2 rejection (AC-013 Part
+            // A), before this code ever runs.
+            //
+            // But `--project` is ALSO a `global = true` flag on `Cli`
+            // itself, and clap's global-value propagation copies a
+            // global-position value down into a subcommand's SAME-NAMED
+            // local field automatically — so `project` here is ALREADY
+            // `Some("FOO")` for `jr --project FOO component rename A B
+            // --all-projects` even though the user never touched the local
+            // `--project` flag. Empirically confirmed (via a temporary debug
+            // print, since removed): clap's `conflicts_with` does NOT fire
+            // for this value-source — it only rejects a LOCAL, directly-
+            // matched `--project`, not one inherited from the global
+            // position. Pre-fix this genuinely reached
+            // `handle_rename_all_projects` and silently fanned out across
+            // EVERY accessible project while `--project` sat unused — a real
+            // footgun (the flag *looks* like it is scoping the rename, but
+            // is not), not merely a coverage gap.
+            //
+            // By construction, `project.is_some() && all_projects` can only
+            // be reached here via that global-inherited path: the genuine
+            // local-both-flags case never reaches this line at all (clap
+            // already exited 2 for it). So this check, unlike the
+            // `project.is_none() && !all_projects` neither-supplied guard in
+            // `handle_rename`, does not need to separately consult
+            // `project_flag` — `project`'s mere presence here already proves
+            // it came from a source clap's own conflict check didn't cover.
+            // The rejection is an application-level `JrError::UserError`
+            // (exit 64, not clap's exit 2 — this codebase's established
+            // convention for an app-level guard covering a combination clap
+            // itself cannot express directly, per DEC-188 and
+            // `handle_delete`'s neither-flag guard) so it fails the same way
+            // — before any HTTP call — as the local-both form, just via a
+            // different mechanism.
+            if project.is_some() && all_projects {
+                return Err(JrError::UserError(
+                    "rename --all-projects cannot be combined with --project (including the \
+                     global --project flag) — supply exactly one."
+                        .into(),
+                )
+                .into());
+            }
             handle_rename(
                 RenameComponentArgs {
                     old,
