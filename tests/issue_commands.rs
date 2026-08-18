@@ -7590,3 +7590,355 @@ async fn test_bc_3_4_022_issue_edit_component_rmw_untouched_survives_by_identity
          re-emitted by its own identity"
     );
 }
+
+// =============================================================================
+// Step-4.5 Round 7 — MEDIUM-1: merge the single-key --component edit into
+// ONE PUT with other field changes (close the two-PUT partial-write window)
+// =============================================================================
+
+/// THE KEY RED-then-GREEN TEST. `--component add:Backend --priority Bogus`
+/// on the NATIVE update-verb path (editmeta advertises add+remove), where
+/// Jira rejects the invalid priority with 400: exactly ONE PUT must fire,
+/// carrying BOTH `update.components` and `fields.priority` in the SAME
+/// request body -- so the whole edit (including the component change) is
+/// rejected together, never landing a partial write.
+///
+/// This test was run against the PRE-FIX (two-PUT) code first and
+/// confirmed RED: the component-only PUT (`{"update":{"components":[...]}}`)
+/// succeeded (204) -- the component change LANDED -- and only the
+/// SEPARATE, SECOND field-only PUT (`{"fields":{"priority":...}}`) 400'd,
+/// producing a false-negative partial write (component change applied,
+/// user told the edit failed). After the fix, only ONE PUT fires, with the
+/// combined body, and it alone determines success/failure -- no separate
+/// component-only PUT can ever land.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_and_invalid_field_one_put_rejects_whole_edit() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["add", "remove"]).await;
+
+    // Decoy (Round-7 pre-fix shape): a PUT whose body is EXACTLY the
+    // component-only native update -- this is what the OLD two-PUT code's
+    // FIRST PUT looked like. Mounted so a pre-fix regression is caught by a
+    // count assertion below (any real hit here means a second, separate PUT
+    // fired) -- NOT mounted with .expect(1)/.expect(0) here because its
+    // count is asserted indirectly via the total-PUT-count check.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "update": {
+                "components": [
+                    {"add": {"name": "Backend"}}
+                ]
+            }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    // Decoy (Round-7 pre-fix shape): a PUT whose body is EXACTLY the
+    // field-only set -- the OLD two-PUT code's SECOND PUT.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "fields": {
+                "priority": {"name": "Bogus"}
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .set_body_json(serde_json::json!({"errorMessages": ["Invalid priority"]})),
+        )
+        .mount(&server)
+        .await;
+
+    // THE FIXED shape: one PUT, combined body.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "update": {
+                "components": [
+                    {"add": {"name": "Backend"}}
+                ]
+            },
+            "fields": {
+                "priority": {"name": "Bogus"}
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .set_body_json(serde_json::json!({"errorMessages": ["Invalid priority"]})),
+        )
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Backend",
+            "--priority",
+            "Bogus",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "MEDIUM-1: expected exit 1 (raw ApiError, no --type enrichment path); \
+         stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "MEDIUM-1: expected EXACTLY ONE PUT to the issue -- a second, \
+         separate component-only PUT landing before the field-validation \
+         error is exactly the partial-write bug this fix closes; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "update": {
+                "components": [
+                    {"add": {"name": "Backend"}}
+                ]
+            },
+            "fields": {
+                "priority": {"name": "Bogus"}
+            }
+        }),
+        "MEDIUM-1: the single PUT must carry BOTH update.components and \
+         fields.priority in one body"
+    );
+}
+
+/// Happy-path native combined PUT: `--component add:Backend --summary
+/// "New"` → ONE PUT with both `update.components` and `fields.summary`,
+/// 204, exit 0.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_and_summary_one_put_native() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["add", "remove"]).await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Backend",
+            "--summary",
+            "New",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "MEDIUM-1 (happy path native): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "MEDIUM-1 (happy path native): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "update": {
+                "components": [
+                    {"add": {"name": "Backend"}}
+                ]
+            },
+            "fields": {
+                "summary": "New"
+            }
+        }),
+        "MEDIUM-1 (happy path native): the single PUT must carry BOTH \
+         update.components and fields.summary"
+    );
+}
+
+/// Happy-path RMW-fallback combined PUT: editmeta lacks add/remove +
+/// `--component add:Backend --summary "New"` → ONE PUT with
+/// `fields.components` folded into the SAME `fields` object as the other
+/// field change.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_and_summary_one_put_fallback() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_components("FOO-1", "Test", &[]),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Backend",
+            "--summary",
+            "New",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "MEDIUM-1 (happy path fallback): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "MEDIUM-1 (happy path fallback): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": [
+                    {"name": "Backend"}
+                ],
+                "summary": "New"
+            }
+        }),
+        "MEDIUM-1 (happy path fallback): fields.components must be folded \
+         into the SAME fields object as the other field change, in one PUT"
+    );
+}
+
+// ── LOW-2 — dedup an add already present in the existing set (RMW) ───────
+
+/// RMW fallback (editmeta lacks add/remove): `--component add:Backend`
+/// where "Backend" is ALREADY present on the issue (with an id) → the
+/// set-verb array must NOT contain Backend twice -- the add is deduped
+/// against the already-surviving existing entry.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_add_already_present_deduped() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10050", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    let issue_with_id_bearing = common::fixtures::issue_response_with_components_and_ids(
+        "FOO-1",
+        "Test",
+        &[("Backend", "10050")],
+    );
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_id_bearing))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "LOW-2: expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(puts.len(), 1, "LOW-2: expected exactly 1 PUT; got {puts:?}");
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": [
+                    {"id": "10050"}
+                ]
+            }
+        }),
+        "LOW-2: Backend must appear exactly ONCE -- the add must be deduped \
+         against the already-surviving existing entry, not appended a \
+         second time"
+    );
+}
