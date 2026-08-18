@@ -1420,6 +1420,20 @@ struct RenameTarget {
 /// currently worded. See `test_bc_8_3_002_component_rename_all_projects_discovery_phase_error_aborts_fanout_zero_put`
 /// for the regression pin (one project's `list_components` 500 → exit 1,
 /// zero `PUT` calls).
+///
+/// **Posture is human-ratified for this story, not merely a default left
+/// unexamined.** Abort-on-any-error (no partial-project skip, no
+/// `--best-effort` escape hatch) was reviewed against a HYBRID alternative —
+/// deterministic per-project errors (403/404: project not visible / no
+/// components endpoint) skip-and-warn-and-account for that project while
+/// continuing the fan-out; transient errors (5xx / network) still abort the
+/// whole fan-out; an optional `--best-effort` flag would let a caller opt
+/// into the skip-and-continue behavior explicitly — and the current
+/// abort-everything behavior was deliberately kept for this story. The
+/// HYBRID refinement is DEFERRED to a follow-up story, not implemented here.
+/// See the research at
+/// `.factory/research/S-608-1-all-projects-discovery-error-posture.md` for
+/// the full analysis and rationale.
 async fn discover_rename_targets(old: &str, client: &JiraClient) -> Result<Vec<RenameTarget>> {
     let projects = client.list_projects(None, None).await?;
     let mut targets = Vec::new();
