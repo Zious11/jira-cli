@@ -1175,6 +1175,42 @@ async fn edit_issue_components(
         //    followed by (add survivors, by their own wire shape). Order is
         //    irrelevant to Jira (components is a set-valued field) -- only
         //    the net SET matters.
+        // 4. ACCEPTED DIVERGENCE (Step-4.5 Round 8, F-LOW-001): same-
+        //    IDENTIFIER add==remove (point 2's `removes.contains(a)` half)
+        //    is reconciled to net-ABSENT on BOTH the native and this RMW
+        //    path (B-LOW-1). CROSS-identifier add/remove of the SAME
+        //    component (e.g. `remove:100` + `add:Backend`, where numeric
+        //    id 100 IS the component named Backend) is NOT reconciled
+        //    between the two paths, and this divergence is INTENTIONAL,
+        //    ACCEPTED, contradictory-input behavior -- not a bug:
+        //      - Native path: Jira applies the ops array add-then-remove
+        //        (Post 2) -> net ABSENT.
+        //      - This RMW fallback: `add_survivors`'s filter only excludes
+        //        an add matching a remove target by the SAME `ComponentRef`
+        //        variant+value (point 2's same-identifier check) or a
+        //        SURVIVING existing component by id-OR-name (point 2's
+        //        LOW-2 dedup check) -- neither condition catches a
+        //        cross-identifier collision, because "id 100" and "name
+        //        Backend" are never resolved to each other here -- so the
+        //        Backend add survives -> net PRESENT.
+        //    Rationale for accepting rather than reconciling: (a) the
+        //    input is self-contradictory -- the user names the SAME
+        //    component by two different identifiers with opposite verbs in
+        //    one command; there is no single "correct" outcome. (b)
+        //    native's "absent" result is Jira-determined by its FIXED
+        //    add-before-remove ops ordering (Post 2) -- this fallback
+        //    cannot be made to match it without violating that ordering
+        //    elsewhere (or reordering ops, which Post 2 forbids). (c)
+        //    matching native here would require resolving a NAME add to
+        //    its id (or vice versa) purely to detect a same-target
+        //    collision -- fragile cross-identifier resolution added to a
+        //    code path that has already regressed three times (Rounds 4,
+        //    5, 6) -- not worth the risk for a nonsensical input. (d) no
+        //    UNRELATED component is ever lost on either path. Pinned (both
+        //    sides of the divergence) by
+        //    `test_bc_3_4_022_issue_edit_component_rmw_cross_identifier_add_remove_accepted_divergence`
+        //    and
+        //    `test_bc_3_4_022_issue_edit_component_native_cross_identifier_add_remove_nets_absent`.
         //
         // THE BUG THIS SUPERSEDES: the Round-5 code collapsed each existing
         // component to ONE `ComponentRef` (`Id` when it had one, else
