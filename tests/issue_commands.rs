@@ -6321,3 +6321,291 @@ async fn test_bc_8_4_003_issue_create_component_ambiguous_exits_64() {
          (alphabetically-sorted Matches list); stderr={stderr}"
     );
 }
+
+// =============================================================================
+// Step-4.5 Round 3 — F1: numeric --component input wires as {"id":...}, not
+// {"name":...} (BC-8.4.001 numeric bypass / BC-8.1.008); F2: --field
+// validation must run before the --component mutation (partial-write fix)
+// =============================================================================
+
+// ── F1 — numeric --component on `issue create` wires as {"id":...} ───────
+
+/// `jr issue create --project FOO --component 10001` (numeric, no prefix
+/// grammar on create) → `fields.components == [{"id":"10001"}]` -- NOT
+/// `{"name":"10001"}`. BC-8.4.001's numeric bypass means all-ASCII-digit
+/// input is always a component id (BC-8.1.008), and Jira's issue
+/// components field accepts `{"id":...}`.
+#[tokio::test]
+async fn test_bc_3_4_024_issue_create_component_numeric_wires_as_id() {
+    let server = MockServer::start().await;
+
+    // The project component-list GET still fires (BC-3.4.025's resolution
+    // mechanism runs unconditionally), but its contents are irrelevant to a
+    // numeric value -- BC-8.4.001's bypass short-circuits before any
+    // candidate-list matching.
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "99999", "Unrelated", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(common::fixtures::create_issue_response("FOO-1")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "create",
+            "--project",
+            "FOO",
+            "--type",
+            "Task",
+            "--summary",
+            "Test numeric component id",
+            "--component",
+            "10001",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "F1 (create numeric): expected exit 0; stderr={stderr}"
+    );
+
+    let posts = s605_1_captured_posts(&server).await;
+    assert_eq!(posts.len(), 1, "F1 (create numeric): expected exactly 1 POST; got {posts:?}");
+    assert_eq!(
+        posts[0]["fields"]["components"],
+        serde_json::json!([{"id": "10001"}]),
+        "F1 (create numeric): a numeric --component value must wire as \
+         {{\"id\":...}}, never {{\"name\":...}}"
+    );
+}
+
+// ── F1 — numeric --component on `issue edit` (single-key, native path) ───
+
+/// `jr issue edit FOO-1 --component add:10001 --component remove:20002`
+/// (both numeric) → `PUT /rest/api/3/issue/FOO-1` body
+/// `{"update":{"components":[{"add":{"id":"10001"}},{"remove":{"id":"20002"}}]}}`
+/// -- id-keyed objects, not name-keyed. The wire's ADD-before-REMOVE
+/// ordering (AC-003) is unaffected by the id-vs-name discriminator.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_numeric_wires_as_id_native_path() {
+    let server = MockServer::start().await;
+
+    // As above: the component-list GET fires but its contents are
+    // irrelevant to numeric inputs.
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "99999", "Unrelated", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["add", "remove"]).await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:10001",
+            "--component",
+            "remove:20002",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "F1 (edit numeric native): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(puts.len(), 1, "F1 (edit numeric native): expected exactly 1 PUT; got {puts:?}");
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "update": {
+                "components": [
+                    {"add": {"id": "10001"}},
+                    {"remove": {"id": "20002"}}
+                ]
+            }
+        }),
+        "F1 (edit numeric native): numeric add/remove targets must wire as \
+         {{\"id\":...}}, never {{\"name\":...}}"
+    );
+}
+
+// ── F1 — numeric --component remove on the RMW fallback path ─────────────
+
+/// editmeta advertises ONLY `set` (fallback fires). The issue's CURRENT
+/// `fields.components` has an id-bearing component (id `"20002"`) and an
+/// untouched other component. `--component remove:20002` (numeric) → the
+/// computed set-verb array drops the id-MATCHED component (not a name
+/// match) and keeps the untouched one.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_numeric_remove_fallback_matches_by_id() {
+    let server = MockServer::start().await;
+
+    // Unused for a numeric input's resolution, but resolve_component_change_names
+    // fetches it unconditionally.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::component_list_response(vec![]),
+        ))
+        .mount(&server)
+        .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    let mut issue_with_ids = common::fixtures::issue_response("FOO-1", "Test", "To Do");
+    issue_with_ids["fields"]["components"] = serde_json::json!([
+        {"name": "Untouched", "id": "30001"},
+        {"name": "ToRemove", "id": "20002"}
+    ]);
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_ids))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:20002",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "F1 (fallback numeric remove): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "F1 (fallback numeric remove): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": [
+                    {"name": "Untouched"}
+                ]
+            }
+        }),
+        "F1 (fallback numeric remove): the id-matched component (id \
+         \"20002\") must be dropped by ID match, not name match; the \
+         untouched component must be retained"
+    );
+}
+
+// ── F2 — --field validation must run before the --component mutation ────
+
+/// `jr issue edit FOO-1 --component add:X --field bogusfield=Y` (single
+/// key, unresolvable --field name) → exit 64, ZERO component mutation.
+/// Before the F2 fix, `edit_issue_components` fired its PUT BEFORE
+/// `resolve_edit_fields` validated `--field`, so an invalid `--field`
+/// landed the component change, THEN exited 64 -- a partial write.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_field_validated_before_component_put() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // --field resolution's fields-list GET returns no field matching
+    // "bogusfield" -- resolution fails BEFORE editmeta, BEFORE any
+    // --component HTTP call (mirrors tests/issue_edit_field.rs's
+    // test_bc_3_4_017_ec_11_field_type_key_not_rejected_by_gate_b pattern:
+    // "No editmeta, no PUT — resolution fails before reaching editmeta").
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10001", "name": "Severity", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    // F2's core assertion: edit_issue_components must never even be
+    // entered -- its first HTTP call would be this component-list GET.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Zero mutation guarantee: no PUT of any kind (component's native/
+    // fallback PUT, or the generic client.edit_issue PUT) may occur.
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:X",
+            "--field",
+            "bogusfield=Y",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F2: expected exit 64 for an unresolvable --field; stderr={stderr}"
+    );
+    // `.expect(0)` on both the component-list GET and the PUT catch-all
+    // verify the component mutation never started -- the invalid --field
+    // is caught first, so there is no partial write.
+}
