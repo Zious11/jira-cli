@@ -463,6 +463,26 @@ pub(super) async fn handle_edit(
             None => None,
         };
 
+        // Step-4.5 Round 1, F1 fix (BC-3.4.021 EC-3.4.021-20): --component
+        // name resolution (BC-8.4) still fires during dry-run -- it is a
+        // read-only GET -- and an unresolvable/ambiguous name still exits 64
+        // BEFORE any plannedChanges output, same as resolve_edit_fields and
+        // the description ADF conversion above. This is another single,
+        // unconditional PRE-STEP that MUST complete before the `match
+        // output_format` block below emits ANY output (same load-bearing
+        // ordering rationale as dr_desc_text/dr_desc_adf). The preview then
+        // renders the RESOLVED canonical name -- parity with the live echo,
+        // which also renders resolved names, never the raw CLI input.
+        let dr_component_changes: Option<Vec<format::ComponentChange>> = if !components.is_empty()
+        {
+            let dr_key = &effective_keys[0];
+            let dr_project_key = project_key_from_issue_key(dr_key);
+            let dr_changes = format::normalize_component_changes(&components);
+            Some(resolve_component_change_names(client, dr_project_key, &dr_changes).await?)
+        } else {
+            None
+        };
+
         match output_format {
             OutputFormat::Json => {
                 // C-3: --output json must produce machine-readable JSON on stdout,
@@ -511,15 +531,16 @@ pub(super) async fn handle_edit(
                         .collect();
                     planned.insert("labels".into(), json!(label_entries));
                 }
-                if !components.is_empty() {
+                if let Some(ref component_changes) = dr_component_changes {
                     // BC-3.4.021 amendment (AC-016): structured
                     // `[{"action":"ADD","name":"X"},{"action":"REMOVE","name":"Y"}]`
                     // array — DIFFERENT shape from the comma-joined live-echo
-                    // string (format::format_component_changes_echo).
-                    let component_changes = format::normalize_component_changes(&components);
+                    // string (format::format_component_changes_echo). Renders
+                    // resolved (canonical) names, in CLI input order (F1/F2
+                    // fixes) -- resolved above, before this match arm.
                     planned.insert(
                         "components".into(),
-                        json!(format::component_changes_dry_run_json(&component_changes)),
+                        json!(format::component_changes_dry_run_json(component_changes)),
                     );
                 }
                 if let Some(ref t) = issue_type {
@@ -588,14 +609,15 @@ pub(super) async fn handle_edit(
                 if !labels.is_empty() {
                     println!("  labels → {}", labels.join(", "));
                 }
-                if !components.is_empty() {
+                if let Some(ref component_changes) = dr_component_changes {
                     // BC-3.4.021 amendment (AC-017): identical normalization
                     // to the live-edit echo (AC-012) — bare `X` renders as
-                    // `add:X`, never bare.
-                    let component_changes = format::normalize_component_changes(&components);
+                    // `add:X`, never bare. Resolved (canonical) names, in CLI
+                    // input order (F1/F2 fixes) -- resolved above, before
+                    // this match arm.
                     println!(
                         "  components → {}",
-                        format::format_component_changes_echo(&component_changes)
+                        format::format_component_changes_echo(component_changes)
                     );
                 }
                 if let Some(ref t) = issue_type {
@@ -983,84 +1005,42 @@ pub(super) async fn handle_edit(
 ///
 /// Behavior (BC-3.4.022):
 /// 1. Parse/normalize `components` via [`format::normalize_component_changes`]
-///    (add:/remove: prefix grammar, bare → ADD, ADD-before-REMOVE ordering).
-/// 2. Resolve each component NAME via `helpers::resolve_component` (BC-8.4.001),
-///    scoped to the issue's own project — extracted from `key` via the
-///    last-hyphen split (BC-3.4.018 Invariant 4 precedent) — using the
-///    project component-list GET (BC-3.4.025), never editmeta, for name
-///    validation. Unknown name → exit 64, zero PUT (AC-006).
+///    (add:/remove: prefix grammar, bare → ADD, CLI input order preserved --
+///    Step-4.5 Round 1 F2 fix).
+/// 2. Resolve each component NAME via [`resolve_component_change_names`]
+///    (`helpers::resolve_component`, BC-8.4.001), scoped to the issue's own
+///    project — extracted from `key` via the last-hyphen split (BC-3.4.018
+///    Invariant 4 precedent) — using the project component-list GET
+///    (BC-3.4.025), never editmeta, for name validation. Unknown name →
+///    exit 64, zero PUT (AC-006).
 /// 3. Evaluate the editmeta gate ONCE (`client.get_editmeta(key)`,
 ///    `fields.components.operations` containing `add`/`remove`):
 ///    - Present → native `update`-verb PUT via
 ///      [`JiraClient::update_issue_components`] directly, zero extra GET for
-///      current components (AC-004).
+///      current components (AC-004). The `adds`/`removes` slices passed to
+///      it are derived by filtering the resolved changes by `action` --
+///      NOT by relying on any pre-grouped order -- so the wire body stays
+///      ADD-before-REMOVE regardless of CLI input order (AC-003).
 ///    - Absent → read-modify-write fallback: GET current `fields.components`
 ///      (`client.get_issue`), compute the new full array client-side, PUT via
 ///      the `set` verb (`client.edit_issue`) (AC-005).
 ///      No retry-with-different-shape on a subsequent 400 (Invariant 2).
 ///
-/// Returns the normalized changes (ADD before REMOVE) so the caller can build
-/// `changed_fields`/table echo via [`format::format_component_changes_echo`]
-/// without re-deriving the ordering.
+/// Returns the resolved changes in CLI input order (F2 fix) so the caller
+/// can build `changed_fields`/table echo via
+/// [`format::format_component_changes_echo`] without re-deriving the order.
 async fn edit_issue_components(
     client: &JiraClient,
     key: &str,
     components: &[String],
 ) -> Result<Vec<format::ComponentChange>> {
-    // Step 1: parse/normalize add:/remove: entries (ADD before REMOVE).
+    // Step 1: parse/normalize add:/remove: entries, CLI input order preserved.
     let changes = format::normalize_component_changes(components);
 
-    // Step 2: resolve each component NAME via BC-8.4.001, scoped to the
-    // issue's own project (last-hyphen split, BC-3.4.018 Invariant 4) using
-    // the project component-list GET (BC-3.4.025) -- NEVER editmeta.
+    // Step 2: resolve each component NAME via BC-8.4.001/BC-3.4.025, scoped
+    // to the issue's own project (last-hyphen split, BC-3.4.018 Invariant 4).
     let project_key = project_key_from_issue_key(key);
-    let component_list = client.list_components(project_key).await?;
-    let candidate_names: Vec<String> = component_list.iter().map(|c| c.name.clone()).collect();
-
-    let mut resolved_changes: Vec<format::ComponentChange> = Vec::with_capacity(changes.len());
-    for change in &changes {
-        let matched_name =
-            match helpers::resolve_component(&change.name, project_key, &candidate_names) {
-                MatchResult::Exact(matched) => matched,
-                MatchResult::ExactMultiple(matched_name) => {
-                    let ids: Vec<String> = component_list
-                        .iter()
-                        .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
-                        .map(|c| c.id.clone())
-                        .collect();
-                    return Err(JrError::UserError(format!(
-                        "Multiple components named \"{}\" found (IDs: {}). \
-                     Pass the numeric ID directly.",
-                        matched_name,
-                        ids.join(", ")
-                    ))
-                    .into());
-                }
-                MatchResult::Ambiguous(mut candidates) => {
-                    candidates.sort_by_key(|s| s.to_lowercase());
-                    return Err(JrError::UserError(format!(
-                        "Ambiguous component '{}'. Matches: {}.",
-                        change.name,
-                        candidates.join(", ")
-                    ))
-                    .into());
-                }
-                MatchResult::None(mut available) => {
-                    available.sort_by_key(|s| s.to_lowercase());
-                    return Err(JrError::UserError(format!(
-                        "Component '{}' not found in project {}. Available: {}.",
-                        change.name,
-                        project_key,
-                        available.join(", ")
-                    ))
-                    .into());
-                }
-            };
-        resolved_changes.push(format::ComponentChange {
-            action: change.action.clone(),
-            name: matched_name,
-        });
-    }
+    let resolved_changes = resolve_component_change_names(client, project_key, &changes).await?;
 
     let adds: Vec<String> = resolved_changes
         .iter()
@@ -1105,6 +1085,76 @@ async fn edit_issue_components(
             .await?;
     }
 
+    Ok(resolved_changes)
+}
+
+/// Resolve component change NAMES against the project's component list
+/// (BC-8.4.001, BC-3.4.025) — shared by the live single-key wire-shape
+/// handler ([`edit_issue_components`]) and the `--dry-run` preview path in
+/// [`handle_edit`] (Step-4.5 Round 1, F1 fix: BC-3.4.021 EC-3.4.021-20 --
+/// "Component NAME resolution (BC-8.4) still fires during dry-run (it is a
+/// read-only GET…) — an unresolvable/ambiguous component name still exits
+/// 64 before any plannedChanges output, --dry-run does not suppress this
+/// resolution error." — `--dry-run` suppresses mutation HTTP calls only,
+/// never this read-only resolution).
+///
+/// Returns `changes` with each `name` replaced by its resolved canonical
+/// name, in the SAME order as the input `changes` (F2 fix: CLI input order
+/// is preserved end-to-end through this function — ADD/REMOVE wire
+/// reordering happens only at the wire-body construction site in
+/// [`edit_issue_components`], never here).
+async fn resolve_component_change_names(
+    client: &JiraClient,
+    project_key: &str,
+    changes: &[format::ComponentChange],
+) -> Result<Vec<format::ComponentChange>> {
+    let component_list = client.list_components(project_key).await?;
+    let candidate_names: Vec<String> = component_list.iter().map(|c| c.name.clone()).collect();
+
+    let mut resolved_changes: Vec<format::ComponentChange> = Vec::with_capacity(changes.len());
+    for change in changes {
+        let matched_name =
+            match helpers::resolve_component(&change.name, project_key, &candidate_names) {
+                MatchResult::Exact(matched) => matched,
+                MatchResult::ExactMultiple(matched_name) => {
+                    let ids: Vec<String> = component_list
+                        .iter()
+                        .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
+                        .map(|c| c.id.clone())
+                        .collect();
+                    return Err(JrError::UserError(format!(
+                        "Multiple components named \"{}\" found (IDs: {}). \
+                         Pass the numeric ID directly.",
+                        matched_name,
+                        ids.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::Ambiguous(mut candidates) => {
+                    candidates.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Ambiguous component '{}'. Matches: {}.",
+                        change.name,
+                        candidates.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::None(mut available) => {
+                    available.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Component '{}' not found in project {}. Available: {}.",
+                        change.name,
+                        project_key,
+                        available.join(", ")
+                    ))
+                    .into());
+                }
+            };
+        resolved_changes.push(format::ComponentChange {
+            action: change.action.clone(),
+            name: matched_name,
+        });
+    }
     Ok(resolved_changes)
 }
 
