@@ -848,15 +848,12 @@ pub(super) async fn handle_edit(
     // Errors here (field not found, absent from editmeta, bad type, etc.) exit 64
     // BEFORE the PUT is issued (all-or-nothing semantics per EC-3.4.015-12).
     //
-    // Step-4.5 Round 3, F2 fix: this block MUST run BEFORE the --component
-    // mutation block below. resolve_edit_fields only POPULATES `fields`/
-    // `changed_fields` and can exit 64 on an unknown field or bad type --
-    // it never itself issues a PUT. `edit_issue_components` DOES issue a
-    // PUT immediately. Running --component's mutation first meant an
-    // invalid --field (e.g. `--component add:X --field bogus=Y`) landed
-    // the component change, THEN exited 64 -- a partial write. Reordering
-    // so field validation runs first means an invalid --field now exits 64
-    // with ZERO component mutation.
+    // Step-4.5 Round 3, F2 fix (superseded in spirit, not reverted, by the
+    // Round-7 MEDIUM-1 single-PUT merge below): this block still runs
+    // BEFORE the --component block, so a client-side --field validation
+    // failure (unknown field, bad type) exits 64 before any HTTP mutation
+    // at all -- unaffected by whether components ends up merged into the
+    // same PUT.
     if !field_pairs.is_empty() {
         helpers::resolve_edit_fields(
             client,
@@ -872,20 +869,47 @@ pub(super) async fn handle_edit(
 
     // BC-3.4.022 (single-key path ONLY — effective_keys.len() == 1 is
     // guaranteed here by the C-1 rejection block above): components use a
-    // DEDICATED wire shape (`update` verb, editmeta-gated fallback) that
-    // cannot be merged into the generic `fields` object PUT below, so this
-    // fires its own HTTP call(s) via `edit_issue_components` BEFORE
-    // `client.edit_issue(key, fields)` runs. (F2 fix: --field validation
-    // above already ran, so reaching here means --field -- if supplied --
-    // was valid; this component PUT is no longer at risk of a subsequent
-    // --field-caused exit 64.)
+    // DEDICATED wire shape (native `update` verb, or the RMW fallback's
+    // full `fields.components` array) that `edit_issue_components` COMPUTES
+    // but does NOT PUT itself (Step-4.5 Round 7, MEDIUM-1 fix). Its
+    // contribution is merged into the SAME single PUT as every other field
+    // change below: a native contribution becomes this PUT's `update`
+    // object; a fallback contribution is folded directly into `fields`.
+    // Merging into ONE PUT closes the partial-write window a prior
+    // two-PUT design had (research: `.factory/research/S-605-1-atomic-
+    // component-field-put.md` -- Jira officially supports `update` and
+    // `fields` together in one PUT for DISTINCT fields, and validates all
+    // fields up front, so a field-validation error, e.g. an invalid
+    // priority, rejects the WHOLE edit -- component change included --
+    // instead of the component change having already landed via its own,
+    // separate, earlier PUT. This is a single-request guarantee scoped to
+    // validation errors, per the research -- Atlassian publishes no
+    // broader atomic/transactional/rollback guarantee for other failure
+    // modes.
+    let mut update_obj: Option<serde_json::Value> = None;
     if !components.is_empty() {
-        let component_changes = edit_issue_components(client, key, &components).await?;
+        let (component_changes, contribution) =
+            edit_issue_components(client, key, &components).await?;
         has_updates = true;
         changed_fields.insert(
             "components".into(),
             format::format_component_changes_echo(&component_changes),
         );
+        match contribution {
+            ComponentContribution::Native(ops) => {
+                // GUARD (research Q3 -- Jira rejects a field present in
+                // both `update` and `fields`): `components` lands under
+                // `update` here and is NEVER also written into `fields` in
+                // this branch -- the fallback branch below is the only
+                // other place `fields["components"]` is ever set, and the
+                // two are mutually exclusive per invocation (one editmeta
+                // gate picks exactly one path).
+                update_obj = Some(json!({ "components": ops }));
+            }
+            ComponentContribution::Fallback(arr) => {
+                fields["components"] = json!(arr);
+            }
+        }
     }
 
     if !has_updates {
@@ -894,16 +918,12 @@ pub(super) async fn handle_edit(
         );
     }
 
-    // BC-3.4.022: when --component is the only flag supplied, `fields`
-    // stays an empty object -- edit_issue_components already fired its own
-    // dedicated PUT above, so skip this generic PUT entirely rather than
-    // sending a second, no-op `{"fields":{}}` request (AC-001/AC-004/AC-005
-    // all assert exactly ONE PUT to the issue in that scenario).
-    let edit_result = if fields.as_object().is_some_and(|m| m.is_empty()) {
-        Ok(())
-    } else {
-        client.edit_issue(key, fields).await
-    };
+    // Step-4.5 Round 7, MEDIUM-1: ONE PUT, combining the optional native
+    // `update` object with `fields` (`edit_issue_combined` omits `update`
+    // when `None` and omits `fields` entirely when empty, so a
+    // --component-only edit still sends exactly the same minimal body as
+    // before -- AC-001/004/005 continue to assert exactly one PUT).
+    let edit_result = client.edit_issue_combined(key, fields, update_obj).await;
     if let Err(ref e) = edit_result {
         // --type arm: evaluated FIRST (dual-gate precedence, BC-3.4.010 invariant).
         // HTTP-400 gate: downcast to JrError::ApiError { status: 400, .. }.
@@ -1010,7 +1030,25 @@ pub(super) async fn handle_edit(
     Ok(())
 }
 
-/// Single-key `--component` add:/remove: wire-shape handler (BC-3.4.022).
+/// The single-key `--component` edit's wire CONTRIBUTION (Step-4.5 Round 7,
+/// MEDIUM-1 fix): `edit_issue_components` no longer PUTs anything itself --
+/// it COMPUTES this and returns it so `handle_edit` can merge it into the
+/// SAME single PUT as every other field change. `components` lands in
+/// EXACTLY ONE of the two top-level PUT keys (`update` or `fields`), never
+/// both -- Jira rejects a field present in both (research Q3) -- and this
+/// enum's two variants structurally guarantee that: the caller matches on
+/// it and merges into the ONE corresponding top-level key.
+enum ComponentContribution {
+    /// Native update-verb path (editmeta advertises add+remove): the
+    /// `update.components` ops array, e.g.
+    /// `[{"add":{"name":"X"}},{"remove":{"id":"20002"}}]`.
+    Native(Vec<serde_json::Value>),
+    /// RMW fallback path (editmeta lacks add/remove): the full computed
+    /// `fields.components` array to fold into the caller's `fields` object.
+    Fallback(Vec<serde_json::Value>),
+}
+
+/// Single-key `--component` add:/remove: wire-shape COMPUTATION (BC-3.4.022).
 ///
 /// Called ONLY from the single-key path of [`handle_edit`] (`effective_keys.len()
 /// == 1` is guaranteed by the caller's C-1 rejection block, which rejects
@@ -1026,19 +1064,24 @@ pub(super) async fn handle_edit(
 ///    project — extracted from `key` via the last-hyphen split (BC-3.4.018
 ///    Invariant 4 precedent) — using the project component-list GET
 ///    (BC-3.4.025), never editmeta, for name validation. Unknown name →
-///    exit 64, zero PUT (AC-006).
+///    exit 64, zero HTTP mutation (AC-006).
 /// 3. Evaluate the editmeta gate ONCE (`client.get_editmeta(key)`,
 ///    `fields.components.operations` containing `add`/`remove`):
-///    - Present → native `update`-verb PUT via
-///      [`JiraClient::update_issue_components`] directly, zero extra GET for
-///      current components (AC-004). The `adds`/`removes` slices passed to
-///      it are derived by filtering the resolved changes by `action` --
-///      NOT by relying on any pre-grouped order -- so the wire body stays
+///    - Present → build the native `update.components` ops array, zero
+///      extra GET for current components (AC-004). `adds`/`removes` are
+///      derived by filtering the resolved changes by `action` -- NOT by
+///      relying on any pre-grouped order -- so the ops array stays
 ///      ADD-before-REMOVE regardless of CLI input order (AC-003).
-///    - Absent → read-modify-write fallback: GET current `fields.components`
-///      (`client.get_issue`), compute the new full array client-side, PUT via
-///      the `set` verb (`client.edit_issue`) (AC-005).
+///    - Absent → read-modify-write fallback: GET current `fields.components`,
+///      compute the new full array client-side (AC-005).
 ///      No retry-with-different-shape on a subsequent 400 (Invariant 2).
+///
+/// Does NOT issue any PUT (Step-4.5 Round 7, MEDIUM-1 fix) -- the caller
+/// (`handle_edit`) merges the returned [`ComponentContribution`] into ONE
+/// combined PUT alongside every other field change, closing the two-PUT
+/// partial-write window a prior design had: a field-validation error (e.g.
+/// an invalid priority) now rejects the whole edit in one request instead
+/// of a separate, earlier component-only PUT having already landed.
 ///
 /// Returns the resolved changes in CLI input order (F2 fix) so the caller
 /// can build `changed_fields`/table echo via
@@ -1047,7 +1090,7 @@ async fn edit_issue_components(
     client: &JiraClient,
     key: &str,
     components: &[String],
-) -> Result<Vec<format::ComponentChange>> {
+) -> Result<(Vec<format::ComponentChange>, ComponentContribution)> {
     // Step 1: parse/normalize add:/remove: entries, CLI input order preserved.
     let changes = format::normalize_component_changes(components);
 
@@ -1082,10 +1125,20 @@ async fn edit_issue_components(
     });
 
     if native_supported {
-        client.update_issue_components(key, &adds, &removes).await?;
+        let mut component_ops: Vec<serde_json::Value> = Vec::new();
+        for r in &adds {
+            component_ops.push(json!({"add": r.to_wire_object()}));
+        }
+        for r in &removes {
+            component_ops.push(json!({"remove": r.to_wire_object()}));
+        }
+        Ok((
+            resolved_changes,
+            ComponentContribution::Native(component_ops),
+        ))
     } else {
-        // Read-modify-write fallback: GET current fields.components, compute
-        // the new full array client-side, PUT via the `set` verb.
+        // Read-modify-write fallback: GET current fields.components,
+        // compute the new full array client-side.
         //
         // HIGH-1 fix (Step-4.5 Round 6, DEFINITIVE -- this is the third
         // fix-chain regression in this exact remove-matching logic; see the
@@ -1103,11 +1156,21 @@ async fn edit_issue_components(
         //    `{"name": c.name}` (Jira allows multiple same-named
         //    components -- a bare name is ambiguous when a same-named
         //    sibling also survives).
-        // 2. An ADD target `a` is INCLUDED unless a remove target is the
-        //    SAME `ComponentRef` (same variant + value, i.e.
+        // 2. An ADD target `a` is INCLUDED unless (a) a remove target is
+        //    the SAME `ComponentRef` (same variant + value, i.e.
         //    `removes.contains(a)`) -- this gives `add:X --component
         //    remove:X` net-ABSENT parity with the native path (B-LOW-1,
-        //    Round 5) for BOTH name and numeric X.
+        //    Round 5) for BOTH name and numeric X -- OR (b) it already
+        //    matches a SURVIVING existing component by id-OR-name (LOW-2,
+        //    Step-4.5 Round 7) -- deduped so `add:Backend` against an
+        //    issue that already carries an id-bearing "Backend" does not
+        //    emit it twice (Jira dedupes server-side regardless, but a
+        //    clean payload is better). Condition (b) matches against the
+        //    embedded `Component`'s OWN fields (id-OR-name), same as the
+        //    remove predicate -- NOT `ComponentRef` equality, because a
+        //    NAME add and an id-bearing existing component of that same
+        //    name are different `ComponentRef` values that still refer to
+        //    the SAME real component.
         // 3. Final `fields.components` = (existing survivors, by identity)
         //    followed by (add survivors, by their own wire shape). Order is
         //    irrelevant to Jira (components is a set-valued field) -- only
@@ -1137,7 +1200,7 @@ async fn edit_issue_components(
         let current: Vec<crate::types::jira::issue::Component> =
             issue.fields.components.unwrap_or_default();
 
-        let existing_survivors: Vec<serde_json::Value> = current
+        let existing_survivor_components: Vec<&crate::types::jira::issue::Component> = current
             .iter()
             .filter(|c| {
                 !removes.iter().any(|r| match r {
@@ -1145,6 +1208,10 @@ async fn edit_issue_components(
                     ComponentRef::Name(name) => c.name == *name,
                 })
             })
+            .collect();
+
+        let existing_survivors: Vec<serde_json::Value> = existing_survivor_components
+            .iter()
             .map(|c| match &c.id {
                 Some(id) => json!({"id": id}),
                 None => json!({"name": &c.name}),
@@ -1153,19 +1220,24 @@ async fn edit_issue_components(
 
         let add_survivors: Vec<serde_json::Value> = adds
             .iter()
-            .filter(|a| !removes.contains(a))
+            .filter(|a| {
+                !removes.contains(a)
+                    && !existing_survivor_components.iter().any(|c| match a {
+                        ComponentRef::Id(id) => c.id.as_deref() == Some(id.as_str()),
+                        ComponentRef::Name(name) => &c.name == name,
+                    })
+            })
             .map(ComponentRef::to_wire_object)
             .collect();
 
         let mut new_components = existing_survivors;
         new_components.extend(add_survivors);
 
-        client
-            .edit_issue(key, json!({"components": new_components}))
-            .await?;
+        Ok((
+            resolved_changes,
+            ComponentContribution::Fallback(new_components),
+        ))
     }
-
-    Ok(resolved_changes)
 }
 
 /// Resolve component change NAMES against the project's component list

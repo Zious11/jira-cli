@@ -280,8 +280,9 @@ pub(super) struct ComponentChange {
 ///   EC-3.4.020-8 precedent: the live PUT wire body reorders to
 ///   ADD-before-REMOVE regardless of CLI order, but the wire is the ONLY
 ///   surface that reorders — it does so at its own construction site
-///   (`edit_issue_components`'s `adds`/`removes` filters, and
-///   `JiraClient::update_issue_components`), never here). Callers that need
+///   (`edit_issue_components`'s `adds`/`removes` filters, merged into ONE
+///   combined PUT by `handle_edit` alongside other field changes since
+///   Step-4.5 Round 7's MEDIUM-1 fix), never here). Callers that need
 ///   the wire's ADD-before-REMOVE grouping must derive it themselves by
 ///   filtering this function's CLI-order output by `action` — do not expect
 ///   this function to have already grouped it.
