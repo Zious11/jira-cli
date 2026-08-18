@@ -6414,12 +6414,12 @@ async fn test_delete_component_percent_encodes_ids_in_url() {
 
 // =============================================================================
 // S-608-1: `jr component rename` — single-project + `--all-projects` fan-out,
-// `--dry-run`. TDD mode: strict.
+// `--dry-run`. LANDED: `handle_rename` / `JiraClient::rename_component` are
+// fully implemented (see `src/cli/component.rs`); all 19 tests below are
+// GREEN (18 AC-scoped tests plus the global `--project` flag consistency
+// test, F5-A-L2).
 //
 // BC anchors: BC-8.3.001–BC-8.3.007 (`bc-8-components.md` §8.3).
-// `handle_rename` / `JiraClient::rename_component` are stubs (`todo!()`) at
-// the time these tests are written — ALL 18 tests below MUST FAIL (panic on
-// the `todo!()`) until the implementer fills in S-608-1's implementation.
 //
 // Literal message strings pinned below are copied verbatim from the BC text
 // (BC-8.3.001 M1 / EC-8.3.001-1/2, BC-8.3.002 "Numeric `OLD` under
