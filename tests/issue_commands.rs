@@ -5554,32 +5554,39 @@ async fn test_bc_3_4_020_issue_edit_label_component_mutual_exclusion_zero_http()
 /// {"action":"REMOVE","name":"Y"}]`; table mode →
 /// `"  components → add:X, remove:Y"`; ZERO `PUT`/editmeta-fallback `GET`
 /// calls (VP-COMPONENT-028).
+///
+/// Step-4.5 Round 1 F1 fix: component NAME resolution (BC-8.4) DOES fire
+/// during dry-run (EC-3.4.021-20 -- it's a read-only GET) -- each of the two
+/// invocations below uses its OWN `MockServer` so the resolution GET can be
+/// pinned to EXACTLY `.expect(1)` per invocation, rather than tolerating an
+/// unbounded/absent call as the pre-F1 version of this test did.
 #[tokio::test]
 async fn test_bc_3_4_021_issue_edit_component_dry_run_json_and_table_zero_mutation() {
-    let server = MockServer::start().await;
+    async fn mount_resolution_and_zero_mutation_guards(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/project/FOO/components"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                common::fixtures::component_list_response(vec![
+                    common::fixtures::component_response("10001", "X", None, None, None),
+                    common::fixtures::component_response("10002", "Y", None, None, None),
+                ]),
+            ))
+            .expect(1)
+            .mount(server)
+            .await;
 
-    // Component NAME resolution (BC-8.4) may still fire during dry-run
-    // (EC-3.4.021-20) — mounted defensively, unbounded, so this test does
-    // not depend on whether that resolution call is implemented yet.
-    Mock::given(method("GET"))
-        .and(path("/rest/api/3/project/FOO/components"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            common::fixtures::component_list_response(vec![
-                common::fixtures::component_response("10001", "X", None, None, None),
-                common::fixtures::component_response("10002", "Y", None, None, None),
-            ]),
-        ))
-        .mount(&server)
-        .await;
+        // Zero-mutation guarantee: no PUT of any kind may occur under --dry-run.
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+            .expect(0)
+            .mount(server)
+            .await;
+    }
 
-    // Zero-mutation guarantee: no PUT of any kind may occur under --dry-run.
-    Mock::given(method("PUT"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
-        .expect(0)
-        .mount(&server)
-        .await;
+    let json_server = MockServer::start().await;
+    mount_resolution_and_zero_mutation_guards(&json_server).await;
 
-    let json_out = s605_1_cmd(&server.uri())
+    let json_out = s605_1_cmd(&json_server.uri())
         .args([
             "--no-input",
             "issue",
@@ -5614,7 +5621,10 @@ async fn test_bc_3_4_021_issue_edit_component_dry_run_json_and_table_zero_mutati
          ADD/REMOVE array; body={body}"
     );
 
-    let table_out = s605_1_cmd(&server.uri())
+    let table_server = MockServer::start().await;
+    mount_resolution_and_zero_mutation_guards(&table_server).await;
+
+    let table_out = s605_1_cmd(&table_server.uri())
         .args([
             "--no-input",
             "issue",
@@ -5638,8 +5648,8 @@ async fn test_bc_3_4_021_issue_edit_component_dry_run_json_and_table_zero_mutati
         table_stdout.contains("  components \u{2192} add:X, remove:Y"),
         "AC-016 (table): expected the dry-run preview line verbatim; stdout={table_stdout}"
     );
-    // `.expect(0)` on the PUT catch-all verifies zero mutation across BOTH
-    // invocations cumulatively on server drop.
+    // `.expect(1)` on each server's resolution GET and `.expect(0)` on each
+    // server's PUT catch-all verify both invariants per-invocation.
 }
 
 // ── AC-017 (BC-3.4.021 amendment — dry-run bare normalization parity) ─────
@@ -5651,6 +5661,8 @@ async fn test_bc_3_4_021_issue_edit_component_dry_run_json_and_table_zero_mutati
 async fn test_bc_3_4_021_issue_edit_component_dry_run_bare_normalization_matches_live() {
     let server = MockServer::start().await;
 
+    // Step-4.5 Round 1 F1 fix: resolution now fires during dry-run --
+    // pinned to exactly 1 call (one invocation in this test).
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/FOO/components"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
@@ -5658,6 +5670,7 @@ async fn test_bc_3_4_021_issue_edit_component_dry_run_bare_normalization_matches
                 "10001", "X", None, None, None,
             )]),
         ))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -5695,5 +5708,291 @@ async fn test_bc_3_4_021_issue_edit_component_dry_run_bare_normalization_matches
         !stdout.contains("  components \u{2192} X\n")
             && !stdout.trim_end().ends_with("components \u{2192} X"),
         "AC-017: dry-run preview must never render the bare, unprefixed name; stdout={stdout}"
+    );
+}
+
+// =============================================================================
+// Step-4.5 Round 1 (F1/F2) — additional tests, adjudicated against verbatim
+// BC text
+// =============================================================================
+
+// ── F1 (BC-3.4.021 EC-3.4.021-20) — dry-run unresolvable name exits 64 ────
+
+/// `jr issue edit FOO-1 --component add:Nonexistent --dry-run` → exit 64
+/// via the same BC-8.4.002 canonical not-found message the live path emits
+/// (AC-006), BEFORE any `plannedChanges` output. The resolution GET still
+/// fires (it's read-only); the mutating PUT never does.
+#[tokio::test]
+async fn test_bc_3_4_021_issue_edit_component_dry_run_unknown_name_exits_64() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::component_list_response(vec![
+                common::fixtures::component_response("10001", "Backend", None, None, None),
+            ]),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Nonexistent",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F1: dry-run with an unresolvable component name must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Component 'Nonexistent' not found in project FOO. Available: Backend."),
+        "F1: expected the canonical BC-8.4.002 not-found message; stderr={stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "F1: stdout must be EMPTY on this exit-64 -- zero plannedChanges output \
+         (BC-3.4.021 EC-3.4.021-20); stdout={stdout}"
+    );
+}
+
+// ── F2 (BC-3.4.012/013/021 amendments) — echo/preview in CLI input order ──
+
+/// `--component remove:Y --component add:X` (remove specified FIRST on the
+/// CLI) → the table echo renders `remove:Y, add:X` -- CLI input order, NOT
+/// reordered to `add:X, remove:Y` -- while the live PUT wire body still
+/// emits ADD-before-REMOVE regardless of CLI order (AC-003 precedent).
+/// Mirrors labels' EC-3.4.020-8: only the wire reorders, never the echo.
+#[tokio::test]
+async fn test_bc_3_4_012_issue_edit_component_echo_preserves_cli_input_order() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "X", None, None, None),
+            common::fixtures::component_response("10002", "Y", None, None, None),
+        ],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["add", "remove"]).await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:Y",
+            "--component",
+            "add:X",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "F2: expected exit 0; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("  components \u{2192} remove:Y, add:X"),
+        "F2: table echo must preserve CLI input order (remove specified \
+         first) -- NOT reordered to add:X, remove:Y; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(puts.len(), 1, "F2: expected exactly 1 PUT; got {puts:?}");
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "update": {
+                "components": [
+                    {"add": {"name": "X"}},
+                    {"remove": {"name": "Y"}}
+                ]
+            }
+        }),
+        "F2: the live PUT wire body must stay ADD-before-REMOVE regardless \
+         of CLI input order -- only the echo/preview render in CLI order"
+    );
+}
+
+/// `--component remove:Y --component add:X --output json` (remove specified
+/// FIRST on the CLI) → `changed_fields["components"] == "remove:Y, add:X"`
+/// -- CLI input order, same as the table echo (BC-3.4.013 amendment:
+/// "identical format and CLI-input-order semantics to the table-mode echo").
+#[tokio::test]
+async fn test_bc_3_4_013_issue_edit_component_json_echo_preserves_cli_input_order() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "X", None, None, None),
+            common::fixtures::component_response("10002", "Y", None, None, None),
+        ],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["add", "remove"]).await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:Y",
+            "--component",
+            "add:X",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "F2: expected exit 0; stderr={stderr}"
+    );
+    let body: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("F2: stdout is not valid JSON: {e}; stdout={stdout}"));
+    assert_eq!(
+        body["changed_fields"]["components"],
+        serde_json::json!("remove:Y, add:X"),
+        "F2: changed_fields.components must preserve CLI input order \
+         (remove specified first) -- NOT reordered to add:X, remove:Y; body={body}"
+    );
+}
+
+/// `--dry-run --component remove:Y --component add:X` (remove specified
+/// FIRST on the CLI) → `plannedChanges.components ==
+/// [{"action":"REMOVE","name":"Y"},{"action":"ADD","name":"X"}]` and the
+/// table preview renders `remove:Y, add:X` -- both in CLI input order,
+/// identical to the live echo (F2), not reordered ADD-before-REMOVE.
+#[tokio::test]
+async fn test_bc_3_4_021_issue_edit_component_dry_run_preserves_cli_input_order() {
+    async fn mount_resolution_and_zero_mutation_guards(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/project/FOO/components"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                common::fixtures::component_list_response(vec![
+                    common::fixtures::component_response("10001", "X", None, None, None),
+                    common::fixtures::component_response("10002", "Y", None, None, None),
+                ]),
+            ))
+            .expect(1)
+            .mount(server)
+            .await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+            .expect(0)
+            .mount(server)
+            .await;
+    }
+
+    let json_server = MockServer::start().await;
+    mount_resolution_and_zero_mutation_guards(&json_server).await;
+
+    let json_out = s605_1_cmd(&json_server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:Y",
+            "--component",
+            "add:X",
+            "--dry-run",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let json_stderr = String::from_utf8_lossy(&json_out.stderr);
+    let json_stdout = String::from_utf8_lossy(&json_out.stdout);
+    assert!(
+        json_out.status.success(),
+        "F2 (json): expected exit 0; stderr={json_stderr}"
+    );
+    let body: serde_json::Value = serde_json::from_str(&json_stdout).unwrap_or_else(|e| {
+        panic!("F2 (json): stdout is not valid JSON: {e}; stdout={json_stdout}")
+    });
+    assert_eq!(
+        body["plannedChanges"]["components"],
+        serde_json::json!([
+            {"action": "REMOVE", "name": "Y"},
+            {"action": "ADD", "name": "X"}
+        ]),
+        "F2 (json): plannedChanges.components must preserve CLI input order \
+         (remove specified first); body={body}"
+    );
+
+    let table_server = MockServer::start().await;
+    mount_resolution_and_zero_mutation_guards(&table_server).await;
+
+    let table_out = s605_1_cmd(&table_server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:Y",
+            "--component",
+            "add:X",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+    let table_stderr = String::from_utf8_lossy(&table_out.stderr);
+    let table_stdout = String::from_utf8_lossy(&table_out.stdout);
+    assert!(
+        table_out.status.success(),
+        "F2 (table): expected exit 0; stderr={table_stderr}"
+    );
+    assert!(
+        table_stdout.contains("  components \u{2192} remove:Y, add:X"),
+        "F2 (table): expected the dry-run preview line in CLI input order; \
+         stdout={table_stdout}"
     );
 }
