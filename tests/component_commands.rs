@@ -6892,6 +6892,168 @@ async fn test_bc_8_3_002_component_rename_all_projects_zero_matches_exits_zero()
     );
 }
 
+// ── Step-4.5 fix burst 5, Test 1 (Lens C LOW — dry-run zero-match sibling) ──
+
+/// Step-4.5 fix burst 5, Test 1: the `--all-projects` zero-match branch is
+/// pinned live by `test_bc_8_3_002_component_rename_all_projects_zero_matches_exits_zero`
+/// above, but its `--dry-run` sibling was untested. Mirrors that test's
+/// structure: no project contains a component named "Nonexistent" → exit 0,
+/// `--output json` reports the verbatim empty preview shape
+/// `{"dryRun":true,"targets":[],"wouldFail":[]}` (see
+/// `handle_rename_all_projects`'s `dry_run` JSON branch, which always emits
+/// `wouldFail` alongside `targets`), and zero `PUT` calls (it's a dry run).
+#[tokio::test]
+async fn test_bc_8_3_004_component_rename_dry_run_all_projects_zero_matches_json() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(projects_search_response_for_keys(&["A", "B"])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Frontend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/B/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(component_list_response(vec![])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "Nonexistent",
+            "NewName",
+            "--all-projects",
+            "--dry-run",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Test 1: expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("Test 1: --output json stdout must be valid JSON");
+    assert_eq!(
+        parsed,
+        json!({"dryRun": true, "targets": [], "wouldFail": []}),
+        "Test 1: zero-match dry-run preview must report \
+         {{\"dryRun\":true,\"targets\":[],\"wouldFail\":[]}}; got: {parsed}"
+    );
+}
+
+/// Step-4.5 fix burst 5, Test 1 (table-mode sibling): same zero-match
+/// scenario as the JSON variant above, verified against the human-readable
+/// table output — the dry-run header still prints, the summary line reads
+/// "0 components would be renamed." (the `targets.is_empty() &&
+/// ambiguous.is_empty()` branch in `handle_rename_all_projects`), and zero
+/// `PUT` calls are made.
+#[tokio::test]
+async fn test_bc_8_3_004_component_rename_dry_run_all_projects_zero_matches_table() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(projects_search_response_for_keys(&["A", "B"])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Frontend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/B/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(component_list_response(vec![])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Deliberately NOT --output json.
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "Nonexistent",
+            "NewName",
+            "--all-projects",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Test 1 (table): expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lines: Vec<&str> = stderr.lines().collect();
+    assert!(
+        stderr_lines.contains(&"DRY RUN — no changes will be made."),
+        "Test 1 (table): expected verbatim dry-run header; got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr_lines.contains(&"0 components would be renamed."),
+        "Test 1 (table): expected verbatim zero-match summary line; got stderr:\n{stderr}"
+    );
+}
+
 // ── AC-007 (BC-8.3.002 Precondition 2 / EC-8.3.002-2 — numeric OLD rejected) ─
 
 /// AC-007 / EC-8.3.002-2: `rename 10042 NewName --all-projects` (all-digit
