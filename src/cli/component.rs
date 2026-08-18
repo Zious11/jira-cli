@@ -1415,6 +1415,28 @@ struct RenameTarget {
     id: String,
 }
 
+/// A project SKIPPED during `--all-projects` discovery because it had MORE
+/// THAN ONE component whose name exactly case-insensitively matches `old`
+/// (Step-4.5 fix burst 3, LOW-2). Fail-closed per project — mirrors
+/// `resolve_rename_source`'s single-project `MatchResult::ExactMultiple`
+/// exit-64 guard: a mutation fan-out must be at least as fail-closed as its
+/// single-project sibling, never a silent first-pick on an ambiguous
+/// mutation target. The project is EXCLUDED from `RenameTarget`s — zero
+/// `PUT` is ever attempted for it — and instead surfaces as a `failed[]`
+/// entry in the live (non-`--dry-run`) path, while the rest of the fan-out
+/// continues (BC-8.3.003 continue-on-error semantics preserved; this is
+/// intentionally distinct from the discovery-phase HTTP-error abort
+/// documented on `discover_rename_targets` itself — an ambiguous-but
+/// -successful result must not abort projects already enumerated).
+///
+/// **BC-8.3.002 wording note:** the BC text does not yet spell out this
+/// per-project ambiguity case explicitly; that clarification is deferred to
+/// a feature-level F5 pass rather than amended here.
+struct DiscoveryAmbiguity {
+    project: String,
+    message: String,
+}
+
 /// `--all-projects` fan-out discovery (BC-8.3.002): iterates
 /// `list_projects` (paginated, reused as-is) and, per accessible project,
 /// looks for a component whose name EXACTLY case-insensitively equals `old`
@@ -1454,22 +1476,44 @@ struct RenameTarget {
 /// See the research at
 /// `.factory/research/S-608-1-all-projects-discovery-error-posture.md` for
 /// the full analysis and rationale.
-async fn discover_rename_targets(old: &str, client: &JiraClient) -> Result<Vec<RenameTarget>> {
+async fn discover_rename_targets(
+    old: &str,
+    client: &JiraClient,
+) -> Result<(Vec<RenameTarget>, Vec<DiscoveryAmbiguity>)> {
     let projects = client.list_projects(None, None).await?;
     let mut targets = Vec::new();
+    let mut ambiguous = Vec::new();
     for p in &projects {
         let components = client.list_components(&p.key).await?;
-        if let Some(comp) = components
+        // Step-4.5 fix burst 3, LOW-2: collect ALL exact case-insensitive
+        // matches (not just the first) so a project with >1 match can be
+        // detected and skipped fail-closed, rather than silently first-
+        // picked via `.find()`.
+        let matches: Vec<_> = components
             .iter()
-            .find(|c| c.name.to_lowercase() == old.to_lowercase())
-        {
-            targets.push(RenameTarget {
-                project: p.key.clone(),
-                id: comp.id.clone(),
-            });
+            .filter(|c| c.name.to_lowercase() == old.to_lowercase())
+            .collect();
+        match matches.len() {
+            0 => {}
+            1 => {
+                targets.push(RenameTarget {
+                    project: p.key.clone(),
+                    id: matches[0].id.clone(),
+                });
+            }
+            _ => {
+                ambiguous.push(DiscoveryAmbiguity {
+                    project: p.key.clone(),
+                    message: format!(
+                        "Multiple components named '{}' in project {} — rename it via the \
+                         single-project form with the numeric component ID.",
+                        old, p.key
+                    ),
+                });
+            }
         }
     }
-    Ok(targets)
+    Ok((targets, ambiguous))
 }
 
 /// `--all-projects` form of `rename` (BC-8.3.002 discovery + numeric-`OLD`
@@ -1492,7 +1536,7 @@ async fn handle_rename_all_projects(
         return Err(JrError::UserError(ALL_PROJECTS_NUMERIC_OLD_REJECTED_MSG.into()).into());
     }
 
-    let targets = discover_rename_targets(old, client).await?;
+    let (targets, ambiguous) = discover_rename_targets(old, client).await?;
 
     if dry_run {
         match output_format {
@@ -1530,6 +1574,20 @@ async fn handle_rename_all_projects(
     let mut failed: Vec<serde_json::Value> = Vec::new();
     let mut failed_projects: Vec<String> = Vec::new();
     let mut table_lines: Vec<String> = Vec::new();
+
+    // Step-4.5 fix burst 3, LOW-2: projects with >1 exact case-insensitive
+    // match were skipped fail-closed at discovery time (ZERO `PUT`) — seed
+    // them into `failed[]` up front so they're reported the same way as a
+    // mutation-phase failure, rather than silently vanishing from the
+    // output.
+    for a in &ambiguous {
+        failed.push(serde_json::json!({
+            "project": a.project,
+            "error": a.message,
+        }));
+        failed_projects.push(a.project.clone());
+        table_lines.push(format!("{}: FAILED — {}", a.project, a.message));
+    }
 
     for t in &targets {
         match client.rename_component(&t.id, new).await {
@@ -1580,12 +1638,16 @@ async fn handle_rename_all_projects(
     // failed projects and how to retry them (see the failed[] entries
     // above/the "FAILED —" table lines for each project's underlying error).
     if any_failed {
+        // Denominator is `targets.len() + ambiguous.len()`, not `targets.len()`
+        // alone (Step-4.5 fix burst 3, LOW-2) — an ambiguous project never
+        // entered `targets` (zero `PUT` attempted for it), but it is still
+        // one of the projects this fan-out considered and failed on.
         return Err(anyhow::anyhow!(
             "{} of {} project rename(s) failed ({}). Retry the failed projects individually: \
              jr component rename {} {} --project <KEY> — see the failed[] entries above for \
              each project's error.",
             failed.len(),
-            targets.len(),
+            targets.len() + ambiguous.len(),
             failed_projects.join(", "),
             old,
             new
