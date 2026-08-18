@@ -6076,7 +6076,11 @@ async fn test_bc_3_4_022_issue_edit_component_fallback_remove_computes_correct_s
     );
 
     let puts = s605_1_captured_puts(&server, "FOO-1").await;
-    assert_eq!(puts.len(), 1, "MEDIUM-1: expected exactly 1 PUT; got {puts:?}");
+    assert_eq!(
+        puts.len(),
+        1,
+        "MEDIUM-1: expected exactly 1 PUT; got {puts:?}"
+    );
     assert_eq!(
         puts[0],
         serde_json::json!({
