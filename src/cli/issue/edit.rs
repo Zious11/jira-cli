@@ -997,7 +997,7 @@ pub(super) async fn handle_edit(
 ///    - Absent → read-modify-write fallback: GET current `fields.components`
 ///      (`client.get_issue`), compute the new full array client-side, PUT via
 ///      the `set` verb (`client.edit_issue`) (AC-005).
-///    No retry-with-different-shape on a subsequent 400 (Invariant 2).
+///      No retry-with-different-shape on a subsequent 400 (Invariant 2).
 ///
 /// Returns the normalized changes (ADD before REMOVE) so the caller can build
 /// `changed_fields`/table echo via [`format::format_component_changes_echo`]
@@ -1019,42 +1019,43 @@ async fn edit_issue_components(
 
     let mut resolved_changes: Vec<format::ComponentChange> = Vec::with_capacity(changes.len());
     for change in &changes {
-        let matched_name = match helpers::resolve_component(&change.name, project_key, &candidate_names) {
-            MatchResult::Exact(matched) => matched,
-            MatchResult::ExactMultiple(matched_name) => {
-                let ids: Vec<String> = component_list
-                    .iter()
-                    .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
-                    .map(|c| c.id.clone())
-                    .collect();
-                return Err(JrError::UserError(format!(
-                    "Multiple components named \"{}\" found (IDs: {}). \
+        let matched_name =
+            match helpers::resolve_component(&change.name, project_key, &candidate_names) {
+                MatchResult::Exact(matched) => matched,
+                MatchResult::ExactMultiple(matched_name) => {
+                    let ids: Vec<String> = component_list
+                        .iter()
+                        .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
+                        .map(|c| c.id.clone())
+                        .collect();
+                    return Err(JrError::UserError(format!(
+                        "Multiple components named \"{}\" found (IDs: {}). \
                      Pass the numeric ID directly.",
-                    matched_name,
-                    ids.join(", ")
-                ))
-                .into());
-            }
-            MatchResult::Ambiguous(mut candidates) => {
-                candidates.sort_by_key(|s| s.to_lowercase());
-                return Err(JrError::UserError(format!(
-                    "Ambiguous component '{}'. Matches: {}.",
-                    change.name,
-                    candidates.join(", ")
-                ))
-                .into());
-            }
-            MatchResult::None(mut available) => {
-                available.sort_by_key(|s| s.to_lowercase());
-                return Err(JrError::UserError(format!(
-                    "Component '{}' not found in project {}. Available: {}.",
-                    change.name,
-                    project_key,
-                    available.join(", ")
-                ))
-                .into());
-            }
-        };
+                        matched_name,
+                        ids.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::Ambiguous(mut candidates) => {
+                    candidates.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Ambiguous component '{}'. Matches: {}.",
+                        change.name,
+                        candidates.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::None(mut available) => {
+                    available.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Component '{}' not found in project {}. Available: {}.",
+                        change.name,
+                        project_key,
+                        available.join(", ")
+                    ))
+                    .into());
+                }
+            };
         resolved_changes.push(format::ComponentChange {
             action: change.action.clone(),
             name: matched_name,
@@ -1075,10 +1076,9 @@ async fn edit_issue_components(
     // Step 3: evaluate the editmeta gate ONCE -- no retry-with-different-shape
     // on a subsequent 400 (Invariant 2).
     let editmeta = client.get_editmeta(key).await?;
-    let native_supported = editmeta
-        .fields
-        .get("components")
-        .is_some_and(|f| f.operations.iter().any(|op| op == "add") && f.operations.iter().any(|op| op == "remove"));
+    let native_supported = editmeta.fields.get("components").is_some_and(|f| {
+        f.operations.iter().any(|op| op == "add") && f.operations.iter().any(|op| op == "remove")
+    });
 
     if native_supported {
         client.update_issue_components(key, &adds, &removes).await?;
@@ -1678,7 +1678,7 @@ mod tests {
             "description",
             "description_stdin",
             "markdown",
-            "field", // --field NAME=VALUE (S-396): single-key only (BC-3.4.017 Gate A)
+            "field",     // --field NAME=VALUE (S-396): single-key only (BC-3.4.017 Gate A)
             "component", // --component add:/remove: (S-605-1): single-key only (BC-3.4.022)
         ]
         .into_iter()
