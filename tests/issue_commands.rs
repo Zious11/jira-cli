@@ -6347,7 +6347,11 @@ async fn test_bc_3_4_024_issue_create_component_numeric_wires_as_id() {
         &server,
         "FOO",
         vec![common::fixtures::component_response(
-            "99999", "Unrelated", None, None, None,
+            "99999",
+            "Unrelated",
+            None,
+            None,
+            None,
         )],
     )
     .await;
@@ -6386,7 +6390,11 @@ async fn test_bc_3_4_024_issue_create_component_numeric_wires_as_id() {
     );
 
     let posts = s605_1_captured_posts(&server).await;
-    assert_eq!(posts.len(), 1, "F1 (create numeric): expected exactly 1 POST; got {posts:?}");
+    assert_eq!(
+        posts.len(),
+        1,
+        "F1 (create numeric): expected exactly 1 POST; got {posts:?}"
+    );
     assert_eq!(
         posts[0]["fields"]["components"],
         serde_json::json!([{"id": "10001"}]),
@@ -6412,7 +6420,11 @@ async fn test_bc_3_4_022_issue_edit_component_numeric_wires_as_id_native_path() 
         &server,
         "FOO",
         vec![common::fixtures::component_response(
-            "99999", "Unrelated", None, None, None,
+            "99999",
+            "Unrelated",
+            None,
+            None,
+            None,
         )],
     )
     .await;
@@ -6446,7 +6458,11 @@ async fn test_bc_3_4_022_issue_edit_component_numeric_wires_as_id_native_path() 
     );
 
     let puts = s605_1_captured_puts(&server, "FOO-1").await;
-    assert_eq!(puts.len(), 1, "F1 (edit numeric native): expected exactly 1 PUT; got {puts:?}");
+    assert_eq!(
+        puts.len(),
+        1,
+        "F1 (edit numeric native): expected exactly 1 PUT; got {puts:?}"
+    );
     assert_eq!(
         puts[0],
         serde_json::json!({
@@ -6477,9 +6493,10 @@ async fn test_bc_3_4_022_issue_edit_component_numeric_remove_fallback_matches_by
     // fetches it unconditionally.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/FOO/components"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            common::fixtures::component_list_response(vec![]),
-        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::component_list_response(vec![])),
+        )
         .mount(&server)
         .await;
     s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
