@@ -5460,6 +5460,18 @@ async fn test_bc_3_4_013_issue_edit_component_json_echo_normalized_string() {
 /// `jr issue edit KEY1 KEY2 --component add:X --field components=Y` →
 /// exit 64 (Gate B fires for `components`, the fifth field), no HTTP.
 /// `--field Components=Y` (capitalized) triggers the same guard.
+///
+/// C-MED-1 fix (Step-4.5 Round 5): this 2-KEY input ALSO trips the C-1
+/// multi-key rejection (edit.rs, "Multi-key bulk edit doesn't yet
+/// support: --component") with the identical observable (exit 64, zero
+/// HTTP) -- so exit-code-only assertions here cannot distinguish Gate B
+/// from C-1; deleting Gate B's `components` clause would leave this test
+/// green (C-1 alone would still catch this 2-key input). Asserting the
+/// VERBATIM Gate B message closes that gap for the 2-key case; the
+/// genuinely Gate-B-only scenario (single key, where C-1 never fires) is
+/// covered separately by
+/// `test_bc_3_4_017_issue_edit_single_key_component_field_overlap_gate_b`
+/// below.
 #[tokio::test]
 async fn test_bc_3_4_017_issue_edit_bulk_component_field_overlap_gate_b() {
     let server = MockServer::start().await;
@@ -5491,6 +5503,14 @@ async fn test_bc_3_4_017_issue_edit_bulk_component_field_overlap_gate_b() {
         Some(64),
         "AC-014 (lowercase 'components'): expected exit 64; stderr={lower_stderr}"
     );
+    assert!(
+        lower_stderr.contains(
+            "components is set by both --component and --field; use only one."
+        ),
+        "C-MED-1: expected the verbatim Gate B message (distinguishing it \
+         from the C-1 multi-key rejection, which would also exit 64 on \
+         this same 2-key input); stderr={lower_stderr}"
+    );
 
     let capitalized = s605_1_cmd(&server.uri())
         .args([
@@ -5512,8 +5532,59 @@ async fn test_bc_3_4_017_issue_edit_bulk_component_field_overlap_gate_b() {
         Some(64),
         "AC-014 (capitalized 'Components'): expected exit 64; stderr={cap_stderr}"
     );
+    assert!(
+        cap_stderr.contains(
+            "components is set by both --component and --field; use only one."
+        ),
+        "C-MED-1: expected the verbatim Gate B message for the capitalized \
+         'Components' variant too; stderr={cap_stderr}"
+    );
     // `.expect(0)` on the catch-all mock verifies zero HTTP across BOTH
     // invocations cumulatively on server drop.
+}
+
+// ── C-MED-1 — Gate B's genuinely-untested scenario: SINGLE-KEY overlap ───
+
+/// `jr issue edit FOO-1 --component add:X --field components=Y` (SINGLE
+/// key) → exit 64, the verbatim Gate B message, ZERO HTTP. Single-key
+/// input never reaches the C-1 multi-key rejection block, so Gate B is
+/// the ONLY guard preventing a --component/--field-components double-write
+/// here -- this is the scenario AC-014 (2-key input) cannot exercise.
+#[tokio::test]
+async fn test_bc_3_4_017_issue_edit_single_key_component_field_overlap_gate_b() {
+    let server = MockServer::start().await;
+
+    // Strongest zero-HTTP guarantee.
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:X",
+            "--field",
+            "components=Y",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "C-MED-1 (single-key): expected exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("components is set by both --component and --field; use only one."),
+        "C-MED-1 (single-key): expected the verbatim Gate B message; stderr={stderr}"
+    );
+    // `.expect(0)` on the catch-all mock verifies zero HTTP.
 }
 
 // ── AC-015 (BC-3.4.020 amendment — label/component mutual exclusion) ──────
