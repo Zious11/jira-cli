@@ -388,6 +388,14 @@ pub enum IssueCommand {
         /// Labels (can be specified multiple times)
         #[arg(long)]
         label: Vec<String>,
+        /// Set initial components (repeatable). Resolved via the project's
+        /// component list (BC-3.4.025), the same resolver as `jr component`
+        /// and `issue list --component`. No add:/remove: prefix grammar on
+        /// create — a literal `add:X` is resolved as-is and 400s as an
+        /// unknown name (BC-3.4.024). Cannot be combined with --request-type
+        /// (BC-3.4.024 Postcondition 3).
+        #[arg(long = "component")]
+        component: Vec<String>,
         /// Team assignment
         #[arg(long)]
         team: Option<String>,
@@ -465,6 +473,14 @@ pub enum IssueCommand {
         /// Add or remove labels (e.g., --label add:backend --label remove:frontend)
         #[arg(long)]
         label: Vec<String>,
+        /// Add or remove components (e.g., --component add:backend --component
+        /// remove:frontend). Bare values (no prefix) are treated as ADD
+        /// (BC-3.4.022). Single-key path only — mirrors --field's single-key
+        /// restriction; multi-key/--jql bulk edits reject this flag (S-605-2
+        /// implements the bulk wire shape, BC-3.4.023). Cannot be combined
+        /// with --label on the same call (BC-3.4.020 amendment).
+        #[arg(long = "component")]
+        component: Vec<String>,
         /// Team assignment
         #[arg(long)]
         team: Option<String>,
