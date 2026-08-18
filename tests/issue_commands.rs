@@ -5504,9 +5504,7 @@ async fn test_bc_3_4_017_issue_edit_bulk_component_field_overlap_gate_b() {
         "AC-014 (lowercase 'components'): expected exit 64; stderr={lower_stderr}"
     );
     assert!(
-        lower_stderr.contains(
-            "components is set by both --component and --field; use only one."
-        ),
+        lower_stderr.contains("components is set by both --component and --field; use only one."),
         "C-MED-1: expected the verbatim Gate B message (distinguishing it \
          from the C-1 multi-key rejection, which would also exit 64 on \
          this same 2-key input); stderr={lower_stderr}"
@@ -5533,9 +5531,7 @@ async fn test_bc_3_4_017_issue_edit_bulk_component_field_overlap_gate_b() {
         "AC-014 (capitalized 'Components'): expected exit 64; stderr={cap_stderr}"
     );
     assert!(
-        cap_stderr.contains(
-            "components is set by both --component and --field; use only one."
-        ),
+        cap_stderr.contains("components is set by both --component and --field; use only one."),
         "C-MED-1: expected the verbatim Gate B message for the capitalized \
          'Components' variant too; stderr={cap_stderr}"
     );
@@ -6933,7 +6929,11 @@ async fn test_bc_3_4_022_issue_edit_component_rmw_add_remove_same_matches_native
     );
 
     let puts = s605_1_captured_puts(&server, "FOO-1").await;
-    assert_eq!(puts.len(), 1, "B-LOW-1: expected exactly 1 PUT; got {puts:?}");
+    assert_eq!(
+        puts.len(),
+        1,
+        "B-LOW-1: expected exactly 1 PUT; got {puts:?}"
+    );
     assert_eq!(
         puts[0],
         serde_json::json!({
@@ -7014,7 +7014,11 @@ async fn test_bc_3_4_022_issue_edit_component_editmeta_add_only_uses_fallback() 
     );
 
     let puts = s605_1_captured_puts(&server, "FOO-1").await;
-    assert_eq!(puts.len(), 1, "C-LOW-1: expected exactly 1 PUT; got {puts:?}");
+    assert_eq!(
+        puts.len(),
+        1,
+        "C-LOW-1: expected exactly 1 PUT; got {puts:?}"
+    );
     assert_eq!(
         puts[0],
         serde_json::json!({
