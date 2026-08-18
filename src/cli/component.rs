@@ -1550,6 +1550,15 @@ async fn handle_rename_all_projects(
 
     let (targets, ambiguous) = discover_rename_targets(old, client).await?;
 
+    // Step-4.5 fix burst 4, Finding 1 (BC-8.3.004 Invariant 1 — the preview
+    // must predict the live outcome): `ambiguous` projects are surfaced here
+    // exactly as the live path below seeds them into `failed[]` — as a
+    // `wouldFail` entry per project (JSON) / a `WOULD FAIL —` line (table) —
+    // and dry-run exits 1 when any exist, mirroring the live run's exit 1 on
+    // ≥1 failure. This is a dry-run-side extension beyond BC-8.3.004's
+    // current text (which does not yet spell out the ambiguous-project case
+    // any more than BC-8.3.002 does); the BC wording clarification for both
+    // is deferred to a feature-level F5 pass rather than amended here.
     if dry_run {
         match output_format {
             OutputFormat::Json => {
@@ -1564,19 +1573,46 @@ async fn handle_rename_all_projects(
                         })
                     })
                     .collect();
-                let json_out = serde_json::json!({"dryRun": true, "targets": targets_json});
+                let would_fail_json: Vec<serde_json::Value> = ambiguous
+                    .iter()
+                    .map(|a| {
+                        serde_json::json!({
+                            "project": a.project,
+                            "error": a.message,
+                        })
+                    })
+                    .collect();
+                let json_out = serde_json::json!({
+                    "dryRun": true,
+                    "targets": targets_json,
+                    "wouldFail": would_fail_json,
+                });
                 println!("{}", output::render_json(&json_out)?);
             }
             OutputFormat::Table => {
                 eprintln!("DRY RUN — no changes will be made.");
-                if targets.is_empty() {
+                if targets.is_empty() && ambiguous.is_empty() {
                     eprintln!("0 components would be renamed.");
                 } else {
                     for t in &targets {
                         eprintln!("  {}: {} \u{2192} {} (id {})", t.project, old, new, t.id);
                     }
+                    for a in &ambiguous {
+                        eprintln!("  {}: WOULD FAIL — {}", a.project, a.message);
+                    }
                 }
             }
+        }
+        if !ambiguous.is_empty() {
+            let ambiguous_projects: Vec<String> =
+                ambiguous.iter().map(|a| a.project.clone()).collect();
+            return Err(anyhow::anyhow!(
+                "{} of {} project(s) would fail to rename ({}) — DRY RUN, no changes were \
+                 made. See the wouldFail entries above for each project's error.",
+                ambiguous.len(),
+                targets.len() + ambiguous.len(),
+                ambiguous_projects.join(", ")
+            ));
         }
         return Ok(());
     }

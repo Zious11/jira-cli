@@ -8879,6 +8879,235 @@ async fn test_bc_8_3_002_component_rename_all_projects_intra_project_duplicate_f
     );
 }
 
+// ── Step-4.5 fix burst 4, Finding 1 (dry-run must surface ambiguous) ───────
+
+/// Finding 1: the `--dry-run` preview must faithfully predict the live run's
+/// outcome (BC-8.3.004 Invariant 1). Project A has TWO exact
+/// case-insensitive matches ("Backend"+"BACKEND") — an ambiguous project the
+/// live path seeds into `failed[]` (Step-4.5 fix burst 3, LOW-2). Before
+/// this fix, dry-run silently dropped project A from BOTH `targets` and any
+/// warning and exited 0. This test locks: A appears as a `wouldFail` JSON
+/// entry with the verbatim ambiguity message; B appears as a normal
+/// `targets` entry; ZERO `PUT` is ever attempted for ANY project (it's a dry
+/// run); and the command exits 1 (parity with the live run's exit 1 on ≥1
+/// failure).
+#[tokio::test]
+async fn test_bc_8_3_004_component_rename_dry_run_all_projects_surfaces_ambiguous_as_would_fail_json()
+ {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    let keys = ["A", "B", "C"];
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(projects_search_response_for_keys(&keys)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Project A: TWO exact case-insensitive matches for "Backend".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_two_same_name(
+                "10001", "Backend", "10002", "BACKEND",
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Project B: exactly one match.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/B/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("20001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Project C: no match at all.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/C/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("30001", "Frontend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // ZERO PUT for ALL projects — it's a dry run.
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "Backend",
+            "NewName",
+            "--all-projects",
+            "--dry-run",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Finding 1: expected exit 1 (project A's ambiguity would fail on a live \
+         run); got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("Finding 1: dry-run stdout must be valid JSON");
+
+    assert_eq!(parsed["dryRun"], json!(true), "got: {parsed}");
+
+    let targets = parsed["targets"].as_array().expect("targets must be array");
+    assert_eq!(
+        targets.len(),
+        1,
+        "Finding 1: expected exactly 1 target (project B); got: {targets:?}"
+    );
+    assert_eq!(
+        targets[0]["project"], "B",
+        "Finding 1: the single target must be project B; got: {targets:?}"
+    );
+
+    let would_fail = parsed["wouldFail"]
+        .as_array()
+        .expect("wouldFail must be array");
+    assert_eq!(
+        would_fail.len(),
+        1,
+        "Finding 1: expected exactly 1 wouldFail entry (project A's ambiguity); \
+         got: {would_fail:?}"
+    );
+    let a_entry = &would_fail[0];
+    assert_eq!(
+        a_entry["project"], "A",
+        "Finding 1: the wouldFail entry must be reported against project A; got: {a_entry}"
+    );
+    assert_eq!(
+        a_entry["error"],
+        "Multiple components named 'Backend' in project A — rename it via the \
+         single-project form with the numeric component ID.",
+        "Finding 1: expected the verbatim per-project ambiguity message (same as the \
+         live path's failed[] message); got: {a_entry}"
+    );
+}
+
+/// Finding 1 (table mode): same scenario as the JSON test above, verified
+/// against the human-readable table output — project A's ambiguity renders
+/// as a `WOULD FAIL —` line (not silently dropped), project B renders as a
+/// normal preview row, ZERO `PUT` is ever attempted, and the command exits
+/// 1.
+#[tokio::test]
+async fn test_bc_8_3_004_component_rename_dry_run_all_projects_surfaces_ambiguous_as_would_fail_table()
+ {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    let keys = ["A", "B"];
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(projects_search_response_for_keys(&keys)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_two_same_name(
+                "10001", "Backend", "10002", "BACKEND",
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/B/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("20001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Deliberately NOT --output json.
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "Backend",
+            "NewName",
+            "--all-projects",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Finding 1 (table): expected exit 1; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lines: Vec<&str> = stderr.lines().collect();
+    assert!(
+        stderr_lines.contains(&"DRY RUN — no changes will be made."),
+        "Finding 1 (table): expected verbatim dry-run header; got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr_lines.contains(&"  B: Backend \u{2192} NewName (id 20001)"),
+        "Finding 1 (table): expected verbatim dry-run row for project B; got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr_lines.contains(
+            &"  A: WOULD FAIL — Multiple components named 'Backend' in project A — rename it \
+              via the single-project form with the numeric component ID."
+        ),
+        "Finding 1 (table): expected verbatim WOULD FAIL row for project A; got stderr:\n{stderr}"
+    );
+}
+
 // ── Step-4.5 fix burst 4, Finding 2 (affirm BC-literal JSON project echo) ───
 
 /// Finding 2 (AFFIRMED behavior, not a regression fix): for a numeric OLD
