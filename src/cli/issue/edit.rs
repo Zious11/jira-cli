@@ -1085,48 +1085,53 @@ async fn edit_issue_components(
         client.update_issue_components(key, &adds, &removes).await?;
     } else {
         // Read-modify-write fallback: GET current fields.components, compute
-        // the new full array client-side (existing minus removed
-        // components, plus newly-resolved adds appended), PUT via the `set`
-        // verb. F1 fix: a numeric remove target matches an existing
-        // component by ID (`c.id`, `Option<String>`), NOT by name -- a
-        // name-kind remove target still matches by name, unchanged.
+        // the new full array client-side, PUT via the `set` verb.
         //
         // MED-1 fix (Step-4.5 Round 4, supersedes the F1-round instruction
         // to re-emit retained components by name): Jira allows multiple
         // components with the SAME name in one project (the entire reason
-        // F1 added numeric-id targeting). Re-emitting a RETAINED component
-        // as a bare `{"name": ...}` is ambiguous when a same-named sibling
-        // also survives -- Jira's `set` verb resolves a bare name
-        // arbitrarily (observed: the lowest id), so the wrong component can
-        // survive a same-named remove, and two name-identical retained
-        // entries silently dedupe to one on Jira's side (a component
-        // silently dropped, exit 0). Retained components are therefore
-        // re-emitted by IDENTITY -- `{"id": ...}` when the component has an
-        // id (the normal case for a real Jira component), falling back to
-        // `{"name": ...}` only when `id` is `None`. This does not change
-        // the SET computation (existing minus removed, plus adds appended,
-        // BC-3.4.022 Post 3) -- it only makes the survivor set unambiguous
-        // on the wire. Newly-added targets are unaffected: they still carry
-        // their own id-vs-name discriminator via `ComponentRef`.
+        // F1 added numeric-id targeting). Re-emitting a survivor as a bare
+        // `{"name": ...}` is ambiguous when a same-named sibling also
+        // survives -- Jira's `set` verb resolves a bare name arbitrarily
+        // (observed: the lowest id), so the wrong component can survive a
+        // same-named remove, and two name-identical survivor entries
+        // silently dedupe to one on Jira's side (a component silently
+        // dropped, exit 0). Every survivor is therefore re-emitted by
+        // IDENTITY -- `{"id": ...}` when it has an id (the normal case for
+        // a real Jira component), falling back to `{"name": ...}` only
+        // when `id` is `None`.
+        //
+        // B-LOW-1 fix (Step-4.5 Round 5): the survivor set is computed as
+        // (existing ∪ adds) MINUS removes -- i.e. adds are combined with
+        // the existing set BEFORE the remove filter runs, not appended
+        // after it. This matches the native update-verb path's
+        // add-before-remove wire ordering (BC-3.4.022 Post 2): for
+        // `--component add:X --component remove:X` (the SAME component
+        // both added and removed), the native path emits
+        // `[{"add":X},{"remove":X}]`, which Jira applies in order -- X ends
+        // up ABSENT. Appending removed-then-added (the pre-fix order) would
+        // instead leave X PRESENT, an opposite result from the same command
+        // depending solely on which wire shape editmeta selected. For the
+        // normal disjoint case (X≠Y) the two orderings are algebraically
+        // identical: (existing + {X}) - {Y} == (existing - {Y}) + {X}.
+        // `ComponentRef`'s derived `PartialEq` gives an id-kind candidate
+        // and a name-kind remove target no chance of a false match (only
+        // same-variant, same-value entries are equal), mirroring the
+        // per-kind matching the old code spelled out explicitly.
         let issue = client.get_issue(key, &[]).await?;
-        let mut current: Vec<crate::types::jira::issue::Component> =
+        let current: Vec<crate::types::jira::issue::Component> =
             issue.fields.components.unwrap_or_default();
-        current.retain(|c| {
-            !removes.iter().any(|r| match r {
-                ComponentRef::Id(id) => c.id.as_deref() == Some(id.as_str()),
-                ComponentRef::Name(name) => &c.name == name,
-            })
-        });
-        let mut new_components: Vec<serde_json::Value> = current
+        let mut survivors: Vec<ComponentRef> = current
             .iter()
             .map(|c| match &c.id {
-                Some(id) => json!({"id": id}),
-                None => json!({"name": &c.name}),
+                Some(id) => ComponentRef::Id(id.clone()),
+                None => ComponentRef::Name(c.name.clone()),
             })
             .collect();
-        for r in &adds {
-            new_components.push(r.to_wire_object());
-        }
+        survivors.extend(adds.iter().cloned());
+        survivors.retain(|s| !removes.contains(s));
+        let new_components: Vec<serde_json::Value> =
+            survivors.iter().map(ComponentRef::to_wire_object).collect();
         client
             .edit_issue(key, json!({"components": new_components}))
             .await?;
