@@ -8878,3 +8878,86 @@ async fn test_bc_8_3_002_component_rename_all_projects_intra_project_duplicate_f
         "LOW-2: expected the verbatim per-project ambiguity message; got: {a_entry}"
     );
 }
+
+// ── Step-4.5 fix burst 4, Finding 2 (affirm BC-literal JSON project echo) ───
+
+/// Finding 2 (AFFIRMED behavior, not a regression fix): for a numeric OLD
+/// resolved via a case-variant `--project` flag, the success JSON `project`
+/// field echoes the SUPPLIED FLAG VALUE verbatim (BC-8.3.001 Postcondition
+/// 2's literal wording — `"project": KEY`), NOT the confirming-GET-derived
+/// canonical-cased project key. This is deliberately asymmetric with cache
+/// invalidation (Step-4.5 fix burst 3, LOW-1), which DOES use the derived
+/// canonical key, and deliberately diverges from `handle_edit`'s sibling
+/// behavior, which canonicalizes its own echoed project value. This test
+/// pins the BC-literal casing so it cannot silently regress into
+/// canonicalization.
+#[tokio::test]
+async fn test_bc_8_3_001_component_rename_numeric_success_json_project_echoes_flag_value_not_canonical()
+ {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Confirming GET: component 10001 belongs to canonical-cased project "FOO".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "NewName", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // User supplies --project in LOWERCASE ("foo").
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "10001",
+            "NewName",
+            "--project",
+            "foo",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "Finding 2: expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("Finding 2: stdout must be valid JSON");
+
+    assert_eq!(
+        parsed["renamed"]["project"], "foo",
+        "Finding 2: success JSON `project` must echo the supplied flag value \
+         verbatim ('foo'), NOT the confirming-GET-derived canonical casing \
+         ('FOO') — BC-8.3.001 Postcondition 2 pins the flag KEY; got: {parsed}"
+    );
+}

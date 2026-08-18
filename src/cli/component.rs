@@ -1382,6 +1382,18 @@ async fn handle_rename_single_project(
     match output_format {
         OutputFormat::Json => {
             // BC-8.3.001 Postcondition 2: exact JSON shape.
+            //
+            // Step-4.5 fix burst 4, Finding 2 (AFFIRMED, not changed): `project`
+            // echoes the caller-supplied `--project` flag KEY verbatim (e.g.
+            // lowercase `"foo"` for a numeric OLD resolved against canonical
+            // project `FOO`), NOT the confirming-GET-derived canonical key —
+            // BC-8.3.001 Postcondition 2 literally specifies `"project": KEY`
+            // (the supplied flag value). This is a deliberate split from cache
+            // invalidation just above, which uses the derived canonical key
+            // (Step-4.5 fix burst 3, LOW-1) — and a deliberate divergence from
+            // `handle_edit`'s sibling behavior, which does canonicalize its own
+            // echoed project value. Do NOT "fix" this to canonicalize; rename's
+            // BC pins the flag KEY specifically.
             let json_out = serde_json::json!({
                 "renamed": {
                     "id": updated.id,
