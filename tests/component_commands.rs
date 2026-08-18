@@ -8622,3 +8622,259 @@ async fn test_bc_8_3_001_component_rename_numeric_no_project_field_fails_closed(
         "F-08: expected the verbatim no-project-field guard message; got: {stderr}"
     );
 }
+
+// ── Step-4.5 fix burst 3, Finding LOW-1 (cache invalidation, derived key) ───
+
+/// LOW-1: for a numeric OLD, `resolve_rename_source` must invalidate the
+/// components cache using the confirming GET's DERIVED (canonical-cased)
+/// project — not the caller's `--project` flag casing — mirroring
+/// `handle_edit`'s numeric path (`final_project_key = derived_project`,
+/// PR#704 Finding C). The components cache is a case-sensitive `HashMap`
+/// (`components_<profile>.json`), so this test pre-writes a cache entry
+/// keyed by the CANONICAL-cased project "FOO", runs a numeric rename with
+/// `--project foo` (lowercase — accepted by the `eq_ignore_ascii_case`
+/// mismatch check), and asserts the "FOO" entry is gone afterward. Before
+/// the fix, invalidation would have called
+/// `invalidate_components_cache(profile, "foo")`, which — being a
+/// case-sensitive `HashMap::remove` — would silently leave "FOO" untouched.
+#[tokio::test]
+async fn test_bc_8_3_001_component_rename_numeric_cache_invalidation_uses_derived_project_key() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    // Pre-write a components cache entry keyed by the CANONICAL-cased
+    // project "FOO" (as a real fetch/list would key it).
+    let cache_dir_path = cache.path().join("v1").join("default");
+    std::fs::create_dir_all(&cache_dir_path).unwrap();
+    let cache_file = cache_dir_path.join("components_default.json");
+    std::fs::write(
+        &cache_file,
+        r#"{"FOO":{"components":[{"id":"10001","name":"Backend"}],"fetched_at":"2026-01-01T00:00:00Z"}}"#,
+    )
+    .unwrap();
+
+    let before: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cache_file).unwrap()).unwrap();
+    assert!(
+        before.get("FOO").is_some(),
+        "LOW-1 precondition: FOO entry must be present in cache before command"
+    );
+
+    // Confirming GET: component 10001 belongs to canonical-cased project "FOO".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_response_with_flags(
+                "10001",
+                "Backend",
+                None,
+                None,
+                None,
+                Some("FOO"),
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("10001", "NewName", "FOO")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // User supplies --project in LOWERCASE ("foo"); resolve_rename_source's
+    // eq_ignore_ascii_case check accepts it as a match against the
+    // canonical-cased "FOO" the confirming GET returned.
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "10001",
+            "NewName",
+            "--project",
+            "foo",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "LOW-1: expected exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The cache entry under the CANONICAL key "FOO" must be gone — proving
+    // invalidation used the confirming-GET-derived project, not the user's
+    // lowercase flag casing "foo" (which would leave "FOO" untouched in the
+    // case-sensitive HashMap).
+    let after_content = std::fs::read_to_string(&cache_file).unwrap_or_default();
+    let after: serde_json::Value = serde_json::from_str(&after_content).unwrap_or(json!({}));
+    assert!(
+        after.get("FOO").is_none(),
+        "LOW-1: after a successful numeric rename with --project foo (lowercase), \
+         the canonical-cased FOO cache entry must be removed (cache invalidation \
+         must use the confirming-GET-derived project key, not the caller's flag \
+         casing); cache after: {after}"
+    );
+}
+
+// ── Step-4.5 fix burst 3, Finding LOW-2 (--all-projects fail-closed dupes) ──
+
+/// LOW-2: `--all-projects` discovery must not silently first-pick when one
+/// project has MORE THAN ONE component whose name exactly case-insensitively
+/// matches OLD. Project A has both "Backend" and "BACKEND" (two exact,
+/// distinct-case matches) → A is skipped fail-closed at discovery (ZERO
+/// `PUT` for either of its components) and reported in `failed[]`; Project B
+/// has a single "Backend" → renames normally; Project C has no match at all
+/// → silently skipped as usual (not an error, not in `failed[]`). Overall
+/// exit stays 1 (BC-8.3.003 continue-on-error: B still renames despite A's
+/// failure).
+#[tokio::test]
+async fn test_bc_8_3_002_component_rename_all_projects_intra_project_duplicate_fails_closed_not_first_picked()
+ {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    let keys = ["A", "B", "C"];
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(projects_search_response_for_keys(&keys)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Project A: TWO exact case-insensitive matches for "Backend".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_two_same_name(
+                "10001", "Backend", "10002", "BACKEND",
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Project B: exactly one match — renames normally.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/B/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("20001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Project C: no match at all.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/C/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("30001", "Frontend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Neither of project A's ambiguous components may ever receive a PUT.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10001"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/10002"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Project B's single match DOES rename.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/component/20001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(component_edit_response("20001", "NewName", "B")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "Backend",
+            "NewName",
+            "--all-projects",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "LOW-2: expected exit 1 (project A's ambiguity counts as a failure); \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("LOW-2: --output json stdout must be valid JSON");
+
+    let renamed = parsed["renamed"]
+        .as_array()
+        .expect("renamed must be an array");
+    assert_eq!(
+        renamed.len(),
+        1,
+        "LOW-2: expected exactly 1 success (project B); got: {renamed:?}"
+    );
+    assert_eq!(
+        renamed[0]["project"], "B",
+        "LOW-2: the single success must be project B; got: {renamed:?}"
+    );
+
+    let failed = parsed["failed"]
+        .as_array()
+        .expect("failed must be an array");
+    assert_eq!(
+        failed.len(),
+        1,
+        "LOW-2: expected exactly 1 failure (project A's ambiguity); got: {failed:?}"
+    );
+    let a_entry = &failed[0];
+    assert_eq!(
+        a_entry["project"], "A",
+        "LOW-2: the failure must be reported against project A; got: {a_entry}"
+    );
+    assert_eq!(
+        a_entry["error"],
+        "Multiple components named 'Backend' in project A — rename it via the \
+         single-project form with the numeric component ID.",
+        "LOW-2: expected the verbatim per-project ambiguity message; got: {a_entry}"
+    );
+}
