@@ -4908,7 +4908,13 @@ async fn test_bc_3_4_022_issue_edit_component_editmeta_native_path() {
 /// `set`) → `jr` GETs current `fields.components`, computes the new full
 /// array client-side (existing components + newly-resolved adds, existing
 /// order preserved, new adds appended), and `PUT`s via the `set` verb
-/// `{"fields":{"components":[...]}}`.
+/// `{"fields":{"components":[...]}}`. MED-1 fix (Step-4.5 Round 4): a
+/// RETAINED existing component is re-emitted by IDENTITY -- `{"id":...}`
+/// when it has one (the normal case for a real Jira component) -- not by
+/// bare name, since Jira allows multiple same-named components and a bare
+/// name is ambiguous on the wire. The newly-added component ("Backend",
+/// resolved from a NAME input) is unaffected and still wires as
+/// `{"name":...}`.
 #[tokio::test]
 async fn test_bc_3_4_022_issue_edit_component_editmeta_fallback_read_modify_write() {
     let server = MockServer::start().await;
@@ -4925,11 +4931,16 @@ async fn test_bc_3_4_022_issue_edit_component_editmeta_fallback_read_modify_writ
     // must fire.
     s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
 
+    // MED-1: the existing retained component carries a concrete id
+    // ("30001") so the assertion below can pin the exact identity-based
+    // re-emission -- {"id":"30001"}, not the ambiguous {"name":"Existing"}.
+    let mut issue_with_existing = common::fixtures::issue_response("FOO-1", "Test", "To Do");
+    issue_with_existing["fields"]["components"] = serde_json::json!([
+        {"name": "Existing", "id": "30001"}
+    ]);
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            common::fixtures::issue_response_with_components("FOO-1", "Test", &["Existing"]),
-        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_existing))
         .expect(1)
         .mount(&server)
         .await;
@@ -4970,13 +4981,15 @@ async fn test_bc_3_4_022_issue_edit_component_editmeta_fallback_read_modify_writ
         serde_json::json!({
             "fields": {
                 "components": [
-                    {"name": "Existing"},
+                    {"id": "30001"},
                     {"name": "Backend"}
                 ]
             }
         }),
-        "AC-005: fallback PUT must use the set-verb fields.components shape, \
-         existing components preserved with newly-resolved adds appended"
+        "AC-005 (MED-1): fallback PUT must use the set-verb fields.components \
+         shape, with the retained existing component re-emitted by IDENTITY \
+         ({{\"id\":\"30001\"}}, not bare name) and the newly-resolved add \
+         appended by its own resolved shape"
     );
 }
 
@@ -6484,7 +6497,8 @@ async fn test_bc_3_4_022_issue_edit_component_numeric_wires_as_id_native_path() 
 /// `fields.components` has an id-bearing component (id `"20002"`) and an
 /// untouched other component. `--component remove:20002` (numeric) → the
 /// computed set-verb array drops the id-MATCHED component (not a name
-/// match) and keeps the untouched one.
+/// match) and keeps the untouched one, re-emitted by its own id (MED-1
+/// fix, Step-4.5 Round 4) rather than an ambiguous bare name.
 #[tokio::test]
 async fn test_bc_3_4_022_issue_edit_component_numeric_remove_fallback_matches_by_id() {
     let server = MockServer::start().await;
@@ -6549,13 +6563,14 @@ async fn test_bc_3_4_022_issue_edit_component_numeric_remove_fallback_matches_by
         serde_json::json!({
             "fields": {
                 "components": [
-                    {"name": "Untouched"}
+                    {"id": "30001"}
                 ]
             }
         }),
-        "F1 (fallback numeric remove): the id-matched component (id \
+        "F1/MED-1 (fallback numeric remove): the id-matched component (id \
          \"20002\") must be dropped by ID match, not name match; the \
-         untouched component must be retained"
+         untouched component must be retained and re-emitted by IDENTITY \
+         ({{\"id\":\"30001\"}}, MED-1 fix -- not the ambiguous bare name)"
     );
 }
 
@@ -6625,4 +6640,160 @@ async fn test_bc_3_4_022_issue_edit_field_validated_before_component_put() {
     // `.expect(0)` on both the component-list GET and the PUT catch-all
     // verify the component mutation never started -- the invalid --field
     // is caught first, so there is no partial write.
+}
+
+// =============================================================================
+// Step-4.5 Round 4 — MED-1: RMW fallback re-emits RETAINED components by
+// IDENTITY (id when present), not by ambiguous bare name, on an issue
+// carrying multiple same-named components
+// =============================================================================
+
+/// editmeta advertises ONLY `set` (fallback fires). The issue's CURRENT
+/// `fields.components` has TWO same-named components: "Backend" id
+/// `"10001"` and "Backend" id `"10002"` (Jira allows this -- the entire
+/// reason F1 added numeric-id targeting).
+///
+/// (a) `--component remove:10001` (numeric) → the set-verb array retains
+///     ONLY id `"10002"`, re-emitted by its own id -- the survivor is
+///     unambiguous, the removed one is gone.
+/// (b) `--component add:Frontend` (no remove) → BOTH Backends survive and
+///     must be re-emitted by id, never by the ambiguous bare name
+///     "Backend" twice (which Jira would silently dedupe to one --
+///     component "10002" silently dropped from the issue, exit 0 -- the
+///     data-loss bug MED-1 closes), plus the newly-resolved Frontend.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_retains_duplicate_named_by_id() {
+    let mut issue_dup = common::fixtures::issue_response("FOO-1", "Test", "To Do");
+    issue_dup["fields"]["components"] = serde_json::json!([
+        {"name": "Backend", "id": "10001"},
+        {"name": "Backend", "id": "10002"}
+    ]);
+
+    // --- (a) remove:10001 -> only id 10002 survives, emitted by id. ---
+    let remove_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::component_list_response(vec![])),
+        )
+        .mount(&remove_server)
+        .await;
+    s605_1_mock_editmeta(&remove_server, "FOO-1", &["set"]).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_dup.clone()))
+        .expect(1)
+        .mount(&remove_server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&remove_server)
+        .await;
+
+    let remove_output = s605_1_cmd(&remove_server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:10001",
+        ])
+        .output()
+        .unwrap();
+    let remove_stderr = String::from_utf8_lossy(&remove_output.stderr);
+    assert!(
+        remove_output.status.success(),
+        "MED-1 (remove): expected exit 0; stderr={remove_stderr}"
+    );
+    let remove_puts = s605_1_captured_puts(&remove_server, "FOO-1").await;
+    assert_eq!(
+        remove_puts.len(),
+        1,
+        "MED-1 (remove): expected exactly 1 PUT; got {remove_puts:?}"
+    );
+    assert_eq!(
+        remove_puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": [
+                    {"id": "10002"}
+                ]
+            }
+        }),
+        "MED-1 (remove): only id 10002 must survive, re-emitted by id -- \
+         a bare-name re-emission would be ambiguous with the removed \
+         same-named component"
+    );
+
+    // --- (b) add:Frontend (no remove) -> both Backends survive, each
+    // emitted by id (never by the ambiguous bare name "Backend" twice). ---
+    let add_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::component_list_response(vec![common::fixtures::component_response(
+                "40001", "Frontend", None, None, None,
+            )]),
+        ))
+        .mount(&add_server)
+        .await;
+    s605_1_mock_editmeta(&add_server, "FOO-1", &["set"]).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_dup))
+        .expect(1)
+        .mount(&add_server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&add_server)
+        .await;
+
+    let add_output = s605_1_cmd(&add_server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Frontend",
+        ])
+        .output()
+        .unwrap();
+    let add_stderr = String::from_utf8_lossy(&add_output.stderr);
+    assert!(
+        add_output.status.success(),
+        "MED-1 (add): expected exit 0; stderr={add_stderr}"
+    );
+    let add_puts = s605_1_captured_puts(&add_server, "FOO-1").await;
+    assert_eq!(
+        add_puts.len(),
+        1,
+        "MED-1 (add): expected exactly 1 PUT; got {add_puts:?}"
+    );
+    assert_eq!(
+        add_puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": [
+                    {"id": "10001"},
+                    {"id": "10002"},
+                    {"name": "Frontend"}
+                ]
+            }
+        }),
+        "MED-1 (add): BOTH same-named Backends must survive, each \
+         re-emitted by its own id -- two bare {{\"name\":\"Backend\"}} \
+         entries would silently dedupe to one on Jira's side (data loss)"
+    );
 }
