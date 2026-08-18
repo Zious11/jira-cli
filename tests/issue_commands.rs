@@ -4508,16 +4508,18 @@ async fn test_bc_2_1_018_issue_list_component_with_jql_flag_current_behavior() {
 //     table preview, bare-normalization parity with the live echo
 //     (AC-016..017)
 //
-// Red Gate: every test below MUST fail against the current stubs. The
-// production call sites (`format::normalize_component_changes`,
-// `format::format_component_changes_echo`,
-// `format::component_changes_dry_run_json`, `format::ComponentAction::
-// as_wire_str`, `edit_issue_components`, `resolve_create_components`, and
-// three inline `todo!()` guard sites in `edit.rs`/`create.rs`) all panic
-// unconditionally today — every test that reaches one of them fails with a
-// `not yet implemented` panic (subprocess non-zero exit, assert_cmd
-// `output.status.success()` false). See story
-// `.factory/stories/S-605-1-issue-component-single-key.md`.
+// These tests were authored red against `todo!()` stubs in
+// `format::normalize_component_changes`, `format::format_component_changes_echo`,
+// `format::component_changes_dry_run_json`, `format::ComponentAction::as_wire_str`,
+// `edit_issue_components`, `resolve_create_components`, and three inline guard
+// sites in `edit.rs`/`create.rs` — every cited call site is now implemented.
+// See story `.factory/stories/S-605-1-issue-component-single-key.md`.
+//
+// Step-4.5 Round 1 review (F1/F2) added three further tests below AC-017:
+// dry-run --component now resolves names (exits 64 on an unresolvable name,
+// same as the live path) instead of skipping resolution, and the components
+// echo/dry-run preview render in CLI input order rather than the wire's
+// ADD-before-REMOVE reordering (labels precedent, EC-3.4.020-8).
 
 /// Shared harness: plain `jr` CLI invocation, no XDG isolation needed —
 /// component resolution has no cache wired into this read/resolve path yet
