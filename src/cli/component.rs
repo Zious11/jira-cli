@@ -1233,7 +1233,20 @@ async fn resolve_rename_source(
                 return Err(e);
             }
         };
+        // F-08 / BC-8.3.001: fail-closed if the confirming GET returned no
+        // project field — mirrors handle_edit's F-07 / PR#704 Finding C and
+        // handle_delete's identical guard. Without this, an empty
+        // derived_project would fall through to the mismatch comparison
+        // below and emit a misleading "belongs to project , not X" message
+        // instead of a clear "project could not be determined" error.
         let derived_project = comp.project.clone().unwrap_or_default();
+        if derived_project.is_empty() {
+            return Err(JrError::UserError(format!(
+                "Component {} returned no project field; cannot verify --project {} for the rename.",
+                old, project_key
+            ))
+            .into());
+        }
         if !derived_project.eq_ignore_ascii_case(project_key) {
             return Err(JrError::UserError(format!(
                 "Component {} belongs to project {}, not {}.",
