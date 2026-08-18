@@ -8190,3 +8190,272 @@ async fn test_bc_8_3_001_component_rename_honors_global_project_flag() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// =============================================================================
+// S-608-1 Step-4.5 fix burst (fresh-context adversarial review, 4 LOW
+// findings). New, additive tests only — no existing rename test above this
+// marker was modified for these findings.
+// =============================================================================
+
+// ── F-2 (BC-8.3.003 table-mode fan-out — previously unasserted) ─────────────
+
+/// F-2 companion to AC-008
+/// (`test_bc_8_3_003_component_rename_all_projects_partial_failure_no_rollback`):
+/// BC-8.3.003 pins the human (table-mode) fan-out rendering — per-project
+/// `<KEY>: renamed` / `<KEY>: FAILED — <message>` lines plus a `{N} renamed`
+/// summary — but every existing fan-out test asserted `--output json` only,
+/// leaving the table renderer in `handle_rename_all_projects` unasserted.
+/// Reuses AC-008's exact fixture (5 projects, 3 succeed, 2 fail on a 400 name
+/// collision) without `--output json`, and pins the table lines verbatim for
+/// the literal prefixes/summary (the per-failure `<message>` suffix is
+/// server-supplied, so it is `contains`-checked, matching AC-008's own
+/// precedent for the same text).
+#[tokio::test]
+async fn test_bc_8_3_003_component_rename_all_projects_partial_failure_table_mode() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    let keys = ["A", "B", "C", "D", "E"];
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(projects_search_response_for_keys(&keys)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ids = ["30001", "30002", "30003", "30004", "30005"];
+    for (key, id) in keys.iter().zip(ids.iter()) {
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/api/3/project/{key}/components")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                    component_response(id, "Backend", None, None, None),
+                ])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    for (key, id) in [("A", "30001"), ("C", "30003"), ("E", "30005")] {
+        Mock::given(method("PUT"))
+            .and(path(format!("/rest/api/3/component/{id}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(component_edit_response(id, "NewName", key)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    for (key, id) in [("B", "30002"), ("D", "30004")] {
+        Mock::given(method("PUT"))
+            .and(path(format!("/rest/api/3/component/{id}")))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "errorMessages": [format!("A component with the name 'NewName' already exists in project {key}.")]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    // Deliberately NOT --output json — this is the table-mode rendering.
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "Backend",
+            "NewName",
+            "--all-projects",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "F-2: table-mode partial-failure batch must still exit 1; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lines: Vec<&str> = stderr.lines().collect();
+
+    for key in ["A", "C", "E"] {
+        let line = format!("{key}: renamed");
+        assert!(
+            stderr_lines.contains(&line.as_str()),
+            "F-2: expected verbatim success line \"{line}\"; got stderr:\n{stderr}"
+        );
+    }
+
+    for key in ["B", "D"] {
+        let prefix = format!("{key}: FAILED — ");
+        let matching = stderr_lines.iter().find(|l| l.starts_with(&prefix));
+        let line = matching.unwrap_or_else(|| {
+            panic!("F-2: expected a line starting with \"{prefix}\"; got stderr:\n{stderr}")
+        });
+        assert!(
+            line.contains("already exists"),
+            "F-2: FAILED line for {key} must carry the raw Jira collision \
+             message; got: {line}"
+        );
+    }
+
+    assert!(
+        stderr_lines.contains(&"3 renamed"),
+        "F-2: expected verbatim summary line \"3 renamed\"; got stderr:\n{stderr}"
+    );
+}
+
+/// F-2 companion to AC-010
+/// (`test_bc_8_3_004_component_rename_dry_run_zero_mutation_both_scopes`):
+/// BC-8.3.004 pins the table-mode dry-run preview — a `DRY RUN — no changes
+/// will be made.` header plus one `  <KEY>: <OLD> → <NEW> (id N)` row per
+/// target — for both the single-project and `--all-projects` scopes, but
+/// every existing dry-run test asserted `--output json` only. This pins the
+/// single-project scope's table rendering.
+#[tokio::test]
+async fn test_bc_8_3_004_component_rename_dry_run_single_project_table_mode() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Deliberately NOT --output json.
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "Backend",
+            "NewName",
+            "--project",
+            "FOO",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "F-2: single-project dry-run table mode must exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lines: Vec<&str> = stderr.lines().collect();
+    assert!(
+        stderr_lines.contains(&"DRY RUN — no changes will be made."),
+        "F-2: expected verbatim dry-run header; got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr_lines.contains(&"  FOO: Backend \u{2192} NewName (id 10001)"),
+        "F-2: expected verbatim single-project dry-run row; got stderr:\n{stderr}"
+    );
+}
+
+/// F-2 companion to AC-010, `--all-projects` scope (see the single-project
+/// sibling test above for the full rationale).
+#[tokio::test]
+async fn test_bc_8_3_004_component_rename_dry_run_all_projects_table_mode() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(projects_search_response_for_keys(&["A", "B"])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/A/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/B/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("20001", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Deliberately NOT --output json.
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "Backend",
+            "NewName",
+            "--all-projects",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "F-2: --all-projects dry-run table mode must exit 0; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lines: Vec<&str> = stderr.lines().collect();
+    assert!(
+        stderr_lines.contains(&"DRY RUN — no changes will be made."),
+        "F-2: expected verbatim dry-run header; got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr_lines.contains(&"  A: Backend \u{2192} NewName (id 10001)"),
+        "F-2: expected verbatim dry-run row for project A; got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr_lines.contains(&"  B: Backend \u{2192} NewName (id 20001)"),
+        "F-2: expected verbatim dry-run row for project B; got stderr:\n{stderr}"
+    );
+}
