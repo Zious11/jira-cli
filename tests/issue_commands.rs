@@ -7942,3 +7942,177 @@ async fn test_bc_3_4_022_issue_edit_component_rmw_add_already_present_deduped() 
          second time"
     );
 }
+
+// =============================================================================
+// Step-4.5 Round 8 — F-LOW-001: accepted, documented divergence for
+// cross-identifier contradictory add/remove of the SAME component (docs +
+// pinning tests only -- NO behavioral change)
+// =============================================================================
+
+/// RMW fallback (editmeta lacks add/remove): the issue's current Backend
+/// component has id `"100"`. `--component remove:100 --component
+/// add:Backend` (cross-identifier: id `100` IS the component named
+/// Backend) → the resulting `fields.components` array CONTAINS Backend --
+/// net PRESENT. This is the ACCEPTED-DIVERGENCE contract documented in
+/// edit.rs's RMW fallback comment block (point 4, F-LOW-001): this
+/// contradictory cross-identifier input is NOT reconciled between the
+/// native and RMW-fallback wire paths -- native nets Backend ABSENT (see
+/// `test_bc_3_4_022_issue_edit_component_native_cross_identifier_add_remove_nets_absent`
+/// below) via Jira's fixed add-before-remove ops ordering, while this RMW
+/// path nets Backend PRESENT because its add-survivor filter only excludes
+/// a same-`ComponentRef` remove or a surviving-existing id-OR-name match --
+/// neither catches a cross-identifier collision (id `100` is never
+/// resolved to the name `Backend` here). Accepted because the input is
+/// self-contradictory, native's ordering is Jira-fixed, reconciling would
+/// require fragile cross-identifier resolution in a path that has already
+/// regressed three times, and no UNRELATED component is ever lost on
+/// either path.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_cross_identifier_add_remove_accepted_divergence()
+ {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "100", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    let issue_with_id_bearing = common::fixtures::issue_response_with_components_and_ids(
+        "FOO-1",
+        "Test",
+        &[("Backend", "100")],
+    );
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_id_bearing))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:100",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "F-LOW-001 (RMW): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "F-LOW-001 (RMW): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": [
+                    {"name": "Backend"}
+                ]
+            }
+        }),
+        "F-LOW-001 (RMW): ACCEPTED DIVERGENCE -- cross-identifier \
+         remove:100 + add:Backend (same real component) must net PRESENT \
+         on the RMW fallback path, the opposite of the native path's net \
+         ABSENT. This is documented, intentional, contradictory-input \
+         behavior (edit.rs RMW fallback comment, point 4) -- not a bug."
+    );
+}
+
+/// Native path (editmeta advertises add+remove) counterpart to the RMW
+/// test above: the SAME cross-identifier input, `--component remove:100
+/// --component add:Backend`, on the native path → the ops array is
+/// `[{"add":{"name":"Backend"}},{"remove":{"id":"100"}}]` (add-before-
+/// remove, BC-3.4.022 Post 2, unaffected by the id-vs-name discriminator)
+/// -- Jira applies this in order, so Backend ends net ABSENT. Pins the
+/// OTHER side of the F-LOW-001 accepted divergence.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_native_cross_identifier_add_remove_nets_absent()
+ {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "100", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["add", "remove"]).await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:100",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "F-LOW-001 (native): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "F-LOW-001 (native): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "update": {
+                "components": [
+                    {"add": {"name": "Backend"}},
+                    {"remove": {"id": "100"}}
+                ]
+            }
+        }),
+        "F-LOW-001 (native): cross-identifier remove:100 + add:Backend \
+         (same real component) must emit add-before-remove per BC-3.4.022 \
+         Post 2 -- Jira applies this in order, netting Backend ABSENT, the \
+         opposite of the RMW fallback's net PRESENT (documented \
+         accepted divergence, edit.rs point 4)"
+    );
+}
