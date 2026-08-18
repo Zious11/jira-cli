@@ -6415,9 +6415,13 @@ async fn test_delete_component_percent_encodes_ids_in_url() {
 // =============================================================================
 // S-608-1: `jr component rename` — single-project + `--all-projects` fan-out,
 // `--dry-run`. LANDED: `handle_rename` / `JiraClient::rename_component` are
-// fully implemented (see `src/cli/component.rs`); all 19 tests below are
-// GREEN (18 AC-scoped tests plus the global `--project` flag consistency
-// test, F5-A-L2).
+// fully implemented (see `src/cli/component.rs`). All tests below are GREEN:
+// the AC-scoped tests, the global `--project` flag consistency test
+// (F5-A-L2), and the Step-4.5 fix-burst additions that followed (see each
+// test's own doc comment for its originating finding). Do not hardcode a
+// test count here — it drifts every time a fix burst adds coverage; see
+// CLAUDE.md's "BC Trace and Source fields must not contain numeric test
+// counts" convention (same rationale applies to suite header comments).
 //
 // BC anchors: BC-8.3.001–BC-8.3.007 (`bc-8-components.md` §8.3).
 //
