@@ -1993,6 +1993,7 @@ pub enum IssueCommand {
             "--description-stdin", // description_stdin → description-stdin
             "--markdown",
             "--field",
+            "--component", // component (S-605-1): BC-3.4.020 amendment, AC-015
         ]
         .iter()
         .map(|s| s.to_string())
@@ -2016,18 +2017,20 @@ pub enum IssueCommand {
         );
     }
 
-    /// R2 pin: the `conflicting.push` extractor correctly identifies exactly 12 flags
+    /// R2 pin: the `conflicting.push` extractor correctly identifies exactly 13 flags
     /// from the current source of edit.rs. This test pins the extractor against the
     /// actual file — if the extraction logic regresses (e.g., formatting drift changes
     /// the pattern), this fails distinctly from the set-equality meta-test.
     ///
-    /// The 12 expected members are:
+    /// The 13 expected members are:
     ///   --field, --summary, --priority, --type, --team, --points, --no-points,
-    ///   --parent, --no-parent, --description, --description-stdin, --markdown
+    ///   --parent, --no-parent, --description, --description-stdin, --markdown,
+    ///   --component
     ///
-    /// Closes EC-3.4.017-14 (R2 pin, S-407 AC-013).
+    /// Closes EC-3.4.017-14 (R2 pin, S-407 AC-013). Extended to 13 by S-605-1
+    /// (BC-3.4.020 amendment, AC-015).
     #[test]
-    fn test_label_conflict_block_extractor_pin_12_members() {
+    fn test_label_conflict_block_extractor_pin_13_members() {
         let source = include_str!("edit.rs");
 
         let extracted: BTreeSet<String> = source
@@ -2045,9 +2048,9 @@ pub enum IssueCommand {
             })
             .collect();
 
-        // The 12 current --label conflict block entries (as of S-407).
+        // The 13 current --label conflict block entries (as of S-605-1).
         // If the count changes, update both this test AND the meta-test above.
-        let expected_12: BTreeSet<String> = [
+        let expected_13: BTreeSet<String> = [
             "--field",
             "--summary",
             "--priority",
@@ -2060,6 +2063,7 @@ pub enum IssueCommand {
             "--description",
             "--description-stdin",
             "--markdown",
+            "--component",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -2067,18 +2071,18 @@ pub enum IssueCommand {
 
         assert_eq!(
             extracted.len(),
-            12,
-            "R2 pin: expected exactly 12 conflicting.push entries in edit.rs, found {}.\n\
+            13,
+            "R2 pin: expected exactly 13 conflicting.push entries in edit.rs, found {}.\n\
              Current extracted set: {:?}",
             extracted.len(),
             extracted,
         );
 
         assert_eq!(
-            extracted, expected_12,
-            "R2 pin: extracted flag set does not match the 12 expected members.\n\
+            extracted, expected_13,
+            "R2 pin: extracted flag set does not match the 13 expected members.\n\
              Extracted: {:?}\nExpected: {:?}",
-            extracted, expected_12,
+            extracted, expected_13,
         );
     }
 }
