@@ -1733,7 +1733,12 @@ async fn handle_rename_all_projects(
             for line in &table_lines {
                 eprintln!("{line}");
             }
-            eprintln!("{renamed_count} renamed");
+            let failed_count = failed.len();
+            if failed_count > 0 {
+                eprintln!("{renamed_count} renamed, {failed_count} failed");
+            } else {
+                eprintln!("{renamed_count} renamed");
+            }
         }
     }
 

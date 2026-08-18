@@ -8561,8 +8561,8 @@ async fn test_bc_8_3_003_component_rename_all_projects_partial_failure_table_mod
     }
 
     assert!(
-        stderr_lines.contains(&"3 renamed"),
-        "F-2: expected verbatim summary line \"3 renamed\"; got stderr:\n{stderr}"
+        stderr_lines.contains(&"3 renamed, 2 failed"),
+        "F-2: expected verbatim summary line \"3 renamed, 2 failed\"; got stderr:\n{stderr}"
     );
 }
 
