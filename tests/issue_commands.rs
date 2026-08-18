@@ -7036,3 +7036,468 @@ async fn test_bc_3_4_022_issue_edit_component_editmeta_add_only_uses_fallback() 
          (not the native path, which never calls get_issue) actually ran."
     );
 }
+
+// =============================================================================
+// Step-4.5 Round 6 — HIGH-1 (F-A-001): RMW fallback silently failed to
+// remove a NAME-specified component against a live (id-bearing) issue
+// component. A COMPLETE test matrix (a)-(f) below closes this definitively.
+// =============================================================================
+
+/// (a) THE BUG, RED-then-GREEN proof. RMW fallback (editmeta lacks
+/// add/remove) on an issue whose current "Backend" component HAS an id
+/// (`"10050"` -- the LIVE-Jira-correct shape) with `--component
+/// remove:Backend` (a NAME remove target) → the set-verb body must NOT
+/// contain Backend.
+///
+/// THE BUG (pre-fix): the RMW fallback mapped each existing component to a
+/// SINGLE `ComponentRef` (`Id` when it has one, else `Name`), so an
+/// id-bearing Backend became `ComponentRef::Id("10050")` — a NAME remove
+/// target (`ComponentRef::Name("Backend")`) never matches an `Id`-variant
+/// candidate under `ComponentRef`'s derived, variant-sensitive `PartialEq`,
+/// so `retain` kept it: Backend was silently NOT removed, exit 0, a false
+/// `components → remove:Backend` success echo — silent data loss on the
+/// COMMON case (name remove + live Jira + RMW fallback).
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_name_remove_matches_id_bearing_existing() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10050", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    let issue_with_id_bearing = common::fixtures::issue_response_with_components_and_ids(
+        "FOO-1",
+        "Test",
+        &[("Backend", "10050")],
+    );
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_id_bearing))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "HIGH-1 (a): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "HIGH-1 (a): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": []
+            }
+        }),
+        "HIGH-1 (a): a NAME remove target must drop an id-bearing existing \
+         component by matching NAME, not just id -- the set-verb body must \
+         NOT contain Backend"
+    );
+}
+
+/// (b) existing id-bearing "Backend"(10050) + `remove:10050` (numeric
+/// remove target) → drops Backend. Regression guard: this must KEEP
+/// passing under the HIGH-1 fix (it already passed under the buggy Round-5
+/// code, since an id-remove against an id-bearing component happened to
+/// still match).
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_numeric_remove_matches_id_bearing_existing() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10050", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    let issue_with_id_bearing = common::fixtures::issue_response_with_components_and_ids(
+        "FOO-1",
+        "Test",
+        &[("Backend", "10050")],
+    );
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_id_bearing))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:10050",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "HIGH-1 (b): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "HIGH-1 (b): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": []
+            }
+        }),
+        "HIGH-1 (b): a numeric remove target must drop the id-matched \
+         existing component"
+    );
+}
+
+/// (c) existing id=None "Legacy" (the `issue_response_with_components`
+/// minimal-fixture shape) + `remove:Legacy` (name remove) → drops Legacy.
+/// Regression guard preserving the MED-1/Round-4 id=None coverage: adding
+/// `issue_response_with_components_and_ids` for HIGH-1 must NOT retire the
+/// id=None code path.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_name_remove_matches_id_absent_existing() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10070", "Legacy", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_components("FOO-1", "Test", &["Legacy"]),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:Legacy",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "HIGH-1 (c): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "HIGH-1 (c): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": []
+            }
+        }),
+        "HIGH-1 (c): a name remove target must drop an id=None existing \
+         component matching by name"
+    );
+}
+
+/// (d) existing id-bearing "Backend"(10050) + `add:Backend --component
+/// remove:Backend` (name add==remove, targeting a component that ALSO
+/// already exists on the issue with an id) → Backend ABSENT (net), matching
+/// the native path's add-before-remove semantics (B-LOW-1 parity). Distinct
+/// from the Round-5 B-LOW-1 test, whose existing-components fixture did NOT
+/// contain a pre-existing Backend at all -- this proves the pre-existing,
+/// id-bearing instance is ALSO removed, not just the would-be add
+/// short-circuited.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_add_remove_same_id_bearing_existing() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10050", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    let issue_with_id_bearing = common::fixtures::issue_response_with_components_and_ids(
+        "FOO-1",
+        "Test",
+        &[("Backend", "10050")],
+    );
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_id_bearing))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Backend",
+            "--component",
+            "remove:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "HIGH-1 (d): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "HIGH-1 (d): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": []
+            }
+        }),
+        "HIGH-1 (d): add:Backend + remove:Backend against a pre-existing, \
+         id-bearing Backend must leave the set NET ABSENT -- matching the \
+         native path's add-before-remove semantics"
+    );
+}
+
+/// (e) existing id-bearing Backend(10050) AND Frontend(10060) + BOTH
+/// `remove:Backend` and `remove:Frontend` (two disjoint name removes) →
+/// both dropped, matched by name against their own id-bearing entries.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_disjoint_name_removes_id_bearing_existing() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10050", "Backend", None, None, None),
+            common::fixtures::component_response("10060", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    let issue_with_id_bearing = common::fixtures::issue_response_with_components_and_ids(
+        "FOO-1",
+        "Test",
+        &[("Backend", "10050"), ("Frontend", "10060")],
+    );
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_id_bearing))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:Backend",
+            "--component",
+            "remove:Frontend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "HIGH-1 (e): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "HIGH-1 (e): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": []
+            }
+        }),
+        "HIGH-1 (e): two disjoint name-remove targets must each drop their \
+         own id-bearing existing component"
+    );
+}
+
+/// (f) untouched components (not targeted by any remove) always survive,
+/// re-emitted by identity (`{"id":...}`) -- an id-bearing "Other" component
+/// survives a `remove:Backend` that targets a DIFFERENT, disjoint
+/// component.
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_rmw_untouched_survives_by_identity() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10050", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    let issue_with_id_bearing = common::fixtures::issue_response_with_components_and_ids(
+        "FOO-1",
+        "Test",
+        &[("Backend", "10050"), ("Other", "30001")],
+    );
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_id_bearing))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "remove:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "HIGH-1 (f): expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(
+        puts.len(),
+        1,
+        "HIGH-1 (f): expected exactly 1 PUT; got {puts:?}"
+    );
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": [
+                    {"id": "30001"}
+                ]
+            }
+        }),
+        "HIGH-1 (f): the untouched 'Other' component must survive, \
+         re-emitted by its own identity"
+    );
+}
