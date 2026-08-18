@@ -1214,11 +1214,24 @@ async fn handle_rename(
 /// Name `old`: uses the §8.4 resolver (`resolve_component`/`partial_match`)
 /// scoped to `project_key` — structurally identical to `handle_edit`'s
 /// name-based branch (S-604-2 precedent, reused not duplicated).
+///
+/// Returns `(component_id, cache_invalidation_project_key)`. The second
+/// element is the project key `handle_rename_single_project` should use for
+/// `cache::invalidate_components_cache` — NOT necessarily the caller-supplied
+/// `project_key` flag value. For the numeric branch it is the confirming
+/// GET's DERIVED (canonical-cased) project, mirroring `handle_edit`'s
+/// numeric path (`final_project_key = derived_project`, PR#704 Finding C
+/// precedent) — the components cache is a case-sensitive `HashMap`, so
+/// invalidating with the user's flag casing (e.g. `foo`) would silently miss
+/// a canonical-cased entry (`FOO`) (Step-4.5 fix burst 3, LOW-1). For the
+/// name branch, `project_key` itself IS the resolution scope (there is no
+/// separate confirming-GET-derived value to prefer), so it is returned
+/// unchanged.
 async fn resolve_rename_source(
     old: &str,
     project_key: &str,
     client: &JiraClient,
-) -> Result<String> {
+) -> Result<(String, String)> {
     if is_numeric_id(old) {
         let comp = match client.get_component(old).await {
             Ok(c) => c,
@@ -1254,7 +1267,7 @@ async fn resolve_rename_source(
             ))
             .into());
         }
-        Ok(comp.id)
+        Ok((comp.id, derived_project))
     } else {
         let components = client.list_components(project_key).await?;
         let candidate_names: Vec<String> = components.iter().map(|c| c.name.clone()).collect();
@@ -1306,7 +1319,7 @@ async fn resolve_rename_source(
                 ))
             })?;
 
-        Ok(comp.id)
+        Ok((comp.id, project_key.to_string()))
     }
 }
 
@@ -1324,7 +1337,8 @@ async fn handle_rename_single_project(
     config: &Config,
     client: &JiraClient,
 ) -> Result<()> {
-    let component_id = resolve_rename_source(old, project_key, client).await?;
+    let (component_id, cache_invalidation_project_key) =
+        resolve_rename_source(old, project_key, client).await?;
 
     if dry_run {
         match output_format {
@@ -1356,8 +1370,14 @@ async fn handle_rename_single_project(
     let updated = client.rename_component(&component_id, new).await?;
 
     // ADR-0018 §2: invalidate the project's components cache after a
-    // successful mutation.
-    cache::invalidate_components_cache(&config.active_profile_name, project_key);
+    // successful mutation. Uses the confirming-GET-derived (canonical-cased)
+    // project key for the numeric branch, not the caller-supplied
+    // `project_key` flag value — see `resolve_rename_source`'s doc comment
+    // (Step-4.5 fix burst 3, LOW-1).
+    cache::invalidate_components_cache(
+        &config.active_profile_name,
+        &cache_invalidation_project_key,
+    );
 
     match output_format {
         OutputFormat::Json => {
