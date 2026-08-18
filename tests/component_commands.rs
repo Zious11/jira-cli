@@ -9418,6 +9418,178 @@ async fn test_bc_8_3_001_component_rename_no_config_fallback_for_project_neither
 // findings.
 // =============================================================================
 
+// ── F-1 (MEDIUM — single-project NAME-resolution-failure branches, untested) ─
+
+/// F-1 (a): `resolve_rename_source`'s name-branch `MatchResult::None` arm
+/// (`src/cli/component.rs`) was previously exercised only for `edit`
+/// (AC-015/`test_bc_8_1_008_component_edit_name_notfound_and_ambiguous_messages`),
+/// never for `rename`'s single-project form. `rename xyz NewName --project
+/// FOO` where `xyz` matches nothing in FOO's component list → exit 64,
+/// verbatim `"Component 'xyz' not found in project FOO. Available: Backend,
+/// Frontend."` (alphabetically sorted), ZERO `PUT`.
+#[tokio::test]
+async fn test_bc_8_3_001_component_rename_single_project_name_not_found_exit_64() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Frontend", None, None, None),
+                component_response("10002", "Backend", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "rename", "xyz", "NewName", "--project", "FOO"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F-1(a): expected exit 64 for single-project NAME not-found; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Component 'xyz' not found in project FOO. Available: Backend, Frontend."),
+        "F-1(a): expected verbatim \"Component 'xyz' not found in project FOO. \
+         Available: Backend, Frontend.\"; got: {stderr}"
+    );
+}
+
+/// F-1 (b): `resolve_rename_source`'s name-branch `MatchResult::Ambiguous`
+/// arm, previously untested for `rename`'s single-project form. `rename back
+/// NewName --project FOO` where FOO has both "Backend" and "Backoffice"
+/// (both substring-match "back") → exit 64, verbatim `"Ambiguous component
+/// 'back'. Matches: Backend, Backoffice."`, ZERO `PUT`.
+#[tokio::test]
+async fn test_bc_8_3_001_component_rename_single_project_name_ambiguous_exit_64() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_response(vec![
+                component_response("10001", "Backend", None, None, None),
+                component_response("10002", "Backoffice", None, None, None),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "rename", "back", "NewName", "--project", "FOO"])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F-1(b): expected exit 64 for single-project NAME ambiguous; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Ambiguous component 'back'. Matches: Backend, Backoffice."),
+        "F-1(b): expected verbatim \"Ambiguous component 'back'. Matches: \
+         Backend, Backoffice.\"; got: {stderr}"
+    );
+}
+
+/// F-1 (c): `resolve_rename_source`'s name-branch `MatchResult::ExactMultiple`
+/// arm, previously untested for `rename`'s single-project form. `rename
+/// backend NewName --project FOO` where FOO has both "Backend" (10001) and
+/// "backend" (10002) (both exact case-insensitive matches for "backend") →
+/// exit 64, verbatim `"Multiple components named \"Backend\" found (IDs:
+/// 10001, 10002). Pass the numeric ID directly."` (matched_name takes the
+/// FIRST exact match's casing, list order — `partial_match`'s documented
+/// behavior), ZERO `PUT`.
+#[tokio::test]
+async fn test_bc_8_3_001_component_rename_single_project_name_exact_multiple_exit_64() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/components"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(component_list_two_same_name(
+                "10001", "Backend", "10002", "backend",
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args([
+            "component",
+            "rename",
+            "backend",
+            "NewName",
+            "--project",
+            "FOO",
+        ])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F-1(c): expected exit 64 for single-project NAME ExactMultiple; \
+         got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Multiple components named \"Backend\" found (IDs: 10001, 10002). \
+             Pass the numeric ID directly."
+        ),
+        "F-1(c): expected verbatim 'Multiple components named \"Backend\" found \
+         (IDs: 10001, 10002). Pass the numeric ID directly.'; got: {stderr}"
+    );
+}
+
 // ── Lens A (LOW — global-position --project + --all-projects conflict) ──────
 
 /// Step-4.5 fix burst 7, Lens A finding: the pre-existing AC-013
