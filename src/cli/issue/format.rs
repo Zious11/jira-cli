@@ -231,35 +231,41 @@ pub(super) struct ComponentChange {
 ///   `create::resolve_create_components`).
 /// - A bare value (no prefix) normalizes to `Add` (BC-3.4.022 Edge Case
 ///   EC-3.4.022-2 / BC-3.4.012 amendment EC-3.4.012-17).
-/// - The returned `Vec` is REORDERED so every `Add` entry precedes every
-///   `Remove` entry, regardless of CLI input order (BC-3.4.022
-///   Postcondition 2, AC-003) — this is the single source of truth for that
-///   ordering; callers (the native-shape PUT body, the live echo, and the
-///   dry-run preview) must not re-derive it.
+/// - The returned `Vec` PRESERVES CLI input order (Step-4.5 Round 1, F2 fix
+///   — BC-3.4.012/BC-3.4.013 amendments require the echo/dry-run preview to
+///   render in CLI input order, e.g. `remove:Y, add:X` for
+///   `--component remove:Y --component add:X`, mirroring labels'
+///   EC-3.4.020-8 precedent: the live PUT wire body reorders to
+///   ADD-before-REMOVE regardless of CLI order, but the wire is the ONLY
+///   surface that reorders — it does so at its own construction site
+///   (`edit_issue_components`'s `adds`/`removes` filters, and
+///   `JiraClient::update_issue_components`), never here). Callers that need
+///   the wire's ADD-before-REMOVE grouping must derive it themselves by
+///   filtering this function's CLI-order output by `action` — do not expect
+///   this function to have already grouped it.
 pub(super) fn normalize_component_changes(values: &[String]) -> Vec<ComponentChange> {
-    let mut adds: Vec<ComponentChange> = Vec::new();
-    let mut removes: Vec<ComponentChange> = Vec::new();
-    for value in values {
-        if let Some(name) = value.strip_prefix("add:") {
-            adds.push(ComponentChange {
-                action: ComponentAction::Add,
-                name: name.to_string(),
-            });
-        } else if let Some(name) = value.strip_prefix("remove:") {
-            removes.push(ComponentChange {
-                action: ComponentAction::Remove,
-                name: name.to_string(),
-            });
-        } else {
-            // Bare value (no prefix) normalizes to Add (EC-3.4.022-2).
-            adds.push(ComponentChange {
-                action: ComponentAction::Add,
-                name: value.clone(),
-            });
-        }
-    }
-    adds.extend(removes);
-    adds
+    values
+        .iter()
+        .map(|value| {
+            if let Some(name) = value.strip_prefix("add:") {
+                ComponentChange {
+                    action: ComponentAction::Add,
+                    name: name.to_string(),
+                }
+            } else if let Some(name) = value.strip_prefix("remove:") {
+                ComponentChange {
+                    action: ComponentAction::Remove,
+                    name: name.to_string(),
+                }
+            } else {
+                // Bare value (no prefix) normalizes to Add (EC-3.4.022-2).
+                ComponentChange {
+                    action: ComponentAction::Add,
+                    name: value.clone(),
+                }
+            }
+        })
+        .collect()
 }
 
 /// Render normalized component changes as the comma-joined echo string used
