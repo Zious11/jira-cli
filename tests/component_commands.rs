@@ -9352,3 +9352,61 @@ async fn test_bc_8_3_001_component_rename_numeric_success_json_project_echoes_fl
          ('FOO') — BC-8.3.001 Postcondition 2 pins the flag KEY; got: {parsed}"
     );
 }
+
+// ── Step-4.5 fix burst 5, Test 2 (Lens A LOW — no config-fallback for --project) ─
+
+/// Step-4.5 fix burst 5, Test 2 / BC-8.3.001 Precondition 1 / EC-8.1.004-2:
+/// `component rename` has NO `.jr.toml` config fallback for its scope
+/// selection, unlike `component list` (see
+/// `test_bc_8_1_001_component_list_falls_back_to_configured_project`) — the
+/// neither-`--project`-nor-`--all-projects` guard
+/// (`test_bc_8_3_005_component_rename_scope_selection_clap_conflict_and_app_guard`
+/// Part B) was previously only exercised with NO configured default project
+/// at all, leaving the "does a configured default silently satisfy the
+/// guard?" question unanswered. This is the same pattern as
+/// `test_bc_8_1_005_component_create_no_project_exits_64_not_clap_exit_2`
+/// (create's sibling no-fallback regression test). Here: a `.jr.toml` in CWD
+/// DOES configure `project = "FOO"`, yet `rename OLD NEW` with neither flag
+/// must still exit 64 (the app-level neither-guard, NOT clap's exit 2) with
+/// ZERO HTTP calls — proving the configured default did not leak into
+/// rename's scope resolution.
+#[tokio::test]
+async fn test_bc_8_3_001_component_rename_no_config_fallback_for_project_neither_guard_still_fires()
+{
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_profile_config(config.path(), &server.uri());
+    // .jr.toml DOES configure a default project — rename must NOT fall back to it.
+    std::fs::write(cwd.path().join(".jr.toml"), "project = \"FOO\"\n").unwrap();
+
+    let output = jr_cmd(&server.uri(), cache.path(), config.path())
+        .args(["component", "rename", "OLD", "NewName"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Test 2: expected app-level exit 64 (no .jr.toml fallback for rename's \
+         neither-scope guard), NOT clap's exit 2; got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--project") && stderr.contains("--all-projects"),
+        "Test 2: neither-flag error must name BOTH --project and \
+         --all-projects even with a configured default project; got: {stderr}"
+    );
+    let received = server.received_requests().await.unwrap();
+    assert!(
+        received.is_empty(),
+        "Test 2: application-level guard must fire before any HTTP — the \
+         configured .jr.toml default project must not have been resolved \
+         and used to make a request; got {} request(s)",
+        received.len()
+    );
+}
