@@ -215,12 +215,54 @@ impl ComponentAction {
     }
 }
 
+/// Whether a resolved `--component` value is a component NAME or a numeric
+/// component ID (Step-4.5 Round 3, F1 fix).
+///
+/// BC-8.4.001's numeric bypass means all-ASCII-digit `--component` input is
+/// ALWAYS a component id, never a name (BC-8.1.008 -- identical to the
+/// `component edit`/`delete`/`rename` command family convention). This
+/// discriminator carries that fact from parse time (`for_input`, which
+/// mirrors `helpers::resolve_component`'s own bypass predicate byte-for-byte
+/// -- keep the two in sync) through resolution to the wire-body construction
+/// site, so a numeric value is wired as `{"id": ...}` and a name is wired as
+/// `{"name": ...}` -- never the reverse. Accepted edge (matches BC-8.1.008's
+/// established gap): a component literally NAMED e.g. `"10001"` is
+/// unreachable by name via `--component` -- numeric input is always treated
+/// as an id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ComponentRefKind {
+    /// Wired as `{"name": <value>}`.
+    Name,
+    /// Wired as `{"id": <value>}` (BC-8.4.001 numeric bypass).
+    Id,
+}
+
+impl ComponentRefKind {
+    /// Determine the ref kind directly from a raw `--component` value's
+    /// text (BEFORE resolution) -- non-empty and all-ASCII-digit → `Id`,
+    /// otherwise `Name`. Mirrors `helpers::resolve_component`'s numeric
+    /// bypass condition (BC-8.4.001 step 1); the two must stay in sync.
+    pub(super) fn for_input(value: &str) -> Self {
+        if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
+            ComponentRefKind::Id
+        } else {
+            ComponentRefKind::Name
+        }
+    }
+}
+
 /// One normalized `--component` change: an action (ADD/REMOVE) paired with
-/// the (not-yet-resolved) component name as supplied on the CLI.
+/// the (not-yet-resolved, pre-`ref_kind`-determination) component name as
+/// supplied on the CLI. `ref_kind` is determined at construction time from
+/// the raw input text (see [`ComponentRefKind::for_input`]) and carried
+/// through resolution unchanged -- resolution only replaces `name` with the
+/// resolved canonical string; a numeric value's `name` is unchanged by
+/// resolution (BC-8.4.001's numeric bypass is a no-op pass-through).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ComponentChange {
     pub(super) action: ComponentAction,
     pub(super) name: String,
+    pub(super) ref_kind: ComponentRefKind,
 }
 
 /// Parse the repeatable `--component` flag's raw values into normalized
@@ -250,17 +292,20 @@ pub(super) fn normalize_component_changes(values: &[String]) -> Vec<ComponentCha
             if let Some(name) = value.strip_prefix("add:") {
                 ComponentChange {
                     action: ComponentAction::Add,
+                    ref_kind: ComponentRefKind::for_input(name),
                     name: name.to_string(),
                 }
             } else if let Some(name) = value.strip_prefix("remove:") {
                 ComponentChange {
                     action: ComponentAction::Remove,
+                    ref_kind: ComponentRefKind::for_input(name),
                     name: name.to_string(),
                 }
             } else {
                 // Bare value (no prefix) normalizes to Add (EC-3.4.022-2).
                 ComponentChange {
                     action: ComponentAction::Add,
+                    ref_kind: ComponentRefKind::for_input(value),
                     name: value.clone(),
                 }
             }

@@ -6,6 +6,7 @@ use serde_json::json;
 use crate::adf;
 use crate::api::client::JiraClient;
 use crate::api::jira::bulk::{BULK_MAX_KEYS, resolve_bulk_await_timeout};
+use crate::api::jira::issues::ComponentRef;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
 use crate::error::JrError;
@@ -1041,15 +1042,22 @@ async fn edit_issue_components(
     let project_key = project_key_from_issue_key(key);
     let resolved_changes = resolve_component_change_names(client, project_key, &changes).await?;
 
-    let adds: Vec<String> = resolved_changes
+    // F1 fix: carry the id-vs-name discriminator into the wire-body
+    // construction as a ComponentRef, not a bare String -- a numeric
+    // resolved value wires as {"id":...}, a name wires as {"name":...}.
+    let to_component_ref = |c: &format::ComponentChange| match c.ref_kind {
+        format::ComponentRefKind::Id => ComponentRef::Id(c.name.clone()),
+        format::ComponentRefKind::Name => ComponentRef::Name(c.name.clone()),
+    };
+    let adds: Vec<ComponentRef> = resolved_changes
         .iter()
         .filter(|c| c.action == format::ComponentAction::Add)
-        .map(|c| c.name.clone())
+        .map(to_component_ref)
         .collect();
-    let removes: Vec<String> = resolved_changes
+    let removes: Vec<ComponentRef> = resolved_changes
         .iter()
         .filter(|c| c.action == format::ComponentAction::Remove)
-        .map(|c| c.name.clone())
+        .map(to_component_ref)
         .collect();
 
     // Step 3: evaluate the editmeta gate ONCE -- no retry-with-different-shape
@@ -1063,22 +1071,29 @@ async fn edit_issue_components(
         client.update_issue_components(key, &adds, &removes).await?;
     } else {
         // Read-modify-write fallback: GET current fields.components, compute
-        // the new full array client-side (existing minus removed names, plus
-        // newly-resolved adds appended), PUT via the `set` verb.
+        // the new full array client-side (existing minus removed
+        // components, plus newly-resolved adds appended), PUT via the `set`
+        // verb. F1 fix: a numeric remove target matches an existing
+        // component by ID (`c.id`, `Option<String>`), NOT by name -- a
+        // name-kind remove target still matches by name, unchanged. A
+        // retained existing component is re-emitted as `{"name": c.name}`
+        // regardless of whether it has an id (unchanged pre-F1 behavior,
+        // AC-005) -- only NEWLY-added targets carry the id-vs-name
+        // discriminator on the wire.
         let issue = client.get_issue(key, &[]).await?;
-        let mut current: Vec<String> = issue
-            .fields
-            .components
-            .unwrap_or_default()
-            .into_iter()
-            .map(|c| c.name)
-            .collect();
-        current.retain(|name| !removes.contains(name));
-        for name in &adds {
-            current.push(name.clone());
+        let mut current: Vec<crate::types::jira::issue::Component> =
+            issue.fields.components.unwrap_or_default();
+        current.retain(|c| {
+            !removes.iter().any(|r| match r {
+                ComponentRef::Id(id) => c.id.as_deref() == Some(id.as_str()),
+                ComponentRef::Name(name) => &c.name == name,
+            })
+        });
+        let mut new_components: Vec<serde_json::Value> =
+            current.iter().map(|c| json!({"name": &c.name})).collect();
+        for r in &adds {
+            new_components.push(r.to_wire_object());
         }
-        let new_components: Vec<serde_json::Value> =
-            current.iter().map(|name| json!({"name": name})).collect();
         client
             .edit_issue(key, json!({"components": new_components}))
             .await?;
@@ -1152,6 +1167,11 @@ async fn resolve_component_change_names(
         resolved_changes.push(format::ComponentChange {
             action: change.action.clone(),
             name: matched_name,
+            // F1 fix: ref_kind is carried forward unchanged from the raw
+            // input (determined at parse time in
+            // format::normalize_component_changes) -- resolution never
+            // changes whether a value is a name or a numeric id.
+            ref_kind: change.ref_kind,
         });
     }
     Ok(resolved_changes)

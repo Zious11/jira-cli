@@ -12,6 +12,7 @@ use crate::error::JrError;
 use crate::output;
 use crate::partial_match::MatchResult;
 
+use super::format;
 use super::helpers;
 use super::jsm_create::{JsmCreateArgs, handle_jsm_create};
 
@@ -346,8 +347,16 @@ pub(super) async fn handle_create(
 /// (AC-010, VP-COMPONENT-025) — callers must not fetch it again elsewhere in
 /// the same command. Unknown name → exit 64, zero POST (AC-008 variant).
 ///
-/// Returns one `{"name": "<resolved-name>"}` entry per input value, in CLI
-/// input order (AC-007).
+/// Returns one entry per input value, in CLI input order (AC-007) --
+/// `{"name": "<resolved-name>"}` for a NAME input, `{"id": "<n>"}` for a
+/// numeric input (Step-4.5 Round 3, F1 fix: BC-8.4.001's numeric bypass
+/// means all-ASCII-digit `--component` input is always a component id,
+/// never a name -- BC-8.1.008; Jira's issue components field accepts
+/// `{"id":...}`). Deliberately NOT confirmed against `GET /component/{id}`
+/// before use -- Jira validates the id on the POST itself (an invalid id →
+/// Jira 4xx → exit 1, same treatment as an unknown name today). Accepted
+/// edge (BC-8.1.008's established gap): a component literally NAMED e.g.
+/// `"10001"` is unreachable by name via `--component`.
 async fn resolve_create_components(
     client: &JiraClient,
     project_key: &str,
@@ -360,6 +369,9 @@ async fn resolve_create_components(
     for input in components {
         // BC-3.4.024 EC-2: NO add:/remove: prefix stripping on create -- the
         // raw value is resolved LITERALLY against the project component list.
+        // F1 fix: the ref kind is determined from the RAW input text, before
+        // resolution -- mirrors edit.rs's resolve_component_change_names.
+        let ref_kind = format::ComponentRefKind::for_input(input);
         let matched_name = match helpers::resolve_component(input, project_key, &candidate_names) {
             MatchResult::Exact(matched) => matched,
             MatchResult::ExactMultiple(matched_name) => {
@@ -396,7 +408,10 @@ async fn resolve_create_components(
                 .into());
             }
         };
-        resolved.push(json!({"name": matched_name}));
+        resolved.push(match ref_kind {
+            format::ComponentRefKind::Id => json!({"id": matched_name}),
+            format::ComponentRefKind::Name => json!({"name": matched_name}),
+        });
     }
     Ok(resolved)
 }

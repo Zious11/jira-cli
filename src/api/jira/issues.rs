@@ -30,6 +30,43 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
     "issuelinks",
 ];
 
+/// A resolved `--component` add/remove target's WIRE identity (Step-4.5
+/// Round 3, F1 fix; BC-3.4.022/BC-3.4.024, BC-8.4.001, BC-8.1.008).
+///
+/// BC-8.4.001's numeric bypass means all-ASCII-digit `--component` input is
+/// ALWAYS a component id, never a name — identical to the
+/// `component edit`/`delete`/`rename` command family convention
+/// (BC-8.1.008). This determines whether a wire entry is `{"id":...}` or
+/// `{"name":...}`. Constructed by callers (`cli::issue::edit`,
+/// `cli::issue::create`) from their own name/id resolution — this module
+/// only renders the wire shape from an already-decided `ComponentRef`.
+///
+/// Deliberately NOT confirmed against `GET /component/{id}` before use on
+/// the issue-write path — Jira validates the id on the create/edit write
+/// itself (an invalid id → Jira 4xx → exit 1, same treatment as an unknown
+/// name today). This intentionally differs from `component edit`/`delete`,
+/// which DO confirm the id first; that extra confirmation is unnecessary
+/// here because the write call itself is the validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComponentRef {
+    /// Wired as `{"name": <value>}`.
+    Name(String),
+    /// Wired as `{"id": <value>}`.
+    Id(String),
+}
+
+impl ComponentRef {
+    /// Render this target as the JSON object nested under the `add`/`remove`
+    /// wire-verb key (or, for the read-modify-write fallback's `adds` side,
+    /// directly as a `fields.components[]` array element).
+    pub(crate) fn to_wire_object(&self) -> Value {
+        match self {
+            ComponentRef::Name(name) => serde_json::json!({"name": name}),
+            ComponentRef::Id(id) => serde_json::json!({"id": id}),
+        }
+    }
+}
+
 /// Result of a paginated issue search, including a flag indicating whether
 /// the result set may be incomplete (caller-limit truncation OR
 /// repeated-cursor guard abort).
@@ -547,11 +584,16 @@ impl JiraClient {
     /// {"update":{"components":[{"add":{"name":"X"}},{"remove":{"name":"Y"}}]}}
     /// ```
     ///
-    /// Component entries are name-keyed **objects** (`{"add":{"name":...}}`)
-    /// — NOT bare strings (contrast [`Self::update_issue_labels`]). `adds`
-    /// entries are emitted before `removes` entries in the wire array
-    /// (BC-3.4.022 Postcondition 2); callers should pass already-resolved,
-    /// already-ordered component names (see
+    /// Component entries are keyed **objects** — `{"add":{"name":...}}` for
+    /// a NAME target, `{"add":{"id":...}}` for a numeric ID target
+    /// (Step-4.5 Round 3, F1 fix: BC-3.4.024's `--component` resolution goes
+    /// via §8.4, whose numeric bypass means all-ASCII-digit input is always
+    /// a component id, never a name — BC-8.1.008; Jira's issue components
+    /// field accepts `{"id":...}`) — NOT bare strings (contrast
+    /// [`Self::update_issue_labels`]). `adds` entries are emitted before
+    /// `removes` entries in the wire array (BC-3.4.022 Postcondition 2);
+    /// callers should pass already-resolved, already-ordered
+    /// [`ComponentRef`] values (see
     /// `cli::issue::format::normalize_component_changes`).
     ///
     /// This method implements ONLY the native-shape PUT. The caller
@@ -566,15 +608,15 @@ impl JiraClient {
     pub async fn update_issue_components(
         &self,
         key: &str,
-        adds: &[String],
-        removes: &[String],
+        adds: &[ComponentRef],
+        removes: &[ComponentRef],
     ) -> Result<()> {
         let mut component_ops: Vec<serde_json::Value> = Vec::new();
-        for name in adds {
-            component_ops.push(serde_json::json!({"add": {"name": name}}));
+        for r in adds {
+            component_ops.push(serde_json::json!({"add": r.to_wire_object()}));
         }
-        for name in removes {
-            component_ops.push(serde_json::json!({"remove": {"name": name}}));
+        for r in removes {
+            component_ops.push(serde_json::json!({"remove": r.to_wire_object()}));
         }
         let path = format!("/rest/api/3/issue/{}", urlencoding::encode(key));
         let body = serde_json::json!({
