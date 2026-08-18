@@ -5998,3 +5998,322 @@ async fn test_bc_3_4_021_issue_edit_component_dry_run_preserves_cli_input_order(
          stdout={table_stdout}"
     );
 }
+
+// =============================================================================
+// Step-4.5 Round 2 — additional coverage: RMW fallback REMOVE branch (MEDIUM-1)
+// and resolver ExactMultiple/Ambiguous error branches on the edit AND create
+// paths (MEDIUM-2)
+// =============================================================================
+
+// ── MEDIUM-1 (BC-3.4.022 Postcondition 3) — RMW fallback REMOVE branch ────
+
+/// editmeta advertises ONLY `set` (no add/remove) → the read-modify-write
+/// fallback fires. `--component add:X --component remove:Y`, where the
+/// issue's CURRENT `fields.components` already contains `Y` and an
+/// untouched `Z`: the computed `set`-verb array must retain `Z`, drop `Y`,
+/// and append `X` -- `Z` first (existing, order-preserved), `X` second
+/// (newly resolved add). Prior to this test, the `current.retain(|name|
+/// !removes.contains(name))` removal computation (edit.rs) was exercised
+/// ONLY by AC-005, which passes solely `--component add:Backend` -- zero
+/// coverage on the removal path itself. A mutation inverting or deleting
+/// that `retain` predicate would have stayed green (a real data-loss risk
+/// on a fallback PUT that silently keeps a component the user asked to
+/// remove).
+#[tokio::test]
+async fn test_bc_3_4_022_issue_edit_component_fallback_remove_computes_correct_set_array() {
+    let server = MockServer::start().await;
+
+    // Project component list: X and Y must resolve (they're the CLI
+    // --component inputs); Z is pre-existing on the issue and is never
+    // resolved -- it must not need to appear in this list.
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "X", None, None, None),
+            common::fixtures::component_response("10002", "Y", None, None, None),
+        ],
+    )
+    .await;
+    // editmeta advertises ONLY "set" -- no add/remove -- so the fallback
+    // path must fire (same gate condition as AC-005).
+    s605_1_mock_editmeta(&server, "FOO-1", &["set"]).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_components("FOO-1", "Test", &["Z", "Y"]),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:X",
+            "--component",
+            "remove:Y",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "MEDIUM-1: expected exit 0; stderr={stderr}"
+    );
+
+    let puts = s605_1_captured_puts(&server, "FOO-1").await;
+    assert_eq!(puts.len(), 1, "MEDIUM-1: expected exactly 1 PUT; got {puts:?}");
+    assert_eq!(
+        puts[0],
+        serde_json::json!({
+            "fields": {
+                "components": [
+                    {"name": "Z"},
+                    {"name": "X"}
+                ]
+            }
+        }),
+        "MEDIUM-1: fallback set-verb PUT must retain the untouched \
+         pre-existing component (Z), drop the removed one (Y), and append \
+         the newly-resolved add (X) -- in that order"
+    );
+}
+
+// ── MEDIUM-2 (BC-8.4.003) — ExactMultiple / Ambiguous on edit AND create ──
+
+/// `issue edit`: a component-list GET returning two components whose names
+/// are identical case-insensitively ("Backend" id 10001, "backend" id
+/// 10002) → `MatchResult::ExactMultiple` → exit 64, zero PUT, exact
+/// BC-8.4.003 message (pinned verbatim, including the LIST-ORDER id list --
+/// mirrors `component.rs`'s `test_bc_x_10_003_component_edit_exact_multiple_fails_closed`
+/// precedent, applied to the issue-edit copy of the resolver call).
+#[tokio::test]
+async fn test_bc_8_4_003_issue_edit_component_exact_multiple_exits_64() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "backend", None, None, None),
+        ],
+    )
+    .await;
+    // Mounted defensively -- the resolution-vs-editmeta call ordering is
+    // not pinned by the BC (mirrors AC-006's precedent).
+    s605_1_mock_editmeta(&server, "FOO-1", &["add", "remove"]).await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "MEDIUM-2 (edit ExactMultiple): expected exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "Multiple components named \"Backend\" found (IDs: 10001, 10002). \
+             Pass the numeric ID directly."
+        ),
+        "MEDIUM-2 (edit ExactMultiple): expected exact BC-8.4.003 message; \
+         stderr={stderr}"
+    );
+}
+
+/// `issue edit`: `--component add:Amb` where the project component list
+/// has two partial matches ("Ambition" id 20002, "Amber" id 20001, mounted
+/// in reverse-alphabetical fixture order so the assertion can only pass if
+/// the implementation actually sorts the candidates) → `MatchResult::Ambiguous`
+/// → exit 64, zero PUT, exact BC-8.4.003 message (mirrors the
+/// `issue list --component` precedent, `test_bc_2_1_022_issue_list_component_ambiguous_name_zero_search`,
+/// applied to the issue-edit copy of the resolver call).
+#[tokio::test]
+async fn test_bc_8_4_003_issue_edit_component_ambiguous_exits_64() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("20002", "Ambition", None, None, None),
+            common::fixtures::component_response("20001", "Amber", None, None, None),
+        ],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["add", "remove"]).await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--component",
+            "add:Amb",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "MEDIUM-2 (edit Ambiguous): expected exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Ambiguous component 'Amb'. Matches: Amber, Ambition."),
+        "MEDIUM-2 (edit Ambiguous): expected exact BC-8.4.003 message \
+         (alphabetically-sorted Matches list); stderr={stderr}"
+    );
+}
+
+/// `issue create`: same case-only-duplicate fixture as the edit test above,
+/// via `resolve_create_components` (create.rs's own copy of the resolver
+/// call) → exit 64, zero POST, exact BC-8.4.003 message.
+#[tokio::test]
+async fn test_bc_8_4_003_issue_create_component_exact_multiple_exits_64() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "backend", None, None, None),
+        ],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "create",
+            "--project",
+            "FOO",
+            "--type",
+            "Task",
+            "--summary",
+            "Test exact multiple",
+            "--component",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "MEDIUM-2 (create ExactMultiple): expected exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "Multiple components named \"Backend\" found (IDs: 10001, 10002). \
+             Pass the numeric ID directly."
+        ),
+        "MEDIUM-2 (create ExactMultiple): expected exact BC-8.4.003 message; \
+         stderr={stderr}"
+    );
+}
+
+/// `issue create`: same reverse-alphabetical-fixture partial-match setup as
+/// the edit Ambiguous test above, via `resolve_create_components` → exit
+/// 64, zero POST, exact BC-8.4.003 message.
+#[tokio::test]
+async fn test_bc_8_4_003_issue_create_component_ambiguous_exits_64() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("20002", "Ambition", None, None, None),
+            common::fixtures::component_response("20001", "Amber", None, None, None),
+        ],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "create",
+            "--project",
+            "FOO",
+            "--type",
+            "Task",
+            "--summary",
+            "Test ambiguous",
+            "--component",
+            "Amb",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "MEDIUM-2 (create Ambiguous): expected exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Ambiguous component 'Amb'. Matches: Amber, Ambition."),
+        "MEDIUM-2 (create Ambiguous): expected exact BC-8.4.003 message \
+         (alphabetically-sorted Matches list); stderr={stderr}"
+    );
+}
