@@ -10110,6 +10110,138 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_partial_failure_exits_nonzero
     );
 }
 
+/// A bulk `--component add:Backend` on 2 keys whose poll response includes a
+/// `failedAccessibleIssues` entry for a key that was NOT among the submitted
+/// `selectedIssueIdsOrKeys` (FOO-99, while only FOO-1/FOO-2 were submitted)
+/// exercises `render_bulk_component_results`'s SECONDARY loop -- `for
+/// (failed_key, err) in &op.progress.failed_accessible_issues { if
+/// !op.keys.iter().any(|k| k == failed_key) { ... any_failed = true; } }` --
+/// distinct from the primary per-submitted-key loop the tests above
+/// exercise. No fixture ever placed a failed key outside the submitted set
+/// before this test, so the secondary loop's `any_failed = true` was
+/// production-reachable but never hit: a mutation deleting it (or replacing
+/// the `!op.keys.iter().any(...)` guard with `false`, or deleting the loop
+/// entirely) silently exits 0 on an out-of-chunk failure. This is a
+/// Step-4.5 Round-7 coverage-only pin: no production behavior is asserted to
+/// be correct or desirable here, only pinned so the silent-success mutation
+/// is caught.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_out_of_chunk_failed_key_sets_failure() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-comp-oochunk")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/task-comp-oochunk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::bulk_task_partial_failure(
+                "task-comp-oochunk",
+                &["FOO-1", "FOO-2"],
+                &[("FOO-99", "Out-of-chunk failure for FOO-99")],
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "an out-of-chunk failedAccessibleIssues entry must set any_failed and exit non-zero; \
+         status={:?} stderr={stderr}",
+        output.status
+    );
+    assert!(
+        stderr.contains("One or more issues failed during bulk edit"),
+        "expected the any_failed bail message on stderr; stderr={stderr}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("stdout must be valid JSON even on an out-of-chunk failure: {e}; stdout={stdout}")
+    });
+
+    let operations = parsed["operations"]
+        .as_array()
+        .expect("expected top-level 'operations' array");
+    assert_eq!(
+        operations.len(),
+        1,
+        "expected exactly one operation (single ADD action); got {operations:?}"
+    );
+    let results = operations[0]["results"]
+        .as_array()
+        .expect("expected 'results' array on the operation");
+
+    let foo1 = results
+        .iter()
+        .find(|r| r["key"] == "FOO-1")
+        .unwrap_or_else(|| panic!("expected a result row for FOO-1; results={results:?}"));
+    assert_eq!(
+        foo1["status"], "success",
+        "FOO-1 was submitted and processed; row={foo1:?}"
+    );
+
+    let foo2 = results
+        .iter()
+        .find(|r| r["key"] == "FOO-2")
+        .unwrap_or_else(|| panic!("expected a result row for FOO-2; results={results:?}"));
+    assert_eq!(
+        foo2["status"], "success",
+        "FOO-2 was submitted and processed; row={foo2:?}"
+    );
+
+    let foo99 = results
+        .iter()
+        .find(|r| r["key"] == "FOO-99")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a result row for FOO-99 -- the out-of-chunk failed key rendered by \
+                 the SECONDARY loop; results={results:?}"
+            )
+        });
+    assert_eq!(
+        foo99["status"], "error",
+        "FOO-99 was in failedAccessibleIssues but not among the submitted chunk keys, so it \
+         must render via the secondary loop as status=error; row={foo99:?}"
+    );
+    assert_eq!(
+        foo99["error"], "Out-of-chunk failure for FOO-99",
+        "the secondary loop's error row must carry the BulkActionError summary; row={foo99:?}"
+    );
+}
+
 /// A bulk `--component add:Backend` on 2 keys where the poll response omits
 /// FOO-2 from BOTH `processedAccessibleIssues` and `failedAccessibleIssues`
 /// (counted only via `invalidOrInaccessibleIssueCount`) must render FOO-2's
