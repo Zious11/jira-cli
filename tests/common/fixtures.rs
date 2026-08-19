@@ -803,3 +803,63 @@ pub fn issue_response_with_components_and_ids(
     response["fields"]["components"] = json!(components);
     response
 }
+
+// ── S-605-2: bulk `issue edit --component` (multi-key) fixtures ────────────
+//
+// `POST /rest/api/3/bulk/issues/fields` is async: the endpoint returns a
+// `taskId` immediately, then the client polls `GET /rest/api/3/bulk/queue/
+// {taskId}` until a terminal status. These three fixtures cover the three
+// terminal/non-terminal shapes S-605-2's chunking + mixed add:/remove:
+// tests need: ENQUEUED (immediate POST response), COMPLETE (successful
+// poll), and FAILED (a chunk-sequence abort, EC-3.4.023-4).
+//
+// Field shapes mirror the existing local `bulk_enqueued`/`bulk_complete`
+// helpers in `tests/issue_bulk_pr2.rs` (kept private/local there per that
+// file's own convention) — centralized here as `pub` fixtures per S-605-2's
+// File Structure Requirements ("Multi-chunk bulk-fields fixtures").
+
+/// `POST /rest/api/3/bulk/issues/fields` immediate-response body: task
+/// accepted, not yet started.
+pub fn bulk_task_enqueued(task_id: &str) -> Value {
+    json!({
+        "taskId": task_id,
+        "status": "ENQUEUED",
+        "progressPercent": 0,
+        "totalIssueCount": 0,
+        "processedAccessibleIssues": [],
+        "failedAccessibleIssues": {},
+        "invalidOrInaccessibleIssueCount": 0
+    })
+}
+
+/// `GET /rest/api/3/bulk/queue/{taskId}` terminal-success response — every
+/// key in `processed_keys` succeeded.
+pub fn bulk_task_complete(task_id: &str, processed_keys: &[&str]) -> Value {
+    json!({
+        "taskId": task_id,
+        "status": "COMPLETE",
+        "progressPercent": 100,
+        "totalIssueCount": processed_keys.len(),
+        "processedAccessibleIssues": processed_keys,
+        "failedAccessibleIssues": {},
+        "invalidOrInaccessibleIssueCount": 0
+    })
+}
+
+/// `GET /rest/api/3/bulk/queue/{taskId}` terminal-failure response
+/// (`FAILED`) — used to exercise AC-009 / EC-3.4.023-4's chunk-sequence
+/// abort: a chunk that ends `FAILED` must surface via the existing
+/// `await_bulk_task` error path and stop the remaining chunk sequence from
+/// ever being attempted.
+pub fn bulk_task_failed(task_id: &str, failure_reason: &str) -> Value {
+    json!({
+        "taskId": task_id,
+        "status": "FAILED",
+        "progressPercent": 100,
+        "totalIssueCount": 0,
+        "processedAccessibleIssues": [],
+        "failedAccessibleIssues": {},
+        "invalidOrInaccessibleIssueCount": 0,
+        "failureReason": failure_reason
+    })
+}

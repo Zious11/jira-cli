@@ -8115,3 +8115,952 @@ async fn test_bc_3_4_022_issue_edit_component_native_cross_identifier_add_remove
          accepted divergence, edit.rs point 4)"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// S-605-2: `issue edit KEY1 KEY2 ... --component add:X` (multi-key/`--jql`
+// bulk path) — BC-3.4.023. TDD Red Gate tests against the `todo!()` stubs in
+// `handle_edit_bulk_components` (src/cli/issue/edit.rs) and
+// `build_component_edited_fields` (src/api/jira/bulk.rs).
+//
+// AC-010 (the live-Jira smoke-test release gate, DEC-280) is NOT here — it
+// lives in tests/e2e_live.rs, gated behind JR_RUN_E2E=1 + #[ignore], per that
+// file's existing conventions.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Generate `n` sequential positional issue keys `"{prefix}-1".."{prefix}-n"`.
+fn s605_2_keys(prefix: &str, n: usize) -> Vec<String> {
+    (1..=n).map(|i| format!("{prefix}-{i}")).collect()
+}
+
+/// Mounts `GET /rest/api/3/bulk/queue/{task_id}` -> terminal `COMPLETE`,
+/// with every key in `processed_keys` marked successful.
+async fn s605_2_mount_poll_complete(server: &MockServer, task_id: &str, processed_keys: &[String]) {
+    let keys_ref: Vec<&str> = processed_keys.iter().map(String::as_str).collect();
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_complete(task_id, &keys_ref)),
+        )
+        .mount(server)
+        .await;
+}
+
+/// Mounts `GET /rest/api/3/bulk/queue/{task_id}` -> terminal `FAILED`
+/// (EC-3.4.023-4 chunk-abort scenario).
+async fn s605_2_mount_poll_failed(server: &MockServer, task_id: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::bulk_task_failed(
+                task_id,
+                "Simulated chunk failure",
+            )),
+        )
+        .mount(server)
+        .await;
+}
+
+/// Captures every `POST /rest/api/3/bulk/issues/fields` request body, parsed
+/// as JSON, in arrival order.
+async fn s605_2_captured_bulk_posts(server: &MockServer) -> Vec<serde_json::Value> {
+    let received = server.received_requests().await.unwrap();
+    received
+        .iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::POST
+                && r.url.path() == "/rest/api/3/bulk/issues/fields"
+        })
+        .map(|r| {
+            serde_json::from_slice(&r.body)
+                .unwrap_or_else(|e| panic!("bulk POST body must be valid JSON: {e}"))
+        })
+        .collect()
+}
+
+// ── AC-001 (BC-3.4.023 Postcondition 1/2 -- wire shape) ────────────────────
+
+/// `jr issue edit FOO-1 FOO-2 --component add:Backend` -> exactly ONE
+/// `POST /rest/api/3/bulk/issues/fields` with `selectedActions ==
+/// ["components"]` and `editedFieldsInput.multiselectComponents` as a
+/// SINGLE OBJECT (not an array) -- `{"fieldId":"components",
+/// "components":[{"componentId":10001}],"bulkEditMultiSelectFieldOption":
+/// "ADD"}`. Also asserts the POST body's top-level key SET is exactly
+/// `{selectedIssueIdsOrKeys, selectedActions, editedFieldsInput}` -- i.e. NO
+/// `sendBulkNotification` key (BC-3.4.023 Postcondition 2's 2026-08-19
+/// clarification).
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_add_wire_shape() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-comp-add-001")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let keys = vec!["FOO-1".to_string(), "FOO-2".to_string()];
+    s605_2_mount_poll_complete(&server, "task-comp-add-001", &keys).await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-001: expected exit 0; stderr={stderr}"
+    );
+
+    let posts = s605_2_captured_bulk_posts(&server).await;
+    assert_eq!(
+        posts.len(),
+        1,
+        "AC-001: expected exactly 1 bulk POST; got {posts:?}"
+    );
+
+    assert_eq!(
+        posts[0],
+        serde_json::json!({
+            "selectedIssueIdsOrKeys": ["FOO-1", "FOO-2"],
+            "selectedActions": ["components"],
+            "editedFieldsInput": {
+                "multiselectComponents": {
+                    "fieldId": "components",
+                    "components": [{"componentId": 10001}],
+                    "bulkEditMultiSelectFieldOption": "ADD"
+                }
+            }
+        }),
+        "AC-001: bulk POST body must be the exact multiselectComponents wire shape"
+    );
+
+    // Clarifying note (2026-08-19): the body's top-level key set MUST be
+    // exactly {selectedIssueIdsOrKeys, selectedActions, editedFieldsInput} --
+    // no sendBulkNotification key. Asserted independently of the exact-body
+    // match above so a future body-shape refactor can't accidentally
+    // reintroduce sendBulkNotification while still matching a looser
+    // equality check elsewhere.
+    let top_level_keys: std::collections::BTreeSet<&str> = posts[0]
+        .as_object()
+        .expect("AC-001: bulk POST body must be a JSON object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let expected_keys: std::collections::BTreeSet<&str> = [
+        "selectedIssueIdsOrKeys",
+        "selectedActions",
+        "editedFieldsInput",
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        top_level_keys, expected_keys,
+        "AC-001: bulk POST body top-level key set must be exactly \
+         {{selectedIssueIdsOrKeys, selectedActions, editedFieldsInput}} -- \
+         sendBulkNotification MUST be absent (BC-3.4.023 Postcondition 2, \
+         2026-08-19 clarification)"
+    );
+}
+
+// ── AC-002 (BC-3.4.023 Postcondition 3 -- two sequential POSTs) ────────────
+
+/// `jr issue edit FOO-1 FOO-2 --component add:Backend --component
+/// remove:Frontend` -> EXACTLY two sequential `POST /bulk/issues/fields`
+/// calls, ADD first (fully polled to completion) then REMOVE -- NOT one
+/// coalesced POST (the label bulk path's shape, which this path
+/// deliberately diverges from per the BC-3.4.023 pass-14 correction).
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_mixed_add_remove_two_sequential_posts() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+
+    let keys = vec!["FOO-1".to_string(), "FOO-2".to_string()];
+
+    // Distinguish the ADD POST from the REMOVE POST via body content -- each
+    // must be a SEPARATE POST (never coalesced into one body carrying both
+    // actions).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "editedFieldsInput": {
+                "multiselectComponents": {
+                    "bulkEditMultiSelectFieldOption": "ADD"
+                }
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-comp-add")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_complete(&server, "task-comp-add", &keys).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "editedFieldsInput": {
+                "multiselectComponents": {
+                    "bulkEditMultiSelectFieldOption": "REMOVE"
+                }
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-comp-remove")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_complete(&server, "task-comp-remove", &keys).await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+            "--component",
+            "remove:Frontend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-002: expected exit 0; stderr={stderr}"
+    );
+
+    let posts = s605_2_captured_bulk_posts(&server).await;
+    assert_eq!(
+        posts.len(),
+        2,
+        "AC-002: expected exactly 2 sequential bulk POSTs (ADD then REMOVE, \
+         never coalesced); got {posts:?}"
+    );
+
+    let first_option =
+        posts[0]["editedFieldsInput"]["multiselectComponents"]["bulkEditMultiSelectFieldOption"]
+            .as_str();
+    let second_option =
+        posts[1]["editedFieldsInput"]["multiselectComponents"]["bulkEditMultiSelectFieldOption"]
+            .as_str();
+    assert_eq!(
+        first_option,
+        Some("ADD"),
+        "AC-002: first bulk POST must be the ADD action; posts={posts:?}"
+    );
+    assert_eq!(
+        second_option,
+        Some("REMOVE"),
+        "AC-002: second bulk POST must be the REMOVE action; posts={posts:?}"
+    );
+}
+
+// ── AC-003 (BC-3.4.023 Invariant 2 -- integer componentId, parse step) ─────
+
+/// The resolved `String` component id is explicitly parsed to a numeric
+/// type before body assembly: `components[].componentId` in the POST body
+/// is a JSON integer, never a string and never a `{"name":...}` object.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_id_is_json_integer_not_string() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "20007", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-comp-intid")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let keys = vec!["FOO-1".to_string(), "FOO-2".to_string()];
+    s605_2_mount_poll_complete(&server, "task-comp-intid", &keys).await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-003: expected exit 0; stderr={stderr}"
+    );
+
+    let posts = s605_2_captured_bulk_posts(&server).await;
+    assert_eq!(posts.len(), 1, "AC-003: expected exactly 1 bulk POST");
+
+    let components = posts[0]["editedFieldsInput"]["multiselectComponents"]["components"]
+        .as_array()
+        .expect("AC-003: components must be a JSON array");
+    assert_eq!(
+        components.len(),
+        1,
+        "AC-003: expected exactly 1 component entry"
+    );
+
+    let component_id_value = &components[0]["componentId"];
+    assert!(
+        component_id_value.is_u64(),
+        "AC-003: componentId must be a JSON integer (u64-representable); \
+         got {component_id_value:?}"
+    );
+    assert_eq!(
+        component_id_value.as_u64(),
+        Some(20007),
+        "AC-003: componentId must equal the resolved numeric id 20007"
+    );
+    assert!(
+        !component_id_value.is_string(),
+        "AC-003: componentId MUST NOT be a JSON string; got {component_id_value:?}"
+    );
+    assert!(
+        components[0].get("name").is_none(),
+        "AC-003: components[] entries MUST NOT be {{\"name\":...}} objects \
+         (that shape belongs to BC-3.4.022's single-key path, not this bulk \
+         path); got {:?}",
+        components[0]
+    );
+}
+
+// ── AC-004 (BC-3.4.023 Postcondition 4 -- resolution before POST) ──────────
+
+/// Component NAMES resolve via §8.4 to numeric ids BEFORE the bulk POST is
+/// built; an unknown/ambiguous name -> exit 64, ZERO bulk POST calls.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_unknown_name_zero_post() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Nonexistent",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-004: expected exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "Component 'Nonexistent' not found in project FOO. Available: Backend, Frontend."
+        ),
+        "AC-004: expected BC-8.4.002 canonical not-found message; stderr={stderr}"
+    );
+}
+
+// ── AC-005 (BC-3.4.023 Edge Case EC-3.4.023-1 -- cross-project guard) ──────
+
+/// Keys spanning 2+ projects with `--component` -> exit 64 BEFORE any HTTP
+/// (mirrors BC-3.4.019's `--type` cross-project guard exactly -- component
+/// ids are project-scoped).
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_cross_project_guard() {
+    let server = MockServer::start().await;
+    // Mount NO mocks -- any HTTP call is a test failure; verified via
+    // received_requests().len() == 0 below.
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "BAR-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-005: expected exit 64 for cross-project --component keys; \
+         stderr={stderr} stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("--component"),
+        "AC-005: expected '--component' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("FOO"),
+        "AC-005: expected project key 'FOO' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("BAR"),
+        "AC-005: expected project key 'BAR' in error message; stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "AC-005: expected zero HTTP calls before the cross-project guard \
+         fires; got {} requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ── AC-006 (BC-3.4.023 Edge Case EC-3.4.023-3 -- single-issue fallthrough) ─
+
+/// `--jql` matching exactly 1 issue -> routes to S-605-1's single-key path
+/// (BC-3.4.022, native `update`-verb PUT), NOT this bulk path.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_component_jql_single_match_uses_single_key_path() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::component_delete_snapshot_page(&["FOO-1"], None),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s605_1_mock_editmeta(&server, "FOO-1", &["add", "remove"]).await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // The bulk endpoint MUST NOT be called for a single-match --jql.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "key = FOO-1",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-006: expected exit 0 for single-match --jql routed to the \
+         single-key path; stderr={stderr}"
+    );
+    // wiremock .expect(0/1) assertions verify routing on Drop.
+}
+
+// ── AC-007 (BC-3.4.023 Postcondition 6 -- 1000-issue chunking) ─────────────
+
+/// 1500 issues in one project, `--component add:Backend` -> TWO sequential
+/// bulk POSTs: the first carrying 1000 issues' worth of
+/// `selectedIssueIdsOrKeys`, the second the remaining 500 -- each polled to
+/// completion before the next chunk's POST fires. Exit 0 iff BOTH chunks
+/// succeed.
+///
+/// RED GATE NOTE: this scenario is currently blocked at the CLI ARGUMENT
+/// PARSING layer, before `handle_edit` (let alone
+/// `handle_edit_bulk_components`) ever runs: the `keys` positional's clap
+/// definition (`src/cli/mod.rs`, `Edit { keys, ... }`) carries `#[arg(
+/// num_args = 0..=1001, ...)]`, so clap itself rejects a 1500-key
+/// invocation with "unexpected value ... found; no more were expected"
+/// (exit code 2) — confirmed empirically. Per BC-3.4.023 Postcondition 6,
+/// making this scenario reachable at all requires the implementer to widen
+/// (or otherwise special-case, e.g. via `--jql` whose own `--max` value_parser
+/// is ALSO currently hard-capped `1..=1000`) the CLI surface for the
+/// `--component` chunking path, in addition to implementing the chunking
+/// loop itself in `handle_edit_bulk_components`.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_1000_issue_chunking() {
+    let server = MockServer::start().await;
+
+    let keys = s605_2_keys("FOO", 1500);
+    let chunk1: Vec<String> = keys[..1000].to_vec();
+    let chunk2: Vec<String> = keys[1000..].to_vec();
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "selectedIssueIdsOrKeys": chunk1
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-chunk-1")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_complete(&server, "task-chunk-1", &chunk1).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "selectedIssueIdsOrKeys": chunk2
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-chunk-2")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_complete(&server, "task-chunk-2", &chunk2).await;
+
+    let mut args: Vec<String> = vec!["--no-input".into(), "issue".into(), "edit".into()];
+    args.extend(keys.iter().cloned());
+    args.push("--component".into());
+    args.push("add:Backend".into());
+
+    let output = s605_1_cmd(&server.uri()).args(&args).output().unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-007: expected exit 0 when both chunks succeed; stderr={stderr}"
+    );
+
+    let posts = s605_2_captured_bulk_posts(&server).await;
+    assert_eq!(
+        posts.len(),
+        2,
+        "AC-007: expected exactly 2 sequential chunked bulk POSTs (1000 \
+         then 500); got {} posts",
+        posts.len()
+    );
+    assert_eq!(
+        posts[0]["selectedIssueIdsOrKeys"],
+        serde_json::json!(chunk1),
+        "AC-007: first POST must carry the first 1000 keys, in order"
+    );
+    assert_eq!(
+        posts[1]["selectedIssueIdsOrKeys"],
+        serde_json::json!(chunk2),
+        "AC-007: second POST must carry the remaining 500 keys, in order"
+    );
+}
+
+// ── AC-008 (BC-3.4.023 Postcondition 6 -- chunk-major/action-minor) ────────
+
+/// 1500 issues, `--component add:X --component remove:Y` (both >1000
+/// chunking AND mixed add:/remove:) -> `2 * ceil(1500/1000) == 4` sequential
+/// POSTs total, chunk-major then action-minor ordering: chunk1-ADD,
+/// chunk1-REMOVE, chunk2-ADD, chunk2-REMOVE.
+///
+/// RED GATE NOTE: see `test_bc_3_4_023_issue_edit_bulk_component_1000_issue_chunking`'s
+/// doc comment above -- this scenario is currently blocked at the clap
+/// argument-parsing layer (`keys`'s `num_args = 0..=1001`) for the same
+/// reason.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_chunking_and_mixed_ops_four_posts() {
+    let server = MockServer::start().await;
+
+    let keys = s605_2_keys("FOO", 1500);
+    let chunk1: Vec<String> = keys[..1000].to_vec();
+    let chunk2: Vec<String> = keys[1000..].to_vec();
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+
+    // Four distinct (chunk, action) combinations, each its own POST + poll.
+    let combos: [(&str, &Vec<String>, &str); 4] = [
+        ("task-c1-add", &chunk1, "ADD"),
+        ("task-c1-remove", &chunk1, "REMOVE"),
+        ("task-c2-add", &chunk2, "ADD"),
+        ("task-c2-remove", &chunk2, "REMOVE"),
+    ];
+    for (task_id, chunk_keys, option) in &combos {
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/bulk/issues/fields"))
+            .and(body_partial_json(serde_json::json!({
+                "selectedIssueIdsOrKeys": chunk_keys,
+                "editedFieldsInput": {
+                    "multiselectComponents": {
+                        "bulkEditMultiSelectFieldOption": option
+                    }
+                }
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(common::fixtures::bulk_task_enqueued(task_id)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        s605_2_mount_poll_complete(&server, task_id, chunk_keys).await;
+    }
+
+    let mut args: Vec<String> = vec!["--no-input".into(), "issue".into(), "edit".into()];
+    args.extend(keys.iter().cloned());
+    args.push("--component".into());
+    args.push("add:Backend".into());
+    args.push("--component".into());
+    args.push("remove:Frontend".into());
+
+    let output = s605_1_cmd(&server.uri()).args(&args).output().unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-008: expected exit 0; stderr={stderr}"
+    );
+
+    let posts = s605_2_captured_bulk_posts(&server).await;
+    assert_eq!(
+        posts.len(),
+        4,
+        "AC-008: expected exactly 2*ceil(1500/1000)==4 sequential POSTs; \
+         got {} posts",
+        posts.len()
+    );
+
+    // Chunk-major, action-minor ordering: chunk1-ADD, chunk1-REMOVE,
+    // chunk2-ADD, chunk2-REMOVE.
+    let expected_order = [
+        (&chunk1, "ADD"),
+        (&chunk1, "REMOVE"),
+        (&chunk2, "ADD"),
+        (&chunk2, "REMOVE"),
+    ];
+    for (i, (expected_keys, expected_option)) in expected_order.iter().enumerate() {
+        assert_eq!(
+            posts[i]["selectedIssueIdsOrKeys"],
+            serde_json::json!(expected_keys),
+            "AC-008: POST #{} must carry the expected chunk's keys; posts={posts:?}",
+            i + 1
+        );
+        assert_eq!(
+            posts[i]["editedFieldsInput"]["multiselectComponents"]
+                ["bulkEditMultiSelectFieldOption"]
+                .as_str(),
+            Some(*expected_option),
+            "AC-008: POST #{} must carry the expected action (chunk-major, \
+             action-minor ordering); posts={posts:?}",
+            i + 1
+        );
+    }
+}
+
+// ── AC-009 (BC-3.4.023 Edge Case EC-3.4.023-4 -- chunk-failure abort) ──────
+
+/// 2500 issues (3 chunks: 1000, 1000, 500), `--component add:Backend` --
+/// chunk 1 succeeds, chunk 2 FAILS -> chunk 3 is NEVER attempted. Chunk 1's
+/// already-committed change is NOT rolled back (non-transactional across
+/// chunks); the error output surfaces only chunk 2's `await_bulk_task`
+/// failure, not a per-chunk `renamed[]`/`failed[]` report shape (unlike
+/// `component rename --all-projects`).
+///
+/// RED GATE NOTE: see `test_bc_3_4_023_issue_edit_bulk_component_1000_issue_chunking`'s
+/// doc comment above -- this scenario is currently blocked at the clap
+/// argument-parsing layer (`keys`'s `num_args = 0..=1001`) for the same
+/// reason.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_chunk_failure_aborts_remaining() {
+    let server = MockServer::start().await;
+
+    let keys = s605_2_keys("FOO", 2500);
+    let chunk1: Vec<String> = keys[..1000].to_vec();
+    let chunk2: Vec<String> = keys[1000..2000].to_vec();
+    let chunk3: Vec<String> = keys[2000..].to_vec();
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    // Chunk 1: succeeds.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "selectedIssueIdsOrKeys": chunk1
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-c1-ok")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_complete(&server, "task-c1-ok", &chunk1).await;
+
+    // Chunk 2: FAILS.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "selectedIssueIdsOrKeys": chunk2
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-c2-fail")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_failed(&server, "task-c2-fail").await;
+
+    // Chunk 3: MUST NEVER be attempted.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "selectedIssueIdsOrKeys": chunk3
+        })))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let mut args: Vec<String> = vec!["--no-input".into(), "issue".into(), "edit".into()];
+    args.extend(keys.iter().cloned());
+    args.push("--component".into());
+    args.push("add:Backend".into());
+
+    let output = s605_1_cmd(&server.uri()).args(&args).output().unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "AC-009: expected exit 1 (generic bulk-task failure, not a \
+         JrError::UserError) when chunk 2 fails; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("FAILED"),
+        "AC-009: expected the await_bulk_task FAILED-status error to \
+         surface in stderr; stderr={stderr}"
+    );
+
+    let posts = s605_2_captured_bulk_posts(&server).await;
+    assert_eq!(
+        posts.len(),
+        2,
+        "AC-009: expected exactly 2 bulk POSTs (chunk 1 + chunk 2) -- chunk \
+         3 must never be attempted after chunk 2 fails; got {} posts",
+        posts.len()
+    );
+    assert_eq!(
+        posts[0]["selectedIssueIdsOrKeys"],
+        serde_json::json!(chunk1),
+        "AC-009: first POST must be chunk 1"
+    );
+    assert_eq!(
+        posts[1]["selectedIssueIdsOrKeys"],
+        serde_json::json!(chunk2),
+        "AC-009: second POST must be chunk 2 (the one that fails)"
+    );
+}
+
+// ── Defensive test: componentId String->u64 parse-failure internal-invariant
+
+/// If the §8.4 resolver ever returns a non-numeric component id (an
+/// internal-invariant violation that should never happen in practice --
+/// every resolver-returned component id is itself a digit-only string on
+/// the wire), the bulk `--component` path MUST NOT silently truncate or
+/// coerce the value, and MUST NOT surface it as a `JrError::UserError`
+/// (exit 64) -- that exit code is reserved for user-input errors, and a
+/// malformed resolver id is not user input. It also MUST NOT crash as an
+/// unhandled Rust panic (`panic!`/`unwrap()`/`expect()` bubbling all the
+/// way to the process) -- BC-3.4.023 Invariant 2 calls this "an unexpected
+/// internal error", which this codebase's convention (`error.rs`'s
+/// `JrError` taxonomy) treats as a gracefully-propagated `Err`, not an
+/// uncaught panic. This test asserts the negative space: exit code is NOT
+/// 64 (not treated as a user error), NOT 0 (not silently swallowed), stderr
+/// does NOT contain Rust's default panic banner, and -- most importantly --
+/// zero bulk POST calls are made (the malformed id must never reach the
+/// wire).
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_id_parse_failure_surfaces_as_internal_error() {
+    let server = MockServer::start().await;
+
+    // A component resource with a non-numeric id -- the resolver returns
+    // this id verbatim as a String; the bulk path's explicit
+    // `id.parse::<u64>()` step must fail on it.
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "not-a-number",
+            "Backend",
+            None,
+            None,
+            None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let exit_code = output.status.code();
+    assert_ne!(
+        exit_code,
+        Some(64),
+        "componentId parse failure is an internal-invariant violation, not \
+         a JrError::UserError -- MUST NOT exit 64; stderr={stderr}"
+    );
+    assert_ne!(
+        exit_code,
+        Some(0),
+        "componentId parse failure MUST NOT be silently swallowed as \
+         success; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked at"),
+        "componentId parse failure must be handled as a graceful internal \
+         error (a propagated Err), not an unhandled Rust panic; stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    let bulk_posts: Vec<_> = received
+        .iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::POST
+                && r.url.path() == "/rest/api/3/bulk/issues/fields"
+        })
+        .collect();
+    assert!(
+        bulk_posts.is_empty(),
+        "the malformed componentId must never reach the wire; got {bulk_posts:?}"
+    );
+}

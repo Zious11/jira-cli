@@ -91,7 +91,8 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     ),
     // issue edit  (--priority added: used in e2e_live.rs priority round-trip test;
     //              --description-stdin/--markdown/--points/--no-points/--parent/--no-parent/--field
-    //              added in E2E-HV-2)
+    //              added in E2E-HV-2; --component added in S-605-2 AC-010 bulk
+    //              multiselectComponents live smoke test, DEC-280)
     (
         &["issue", "edit"],
         &[
@@ -110,6 +111,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--parent",
             "--no-parent",
             "--field",
+            "--component",
         ],
     ),
     // issue comment add  (S-577-1 subcommand refactor: flat form → add/delete/edit/view)
@@ -240,6 +242,10 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["worklog", "list"], &["--output"]),
     // api  (positional: path; used by E2E-HV-2 story-points field discovery)
     (&["api"], &[]),
+    // component list  (added in S-605-2 AC-010: discovers an existing component
+    // on the smoke-test project, per BC-3.4.023 Delivery note's precondition
+    // that the project must have >= 1 component defined)
+    (&["component", "list"], &["--project", "--output"]),
 ];
 
 // ---------------------------------------------------------------------------

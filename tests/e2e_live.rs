@@ -8917,6 +8917,260 @@ fn test_e2e_issue_edit_issuetype_multikey_bulk_roundtrip() {
     }
 }
 
+/// E2E: multi-key `jr issue edit K1 K2 --component add:<X>` / `--component
+/// remove:<X>` bulk round-trip using the `multiselectComponents` wire shape
+/// (BC-3.4.023, S-605-2).
+///
+/// **DEC-280 LIVE-JIRA RELEASE GATE (BC-3.4.023 Delivery note):** this test
+/// is the mandated live smoke test — one ADD POST and one REMOVE POST,
+/// against >= 2 real issues in one project — that MUST pass before the bulk
+/// `--component` path ships to release. The `multiselectComponents` wire
+/// shape (`src/api/jira/bulk.rs::build_component_edited_fields`) is
+/// documented and triple-corroborated (Atlassian doc example + swagger
+/// OpenAPI + apidog mirror) but was NOT live-verified at spec-authoring
+/// time. If this test observes a non-403/404 failure (e.g. a live 400),
+/// that is evidence the documented shape is wrong -- BC-3.4.023 must be
+/// corrected to the observed true shape before this story can be marked
+/// done, mirroring how `FIX-BULK-TRANSITION-001` (#446) was discovered via
+/// exactly this kind of live failure, not by static review.
+///
+/// **Precondition (BC-3.4.023 Delivery note, added 2026-08-19):** the
+/// target project MUST already have >= 1 component defined -- Jira's
+/// `GET /rest/api/3/bulk/issues/fields` field-discovery response only lists
+/// `components` in the bulk-edit allowlist when the selected issues'
+/// project actually has components configured; a componentless project
+/// surfaces `components` with an `unavailableMessage` instead, which would
+/// false-negative this test for a reason unrelated to wire-shape
+/// correctness. This precondition is checked by discovering an existing
+/// component via `jr component list --project <proj> --output json` and
+/// clean-skipping if the project has none -- no new `JR_E2E_*` env var is
+/// introduced for this, since the component name is read directly off the
+/// live project rather than configured.
+///
+/// Mirrors `test_e2e_issue_edit_label_multikey_bulk_roundtrip`'s structure
+/// (seed two issues, ADD then assert-present, REMOVE then assert-absent,
+/// clean-skip on 403/404 = "Make bulk changes" permission/plan gate) but
+/// against `fields.components[].name` instead of `fields.labels[]`.
+///
+/// Traces to: AC-010, VP-COMPONENT-012, DEC-280.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_edit_component_multikey_bulk_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let proj = project();
+    let itype = issue_type();
+    let h = e2e_harness();
+
+    // Precondition: the project must have >= 1 component already defined.
+    // Clean-skip (not a failure) if it has none -- see the DEC-280
+    // precondition note in this test's doc comment above.
+    let list_out = h
+        .cmd()
+        .args(["component", "list", "--project", &proj, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for component list");
+    if !list_out.status.success() {
+        eprintln!(
+            "SKIP: `jr component list --project {proj}` failed -- cannot verify \
+             the >= 1 component precondition; skipping bulk --component \
+             round-trip test.\nstderr: {}",
+            String::from_utf8_lossy(&list_out.stderr)
+        );
+        return;
+    }
+    let components: Value =
+        serde_json::from_slice(&list_out.stdout).expect("component list output must be valid JSON");
+    let component_name = match components.as_array().and_then(|arr| arr.first()) {
+        Some(c) => c
+            .get("name")
+            .and_then(Value::as_str)
+            .expect("component list entry must have a 'name' field")
+            .to_string(),
+        None => {
+            eprintln!(
+                "SKIP: project {proj} has zero components defined -- BC-3.4.023's \
+                 Delivery note precondition requires >= 1; skipping bulk \
+                 --component round-trip test. Configure a component on this \
+                 project to enable this release-gate test."
+            );
+            return;
+        }
+    };
+
+    // Seed two throwaway issues, both tagged with run_label() for sweeper
+    // teardown, and WITHOUT the target component (so ADD is a genuine change).
+    let make_issue = |suffix: &str| -> String {
+        let summary = format!("[e2e {label}] multikey-component-{suffix}");
+        let create_out = h
+            .cmd()
+            .args([
+                "issue",
+                "create",
+                "--project",
+                &proj,
+                "--type",
+                &itype,
+                "--summary",
+                &summary,
+                "--label",
+                &label,
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("failed to spawn jr for issue create (multikey component seed)");
+        assert!(
+            create_out.status.success(),
+            "issue create ({suffix}) failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&create_out.stdout),
+            String::from_utf8_lossy(&create_out.stderr)
+        );
+        serde_json::from_slice::<Value>(&create_out.stdout)
+            .expect("issue create output must be valid JSON")
+            .get("key")
+            .and_then(Value::as_str)
+            .expect("issue create JSON must contain a 'key' field")
+            .to_string()
+    };
+
+    let key1 = make_issue("a");
+    let key2 = make_issue("b");
+
+    let component_names = |v: &Value| -> Vec<String> {
+        v.get("fields")
+            .and_then(|f| f.get("components"))
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.get("name").and_then(Value::as_str))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    // Assert the component is ABSENT on both issues before adding (freshly
+    // created issues carry no components).
+    for key in [&key1, &key2] {
+        let before = poll_view(key, &h);
+        assert!(
+            !component_names(&before).contains(&component_name),
+            "component '{component_name}' must be ABSENT on {key} before add; \
+             got: {:?}",
+            component_names(&before)
+        );
+    }
+
+    // ADD the component to BOTH keys in one bulk call -- BC-3.4.023
+    // Postcondition 1/2 wire shape (multiselectComponents ADD).
+    let add_out = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key1,
+            &key2,
+            "--component",
+            &format!("add:{component_name}"),
+        ])
+        .output()
+        .expect("failed to spawn jr for multi-key issue edit --component add");
+
+    if !add_out.status.success() {
+        let stderr = String::from_utf8_lossy(&add_out.stderr);
+        // Skip only on 403 (permission denied) or 404 (endpoint unavailable) --
+        // any OTHER failure (e.g. a 400) is exactly the DEC-280 release-gate
+        // signal that the documented wire shape is wrong and must NOT be
+        // silently skipped.
+        if add_out.status.code() == Some(1) && (stderr.contains("403") || stderr.contains("404")) {
+            eprintln!(
+                "SKIP: bulk-edit {code} -- 'Make bulk changes' permission not \
+                 available on this site; skipping bulk --component round-trip \
+                 test.\nstderr: {stderr}",
+                code = if stderr.contains("403") { "403" } else { "404" }
+            );
+            return;
+        }
+        panic!(
+            "DEC-280 RELEASE GATE FAILURE: multi-key issue edit --component add \
+             failed (non-403/404 -- not a permission skip). This is evidence the \
+             multiselectComponents wire shape documented in BC-3.4.023 does NOT \
+             match live Jira -- correct the BC to the observed true shape before \
+             proceeding (FIX-BULK-TRANSITION-001/#446 precedent), then re-run \
+             test-writer/implementer against the corrected shape.\n\
+             exit: {:?}\nstdout: {}\nstderr: {}",
+            add_out.status.code(),
+            String::from_utf8_lossy(&add_out.stdout),
+            stderr,
+        );
+    }
+
+    // Assert the component IS PRESENT on both issues after add.
+    for key in [&key1, &key2] {
+        let after_add = poll_view(key, &h);
+        assert!(
+            component_names(&after_add).contains(&component_name),
+            "component '{component_name}' must be PRESENT on {key} after add; \
+             got: {:?}",
+            component_names(&after_add)
+        );
+    }
+
+    // REMOVE the component from BOTH keys in one bulk call -- BC-3.4.023
+    // Postcondition 3 (a SEPARATE sequential POST, not coalesced with the
+    // ADD above; here issued as its own `jr` invocation, which exercises
+    // the same REMOVE wire shape as the mixed add:/remove: single-invocation
+    // case would for its second POST).
+    let remove_out = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key1,
+            &key2,
+            "--component",
+            &format!("remove:{component_name}"),
+        ])
+        .output()
+        .expect("failed to spawn jr for multi-key issue edit --component remove");
+
+    if !remove_out.status.success() {
+        let stderr = String::from_utf8_lossy(&remove_out.stderr);
+        if remove_out.status.code() == Some(1) && (stderr.contains("403") || stderr.contains("404"))
+        {
+            eprintln!(
+                "SKIP: bulk-edit {code} on remove -- skipping.\nstderr: {stderr}",
+                code = if stderr.contains("403") { "403" } else { "404" }
+            );
+            return;
+        }
+        panic!(
+            "DEC-280 RELEASE GATE FAILURE: multi-key issue edit --component \
+             remove failed (non-403/404 -- not a permission skip). This is \
+             evidence the multiselectComponents REMOVE wire shape documented in \
+             BC-3.4.023 does NOT match live Jira -- correct the BC before \
+             proceeding.\nexit: {:?}\nstdout: {}\nstderr: {}",
+            remove_out.status.code(),
+            String::from_utf8_lossy(&remove_out.stdout),
+            stderr,
+        );
+    }
+
+    // Assert the component is ABSENT on both issues after remove.
+    for key in [&key1, &key2] {
+        let after_remove = poll_view(key, &h);
+        assert!(
+            !component_names(&after_remove).contains(&component_name),
+            "component '{component_name}' must be ABSENT on {key} after remove; \
+             got: {:?}",
+            component_names(&after_remove)
+        );
+    }
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // ADF markdown round-trip tests (#475)
 //
