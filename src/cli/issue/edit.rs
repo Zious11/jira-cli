@@ -1753,8 +1753,7 @@ async fn resolve_bulk_component_ids(
         // NAME. The bulk wire shape needs a numeric componentId either way
         // (Invariant 2) -- resolve a name to its id via the same fetched
         // candidate list.
-        let id_str = if !matched_name.is_empty()
-            && matched_name.chars().all(|c| c.is_ascii_digit())
+        let id_str = if !matched_name.is_empty() && matched_name.chars().all(|c| c.is_ascii_digit())
         {
             matched_name
         } else {
