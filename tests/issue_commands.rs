@@ -8898,6 +8898,28 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_dry_run_multi_key_happy_path_
         "happy-path regression: plannedChanges.components must still preview \
          correctly for a valid multi-key --component --dry-run; body={body}"
     );
+
+    // Step-4.5 Round-3 F2: the dry-run path previously fetched the
+    // project's component candidate list TWICE -- once via
+    // `resolve_component_change_names` (for the preview) and once via
+    // `resolve_bulk_component_ids` (for id/parse validation) -- each
+    // independently GETting `/rest/api/3/project/{key}/components` for the
+    // SAME project. The consolidated path fetches it exactly ONCE and
+    // reuses the result for both.
+    let received = server.received_requests().await.unwrap();
+    let component_gets = received
+        .iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::GET
+                && r.url.path() == "/rest/api/3/project/FOO/components"
+        })
+        .count();
+    assert_eq!(
+        component_gets, 1,
+        "F2: expected exactly 1 GET .../project/FOO/components call for a \
+         multi-key --component --dry-run (name-resolution and id-validation \
+         must reuse ONE fetched list, not fetch it twice); got {component_gets}"
+    );
 }
 
 // ── AC-006 (BC-3.4.023 Edge Case EC-3.4.023-3 -- single-issue fallthrough) ─

@@ -605,8 +605,19 @@ pub(super) async fn handle_edit(
             let dr_key = &effective_keys[0];
             let dr_project_key = project_key_from_issue_key(dr_key);
             let dr_changes = format::normalize_component_changes(&components);
-            let resolved =
-                resolve_component_change_names(client, dr_project_key, &dr_changes).await?;
+            // Step-4.5 Round-3 fix (F2): fetch the project's component
+            // candidate list ONCE and reuse it for both the name-resolution
+            // preview below and the numeric-id/parse validation that
+            // follows -- previously each call independently re-fetched the
+            // SAME `GET …/project/{key}/components` for the SAME project,
+            // doubling the dry-run's HTTP cost on every multi-key
+            // `--component --dry-run` invocation for no behavioral benefit.
+            let dr_component_list = client.list_components(dr_project_key).await?;
+            let resolved = resolve_component_change_names_with_list(
+                &dr_component_list,
+                dr_project_key,
+                &dr_changes,
+            )?;
             // Step-4.5 Round-2 fix (F2): the multi-key bulk LIVE path
             // additionally resolves each change to a numeric componentId via
             // `resolve_bulk_component_ids` (Invariant 2), which performs an
@@ -621,7 +632,11 @@ pub(super) async fn handle_edit(
             // live path wires a NAME, never a numeric id (see
             // `resolve_bulk_component_ids`'s doc comment).
             if effective_keys.len() > 1 {
-                resolve_bulk_component_ids(client, dr_project_key, &components).await?;
+                resolve_bulk_component_ids_with_list(
+                    &dr_component_list,
+                    dr_project_key,
+                    &dr_changes,
+                )?;
             }
             Some(resolved)
         } else {
@@ -1455,6 +1470,21 @@ async fn resolve_component_change_names(
     changes: &[format::ComponentChange],
 ) -> Result<Vec<format::ComponentChange>> {
     let component_list = client.list_components(project_key).await?;
+    resolve_component_change_names_with_list(&component_list, project_key, changes)
+}
+
+/// Core of [`resolve_component_change_names`], parameterized on an
+/// already-fetched `component_list` so a caller that needs BOTH this
+/// resolution AND [`resolve_bulk_component_ids_with_list`] (the `--dry-run`
+/// multi-key preview, Step-4.5 Round-3 F2) can fetch
+/// `GET …/project/{key}/components` exactly ONCE and reuse the result for
+/// both, instead of each function independently re-fetching the identical
+/// list for the identical project.
+fn resolve_component_change_names_with_list(
+    component_list: &[crate::types::jira::component::Component],
+    project_key: &str,
+    changes: &[format::ComponentChange],
+) -> Result<Vec<format::ComponentChange>> {
     let candidate_names: Vec<String> = component_list.iter().map(|c| c.name.clone()).collect();
 
     let mut resolved_changes: Vec<format::ComponentChange> = Vec::with_capacity(changes.len());
@@ -1871,14 +1901,28 @@ async fn resolve_bulk_component_ids(
     components: &[String],
 ) -> Result<(Vec<u64>, Vec<u64>)> {
     let changes = format::normalize_component_changes(components);
-
     let component_list = client.list_components(project_key).await?;
+    resolve_bulk_component_ids_with_list(&component_list, project_key, &changes)
+}
+
+/// Core of [`resolve_bulk_component_ids`], parameterized on an
+/// already-fetched `component_list` and already-normalized `changes` so a
+/// caller that needs BOTH this AND [`resolve_component_change_names_with_list`]
+/// (the `--dry-run` multi-key preview, Step-4.5 Round-3 F2) can fetch
+/// `GET …/project/{key}/components` exactly ONCE and reuse the result for
+/// both, instead of each function independently re-fetching the identical
+/// list for the identical project.
+fn resolve_bulk_component_ids_with_list(
+    component_list: &[crate::types::jira::component::Component],
+    project_key: &str,
+    changes: &[format::ComponentChange],
+) -> Result<(Vec<u64>, Vec<u64>)> {
     let candidate_names: Vec<String> = component_list.iter().map(|c| c.name.clone()).collect();
 
     let mut add_ids: Vec<u64> = Vec::new();
     let mut remove_ids: Vec<u64> = Vec::new();
 
-    for change in &changes {
+    for change in changes {
         let matched_name =
             match helpers::resolve_component(&change.name, project_key, &candidate_names) {
                 MatchResult::Exact(matched) => matched,
