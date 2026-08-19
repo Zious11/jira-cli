@@ -8608,6 +8608,81 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_cross_project_guard() {
     );
 }
 
+// ── Step-4.5 Round-2 fix F1 (dry-run/live cross-project divergence) ────────
+//
+// The cross-project guard above (AC-005) only ever fired inside the LIVE
+// path (`handle_edit_bulk_components`), which the pre-fix `--dry-run` block
+// never reached (it returns before that function is called). A multi-key
+// `--component --dry-run` spanning 2+ projects therefore resolved against
+// ONLY `effective_keys[0]`'s project and previewed success for an input the
+// live run refuses with exit 64. `--dry-run` must exercise the SAME guard
+// the live path enforces (mirrors the pre-existing `--type` guard, which is
+// hoisted above the dry-run block specifically for this reason).
+
+/// `jr issue edit FOO-1 BAR-2 --component add:Backend --dry-run` (keys
+/// spanning 2 projects) must exit 64 with ZERO HTTP calls -- the SAME
+/// cross-project error the live (non-dry-run) run produces (AC-005) --
+/// instead of previewing a plan resolved against only FOO-1's project.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_dry_run_cross_project_exits_64_zero_http() {
+    let server = MockServer::start().await;
+    // Mount NO mocks -- the hoisted guard is purely client-side (no HTTP
+    // needed to detect a cross-project key set), so any HTTP call at all is
+    // a test failure; verified via received_requests().len() == 0 below.
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "BAR-2",
+            "--component",
+            "add:Backend",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F1 (dry-run): expected exit 64 for cross-project --component keys, \
+         matching the live run's guard; stderr={stderr} stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("--component"),
+        "F1 (dry-run): expected '--component' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("FOO") && stderr.contains("BAR"),
+        "F1 (dry-run): expected both project keys in error message; stderr={stderr}"
+    );
+    // Zero stdout: a preview must never be emitted alongside an exit-64
+    // error (Invariant 2/3, same postcondition the pre-existing dry-run
+    // resolution-error tests in this file already pin).
+    assert!(
+        stdout.is_empty(),
+        "F1 (dry-run): expected empty stdout on error; stdout={stdout}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "F1 (dry-run): expected zero HTTP calls before the cross-project \
+         guard fires; got {} requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
 // ── AC-006 (BC-3.4.023 Edge Case EC-3.4.023-3 -- single-issue fallthrough) ─
 
 /// `--jql` matching exactly 1 issue -> routes to S-605-1's single-key path

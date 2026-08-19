@@ -456,6 +456,40 @@ pub(super) async fn handle_edit(
         }
     }
 
+    // --- BC-3.4.023 cross-project guard for --component (fires in BOTH live
+    // and dry-run; Step-4.5 Round-2 fix). Mirrors the `--type` guard
+    // directly below -- component ids are project-scoped, and the bulk
+    // `multiselectComponents` endpoint takes a single project's ids for the
+    // entire batch. Before this hoist, this check lived ONLY inside
+    // `handle_edit_bulk_components` (the live path), which the `--dry-run`
+    // short-circuit below never reaches -- so a multi-key
+    // `--component --dry-run` spanning 2+ projects previewed success
+    // (resolved against only `effective_keys[0]`'s project) for an input
+    // the live run refuses with exit 64. The check inside
+    // `handle_edit_bulk_components` itself is KEPT as defense-in-depth --
+    // this hoisted copy and that one are deliberately duplicated, not
+    // shared, mirroring the `--type` guard's own precedent one block below.
+    if !components.is_empty() && effective_keys.len() > 1 {
+        let mut project_keys: Vec<&str> = effective_keys
+            .iter()
+            .map(|k| project_key_from_issue_key(k))
+            .collect();
+        project_keys.sort_unstable();
+        project_keys.dedup();
+        if project_keys.len() > 1 {
+            return Err(JrError::UserError(format!(
+                "--component requires all issues to be in the same project; \
+                 the provided keys span {} distinct projects: {}. \
+                 Component IDs differ per project, so a single bulk edit cannot \
+                 target all of them — split the keys by project and run separate \
+                 `jr issue edit` commands.",
+                project_keys.len(),
+                project_keys.join(", "),
+            ))
+            .into());
+        }
+    }
+
     // --- BC-3.4.019 cross-project guard for --type (fires in BOTH live and dry-run). ---
     // Issue-type IDs are project-scoped; the bulk endpoint takes ONE issueTypeId for
     // the entire batch. A cross-project set cannot be safely resolved to a single id,
