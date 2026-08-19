@@ -863,3 +863,38 @@ pub fn bulk_task_failed(task_id: &str, failure_reason: &str) -> Value {
         "failureReason": failure_reason
     })
 }
+
+/// `GET /rest/api/3/bulk/queue/{taskId}` terminal `PARTIAL_FAILURE` response
+/// -- distinct from `bulk_task_failed`'s `FAILED` status: `is_terminal()`
+/// treats `PARTIAL_FAILURE` (and `PROCESSED_WITH_ERRORS`) as a SUCCESSFUL
+/// poll (`await_bulk_task` returns `Ok(progress)`, never `Err`), with the
+/// per-key outcome split across `processed_keys` (succeeded) and
+/// `failed_keys` (failed, each paired with an error message). Used to
+/// exercise the previously-untested `render_bulk_component_results` partial-
+/// failure render branch (Step-4.5 Round-3 F1) -- `bulk_task_failed`'s
+/// FAILED status errors out of `await_bulk_task` via `?` before rendering is
+/// ever reached, so it cannot exercise this branch.
+pub fn bulk_task_partial_failure(
+    task_id: &str,
+    processed_keys: &[&str],
+    failed_keys: &[(&str, &str)],
+) -> Value {
+    let failed_accessible_issues: serde_json::Map<String, Value> = failed_keys
+        .iter()
+        .map(|(key, message)| {
+            (
+                (*key).to_string(),
+                json!({"errorMessages": [message], "errors": {}}),
+            )
+        })
+        .collect();
+    json!({
+        "taskId": task_id,
+        "status": "PARTIAL_FAILURE",
+        "progressPercent": 100,
+        "totalIssueCount": processed_keys.len() + failed_keys.len(),
+        "processedAccessibleIssues": processed_keys,
+        "failedAccessibleIssues": failed_accessible_issues,
+        "invalidOrInaccessibleIssueCount": 0
+    })
+}

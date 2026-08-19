@@ -9886,3 +9886,259 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_plus_label_exits_64_zero_http
             .collect::<Vec<_>>()
     );
 }
+
+// ── Step-4.5 Round-3 F1 (render_bulk_component_results partial-failure
+//    coverage) ──────────────────────────────────────────────────────────────
+//
+// `render_bulk_component_results` (src/cli/issue/edit.rs) has an error-row
+// branch (`if let Some(err) = op.progress.failed_accessible_issues.get(...)`)
+// and an `any_failed` flag that -- when true -- triggers a `bail!` AFTER
+// rendering. `await_bulk_task` returns `Err` for FAILED/CANCELLED/DEAD, but
+// for terminal `PARTIAL_FAILURE`/`PROCESSED_WITH_ERRORS` it returns
+// `Ok(progress)` with `failed_accessible_issues` populated -- flowing INTO
+// the render function's error-row branch. Prior to this fix, no test ever
+// exercised a PARTIAL_FAILURE poll response, so a mutation deleting
+// `any_failed = true` (silent success on a partial failure) survived green.
+
+/// A bulk `--component add:Backend` on 2 keys whose poll terminates
+/// `PARTIAL_FAILURE` (FOO-1 succeeds, FOO-2 fails) must: (1) exit non-zero,
+/// (2) print the `any_failed` bail message on stderr, and (3) in
+/// `--output json` mode, emit a per-key `"status":"error"` row for the
+/// failed key alongside a `"status":"success"` row for the succeeded key.
+/// This kills the "delete `any_failed = true`" mutation (silent-success on
+/// partial failure).
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_partial_failure_exits_nonzero_and_renders_error_row()
+ {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-comp-partial")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/task-comp-partial"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::bulk_task_partial_failure(
+                "task-comp-partial",
+                &["FOO-1"],
+                &[("FOO-2", "Permission denied for FOO-2")],
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "F1: a PARTIAL_FAILURE poll must exit non-zero (any_failed=true), not 0; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("One or more issues failed during bulk edit"),
+        "F1: expected the any_failed bail message on stderr; stderr={stderr}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("F1: stdout must be valid JSON even on partial failure: {e}; stdout={stdout}")
+    });
+
+    let operations = parsed["operations"]
+        .as_array()
+        .expect("F1: expected top-level 'operations' array");
+    assert_eq!(
+        operations.len(),
+        1,
+        "F1: expected exactly one operation (single ADD action); got {operations:?}"
+    );
+    let results = operations[0]["results"]
+        .as_array()
+        .expect("F1: expected 'results' array on the operation");
+
+    let foo1 = results
+        .iter()
+        .find(|r| r["key"] == "FOO-1")
+        .unwrap_or_else(|| panic!("F1: expected a result row for FOO-1; results={results:?}"));
+    assert_eq!(
+        foo1["status"], "success",
+        "F1: FOO-1 was in processedAccessibleIssues and must render status=success; row={foo1:?}"
+    );
+
+    let foo2 = results
+        .iter()
+        .find(|r| r["key"] == "FOO-2")
+        .unwrap_or_else(|| panic!("F1: expected a result row for FOO-2; results={results:?}"));
+    assert_eq!(
+        foo2["status"], "error",
+        "F1: FOO-2 was in failedAccessibleIssues and must render status=error; row={foo2:?}"
+    );
+    assert_eq!(
+        foo2["error"], "Permission denied for FOO-2",
+        "F1: the error row must carry the BulkActionError summary; row={foo2:?}"
+    );
+}
+
+/// A successful mixed `add:X remove:Y` bulk `--component` edit on 2 keys, in
+/// `--output json` mode, must emit the FULL expected structure: an
+/// `operations` array with exactly 2 entries (one per action), each with the
+/// correct `action` (ADD/REMOVE, in that order), a non-empty `taskId`, and
+/// per-key `results[].status == "success"` for every key. This kills
+/// mutations that drop an operation from `operations_json` or change the
+/// `"status":"success"` literal.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_success_renders_full_json_structure() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+
+    let keys = vec!["FOO-1".to_string(), "FOO-2".to_string()];
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "editedFieldsInput": {
+                "multiselectComponents": {
+                    "bulkEditMultiSelectFieldOption": "ADD"
+                }
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-comp-full-add")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_complete(&server, "task-comp-full-add", &keys).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "editedFieldsInput": {
+                "multiselectComponents": {
+                    "bulkEditMultiSelectFieldOption": "REMOVE"
+                }
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::bulk_task_enqueued("task-comp-full-remove"),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_complete(&server, "task-comp-full-remove", &keys).await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+            "--component",
+            "remove:Frontend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "F1: expected exit 0 on a fully-successful mixed edit; stderr={stderr}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("F1: stdout must be one parseable JSON document: {e}; stdout={stdout}")
+    });
+
+    let operations = parsed["operations"]
+        .as_array()
+        .expect("F1: expected top-level 'operations' array");
+    assert_eq!(
+        operations.len(),
+        2,
+        "F1: expected exactly 2 operations (ADD then REMOVE); got {operations:?}"
+    );
+
+    assert_eq!(
+        operations[0]["action"], "ADD",
+        "F1: first operation's action must be ADD; op={:?}",
+        operations[0]
+    );
+    assert_eq!(
+        operations[1]["action"], "REMOVE",
+        "F1: second operation's action must be REMOVE; op={:?}",
+        operations[1]
+    );
+
+    for (idx, op) in operations.iter().enumerate() {
+        let task_id = op["taskId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("F1: operation {idx} must have a string taskId; op={op:?}"));
+        assert!(
+            !task_id.is_empty(),
+            "F1: operation {idx}'s taskId must be non-empty; op={op:?}"
+        );
+
+        let results = op["results"].as_array().unwrap_or_else(|| {
+            panic!("F1: operation {idx} must have a 'results' array; op={op:?}")
+        });
+        assert_eq!(
+            results.len(),
+            2,
+            "F1: operation {idx} must have exactly 2 per-key result rows (FOO-1, FOO-2); op={op:?}"
+        );
+        for key in ["FOO-1", "FOO-2"] {
+            let row = results.iter().find(|r| r["key"] == key).unwrap_or_else(|| {
+                panic!("F1: operation {idx} missing a result row for {key}; op={op:?}")
+            });
+            assert_eq!(
+                row["status"], "success",
+                "F1: operation {idx}'s {key} row must be status=success; row={row:?}"
+            );
+        }
+    }
+}
