@@ -449,14 +449,21 @@ pub enum IssueCommand {
         /// JQL query to select issues for bulk edit. Mutually exclusive with positional keys.
         #[arg(long, conflicts_with = "keys")]
         jql: Option<String>,
-        /// Maximum number of issues to match via --jql (default 50, hard ceiling 1000).
-        /// Requires --jql; cannot be used with positional keys. If the JQL match count
-        /// exceeds this value, the command errors without mutating.
+        /// Maximum number of issues to match via --jql (default 50, hard ceiling 1000
+        /// for non-`--component` bulk edits; `--component` bulk edits chunk internally
+        /// into <=1000-key POSTs (S-605-2, BC-3.4.023 Postcondition 6) and accept up to
+        /// 10000). Requires --jql; cannot be used with positional keys. If the JQL
+        /// match count exceeds this value, the command errors without mutating.
         ///
         /// Values above 100 trigger cursor pagination on /rest/api/3/search/jql (Jira
-        /// caps maxResults at 100 per page), so --max 1000 triggers up to ~10 search
+        /// caps maxResults at 100 per page), so a large --max triggers multiple search
         /// requests before the bulk call. Use the smallest --max that fits your workflow.
-        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=1000))]
+        ///
+        /// The clap-level range here is widened to 1..=10000 so a >1000 `--component`
+        /// invocation can reach the handler at all; `handle_edit` enforces the tighter
+        /// 1000 ceiling at runtime for every OTHER bulk field flag (it cannot see
+        /// --component's presence from a value_parser alone).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=10_000))]
         max: Option<u32>,
         /// Skip the interactive confirmation prompt for large JQL match sets.
         #[arg(long)]

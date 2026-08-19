@@ -30,6 +30,16 @@ use super::json_output;
 /// product feedback indicates the threshold is too aggressive, raise to 25-50.
 const JQL_CONFIRM_THRESHOLD: usize = 5;
 
+/// Sanity ceiling on `--max`/the resolved `--jql` match-set size for the
+/// `--component` bulk path only (Step-4.5 Round-1 F3 fix, BC-3.4.023
+/// Postcondition 6). Mirrors the `num_args = 0..=10000` widening already
+/// applied to the positional `keys` argument in `src/cli/mod.rs` for the
+/// same reason: `--component`'s bulk path chunks internally into
+/// `<=BULK_MAX_KEYS`-key POSTs, so it can safely accept a much larger
+/// resolved key set than every other bulk field path, which issues a
+/// single un-chunked POST and stays hard-capped at `BULK_MAX_KEYS`.
+const JQL_MAX_CEILING: u32 = 10_000;
+
 pub(super) async fn handle_edit(
     command: IssueCommand,
     output_format: &OutputFormat,
@@ -259,7 +269,33 @@ pub(super) async fn handle_edit(
     // clap's `requires` attribute interacts poorly with the keys/jql `conflicts_with`
     // relationship. By the time we reach this branch we know jql.is_some() so the
     // unwrap_or(50) default is the right behavior.
-    let effective_max = max.unwrap_or(50).min(BULK_MAX_KEYS as u32);
+    //
+    // Step-4.5 Round-1 F3 fix: --component's bulk path chunks internally into
+    // <=1000-key POSTs (BC-3.4.023 Postcondition 6) and therefore accepts a
+    // --jql match set larger than the per-POST Atlassian limit, up to the
+    // same sanity ceiling the positional `keys` argument already allows
+    // (JQL_MAX_CEILING, mirroring src/cli/mod.rs's `num_args = 0..=10000`).
+    // Every other bulk field path issues a single un-chunked POST, so --max
+    // stays hard-capped at BULK_MAX_KEYS for them. clap's value_parser alone
+    // cannot see whether --component is present, so it now accepts up to
+    // JQL_MAX_CEILING unconditionally (src/cli/mod.rs); this runtime check
+    // is what actually enforces the tighter ceiling for every other flag.
+    if let Some(m) = max {
+        if components.is_empty() && m > BULK_MAX_KEYS as u32 {
+            return Err(JrError::UserError(format!(
+                "--max {m} exceeds the {BULK_MAX_KEYS}-issue hard ceiling for this edit. \
+                 --component bulk edits chunk internally and accept up to {JQL_MAX_CEILING}; \
+                 every other bulk field is capped at {BULK_MAX_KEYS} per Atlassian's bulk \
+                 API limit."
+            ))
+            .into());
+        }
+    }
+    let effective_max = max.unwrap_or(50).min(if components.is_empty() {
+        BULK_MAX_KEYS as u32
+    } else {
+        JQL_MAX_CEILING
+    });
 
     // Resolve the working set of keys.
     // For --jql: execute the search (read-only), then enforce --max cap.
@@ -289,12 +325,17 @@ pub(super) async fn handle_edit(
         }
 
         if matched_keys.len() > effective_max as usize {
+            let ceiling = if components.is_empty() {
+                BULK_MAX_KEYS as u32
+            } else {
+                JQL_MAX_CEILING
+            };
             return Err(JrError::UserError(format!(
                 "JQL matched at least {} issues, which exceeds --max {}. \
                  Use --max <N> to allow up to {} issues, or refine your JQL.",
                 matched_keys.len(),
                 effective_max,
-                BULK_MAX_KEYS,
+                ceiling,
             ))
             .into());
         }

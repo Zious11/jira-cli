@@ -8990,6 +8990,167 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_chunk_failure_aborts_remainin
     );
 }
 
+// ── Step-4.5 Round-1 F3 fix (BC-3.4.023 Postcondition 6 -- --jql chunking) ─
+
+/// `--jql` matching 1500 issues + `--component add:Backend` -> TWO
+/// sequential chunked bulk POSTs (1000 then 500), mirroring AC-007's
+/// positional-key scenario but exercised via the `--jql` path.
+///
+/// Before this fix, `effective_max` was unconditionally clamped to
+/// `BULK_MAX_KEYS` (1000) regardless of `--component`, and the `--max`
+/// clap flag itself was capped at `1..=1000` -- so a >1000-issue `--jql`
+/// match could never reach the chunking loop this test exercises (only the
+/// positional-keys path could, since `keys`'s clap arg was separately
+/// widened to `0..=10000` for S-605-2). This test proves the `--jql` path
+/// now reaches the same chunking behavior.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_jql_1500_issue_chunking() {
+    let server = MockServer::start().await;
+
+    let keys = s605_2_keys("FOO", 1500);
+    let chunk1: Vec<String> = keys[..1000].to_vec();
+    let chunk2: Vec<String> = keys[1000..].to_vec();
+
+    let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::component_delete_snapshot_page(&key_refs, None),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "selectedIssueIdsOrKeys": chunk1
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-jql-chunk-1")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_complete(&server, "task-jql-chunk-1", &chunk1).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "selectedIssueIdsOrKeys": chunk2
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-jql-chunk-2")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    s605_2_mount_poll_complete(&server, "task-jql-chunk-2", &chunk2).await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = FOO",
+            "--max",
+            "1500",
+            "--yes",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "F3: expected exit 0 for --jql 1500-issue --component chunking; stderr={stderr}"
+    );
+
+    let posts = s605_2_captured_bulk_posts(&server).await;
+    assert_eq!(
+        posts.len(),
+        2,
+        "F3: expected exactly 2 sequential chunked bulk POSTs (1000 then \
+         500) via --jql; got {} posts",
+        posts.len()
+    );
+    assert_eq!(
+        posts[0]["selectedIssueIdsOrKeys"],
+        serde_json::json!(chunk1),
+        "F3: first POST must carry the first 1000 keys, in order"
+    );
+    assert_eq!(
+        posts[1]["selectedIssueIdsOrKeys"],
+        serde_json::json!(chunk2),
+        "F3: second POST must carry the remaining 500 keys, in order"
+    );
+}
+
+/// `--max` above 1000 WITHOUT `--component` (e.g. combined with `--label`)
+/// must still be rejected -- the F3 widening only applies to the
+/// `--component` bulk path, which chunks internally; every other bulk
+/// field path issues a single un-chunked POST and stays hard-capped at
+/// `BULK_MAX_KEYS` (1000).
+#[tokio::test]
+async fn test_max_above_1000_without_component_still_rejected() {
+    let server = MockServer::start().await;
+    // No bulk POST mock -- the ceiling must fire before any mutation call.
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = FOO",
+            "--max",
+            "1500",
+            "--yes",
+            "--label",
+            "add:urgent",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F3: expected exit 64 for --max 1500 without --component; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("1000"),
+        "F3: expected the 1000-issue ceiling named in the error; stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "F3: expected zero HTTP calls before the ceiling guard fires; got {} \
+         requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
 // ── Defensive test: componentId String->u64 parse-failure internal-invariant
 
 /// If the §8.4 resolver ever returns a non-numeric component id (an
