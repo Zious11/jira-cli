@@ -5,7 +5,10 @@ use serde_json::json;
 
 use crate::adf;
 use crate::api::client::JiraClient;
-use crate::api::jira::bulk::{BULK_MAX_KEYS, resolve_bulk_await_timeout};
+use crate::api::jira::bulk::{
+    BULK_MAX_KEYS, BulkMultiSelectFieldOption, build_component_edited_fields,
+    resolve_bulk_await_timeout,
+};
 use crate::api::jira::issues::ComponentRef;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
@@ -298,8 +301,12 @@ pub(super) async fn handle_edit(
 
         matched_keys
     } else {
-        // Positional keys: enforce the Atlassian hard ceiling.
-        if keys.len() > BULK_MAX_KEYS {
+        // Positional keys: enforce the Atlassian hard ceiling -- EXCEPT for
+        // `--component`, whose bulk path (S-605-2, BC-3.4.023 Postcondition 6)
+        // chunks internally into <=1000-key POSTs and therefore accepts a
+        // larger resolved key set. Every other bulk field path below issues
+        // a single un-chunked POST, so the hard ceiling still applies to them.
+        if keys.len() > BULK_MAX_KEYS && components.is_empty() {
             return Err(JrError::UserError(format!(
                 "Too many issue keys: {} provided, maximum is {}. \
                  Split into batches of {} or fewer and run multiple times.",
@@ -1603,12 +1610,205 @@ fn project_key_from_issue_key(key: &str) -> &str {
 /// one project with >= 1 component already defined) confirms the
 /// `multiselectComponents` wire shape documented above (AC-010).
 async fn handle_edit_bulk_components(
-    _keys: &[String],
-    _components: &[String],
-    _output_format: &OutputFormat,
-    _client: &JiraClient,
+    keys: &[String],
+    components: &[String],
+    output_format: &OutputFormat,
+    client: &JiraClient,
 ) -> Result<()> {
-    todo!("S-605-2 / BC-3.4.023: bulk --component multiselectComponents path — see rustdoc above")
+    // 1. EC-3.4.023-1: cross-project guard, BEFORE any HTTP call. Mirrors
+    // `handle_edit_bulk_fields`'s `--type` guard (BC-3.4.019) exactly --
+    // component ids are project-scoped.
+    let mut project_keys: Vec<&str> = keys.iter().map(|k| project_key_from_issue_key(k)).collect();
+    project_keys.sort_unstable();
+    project_keys.dedup();
+    if project_keys.len() > 1 {
+        return Err(JrError::UserError(format!(
+            "--component requires all issues to be in the same project; \
+             the provided keys span {} distinct projects: {}. \
+             Component IDs differ per project, so a single bulk edit cannot \
+             target all of them — split the keys by project and run separate \
+             `jr issue edit` commands.",
+            project_keys.len(),
+            project_keys.join(", "),
+        ))
+        .into());
+    }
+    // `keys.len() > 1` is guaranteed by the caller (`handle_edit`'s routing
+    // block), so `project_keys` is non-empty here.
+    let project_key = project_keys[0];
+
+    // 2. Postcondition 4 / Invariant 2: resolve NAMEs to numeric componentIds
+    // via §8.4 BEFORE any bulk POST is built (AC-004: an unknown/ambiguous
+    // name must produce ZERO bulk POSTs).
+    let (add_ids, remove_ids) = resolve_bulk_component_ids(client, project_key, components).await?;
+
+    if add_ids.is_empty() && remove_ids.is_empty() {
+        bail!("No component changes specified.");
+    }
+
+    // 3. Postcondition 6: split `keys` into sequential <= BULK_MAX_KEYS
+    // chunks, chunk-major ordering. Within each chunk, ADD is issued (fully
+    // polled) BEFORE REMOVE when both are present (Postcondition 3) -- never
+    // coalesced into one POST, unlike the label bulk path. A chunk (or
+    // action-within-chunk) failure propagates immediately via `?`, aborting
+    // the remaining sequence (EC-3.4.023-4) -- already-successful earlier
+    // chunks are NOT rolled back.
+    for chunk in keys.chunks(BULK_MAX_KEYS) {
+        if !add_ids.is_empty() {
+            run_bulk_component_action(
+                chunk,
+                &add_ids,
+                BulkMultiSelectFieldOption::Add,
+                output_format,
+                client,
+            )
+            .await?;
+        }
+        if !remove_ids.is_empty() {
+            run_bulk_component_action(
+                chunk,
+                &remove_ids,
+                BulkMultiSelectFieldOption::Remove,
+                output_format,
+                client,
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolve `--component` add:/remove: specs to numeric `componentId`s for
+/// the bulk `multiselectComponents` wire shape (BC-3.4.023 Postcondition 4,
+/// Invariant 2). Returns `(add_ids, remove_ids)`, each in CLI input order
+/// within its own action bucket.
+///
+/// Distinct from [`resolve_component_change_names`] (the single-key path's
+/// resolver): that function returns canonical NAMEs (or a passed-through
+/// numeric id string) for the `update`-verb wire shape, which wires a name
+/// as `{"name": ...}` and never needs the id. This bulk path needs a numeric
+/// `componentId` for EVERY resolved change -- name-resolved or
+/// id-passed-through alike -- so it performs the name -> id lookup inline
+/// against the SAME fetched candidate list, then the explicit `String` ->
+/// `u64` parse Invariant 2 requires. A parse failure at this point is an
+/// internal-invariant violation (every resolver-returned component id is
+/// itself a digit-only string on the wire) -- surfaced as
+/// `JrError::Internal`, never `JrError::UserError` (the malformed value did
+/// not come from user input at this point).
+async fn resolve_bulk_component_ids(
+    client: &JiraClient,
+    project_key: &str,
+    components: &[String],
+) -> Result<(Vec<u64>, Vec<u64>)> {
+    let changes = format::normalize_component_changes(components);
+
+    let component_list = client.list_components(project_key).await?;
+    let candidate_names: Vec<String> = component_list.iter().map(|c| c.name.clone()).collect();
+
+    let mut add_ids: Vec<u64> = Vec::new();
+    let mut remove_ids: Vec<u64> = Vec::new();
+
+    for change in &changes {
+        let matched_name =
+            match helpers::resolve_component(&change.name, project_key, &candidate_names) {
+                MatchResult::Exact(matched) => matched,
+                MatchResult::ExactMultiple(matched_name) => {
+                    let ids: Vec<String> = component_list
+                        .iter()
+                        .filter(|c| c.name.to_lowercase() == matched_name.to_lowercase())
+                        .map(|c| c.id.clone())
+                        .collect();
+                    return Err(JrError::UserError(format!(
+                        "Multiple components named \"{}\" found (IDs: {}). \
+                         Pass the numeric ID directly.",
+                        matched_name,
+                        ids.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::Ambiguous(mut candidates) => {
+                    candidates.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Ambiguous component '{}'. Matches: {}.",
+                        change.name,
+                        candidates.join(", ")
+                    ))
+                    .into());
+                }
+                MatchResult::None(mut available) => {
+                    available.sort_by_key(|s| s.to_lowercase());
+                    return Err(JrError::UserError(format!(
+                        "Component '{}' not found in project {}. Available: {}.",
+                        change.name,
+                        project_key,
+                        available.join(", ")
+                    ))
+                    .into());
+                }
+            };
+
+        // `matched_name` is either the passed-through numeric id
+        // (BC-8.4.001 step-1 bypass) or the resolved canonical component
+        // NAME. The bulk wire shape needs a numeric componentId either way
+        // (Invariant 2) -- resolve a name to its id via the same fetched
+        // candidate list.
+        let id_str = if !matched_name.is_empty()
+            && matched_name.chars().all(|c| c.is_ascii_digit())
+        {
+            matched_name
+        } else {
+            component_list
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&matched_name))
+                .map(|c| c.id.clone())
+                .ok_or_else(|| {
+                    JrError::Internal(format!(
+                        "Internal error: resolved component name {matched_name:?} was not \
+                         found in the fetched component list for project {project_key} -- \
+                         this should be unreachable (the resolver only returns names present \
+                         in the same list)."
+                    ))
+                })?
+        };
+
+        let id: u64 = id_str.parse().map_err(|e| {
+            JrError::Internal(format!(
+                "Internal error: resolved componentId {id_str:?} is not numeric ({e}) -- \
+                 every resolver-returned component id should be a digit-only string on the \
+                 wire (BC-3.4.023 Invariant 2)."
+            ))
+        })?;
+
+        match change.action {
+            format::ComponentAction::Add => add_ids.push(id),
+            format::ComponentAction::Remove => remove_ids.push(id),
+        }
+    }
+
+    Ok((add_ids, remove_ids))
+}
+
+/// Issue ONE bulk `multiselectComponents` POST for `chunk_keys` + `option`,
+/// poll it to completion via the existing `await_bulk_task` machinery, and
+/// render the result via the shared `render_bulk_edit_results` shape.
+/// Shared by every (chunk, action) pair `handle_edit_bulk_components`
+/// iterates over (BC-3.4.023 Postcondition 3 / Postcondition 6).
+async fn run_bulk_component_action(
+    chunk_keys: &[String],
+    ids: &[u64],
+    option: BulkMultiSelectFieldOption,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> Result<()> {
+    let edited_fields = build_component_edited_fields(ids, option);
+    let task_id = client
+        .bulk_edit_fields(chunk_keys, vec!["components".to_string()], edited_fields)
+        .await?;
+    let progress = client
+        .await_bulk_task(&task_id, resolve_bulk_await_timeout())
+        .await?;
+    render_bulk_edit_results(chunk_keys, &task_id, &progress, output_format)
 }
 
 /// Supports 2..=1000 keys with --summary, --priority, --type.

@@ -439,8 +439,12 @@ pub enum IssueCommand {
     /// Edit issue fields
     Edit {
         /// Issue keys (positional; omit when using --jql). Mutually exclusive with --jql.
-        /// Up to 1000 keys per call (Atlassian Bulk API limit).
-        #[arg(num_args = 0..=1001, conflicts_with = "jql")]
+        /// Non-`--component` bulk edits are capped at 1000 keys per call (Atlassian Bulk
+        /// API limit, enforced in `handle_edit`). `--component` bulk edits (S-605-2,
+        /// BC-3.4.023 Postcondition 6) chunk internally into <=1000-key POSTs, so the CLI
+        /// surface allows a much larger key set for that flag — widened from the prior
+        /// `0..=1001` cap so a >1000-key `--component` invocation can reach the handler.
+        #[arg(num_args = 0..=10000, conflicts_with = "jql")]
         keys: Vec<String>,
         /// JQL query to select issues for bulk edit. Mutually exclusive with positional keys.
         #[arg(long, conflicts_with = "keys")]

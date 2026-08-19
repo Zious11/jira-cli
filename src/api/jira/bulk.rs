@@ -217,8 +217,21 @@ pub fn build_component_edited_fields(
     component_ids: &[u64],
     option: BulkMultiSelectFieldOption,
 ) -> serde_json::Value {
-    let _ = (component_ids, option);
-    todo!("S-605-2 / BC-3.4.023: multiselectComponents body composition — see rustdoc above")
+    let option_str = match option {
+        BulkMultiSelectFieldOption::Add => "ADD",
+        BulkMultiSelectFieldOption::Remove => "REMOVE",
+    };
+    let components: Vec<serde_json::Value> = component_ids
+        .iter()
+        .map(|id| serde_json::json!({"componentId": id}))
+        .collect();
+    serde_json::json!({
+        "multiselectComponents": {
+            "fieldId": "components",
+            "components": components,
+            "bulkEditMultiSelectFieldOption": option_str
+        }
+    })
 }
 
 /// Maximum byte length for a taskId received from Atlassian, used as a sanity
