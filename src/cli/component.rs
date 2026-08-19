@@ -1615,6 +1615,22 @@ async fn handle_rename_all_projects(
 
     let (targets, ambiguous) = discover_rename_targets(old, client).await?;
 
+    // FIX-F5 ([AMENDED 2026-08-19], feature-level F5 — component-family
+    // coherence): ZERO discovered projects contain a component named `old`
+    // → exit 64 "not found", consistent with the single-project form's
+    // `resolve_rename_source` not-found behavior (a typo'd `OLD` must fail
+    // the same way regardless of `--all-projects`). This check fires BEFORE
+    // the `dry_run` fork so the dry-run preview predicts the same outcome as
+    // a live run (BC-8.3.004 Invariant 1) — previously this branch exited 0
+    // with an empty `{"renamed":[],"failed":[]}` fan-out / "0 renamed" on
+    // both live and --dry-run, silently masking a typo.
+    if targets.is_empty() && ambiguous.is_empty() {
+        return Err(JrError::UserError(format!(
+            "Component '{old}' not found in any accessible project."
+        ))
+        .into());
+    }
+
     // Step-4.5 fix burst 4, Finding 1 (BC-8.3.004 Invariant 1 — the preview
     // must predict the live outcome): `ambiguous` projects are surfaced here
     // exactly as the live path below seeds them into `failed[]` — as a
@@ -1656,15 +1672,15 @@ async fn handle_rename_all_projects(
             }
             OutputFormat::Table => {
                 eprintln!("DRY RUN — no changes will be made.");
-                if targets.is_empty() && ambiguous.is_empty() {
-                    eprintln!("0 components would be renamed.");
-                } else {
-                    for t in &targets {
-                        eprintln!("  {}: {} \u{2192} {} (id {})", t.project, old, new, t.id);
-                    }
-                    for a in &ambiguous {
-                        eprintln!("  {}: WOULD FAIL — {}", a.project, a.message);
-                    }
+                // FIX-F5: the `targets.is_empty() && ambiguous.is_empty()`
+                // combination is now unreachable here — it exits 64 above,
+                // before this `dry_run` fork — so at least one of `targets`
+                // / `ambiguous` is always non-empty at this point.
+                for t in &targets {
+                    eprintln!("  {}: {} \u{2192} {} (id {})", t.project, old, new, t.id);
+                }
+                for a in &ambiguous {
+                    eprintln!("  {}: WOULD FAIL — {}", a.project, a.message);
                 }
             }
         }

@@ -6436,6 +6436,14 @@ async fn test_delete_component_percent_encodes_ids_in_url() {
 /// (`--dry-run`) since the BC states the two must be byte-identical outcomes.
 const ALL_PROJECTS_NUMERIC_OLD_REJECTED_MSG: &str = "rename --all-projects requires OLD to be a component NAME, not a numeric id (component ids are project-scoped and cannot be used to select across multiple projects). Use rename OLD NEW --project KEY to target a single project by id.";
 
+/// FIX-F5 (feature-level F5, [AMENDED 2026-08-19]): verbatim not-found
+/// message for `--all-projects` when ZERO discovered projects contain a
+/// component named `OLD` — brings `--all-projects` in line with the
+/// single-project form's exit-64 not-found behavior (`resolve_rename_source`)
+/// instead of the prior exit-0 empty-fan-out behavior.
+const ALL_PROJECTS_ZERO_MATCH_NOT_FOUND_MSG: &str =
+    "Component 'Nonexistent' not found in any accessible project.";
+
 // ── AC-001 (BC-8.3.001 Postcondition 1 — single-project PUT body) ────────────
 
 /// AC-001 / BC-8.3.001 Postcondition 1: `rename Backend NewName --project FOO`
@@ -6763,18 +6771,26 @@ async fn test_bc_8_3_002_component_rename_all_projects_exact_equality_not_substr
     );
 }
 
-// ── AC-006 (BC-8.3.002 EC-8.3.002-1 — zero matches exits zero) ───────────────
+// ── AC-006 (BC-8.3.002 EC-8.3.002-1 — zero matches exits 64) ─────────────────
+// [AMENDED 2026-08-19, feature-level F5 / FIX-F5]: superseded from the
+// original "exits 0 with an empty fan-out" behavior. `--all-projects` where
+// zero discovered projects contain a component named `OLD` now exits 64 with
+// a not-found error, consistent with the single-project form's
+// `resolve_rename_source` not-found behavior — a typo'd `OLD` must fail the
+// same way regardless of `--all-projects`. Zero `PUT` calls either way; only
+// the exit code / error surfacing changed, not the mutation count.
 
-/// AC-006 / EC-8.3.002-1: `--all-projects` where zero projects contain a
-/// component named `OLD` → exit 0 (not an error), zero `PUT` calls, and
-/// `--output json` reports the empty fan-out shape `{"renamed":[],"failed":[]}`.
-/// Table mode's summary also reports "0 renamed" per the BC's own wording.
+/// AC-006 / EC-8.3.002-1 [AMENDED, FIX-F5]: `--all-projects` where zero
+/// projects contain a component named `OLD` → exit 64 (not exit 0), zero
+/// `PUT` calls, and a `Component '<OLD>' not found in any accessible
+/// project.` error on stderr in both `--output json` (structured
+/// `{"error":...,"code":64}`) and table mode.
 #[tokio::test]
-async fn test_bc_8_3_002_component_rename_all_projects_zero_matches_exits_zero() {
+async fn test_bc_8_3_002_component_rename_all_projects_zero_matches_exits_64_not_found() {
     let cache = TempDir::new().unwrap();
     let config = TempDir::new().unwrap();
 
-    // ── Part A: --output json → exact empty-fan-out shape ────────────────────
+    // ── Part A: --output json → structured exit-64 error envelope ────────────
     let server = MockServer::start().await;
     write_profile_config(config.path(), &server.uri());
 
@@ -6826,22 +6842,30 @@ async fn test_bc_8_3_002_component_rename_all_projects_zero_matches_exits_zero()
         .unwrap();
 
     server.verify().await;
-    assert!(
-        json_output.status.success(),
-        "AC-006 Part A: expected exit 0; got {:?}\nstderr: {}",
+    assert_eq!(
+        json_output.status.code(),
+        Some(64),
+        "AC-006 Part A [AMENDED]: expected exit 64; got {:?}\nstderr: {}",
         json_output.status.code(),
         String::from_utf8_lossy(&json_output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&json_output.stdout);
-    let parsed: Value =
-        serde_json::from_str(&stdout).expect("AC-006: --output json stdout must be valid JSON");
-    assert_eq!(
-        parsed,
-        json!({"renamed": [], "failed": []}),
-        "AC-006 Part A: zero-match fan-out must report {{\"renamed\":[],\"failed\":[]}}; got: {parsed}"
+    assert!(
+        json_output.stdout.is_empty(),
+        "AC-006 Part A [AMENDED]: expected empty stdout on error; got: {}",
+        String::from_utf8_lossy(&json_output.stdout)
+    );
+    let stderr_a = String::from_utf8_lossy(&json_output.stderr);
+    assert!(
+        stderr_a.contains(ALL_PROJECTS_ZERO_MATCH_NOT_FOUND_MSG),
+        "AC-006 Part A [AMENDED]: expected not-found message; got: {stderr_a}"
+    );
+    assert!(
+        stderr_a.contains("\"code\":64"),
+        "AC-006 Part A [AMENDED]: expected structured {{\"code\":64}} JSON error envelope; \
+         got: {stderr_a}"
     );
 
-    // ── Part B: table mode → summary reports "0 renamed" ─────────────────────
+    // ── Part B: table mode → not-found error on stderr ────────────────────────
     let server_b = MockServer::start().await;
     write_profile_config(config.path(), &server_b.uri());
 
@@ -6879,31 +6903,35 @@ async fn test_bc_8_3_002_component_rename_all_projects_zero_matches_exits_zero()
         .output()
         .unwrap();
 
-    assert!(
-        table_output.status.success(),
-        "AC-006 Part B: expected exit 0; got {:?}\nstderr: {}",
+    assert_eq!(
+        table_output.status.code(),
+        Some(64),
+        "AC-006 Part B [AMENDED]: expected exit 64; got {:?}\nstderr: {}",
         table_output.status.code(),
         String::from_utf8_lossy(&table_output.stderr)
     );
     let stderr_b = String::from_utf8_lossy(&table_output.stderr);
     assert!(
-        stderr_b.contains("0 renamed"),
-        "AC-006 Part B: table-mode summary must report \"0 renamed\"; got: {stderr_b}"
+        stderr_b.contains(ALL_PROJECTS_ZERO_MATCH_NOT_FOUND_MSG),
+        "AC-006 Part B [AMENDED]: expected not-found message; got: {stderr_b}"
     );
 }
 
 // ── Step-4.5 fix burst 5, Test 1 (Lens C LOW — dry-run zero-match sibling) ──
+// [AMENDED 2026-08-19, feature-level F5 / FIX-F5]: superseded from "exit 0
+// with an empty preview" — BC-8.3.004 Invariant 1 requires the dry-run
+// preview to predict the live outcome, and the live path now exits 64 on
+// zero matches (see AC-006 above), so the zero-match check fires BEFORE the
+// `dry_run` fork and both the live and `--dry-run` forms exit 64 identically.
 
-/// Step-4.5 fix burst 5, Test 1: the `--all-projects` zero-match branch is
-/// pinned live by `test_bc_8_3_002_component_rename_all_projects_zero_matches_exits_zero`
-/// above, but its `--dry-run` sibling was untested. Mirrors that test's
-/// structure: no project contains a component named "Nonexistent" → exit 0,
-/// `--output json` reports the verbatim empty preview shape
-/// `{"dryRun":true,"targets":[],"wouldFail":[]}` (see
-/// `handle_rename_all_projects`'s `dry_run` JSON branch, which always emits
-/// `wouldFail` alongside `targets`), and zero `PUT` calls (it's a dry run).
+/// Step-4.5 fix burst 5, Test 1 [AMENDED, FIX-F5]: the `--all-projects`
+/// zero-match branch is pinned live by
+/// `test_bc_8_3_002_component_rename_all_projects_zero_matches_exits_64_not_found`
+/// above; its `--dry-run` sibling must predict the SAME exit-64 not-found
+/// outcome (BC-8.3.004 Invariant 1) rather than a divergent exit-0 empty
+/// preview. Zero `PUT` calls either way (it's a dry run regardless).
 #[tokio::test]
-async fn test_bc_8_3_004_component_rename_dry_run_all_projects_zero_matches_json() {
+async fn test_bc_8_3_004_component_rename_dry_run_all_projects_zero_matches_exits_64_json() {
     let cache = TempDir::new().unwrap();
     let config = TempDir::new().unwrap();
     let server = MockServer::start().await;
@@ -6958,31 +6986,31 @@ async fn test_bc_8_3_004_component_rename_dry_run_all_projects_zero_matches_json
         .unwrap();
 
     server.verify().await;
-    assert!(
-        output.status.success(),
-        "Test 1: expected exit 0; got {:?}\nstderr: {}",
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Test 1 [AMENDED]: expected exit 64; got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: Value =
-        serde_json::from_str(&stdout).expect("Test 1: --output json stdout must be valid JSON");
-    assert_eq!(
-        parsed,
-        json!({"dryRun": true, "targets": [], "wouldFail": []}),
-        "Test 1: zero-match dry-run preview must report \
-         {{\"dryRun\":true,\"targets\":[],\"wouldFail\":[]}}; got: {parsed}"
+    assert!(
+        output.stdout.is_empty(),
+        "Test 1 [AMENDED]: expected empty stdout on error; got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(ALL_PROJECTS_ZERO_MATCH_NOT_FOUND_MSG),
+        "Test 1 [AMENDED]: expected not-found message; got: {stderr}"
     );
 }
 
-/// Step-4.5 fix burst 5, Test 1 (table-mode sibling): same zero-match
-/// scenario as the JSON variant above, verified against the human-readable
-/// table output — the dry-run header still prints, the summary line reads
-/// "0 components would be renamed." (the `targets.is_empty() &&
-/// ambiguous.is_empty()` branch in `handle_rename_all_projects`), and zero
-/// `PUT` calls are made.
+/// Step-4.5 fix burst 5, Test 1 (table-mode sibling) [AMENDED, FIX-F5]: same
+/// zero-match scenario as the JSON variant above, verified against the
+/// human-readable table output — exits 64 with the not-found message on
+/// stderr, and zero `PUT` calls are made.
 #[tokio::test]
-async fn test_bc_8_3_004_component_rename_dry_run_all_projects_zero_matches_table() {
+async fn test_bc_8_3_004_component_rename_dry_run_all_projects_zero_matches_exits_64_table() {
     let cache = TempDir::new().unwrap();
     let config = TempDir::new().unwrap();
     let server = MockServer::start().await;
@@ -7036,21 +7064,21 @@ async fn test_bc_8_3_004_component_rename_dry_run_all_projects_zero_matches_tabl
         .unwrap();
 
     server.verify().await;
-    assert!(
-        output.status.success(),
-        "Test 1 (table): expected exit 0; got {:?}\nstderr: {}",
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Test 1 (table) [AMENDED]: expected exit 64; got {:?}\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr_lines: Vec<&str> = stderr.lines().collect();
+    // [AMENDED, FIX-F5]: the zero-match check now fires BEFORE the `dry_run`
+    // fork, so neither the "DRY RUN —" header nor the "0 components would be
+    // renamed." summary line is ever printed for this scenario — only the
+    // not-found error.
     assert!(
-        stderr_lines.contains(&"DRY RUN — no changes will be made."),
-        "Test 1 (table): expected verbatim dry-run header; got stderr:\n{stderr}"
-    );
-    assert!(
-        stderr_lines.contains(&"0 components would be renamed."),
-        "Test 1 (table): expected verbatim zero-match summary line; got stderr:\n{stderr}"
+        stderr.contains(ALL_PROJECTS_ZERO_MATCH_NOT_FOUND_MSG),
+        "Test 1 (table) [AMENDED]: expected not-found message; got stderr:\n{stderr}"
     );
 }
 
