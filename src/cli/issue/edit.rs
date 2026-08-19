@@ -1976,24 +1976,23 @@ fn resolve_bulk_component_ids_with_list(
         // 64), not `JrError::Internal`. `JrError::Internal` is reserved for
         // the OTHER branch: a resolver-returned NAME whose looked-up id is
         // somehow non-numeric, which genuinely should be unreachable.
-        let (id_str, id_is_user_input) =
-            if !matched_name.is_empty() && matched_name.chars().all(|c| c.is_ascii_digit()) {
-                (matched_name, true)
-            } else {
-                let id = component_list
-                    .iter()
-                    .find(|c| c.name.eq_ignore_ascii_case(&matched_name))
-                    .map(|c| c.id.clone())
-                    .ok_or_else(|| {
-                        JrError::Internal(format!(
-                            "Internal error: resolved component name {matched_name:?} was not \
+        let (id_str, id_is_user_input) = if helpers::is_numeric_component_id(&matched_name) {
+            (matched_name, true)
+        } else {
+            let id = component_list
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&matched_name))
+                .map(|c| c.id.clone())
+                .ok_or_else(|| {
+                    JrError::Internal(format!(
+                        "Internal error: resolved component name {matched_name:?} was not \
                              found in the fetched component list for project {project_key} -- \
                              this should be unreachable (the resolver only returns names present \
                              in the same list)."
-                        ))
-                    })?;
-                (id, false)
-            };
+                    ))
+                })?;
+            (id, false)
+        };
 
         let id: u64 = id_str.parse().map_err(|e| {
             if id_is_user_input {

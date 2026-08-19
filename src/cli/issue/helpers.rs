@@ -600,6 +600,22 @@ pub(super) async fn resolve_asset(
     }
 }
 
+/// Returns `true` when `s` is a non-empty all-ASCII-digit string — the
+/// BC-8.4.001 numeric-component-id bypass predicate.
+///
+/// This is the SINGLE source of truth for the predicate (FIX-F5, component
+/// family coherence): `resolve_component` (below), `format::ComponentRefKind::for_input`,
+/// `component::is_numeric_id`, `issue/edit.rs`'s bulk id-passthrough detection,
+/// and `issue/list.rs`'s `--component` id resolution all route through this
+/// function rather than open-coding the predicate.
+///
+/// Guard: empty string is vacuously all-ASCII-digit (`"".chars().all(...)` is
+/// `true` for an empty iterator); `!s.is_empty()` is checked first so an empty
+/// `--component` value is never treated as a numeric id.
+pub(crate) fn is_numeric_component_id(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Resolve a component `input` (numeric ID or name) against a **single
 /// project's** candidate list, returning a `MatchResult`.
 ///
@@ -623,9 +639,7 @@ pub(crate) fn resolve_component(
     candidates: &[String],
 ) -> crate::partial_match::MatchResult {
     // BC-8.4.001 step 1: all-ASCII-digit → numeric id bypass, ZERO partial_match calls.
-    // Guard: empty string is vacuously all-ASCII-digit; require non-empty input first
-    // (mirrors src/cli/requesttype.rs `!name_or_id.is_empty() && …` precedent).
-    if !input.is_empty() && input.chars().all(|c| c.is_ascii_digit()) {
+    if is_numeric_component_id(input) {
         return crate::partial_match::MatchResult::Exact(input.to_string());
     }
     // BC-8.4.001 step 2 + Invariant 2 + BC-X.10.001: delegate to partial_match and return
@@ -1001,9 +1015,8 @@ mod tests {
     ///
     /// F-B1 fix (adversarial pass-3): `resolve_component` originally omitted the
     /// `!input.is_empty()` conjunct, so an empty string (vacuously all-ASCII-digit)
-    /// was mis-classified as a numeric id and returned as `Exact("")`.  The guard at
-    /// `helpers.rs ~628` (`if !input.is_empty() && input.chars().all(|c| c.is_ascii_digit())`)
-    /// now prevents that.
+    /// was mis-classified as a numeric id and returned as `Exact("")`.  The guard,
+    /// now consolidated into `is_numeric_component_id` (FIX-F5), prevents that.
     ///
     /// The correct result for `resolve_component("", _, candidates)` is what
     /// `partial_match("", candidates)` returns.  Because the empty string is a

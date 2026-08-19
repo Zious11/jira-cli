@@ -222,13 +222,13 @@ impl ComponentAction {
 /// ALWAYS a component id, never a name (BC-8.1.008 -- identical to the
 /// `component edit`/`delete`/`rename` command family convention). This
 /// discriminator carries that fact from parse time (`for_input`, which
-/// mirrors `helpers::resolve_component`'s own bypass predicate byte-for-byte
-/// -- keep the two in sync) through resolution to the wire-body construction
-/// site, so a numeric value is wired as `{"id": ...}` and a name is wired as
-/// `{"name": ...}` -- never the reverse. Accepted edge (matches BC-8.1.008's
-/// established gap): a component literally NAMED e.g. `"10001"` is
-/// unreachable by name via `--component` -- numeric input is always treated
-/// as an id.
+/// delegates to `helpers::is_numeric_component_id`, the single source of
+/// truth for the bypass predicate -- FIX-F5) through resolution to the
+/// wire-body construction site, so a numeric value is wired as `{"id": ...}`
+/// and a name is wired as `{"name": ...}` -- never the reverse. Accepted edge
+/// (matches BC-8.1.008's established gap): a component literally NAMED e.g.
+/// `"10001"` is unreachable by name via `--component` -- numeric input is
+/// always treated as an id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComponentRefKind {
     /// Wired as `{"name": <value>}`.
@@ -240,10 +240,11 @@ pub(super) enum ComponentRefKind {
 impl ComponentRefKind {
     /// Determine the ref kind directly from a raw `--component` value's
     /// text (BEFORE resolution) -- non-empty and all-ASCII-digit → `Id`,
-    /// otherwise `Name`. Mirrors `helpers::resolve_component`'s numeric
-    /// bypass condition (BC-8.4.001 step 1); the two must stay in sync.
+    /// otherwise `Name`. Delegates to `helpers::is_numeric_component_id`,
+    /// the single source of truth for the BC-8.4.001 step-1 bypass predicate
+    /// (FIX-F5).
     pub(super) fn for_input(value: &str) -> Self {
-        if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
+        if super::helpers::is_numeric_component_id(value) {
             ComponentRefKind::Id
         } else {
             ComponentRefKind::Name

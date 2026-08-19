@@ -19,6 +19,10 @@ pub use format::{format_issue_row, format_issue_rows_public, format_points, issu
 // Re-exported for use by cli::component (BC-8.4.001 — resolve_component is the
 // shared resolver; sibling cli modules cannot reach into cli::issue::helpers directly).
 pub(crate) use helpers::resolve_component;
+// Re-exported for use by cli::component (FIX-F5 — is_numeric_component_id is the
+// single source of truth for the BC-8.4.001 numeric-id bypass predicate; sibling
+// cli modules cannot reach into cli::issue::helpers directly).
+pub(crate) use helpers::is_numeric_component_id;
 
 use anyhow::Result;
 

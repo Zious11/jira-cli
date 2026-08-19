@@ -835,7 +835,7 @@ fn resolve_one_component_id(
 ) -> std::result::Result<Vec<String>, JrError> {
     match helpers::resolve_component(input, project, candidate_names) {
         MatchResult::Exact(matched) => {
-            if !input.is_empty() && input.chars().all(|c| c.is_ascii_digit()) {
+            if helpers::is_numeric_component_id(input) {
                 // Numeric bypass (BC-8.4.001 step 1): `matched` IS the id.
                 Ok(vec![matched])
             } else {

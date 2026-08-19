@@ -467,8 +467,12 @@ async fn handle_create(
 
 /// Returns `true` when `s` is a non-empty all-ASCII-digit string (numeric
 /// component ID path — BC-8.1.004 numeric-ID exemption).
+///
+/// Thin wrapper delegating to `cli::issue::is_numeric_component_id`, the
+/// single source of truth for the BC-8.4.001 numeric-id bypass predicate
+/// (FIX-F5) — kept as a local name since it's called throughout this file.
 fn is_numeric_id(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+    crate::cli::issue::is_numeric_component_id(s)
 }
 
 /// Handle `jr component edit NAME_OR_ID [options]`.
