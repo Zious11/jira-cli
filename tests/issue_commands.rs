@@ -10087,6 +10087,28 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_partial_failure_exits_nonzero
         .as_array()
         .expect("F1: expected 'results' array on the operation");
 
+    // Step-4.5 Round-8 coverage: pin the exact row count for this 2-key
+    // scenario. `render_bulk_component_results`'s secondary loop renders any
+    // `failed_accessible_issues` entry NOT already covered by the primary
+    // per-submitted-key loop -- guarded by
+    // `!op.keys.iter().any(|k| k == failed_key)`. FOO-2 IS in `op.keys` (the
+    // submitted chunk), so it must be rendered exactly ONCE by the primary
+    // loop. Relaxing/removing that guard (e.g. mutating `!` away, or the
+    // whole condition to `true`) would additionally re-render FOO-2 via the
+    // secondary loop, producing a duplicate row -- invisible to a `.find()`
+    // lookup (which only ever sees the first match) but caught here.
+    assert_eq!(
+        results.len(),
+        2,
+        "F1: expected exactly 2 result rows (FOO-1, FOO-2) with no duplicates; results={results:?}"
+    );
+    let foo2_count = results.iter().filter(|r| r["key"] == "FOO-2").count();
+    assert_eq!(
+        foo2_count, 1,
+        "F1: FOO-2 is in the submitted chunk and failed -- it must be rendered exactly once by \
+         the primary loop, not duplicated by the secondary loop; results={results:?}"
+    );
+
     let foo1 = results
         .iter()
         .find(|r| r["key"] == "FOO-1")
@@ -10239,6 +10261,137 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_out_of_chunk_failed_key_sets_
     assert_eq!(
         foo99["error"], "Out-of-chunk failure for FOO-99",
         "the secondary loop's error row must carry the BulkActionError summary; row={foo99:?}"
+    );
+}
+
+// ── Step-4.5 Round-8 (render_bulk_component_results row-count coverage) ────
+//
+// The tests above each exercise the primary loop (submitted key, failed IN
+// chunk) or the secondary loop (failed key NOT in the submitted chunk) in
+// isolation. Neither one, alone, can distinguish "the secondary loop's guard
+// correctly SKIPPED an in-chunk failed key" from "the guard fired anyway and
+// produced a duplicate row" -- a `.find()` lookup only ever sees the first
+// matching row, so a silently-duplicated FOO-2 entry is invisible to the
+// existing per-key assertions. This test submits FOO-1 + FOO-2 and has the
+// poll response fail BOTH an in-chunk key (FOO-2, primary loop) AND an
+// out-of-chunk key (FOO-99, secondary loop) in the SAME response, then pins
+// the total row count. Relaxing the secondary loop's
+// `!op.keys.iter().any(|k| k == failed_key)` guard (e.g. dropping the `!`,
+// or replacing the whole condition with `true`) would re-render FOO-2 a
+// second time via the secondary loop, growing `results.len()` from 3 to 4 --
+// caught here, not by any single-key `.find()` assertion.
+
+/// `jr issue edit FOO-1 FOO-2 --component add:Backend` where the poll
+/// response reports FOO-1 processed, FOO-2 failed (submitted, so rendered by
+/// the PRIMARY loop), and FOO-99 failed (not submitted, so rendered by the
+/// SECONDARY loop) in one response must produce exactly 3 result rows --
+/// FOO-1 (success), FOO-2 (error, exactly once), FOO-99 (error) -- with a
+/// non-zero exit. This is a Step-4.5 Round-8 coverage-only pin: no
+/// production behavior is asserted to be correct or desirable here, only
+/// pinned so a duplicate-row mutation on the primary/secondary split is
+/// caught.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_mixed_in_and_out_of_chunk_failures_no_duplicate_rows()
+ {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-comp-mixed")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/task-comp-mixed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::bulk_task_partial_failure(
+                "task-comp-mixed",
+                &["FOO-1"],
+                &[
+                    ("FOO-2", "Permission denied for FOO-2"),
+                    ("FOO-99", "Out-of-chunk failure for FOO-99"),
+                ],
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a mixed in-chunk + out-of-chunk failure must exit non-zero; status={:?} stderr={stderr}",
+        output.status
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("stdout must be valid JSON on a mixed failure: {e}; stdout={stdout}")
+    });
+
+    let operations = parsed["operations"]
+        .as_array()
+        .expect("expected top-level 'operations' array");
+    assert_eq!(operations.len(), 1, "expected exactly one operation");
+    let results = operations[0]["results"]
+        .as_array()
+        .expect("expected 'results' array on the operation");
+
+    assert_eq!(
+        results.len(),
+        3,
+        "expected exactly 3 result rows (FOO-1 success, FOO-2 error, FOO-99 error) with no \
+         duplicates; results={results:?}"
+    );
+
+    for key in ["FOO-1", "FOO-2", "FOO-99"] {
+        let count = results.iter().filter(|r| r["key"] == key).count();
+        assert_eq!(
+            count, 1,
+            "{key} must appear exactly once in results, not duplicated across the primary and \
+             secondary render loops; results={results:?}"
+        );
+    }
+
+    let foo1 = results.iter().find(|r| r["key"] == "FOO-1").unwrap();
+    assert_eq!(foo1["status"], "success", "row={foo1:?}");
+
+    let foo2 = results.iter().find(|r| r["key"] == "FOO-2").unwrap();
+    assert_eq!(foo2["status"], "error", "row={foo2:?}");
+    assert_eq!(foo2["error"], "Permission denied for FOO-2", "row={foo2:?}");
+
+    let foo99 = results.iter().find(|r| r["key"] == "FOO-99").unwrap();
+    assert_eq!(foo99["status"], "error", "row={foo99:?}");
+    assert_eq!(
+        foo99["error"], "Out-of-chunk failure for FOO-99",
+        "row={foo99:?}"
     );
 }
 
