@@ -1974,11 +1974,17 @@ async fn resolve_bulk_component_ids(
     Ok((add_ids, remove_ids))
 }
 
-/// Issue ONE bulk `multiselectComponents` POST for `chunk_keys` + `option`,
-/// poll it to completion via the existing `await_bulk_task` machinery, and
-/// render the result via the shared `render_bulk_edit_results` shape.
-/// Shared by every (chunk, action) pair `handle_edit_bulk_components`
-/// iterates over (BC-3.4.023 Postcondition 3 / Postcondition 6).
+/// Issue ONE bulk `multiselectComponents` POST for `chunk_keys` + `option`
+/// and poll it to completion via the existing `await_bulk_task` machinery.
+/// Returns the raw [`BulkComponentOpResult`] for the caller to accumulate --
+/// this function does NOT render anything itself. Rendering is deferred to
+/// a single call to [`render_bulk_component_results`], made once every
+/// (chunk, action) cycle in `handle_edit_bulk_components` has completed
+/// (Step-4.5 Round-1 F2 fix), so a multi-cycle invocation (a mixed
+/// add:/remove: edit, or a >1000-issue chunked edit) never emits more than
+/// one coherent result document. Shared by every (chunk, action) pair
+/// `handle_edit_bulk_components` iterates over (BC-3.4.023 Postcondition 3
+/// / Postcondition 6).
 async fn run_bulk_component_action(
     chunk_keys: &[String],
     ids: &[u64],
