@@ -8350,6 +8350,8 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_mixed_add_remove_two_sequenti
     let output = s605_1_cmd(&server.uri())
         .args([
             "--no-input",
+            "--output",
+            "json",
             "issue",
             "edit",
             "FOO-1",
@@ -8391,6 +8393,21 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_mixed_add_remove_two_sequenti
         second_option,
         Some("REMOVE"),
         "AC-002: second bulk POST must be the REMOVE action; posts={posts:?}"
+    );
+
+    // Step-4.5 Round-1 F2 fix: `render_bulk_edit_results` used to be called
+    // once PER (chunk, action) pair inside the loop, so a mixed add:/remove:
+    // edit printed TWO concatenated `println!("{}", ...)` JSON documents on
+    // stdout -- not valid as a single JSON parse. Results must now be
+    // accumulated across the whole invocation and rendered ONCE: exactly one
+    // top-level JSON value parses from the full stdout.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(stdout.trim());
+    assert!(
+        parsed.is_ok(),
+        "AC-002/F2: expected stdout to be exactly ONE parseable top-level JSON \
+         document, got parse error {:?}; stdout={stdout}",
+        parsed.err()
     );
 }
 

@@ -1693,30 +1693,40 @@ async fn handle_edit_bulk_components(
     // action-within-chunk) failure propagates immediately via `?`, aborting
     // the remaining sequence (EC-3.4.023-4) -- already-successful earlier
     // chunks are NOT rolled back.
+    //
+    // Step-4.5 Round-1 F2 fix: each (chunk, action) cycle used to call
+    // `render_bulk_edit_results` directly, which prints its own top-level
+    // JSON document via `println!` -- a mixed add:/remove: edit (or a
+    // >1000-issue chunked edit) therefore printed MULTIPLE concatenated
+    // JSON documents on stdout, which no single `serde_json::from_str` call
+    // can parse, and doubled up the table-mode success lines. Results are
+    // now accumulated across every (chunk, action) cycle and rendered ONCE,
+    // after the loop, as a single coherent output.
+    let mut ops: Vec<BulkComponentOpResult> = Vec::new();
     for chunk in keys.chunks(BULK_MAX_KEYS) {
         if !add_ids.is_empty() {
-            run_bulk_component_action(
-                chunk,
-                &add_ids,
-                BulkMultiSelectFieldOption::Add,
-                output_format,
-                client,
-            )
-            .await?;
+            ops.push(run_bulk_component_action(chunk, &add_ids, BulkMultiSelectFieldOption::Add, client).await?);
         }
         if !remove_ids.is_empty() {
-            run_bulk_component_action(
-                chunk,
-                &remove_ids,
-                BulkMultiSelectFieldOption::Remove,
-                output_format,
-                client,
-            )
-            .await?;
+            ops.push(
+                run_bulk_component_action(chunk, &remove_ids, BulkMultiSelectFieldOption::Remove, client)
+                    .await?,
+            );
         }
     }
 
-    Ok(())
+    render_bulk_component_results(&ops, output_format)
+}
+
+/// One (chunk, action) bulk POST + poll cycle's outcome, accumulated across
+/// the whole `handle_edit_bulk_components` invocation (Step-4.5 Round-1 F2
+/// fix) so the caller can render a single, coherent result once every cycle
+/// has completed, instead of once per cycle.
+struct BulkComponentOpResult {
+    task_id: String,
+    action: BulkMultiSelectFieldOption,
+    keys: Vec<String>,
+    progress: crate::types::jira::bulk::BulkOperationProgress,
 }
 
 /// Resolve `--component` add:/remove: specs to numeric `componentId`s for
@@ -1837,9 +1847,8 @@ async fn run_bulk_component_action(
     chunk_keys: &[String],
     ids: &[u64],
     option: BulkMultiSelectFieldOption,
-    output_format: &OutputFormat,
     client: &JiraClient,
-) -> Result<()> {
+) -> Result<BulkComponentOpResult> {
     let edited_fields = build_component_edited_fields(ids, option);
     let task_id = client
         .bulk_edit_fields(chunk_keys, vec!["components".to_string()], edited_fields)
@@ -1847,7 +1856,111 @@ async fn run_bulk_component_action(
     let progress = client
         .await_bulk_task(&task_id, resolve_bulk_await_timeout())
         .await?;
-    render_bulk_edit_results(chunk_keys, &task_id, &progress, output_format)
+    Ok(BulkComponentOpResult {
+        task_id,
+        action: option,
+        keys: chunk_keys.to_vec(),
+        progress,
+    })
+}
+
+/// Render every accumulated (chunk, action) cycle's outcome as ONE coherent
+/// result (Step-4.5 Round-1 F2 fix) -- a single top-level JSON document in
+/// `--output json` mode, or a single flat sequence of per-key table rows in
+/// table mode. Distinct from [`render_bulk_edit_results`] (used by the
+/// labels and generic-fields bulk paths, which only ever issue ONE bulk
+/// POST + poll cycle per invocation and therefore have no multi-cycle
+/// aggregation concern).
+fn render_bulk_component_results(
+    ops: &[BulkComponentOpResult],
+    output_format: &OutputFormat,
+) -> Result<()> {
+    let mut any_failed = false;
+    let mut operations_json: Vec<serde_json::Value> = Vec::new();
+
+    for op in ops {
+        let processed: std::collections::HashSet<&str> = op
+            .progress
+            .processed_accessible_issues
+            .iter()
+            .map(String::as_str)
+            .collect();
+
+        let mut results: Vec<serde_json::Value> = Vec::new();
+        for key in &op.keys {
+            if let Some(err) = op.progress.failed_accessible_issues.get(key.as_str()) {
+                results.push(json!({
+                    "key": key,
+                    "status": "error",
+                    "error": err.summary(),
+                }));
+                any_failed = true;
+            } else if processed.contains(key.as_str()) {
+                results.push(json!({
+                    "key": key,
+                    "status": "success",
+                }));
+            } else {
+                results.push(json!({
+                    "key": key,
+                    "status": "inaccessible",
+                }));
+            }
+        }
+        // Also capture any failed keys that weren't in this op's chunk
+        // (shouldn't happen, but Atlassian may return unexpected keys).
+        for (failed_key, err) in &op.progress.failed_accessible_issues {
+            if !op.keys.iter().any(|k| k == failed_key) {
+                results.push(json!({
+                    "key": failed_key,
+                    "status": "error",
+                    "error": err.summary(),
+                }));
+                any_failed = true;
+            }
+        }
+
+        let action_str = match op.action {
+            BulkMultiSelectFieldOption::Add => "ADD",
+            BulkMultiSelectFieldOption::Remove => "REMOVE",
+        };
+        operations_json.push(json!({
+            "taskId": op.task_id,
+            "action": action_str,
+            "results": results,
+        }));
+    }
+
+    match output_format {
+        OutputFormat::Json => {
+            // Single top-level JSON document for the ENTIRE invocation --
+            // never one `println!` per (chunk, action) cycle (Step-4.5
+            // Round-1 F2 fix; JSON render invariant #526).
+            let payload = json!({ "operations": operations_json });
+            println!("{}", output::render_json(&payload)?);
+        }
+        OutputFormat::Table => {
+            for op in &operations_json {
+                for entry in op["results"].as_array().expect("results is always an array") {
+                    let key = entry["key"].as_str().unwrap_or("?");
+                    match entry["status"].as_str().unwrap_or("?") {
+                        "success" => output::print_success(&format!("Updated {key}")),
+                        "error" => {
+                            let err_msg = entry["error"].as_str().unwrap_or("unknown error");
+                            eprintln!("error: {key}: {err_msg}");
+                        }
+                        status => eprintln!("warning: {key}: {status}"),
+                    }
+                }
+            }
+        }
+    }
+
+    if any_failed {
+        bail!("One or more issues failed during bulk edit. See output above for details.");
+    }
+
+    Ok(())
 }
 
 /// Supports 2..=1000 keys with --summary, --priority, --type.
