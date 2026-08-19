@@ -423,27 +423,34 @@ pub(super) async fn handle_edit(
     // parity, though it is unreachable in practice (that earlier block
     // already returns before this point whenever both --label and
     // --component are set).
+    //
+    // NOTE: deliberately NOT named `conflicting` -- that identifier is
+    // reserved by the `--label` conflict block above for
+    // `test_label_conflict_block_lists_every_relevant_flag`'s global
+    // `conflicting.push("--...")` source scan (see that block's own
+    // guard comment). A second `conflicting` here would be picked up by
+    // that scan and desync it from the `--label` block it actually audits.
     if !components.is_empty() && effective_keys.len() > 1 {
-        let mut conflicting: Vec<&str> = Vec::new();
+        let mut component_bulk_conflicts: Vec<&str> = Vec::new();
         if summary.is_some() {
-            conflicting.push("--summary");
+            component_bulk_conflicts.push("--summary");
         }
         if priority.is_some() {
-            conflicting.push("--priority");
+            component_bulk_conflicts.push("--priority");
         }
         if issue_type.is_some() {
-            conflicting.push("--type");
+            component_bulk_conflicts.push("--type");
         }
         if !labels.is_empty() {
-            conflicting.push("--label");
+            component_bulk_conflicts.push("--label");
         }
-        if !conflicting.is_empty() {
+        if !component_bulk_conflicts.is_empty() {
             return Err(JrError::UserError(format!(
                 "--component on multiple issues cannot be combined with {} in the \
                  same call -- the bulk component path issues its own, separate POST \
                  sequence and cannot also carry those fields. Run separate \
                  `jr issue edit` commands.",
-                conflicting.join(", ")
+                component_bulk_conflicts.join(", ")
             ))
             .into());
         }
@@ -1647,9 +1654,7 @@ fn project_key_from_issue_key(key: &str) -> &str {
 /// A single effective key is routed to the existing single-key `update`-verb
 /// path (`edit_issue_components`, BC-3.4.022) instead — EC-3.4.023-3.
 ///
-/// Full responsibility list for the eventual implementation (all TODO —
-/// S-605-2 implementer, via TDD against the 10 ACs in
-/// `.factory/stories/S-605-2-issue-component-bulk-edit.md`):
+/// What this function does, step by step:
 ///
 /// 1. **EC-3.4.023-1 cross-project guard**: `keys` spanning 2+ distinct
 ///    projects (via [`project_key_from_issue_key`]) → exit 64
@@ -1658,23 +1663,23 @@ fn project_key_from_issue_key(key: &str) -> &str {
 ///    (BC-3.4.019).
 /// 2. **Postcondition 4 / Invariant 2 — resolve + parse**: parse `components`
 ///    via [`format::normalize_component_changes`], resolve each NAME to a
-///    numeric id via §8.4 ([`resolve_component_change_names`],
+///    numeric id via §8.4 ([`resolve_bulk_component_ids`],
 ///    `helpers::resolve_component`), then an explicit `String` -> `u64`
 ///    parse (`id.parse::<u64>()`) immediately before body assembly — the
 ///    bulk endpoint requires a JSON integer `componentId`, never a string or
-///    `{"name":...}` object. A parse failure is an internal-invariant
-///    violation (every resolver-returned component id is itself a digit-only
-///    string on the wire), not a `JrError::UserError` — surface it as an
-///    unexpected internal error.
+///    `{"name":...}` object. A parse failure on the numeric-id-bypass path
+///    (user input) surfaces as `JrError::UserError`; a parse failure on a
+///    resolver-returned name's looked-up id (which should be unreachable)
+///    surfaces as `JrError::Internal` (Step-4.5 Round-1 F4 fix).
 /// 3. **Postcondition 1/2 — wire shape**: build the `editedFieldsInput` body
 ///    via [`crate::api::jira::bulk::build_component_edited_fields`] with
 ///    `selectedActions == ["components"]` (lowercase field id).
 /// 4. **Postcondition 3 — two sequential POSTs for mixed add:/remove:**: when
-///    both `add:` and `remove:` specs are present, issue the ADD POST first
-///    (fully polled via `await_bulk_task` to completion), THEN the REMOVE
-///    POST — never coalesced into one POST.
-/// 5. **Postcondition 6 / EC-3.4.023-4 — 1000-issue chunking**: split `keys`
-///    into sequential chunks of <= [`crate::api::jira::bulk::BULK_MAX_KEYS`],
+///    both `add:` and `remove:` specs are present, the ADD POST is issued
+///    first (fully polled via `await_bulk_task` to completion), THEN the
+///    REMOVE POST — never coalesced into one POST.
+/// 5. **Postcondition 6 / EC-3.4.023-4 — 1000-issue chunking**: `keys` is
+///    split into sequential chunks of <= [`crate::api::jira::bulk::BULK_MAX_KEYS`],
 ///    each fully polled to completion before the next chunk's POST fires
 ///    (chunk-major, action-minor ordering when combined with item 4 above —
 ///    `2 * ceil(N/1000)` POSTs total for N>1000 issues with mixed
@@ -1682,9 +1687,17 @@ fn project_key_from_issue_key(key: &str) -> &str {
 ///    continue-on-error, unlike `component rename --all-projects`) —
 ///    surfaced via the existing `await_bulk_task` error path. Already-
 ///    successful earlier chunks are NOT rolled back.
-/// 6. Render results via the existing `render_bulk_edit_results` shape
-///    (`output_format`-aware), matching the caller-visible contract every
-///    other bulk path in this file already produces.
+/// 6. Every (chunk, action) cycle's outcome is accumulated into a
+///    [`BulkComponentOpResult`] and rendered ONCE, after the loop, via
+///    [`render_bulk_component_results`] — a single coherent `--output json`
+///    document (or table-mode row sequence) for the whole invocation,
+///    never one document per cycle (Step-4.5 Round-1 F2 fix).
+///
+/// **Mutual exclusion (Step-4.5 Round-1 F1 fix):** the caller (`handle_edit`)
+/// rejects `--component` on 2+ keys combined with `--summary`/`--priority`/
+/// `--type`/`--label` before this function is ever reached — this path's
+/// POST sequence has no way to also carry those fields, so silently
+/// proceeding would drop them.
 ///
 /// **Release gate (DEC-280, BC-3.4.023 Delivery note):** this path MUST NOT
 /// ship to release until a live smoke test (one ADD, one REMOVE, >= 2 issues,
@@ -2987,10 +3000,9 @@ mod is_cross_hierarchy_type_error_proptests {
 
 // ---------------------------------------------------------------------------
 // AC-006 (BC-3.4.018 invariant 4): project key extraction unit tests.
-// RED GATE: `project_key_from_issue_key` does not yet exist. These tests will
-// fail to compile until the Green step adds the helper. The integration test
-// binaries (tests/*.rs) compile separately and are unaffected by this compile
-// failure — only `cargo test --lib` / `cargo test --doc` will fail to compile.
+// `project_key_from_issue_key` is defined above and used by the BC-3.4.019
+// `--type` cross-project guard, the BC-3.4.023 `--component` bulk-edit
+// cross-project guard (S-605-2), and the dry-run preview path.
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod test_project_key_extraction {

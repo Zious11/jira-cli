@@ -8118,9 +8118,9 @@ async fn test_bc_3_4_022_issue_edit_component_native_cross_identifier_add_remove
 
 // ═══════════════════════════════════════════════════════════════════════════
 // S-605-2: `issue edit KEY1 KEY2 ... --component add:X` (multi-key/`--jql`
-// bulk path) — BC-3.4.023. TDD Red Gate tests against the `todo!()` stubs in
-// `handle_edit_bulk_components` (src/cli/issue/edit.rs) and
-// `build_component_edited_fields` (src/api/jira/bulk.rs).
+// bulk path) — BC-3.4.023. Coverage for `handle_edit_bulk_components`
+// (src/cli/issue/edit.rs) and `build_component_edited_fields`
+// (src/api/jira/bulk.rs), both fully implemented.
 //
 // AC-010 (the live-Jira smoke-test release gate, DEC-280) is NOT here — it
 // lives in tests/e2e_live.rs, gated behind JR_RUN_E2E=1 + #[ignore], per that
@@ -8680,18 +8680,10 @@ async fn test_bc_3_4_023_issue_edit_component_jql_single_match_uses_single_key_p
 /// completion before the next chunk's POST fires. Exit 0 iff BOTH chunks
 /// succeed.
 ///
-/// RED GATE NOTE: this scenario is currently blocked at the CLI ARGUMENT
-/// PARSING layer, before `handle_edit` (let alone
-/// `handle_edit_bulk_components`) ever runs: the `keys` positional's clap
-/// definition (`src/cli/mod.rs`, `Edit { keys, ... }`) carries `#[arg(
-/// num_args = 0..=1001, ...)]`, so clap itself rejects a 1500-key
-/// invocation with "unexpected value ... found; no more were expected"
-/// (exit code 2) — confirmed empirically. Per BC-3.4.023 Postcondition 6,
-/// making this scenario reachable at all requires the implementer to widen
-/// (or otherwise special-case, e.g. via `--jql` whose own `--max` value_parser
-/// is ALSO currently hard-capped `1..=1000`) the CLI surface for the
-/// `--component` chunking path, in addition to implementing the chunking
-/// loop itself in `handle_edit_bulk_components`.
+/// The `keys` positional's clap definition (`src/cli/mod.rs`, `Edit { keys,
+/// ... }`) carries `#[arg(num_args = 0..=10000, ...)]`, widened for exactly
+/// this scenario (BC-3.4.023 Postcondition 6) -- a >1000-key `--component`
+/// invocation reaches `handle_edit_bulk_components`'s chunking loop below.
 #[tokio::test]
 async fn test_bc_3_4_023_issue_edit_bulk_component_1000_issue_chunking() {
     let server = MockServer::start().await;
@@ -8776,11 +8768,6 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_1000_issue_chunking() {
 /// chunking AND mixed add:/remove:) -> `2 * ceil(1500/1000) == 4` sequential
 /// POSTs total, chunk-major then action-minor ordering: chunk1-ADD,
 /// chunk1-REMOVE, chunk2-ADD, chunk2-REMOVE.
-///
-/// RED GATE NOTE: see `test_bc_3_4_023_issue_edit_bulk_component_1000_issue_chunking`'s
-/// doc comment above -- this scenario is currently blocked at the clap
-/// argument-parsing layer (`keys`'s `num_args = 0..=1001`) for the same
-/// reason.
 #[tokio::test]
 async fn test_bc_3_4_023_issue_edit_bulk_component_chunking_and_mixed_ops_four_posts() {
     let server = MockServer::start().await;
@@ -8886,11 +8873,6 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_chunking_and_mixed_ops_four_p
 /// chunks); the error output surfaces only chunk 2's `await_bulk_task`
 /// failure, not a per-chunk `renamed[]`/`failed[]` report shape (unlike
 /// `component rename --all-projects`).
-///
-/// RED GATE NOTE: see `test_bc_3_4_023_issue_edit_bulk_component_1000_issue_chunking`'s
-/// doc comment above -- this scenario is currently blocked at the clap
-/// argument-parsing layer (`keys`'s `num_args = 0..=1001`) for the same
-/// reason.
 #[tokio::test]
 async fn test_bc_3_4_023_issue_edit_bulk_component_chunk_failure_aborts_remaining() {
     let server = MockServer::start().await;

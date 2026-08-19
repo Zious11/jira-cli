@@ -486,10 +486,14 @@ pub enum IssueCommand {
         label: Vec<String>,
         /// Add or remove components (e.g., --component add:backend --component
         /// remove:frontend). Bare values (no prefix) are treated as ADD
-        /// (BC-3.4.022). Single-key path only — mirrors --field's single-key
-        /// restriction; multi-key/--jql bulk edits reject this flag (S-605-2
-        /// implements the bulk wire shape, BC-3.4.023). Cannot be combined
-        /// with --label on the same call (BC-3.4.020 amendment).
+        /// (BC-3.4.022). A single key uses the native `update`-verb PUT path;
+        /// 2+ keys (positional or --jql-resolved) route to a dedicated bulk
+        /// multiselectComponents path (BC-3.4.023, S-605-2), chunked
+        /// internally into <=1000-key POSTs. On 2+ keys, --component cannot
+        /// be combined with --summary/--priority/--type in the same call
+        /// (the bulk path has no way to also carry those fields). Cannot be
+        /// combined with --label on the same call at any key count
+        /// (BC-3.4.020 amendment).
         #[arg(long = "component")]
         component: Vec<String>,
         /// Team assignment
