@@ -9422,6 +9422,18 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_id_parse_failure_surfaces_as_
         "componentId parse failure must be handled as a graceful internal \
          error (a propagated Err), not an unhandled Rust panic; stderr={stderr}"
     );
+    // Step-4.5 Round-2 fix (F4): positively confirm the `JrError::Internal`
+    // branch actually fired, not merely that some non-64/non-0/non-panic
+    // exit occurred. Every `JrError::Internal` call site is required (per
+    // `error.rs`'s doc comment) to self-describe with the literal
+    // "Internal error:" prefix, which `main.rs` then echoes verbatim via
+    // `eprintln!("Error: {e}")`.
+    assert!(
+        stderr.contains("Internal error:"),
+        "componentId parse failure must surface via the JrError::Internal \
+         branch, whose message carries the literal \"Internal error:\" \
+         marker; stderr={stderr}"
+    );
 
     let received = server.received_requests().await.unwrap();
     let bulk_posts: Vec<_> = received
