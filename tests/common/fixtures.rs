@@ -898,3 +898,33 @@ pub fn bulk_task_partial_failure(
         "invalidOrInaccessibleIssueCount": 0
     })
 }
+
+/// `GET /rest/api/3/bulk/queue/{taskId}` terminal-success response where one
+/// or more of the originally-submitted keys are INACCESSIBLE -- present in
+/// the POST's issue list but absent from BOTH `processedAccessibleIssues`
+/// AND `failedAccessibleIssues`, counted only via
+/// `invalidOrInaccessibleIssueCount`. Distinct from `bulk_task_partial_failure`
+/// (which puts every submitted key in one of those two maps): here
+/// `inaccessible_count` keys are dropped from the response entirely, mirroring
+/// Atlassian's actual behavior for issues the acting user can no longer see
+/// (e.g. deleted or permission-revoked between submission and poll).
+/// Exercises the previously-untested `render_bulk_component_results`
+/// "inaccessible" render branch (Step-4.5 Round-6 coverage gap) -- every
+/// other poll fixture in this module accounts for 100% of submitted keys via
+/// processed/failed, so the `else` arm (`status: "inaccessible"`) was
+/// production-reachable but never hit by a test.
+pub fn bulk_task_inaccessible(
+    task_id: &str,
+    processed_keys: &[&str],
+    inaccessible_count: usize,
+) -> Value {
+    json!({
+        "taskId": task_id,
+        "status": "COMPLETE",
+        "progressPercent": 100,
+        "totalIssueCount": processed_keys.len() + inaccessible_count,
+        "processedAccessibleIssues": processed_keys,
+        "failedAccessibleIssues": {},
+        "invalidOrInaccessibleIssueCount": inaccessible_count
+    })
+}

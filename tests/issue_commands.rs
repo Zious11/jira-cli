@@ -10110,6 +10110,170 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_partial_failure_exits_nonzero
     );
 }
 
+/// A bulk `--component add:Backend` on 2 keys where the poll response omits
+/// FOO-2 from BOTH `processedAccessibleIssues` and `failedAccessibleIssues`
+/// (counted only via `invalidOrInaccessibleIssueCount`) must render FOO-2's
+/// row as `"status":"inaccessible"` -- not `"success"` and not `"error"` --
+/// while FOO-1 (present in `processedAccessibleIssues`) still renders
+/// `"status":"success"`. Per BC-3.4.023's current, documented behavior
+/// (shared with the pre-existing `render_bulk_edit_results` convention for
+/// the `--type`/`--label` paths), an inaccessible key does NOT set
+/// `any_failed` -- the overall command still exits 0, with the row itself
+/// the only signal. This is a Step-4.5 Round-6 coverage-only pin: no
+/// production behavior is asserted to be correct or desirable here, only
+/// pinned so a mutation collapsing the "inaccessible" literal to "success"
+/// (or deleting the `else if processed.contains(...)` guard) is caught.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_inaccessible_key_renders_inaccessible_status() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::bulk_task_enqueued("task-comp-inaccessible"),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/task-comp-inaccessible"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::bulk_task_inaccessible("task-comp-inaccessible", &["FOO-1"], 1),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "an inaccessible key must NOT set any_failed -- overall exit must stay 0 (current, \
+         documented behavior shared with render_bulk_edit_results); status={:?} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("stdout must be valid JSON on an inaccessible-key result: {e}; stdout={stdout}")
+    });
+
+    let operations = parsed["operations"]
+        .as_array()
+        .expect("expected top-level 'operations' array");
+    assert_eq!(
+        operations.len(),
+        1,
+        "expected exactly one operation (single ADD action); got {operations:?}"
+    );
+    let results = operations[0]["results"]
+        .as_array()
+        .expect("expected 'results' array on the operation");
+
+    let foo1 = results
+        .iter()
+        .find(|r| r["key"] == "FOO-1")
+        .unwrap_or_else(|| panic!("expected a result row for FOO-1; results={results:?}"));
+    assert_eq!(
+        foo1["status"], "success",
+        "FOO-1 was in processedAccessibleIssues and must render status=success; row={foo1:?}"
+    );
+
+    let foo2 = results
+        .iter()
+        .find(|r| r["key"] == "FOO-2")
+        .unwrap_or_else(|| panic!("expected a result row for FOO-2; results={results:?}"));
+    assert_eq!(
+        foo2["status"], "inaccessible",
+        "FOO-2 was in neither processedAccessibleIssues nor failedAccessibleIssues and must \
+         render status=inaccessible (not success, not error); row={foo2:?}"
+    );
+}
+
+/// Table-mode companion to the JSON test above: the `else` arm of the table
+/// renderer (`status => eprintln!("warning: {key}: {status}")`) is the only
+/// place an inaccessible key is surfaced to a human in table mode -- it is
+/// neither a `print_success` row nor an `error:` line. Cheap-to-add per
+/// Step-4.5 Round-6 (table assertion optional, JSON alone would suffice).
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_inaccessible_key_table_mode_warns() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::bulk_task_enqueued("task-comp-inaccessible-table"),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/task-comp-inaccessible-table"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::bulk_task_inaccessible("task-comp-inaccessible-table", &["FOO-1"], 1),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "an inaccessible key must NOT set any_failed -- overall exit must stay 0; \
+         status={:?} stderr={stderr}",
+        output.status
+    );
+    assert!(
+        stderr.contains("warning: FOO-2: inaccessible"),
+        "expected a stderr warning naming the inaccessible key in table mode; stderr={stderr}"
+    );
+}
+
 /// A successful mixed `add:X remove:Y` bulk `--component` edit on 2 keys, in
 /// `--output json` mode, must emit the FULL expected structure: an
 /// `operations` array with exactly 2 entries (one per action), each with the
