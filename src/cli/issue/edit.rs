@@ -368,6 +368,46 @@ pub(super) async fn handle_edit(
         }
     }
 
+    // --- Step-4.5 Round-1 F1 fix: --component bulk route mutual exclusion. ---
+    // `handle_edit_bulk_components` (dispatched near the --label routing,
+    // below) issues its OWN, separate multiselectComponents POST sequence
+    // and returns immediately -- it never reaches `handle_edit_bulk_fields`,
+    // which is the only place --summary/--priority/--type are honored on a
+    // multi-key edit. Without this guard, `--component add:X --summary Y`
+    // on 2+ keys would silently drop `--summary` (exit 0, data loss) because
+    // the --component routing check (below) returns before the bulk-fields
+    // routing is ever reached. --label is already covered by the
+    // BC-3.4.020 amendment conflict block above (fires unconditionally on
+    // any key count) -- included here too for defense-in-depth documentation
+    // parity, though it is unreachable in practice (that earlier block
+    // already returns before this point whenever both --label and
+    // --component are set).
+    if !components.is_empty() && effective_keys.len() > 1 {
+        let mut conflicting: Vec<&str> = Vec::new();
+        if summary.is_some() {
+            conflicting.push("--summary");
+        }
+        if priority.is_some() {
+            conflicting.push("--priority");
+        }
+        if issue_type.is_some() {
+            conflicting.push("--type");
+        }
+        if !labels.is_empty() {
+            conflicting.push("--label");
+        }
+        if !conflicting.is_empty() {
+            return Err(JrError::UserError(format!(
+                "--component on multiple issues cannot be combined with {} in the \
+                 same call -- the bulk component path issues its own, separate POST \
+                 sequence and cannot also carry those fields. Run separate \
+                 `jr issue edit` commands.",
+                conflicting.join(", ")
+            ))
+            .into());
+        }
+    }
+
     // --- BC-3.4.019 cross-project guard for --type (fires in BOTH live and dry-run). ---
     // Issue-type IDs are project-scoped; the bulk endpoint takes ONE issueTypeId for
     // the entire batch. A cross-project set cannot be safely resolved to a single id,

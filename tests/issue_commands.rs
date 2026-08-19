@@ -9064,3 +9064,216 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_id_parse_failure_surfaces_as_
         "the malformed componentId must never reach the wire; got {bulk_posts:?}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Step-4.5 Round-1 F1 fix (BC-3.4.023): multi-key `--component` mutual
+// exclusion with --summary/--priority/--type/--label. Before this fix,
+// `handle_edit`'s routing dispatched straight to `handle_edit_bulk_components`
+// whenever `!components.is_empty() && effective_keys.len() > 1`, BEFORE the
+// generic bulk-fields routing a few lines below that would have carried
+// --summary/--priority/--type — so those flags were silently discarded
+// (exit 0, no error, no PUT/POST reflecting them). --label was already
+// guarded (BC-3.4.020 amendment), so that combination is a regression test
+// confirming the pre-existing guard, not new behavior.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `--component` + `--summary` on 2+ keys -> exit 64, ZERO HTTP calls (no
+/// silent drop of --summary).
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_plus_summary_exits_64_zero_http() {
+    let server = MockServer::start().await;
+    // No mocks mounted -- the mutual-exclusion guard must fire before any
+    // HTTP call (verified via received_requests().len() == 0 below).
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+            "--summary",
+            "New title",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F1: expected exit 64 for --component + --summary on a multi-key \
+         edit; stderr={stderr} stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("--component"),
+        "F1: expected '--component' named in the guard message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--summary"),
+        "F1: expected '--summary' named in the guard message; stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "F1: expected zero HTTP calls before the guard fires; got {} requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `--component` + `--priority` on 2+ keys -> exit 64, ZERO HTTP calls.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_plus_priority_exits_64_zero_http() {
+    let server = MockServer::start().await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+            "--priority",
+            "High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F1: expected exit 64 for --component + --priority on a multi-key \
+         edit; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--component"),
+        "F1: expected '--component' named in the guard message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--priority"),
+        "F1: expected '--priority' named in the guard message; stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "F1: expected zero HTTP calls before the guard fires; got {} requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `--component` + `--type` on 2+ keys -> exit 64, ZERO HTTP calls.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_plus_type_exits_64_zero_http() {
+    let server = MockServer::start().await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+            "--type",
+            "Bug",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F1: expected exit 64 for --component + --type on a multi-key edit; \
+         stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--component"),
+        "F1: expected '--component' named in the guard message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--type"),
+        "F1: expected '--type' named in the guard message; stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "F1: expected zero HTTP calls before the guard fires; got {} requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `--component` + `--label` on 2+ keys -> exit 64, ZERO HTTP calls.
+/// Regression test: this combination is already rejected by the
+/// pre-existing BC-3.4.020 amendment `--label` conflict guard (which fires
+/// earlier, unconditionally on any key count) -- this test pins that the
+/// combination still fails closed after the F1 fix, rather than exercising
+/// new code.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_plus_label_exits_64_zero_http() {
+    let server = MockServer::start().await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+            "--label",
+            "add:urgent",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F1: expected exit 64 for --component + --label on a multi-key \
+         edit; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--component"),
+        "F1: expected '--component' named in the guard message; stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "F1: expected zero HTTP calls before the guard fires; got {} requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
