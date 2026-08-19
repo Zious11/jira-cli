@@ -605,7 +605,25 @@ pub(super) async fn handle_edit(
             let dr_key = &effective_keys[0];
             let dr_project_key = project_key_from_issue_key(dr_key);
             let dr_changes = format::normalize_component_changes(&components);
-            Some(resolve_component_change_names(client, dr_project_key, &dr_changes).await?)
+            let resolved =
+                resolve_component_change_names(client, dr_project_key, &dr_changes).await?;
+            // Step-4.5 Round-2 fix (F2): the multi-key bulk LIVE path
+            // additionally resolves each change to a numeric componentId via
+            // `resolve_bulk_component_ids` (Invariant 2), which performs an
+            // explicit `String -> u64` parse that can fail on an
+            // oversized/non-parseable numeric-bypass id (e.g.
+            // `add:99999999999999999999999999`) even when the NAME-only
+            // resolution above succeeds. The dry-run preview must exercise
+            // the SAME check -- by the cross-project guard hoisted above
+            // this block, `effective_keys` is guaranteed single-project here
+            // -- so it never promises success for an input the live run
+            // rejects. Single-key dry-run doesn't need this: the single-key
+            // live path wires a NAME, never a numeric id (see
+            // `resolve_bulk_component_ids`'s doc comment).
+            if effective_keys.len() > 1 {
+                resolve_bulk_component_ids(client, dr_project_key, &components).await?;
+            }
+            Some(resolved)
         } else {
             None
         };

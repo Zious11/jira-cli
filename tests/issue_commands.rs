@@ -8683,6 +8683,143 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_dry_run_cross_project_exits_6
     );
 }
 
+// ── Step-4.5 Round-2 fix F2 (dry-run oversized-numeric-id divergence) ──────
+//
+// The multi-key `--component` LIVE path resolves each change to a numeric
+// `componentId` via `resolve_bulk_component_ids`, which performs an
+// explicit `String -> u64` parse (Invariant 2) that can fail on an
+// oversized numeric-bypass id even when NAME resolution (the only step
+// dry-run previously performed) succeeds. Dry-run must exercise the SAME
+// parse so it never previews success for an input the live run rejects.
+
+/// `jr issue edit FOO-1 FOO-2 --component add:99999999999999999999999999
+/// --dry-run` -> exit 64 (`JrError::UserError`, same as the live run --
+/// see `test_bc_3_4_023_issue_edit_bulk_component_oversized_numeric_id_is_user_error`),
+/// with zero POSTs -- not a preview of success.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_dry_run_oversized_numeric_id_exits_64() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:99999999999999999999999999",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F2 (dry-run): an oversized numeric --component id must exit 64 in \
+         dry-run, matching the live run's JrError::UserError; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("99999999999999999999999999"),
+        "F2 (dry-run): expected the offending value echoed in the error message; \
+         stderr={stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "F2 (dry-run): expected empty stdout on error; stdout={stdout}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    let posts: Vec<_> = received
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .collect();
+    assert!(
+        posts.is_empty(),
+        "F2 (dry-run): the oversized componentId must never reach a POST; got {posts:?}"
+    );
+}
+
+/// Happy-path regression pin (Step-4.5 Round-2, NOTE): a VALID multi-key
+/// `--component --dry-run` (same project, resolvable names) must still
+/// preview successfully after F1/F2 hoist the cross-project guard and add
+/// the numeric-id resolution check -- neither change may regress the
+/// normal case. Mirrors the single-key AC-016 json-mode assertion shape.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_dry_run_multi_key_happy_path_previews() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+            "--dry-run",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "happy-path regression: expected exit 0; stderr={stderr}"
+    );
+    let body: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("happy-path regression: stdout is not valid JSON: {e}; stdout={stdout}")
+    });
+    assert_eq!(
+        body["plannedChanges"]["components"],
+        serde_json::json!([{"action": "ADD", "name": "Backend"}]),
+        "happy-path regression: plannedChanges.components must still preview \
+         correctly for a valid multi-key --component --dry-run; body={body}"
+    );
+}
+
 // ── AC-006 (BC-3.4.023 Edge Case EC-3.4.023-3 -- single-issue fallthrough) ─
 
 /// `--jql` matching exactly 1 issue -> routes to S-605-1's single-key path
