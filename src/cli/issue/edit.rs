@@ -1759,12 +1759,20 @@ async fn handle_edit_bulk_components(
     let mut ops: Vec<BulkComponentOpResult> = Vec::new();
     for chunk in keys.chunks(BULK_MAX_KEYS) {
         if !add_ids.is_empty() {
-            ops.push(run_bulk_component_action(chunk, &add_ids, BulkMultiSelectFieldOption::Add, client).await?);
+            ops.push(
+                run_bulk_component_action(chunk, &add_ids, BulkMultiSelectFieldOption::Add, client)
+                    .await?,
+            );
         }
         if !remove_ids.is_empty() {
             ops.push(
-                run_bulk_component_action(chunk, &remove_ids, BulkMultiSelectFieldOption::Remove, client)
-                    .await?,
+                run_bulk_component_action(
+                    chunk,
+                    &remove_ids,
+                    BulkMultiSelectFieldOption::Remove,
+                    client,
+                )
+                .await?,
             );
         }
     }
@@ -2017,7 +2025,10 @@ fn render_bulk_component_results(
         }
         OutputFormat::Table => {
             for op in &operations_json {
-                for entry in op["results"].as_array().expect("results is always an array") {
+                for entry in op["results"]
+                    .as_array()
+                    .expect("results is always an array")
+                {
                     let key = entry["key"].as_str().unwrap_or("?");
                     match entry["status"].as_str().unwrap_or("?") {
                         "success" => output::print_success(&format!("Updated {key}")),
