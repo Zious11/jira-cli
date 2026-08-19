@@ -346,14 +346,11 @@ pub(super) async fn handle_edit(
         if !field_pairs.is_empty() {
             unsupported.push("--field");
         }
-        // BC-3.4.022: --component is single-key path ONLY — 2+ keys route to
-        // S-605-2's BC-3.4.023 bulk wire shape (not implemented by this
-        // story). Reject here rather than silently dropping the flag when
-        // forwarded to handle_edit_bulk_fields, which has no components
-        // parameter (mirrors the --field precedent immediately above).
-        if !components.is_empty() {
-            unsupported.push("--component");
-        }
+        // BC-3.4.022/BC-3.4.023: --component on 2+ keys no longer falls into
+        // this "unsupported on bulk" bucket (S-605-2) — it now routes to its
+        // own bulk multiselectComponents path (`handle_edit_bulk_components`,
+        // dispatched below, near the --label routing). Intentionally NOT
+        // added to `unsupported` here.
         if !unsupported.is_empty() {
             return Err(JrError::UserError(format!(
                 "Multi-key bulk edit doesn't yet support: {}. \
@@ -725,6 +722,20 @@ pub(super) async fn handle_edit(
     // --- Route: labels → bulk API. ---
     if !labels.is_empty() {
         return handle_edit_bulk_labels(&effective_keys, labels, output_format, client, no_input)
+            .await;
+    }
+
+    // --- Route: --component on 2+ keys → BC-3.4.023 bulk multiselectComponents
+    // path (S-605-2). Entirely separate from `handle_edit_bulk_fields` below —
+    // the `multiselectComponents` wire shape requires its own POST sequencing
+    // (two sequential POSTs for mixed add:/remove:, plus 1000-issue chunking)
+    // that cannot be folded into that function's generic
+    // {summary,priority,issueType} single-POST composition (BC-3.4.023
+    // Postcondition 2/3). A single effective key falls through to the
+    // existing single-key `update`-verb path below (EC-3.4.023-3,
+    // BC-3.4.022) — this branch only fires for 2+ keys.
+    if !components.is_empty() && effective_keys.len() > 1 {
+        return handle_edit_bulk_components(&effective_keys, &components, output_format, client)
             .await;
     }
 
@@ -1535,6 +1546,69 @@ fn project_key_from_issue_key(key: &str) -> &str {
         Some(pos) => &key[..pos],
         None => key,
     }
+}
+
+/// `jr issue edit KEY1 KEY2 ... --component add:X` — multi-key/`--jql` bulk
+/// `--component` edit (BC-3.4.023, S-605-2). Entirely separate wire path from
+/// `handle_edit_bulk_fields`: the `multiselectComponents` schema holds only
+/// ONE `bulkEditMultiSelectFieldOption` per POST (unlike `labelsFields`'
+/// array-of-elements shape), so mixed `add:`/`remove:` specs require TWO
+/// sequential POSTs rather than one coalesced POST (Postcondition 3).
+///
+/// Precondition (enforced by the caller, `handle_edit`): `keys.len() > 1`.
+/// A single effective key is routed to the existing single-key `update`-verb
+/// path (`edit_issue_components`, BC-3.4.022) instead — EC-3.4.023-3.
+///
+/// Full responsibility list for the eventual implementation (all TODO —
+/// S-605-2 implementer, via TDD against the 10 ACs in
+/// `.factory/stories/S-605-2-issue-component-bulk-edit.md`):
+///
+/// 1. **EC-3.4.023-1 cross-project guard**: `keys` spanning 2+ distinct
+///    projects (via [`project_key_from_issue_key`]) → exit 64
+///    (`JrError::UserError`) BEFORE any HTTP call — component ids are
+///    project-scoped, mirroring `handle_edit_bulk_fields`'s `--type` guard
+///    (BC-3.4.019).
+/// 2. **Postcondition 4 / Invariant 2 — resolve + parse**: parse `components`
+///    via [`format::normalize_component_changes`], resolve each NAME to a
+///    numeric id via §8.4 ([`resolve_component_change_names`],
+///    `helpers::resolve_component`), then an explicit `String` -> `u64`
+///    parse (`id.parse::<u64>()`) immediately before body assembly — the
+///    bulk endpoint requires a JSON integer `componentId`, never a string or
+///    `{"name":...}` object. A parse failure is an internal-invariant
+///    violation (every resolver-returned component id is itself a digit-only
+///    string on the wire), not a `JrError::UserError` — surface it as an
+///    unexpected internal error.
+/// 3. **Postcondition 1/2 — wire shape**: build the `editedFieldsInput` body
+///    via [`crate::api::jira::bulk::build_component_edited_fields`] with
+///    `selectedActions == ["components"]` (lowercase field id).
+/// 4. **Postcondition 3 — two sequential POSTs for mixed add:/remove:**: when
+///    both `add:` and `remove:` specs are present, issue the ADD POST first
+///    (fully polled via `await_bulk_task` to completion), THEN the REMOVE
+///    POST — never coalesced into one POST.
+/// 5. **Postcondition 6 / EC-3.4.023-4 — 1000-issue chunking**: split `keys`
+///    into sequential chunks of <= [`crate::api::jira::bulk::BULK_MAX_KEYS`],
+///    each fully polled to completion before the next chunk's POST fires
+///    (chunk-major, action-minor ordering when combined with item 4 above —
+///    `2 * ceil(N/1000)` POSTs total for N>1000 issues with mixed
+///    add:/remove:). A chunk failure ABORTS the remaining sequence (no
+///    continue-on-error, unlike `component rename --all-projects`) —
+///    surfaced via the existing `await_bulk_task` error path. Already-
+///    successful earlier chunks are NOT rolled back.
+/// 6. Render results via the existing `render_bulk_edit_results` shape
+///    (`output_format`-aware), matching the caller-visible contract every
+///    other bulk path in this file already produces.
+///
+/// **Release gate (DEC-280, BC-3.4.023 Delivery note):** this path MUST NOT
+/// ship to release until a live smoke test (one ADD, one REMOVE, >= 2 issues,
+/// one project with >= 1 component already defined) confirms the
+/// `multiselectComponents` wire shape documented above (AC-010).
+async fn handle_edit_bulk_components(
+    _keys: &[String],
+    _components: &[String],
+    _output_format: &OutputFormat,
+    _client: &JiraClient,
+) -> Result<()> {
+    todo!("S-605-2 / BC-3.4.023: bulk --component multiselectComponents path — see rustdoc above")
 }
 
 /// Supports 2..=1000 keys with --summary, --priority, --type.

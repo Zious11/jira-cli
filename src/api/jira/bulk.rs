@@ -158,6 +158,69 @@ fn resolve_unknown_status_grace() -> Duration {
     Duration::from_secs(DEFAULT_UNKNOWN_STATUS_GRACE_SECS)
 }
 
+/// `bulkEditMultiSelectFieldOption` value for the `multiselectComponents`
+/// bulk-edit wire shape (BC-3.4.023, S-605-2).
+///
+/// The Atlassian endpoint's documented enum also has `Replace`/`RemoveAll`
+/// variants, but `jr` has no `set:`/`replace:`/`clear:` CLI grammar to
+/// produce them — that is `#607` territory, intentionally out of scope here
+/// (BC-3.4.023 Delivery note). `jr` only ever emits `Add`/`Remove`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BulkMultiSelectFieldOption {
+    /// `"ADD"` — appends the given component ids to each issue's existing set.
+    Add,
+    /// `"REMOVE"` — removes the given component ids from each issue's existing set.
+    Remove,
+}
+
+/// Pure body-composition helper for the bulk `--component` edit's
+/// `editedFieldsInput` object (BC-3.4.023 Postcondition 1/2).
+///
+/// Builds ONLY the `editedFieldsInput` value — the caller (`handle_edit_bulk_components`
+/// in `src/cli/issue/edit.rs`) is responsible for pairing it with
+/// `selectedActions: ["components"]` (lowercase field id — INTENTIONALLY
+/// different from the camelCase `multiselectComponents` key below;
+/// same asymmetry class as `labelsFields`/`"labels"` and
+/// `issueType`/`"issuetype"` — do NOT "fix" it) and calling
+/// [`JiraClient::bulk_edit_fields`].
+///
+/// `component_ids` MUST already be resolved, numeric ids (§8.4 resolution +
+/// explicit `String` -> `u64` parse, BC-3.4.023 Invariant 2) — this function
+/// performs no name resolution and no HTTP.
+///
+/// Target shape (verified: doc example + swagger OpenAPI + apidog mirror,
+/// `.factory/research/component-delete-and-bulk-wire-2026-08-15.md` §Q2):
+/// ```json
+/// {
+///   "multiselectComponents": {
+///     "fieldId": "components",
+///     "components": [{"componentId": 10001}, {"componentId": 10002}],
+///     "bulkEditMultiSelectFieldOption": "ADD"
+///   }
+/// }
+/// ```
+/// Note this is a SINGLE OBJECT under `multiselectComponents` — NOT an array,
+/// and NOT `componentsFields` (contrast `labelsFields`'s array-of-elements
+/// shape, which is why mixed add:/remove: requires two sequential calls to
+/// this function + two POSTs, rather than one call producing both actions in
+/// one body — BC-3.4.023 Postcondition 3).
+///
+/// Deliberately OMITS a top-level `sendBulkNotification` key — see
+/// BC-3.4.023 Postcondition 2's 2026-08-19 clarification; the live-proven
+/// `bulk_edit_fields` composition already omits it (issue #446 precedent)
+/// and callers MUST NOT add it here to mirror the Atlassian doc's worked
+/// example.
+///
+/// Pure function — no I/O, no async, no client refs. Testable in isolation
+/// from HTTP (see the story's Purity Classification table).
+pub fn build_component_edited_fields(
+    component_ids: &[u64],
+    option: BulkMultiSelectFieldOption,
+) -> serde_json::Value {
+    let _ = (component_ids, option);
+    todo!("S-605-2 / BC-3.4.023: multiselectComponents body composition — see rustdoc above")
+}
+
 /// Maximum byte length for a taskId received from Atlassian, used as a sanity
 /// cap before embedding the value into the bulk-queue URL path.
 ///
