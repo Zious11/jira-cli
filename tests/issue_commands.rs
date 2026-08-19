@@ -8285,6 +8285,86 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_add_wire_shape() {
     );
 }
 
+/// Step-4.5 Round-3 F3: `--component add:Backend --component add:Frontend`
+/// on 2 keys are the SAME action (ADD), so `resolve_bulk_component_ids`
+/// buckets both resolved ids into one `add_ids` vec and
+/// `build_component_edited_fields` must emit BOTH as a 2-element
+/// `components` array in a SINGLE POST -- never one POST per component, and
+/// never silently truncated to the first id. Kills a `.take(1)`-shaped
+/// mutation on the component id list, which no prior test (all single-id)
+/// could catch.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_two_adds_one_action_emits_two_element_array() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "Frontend", None, None, None),
+        ],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::bulk_task_enqueued("task-comp-two-adds")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let keys = vec!["FOO-1".to_string(), "FOO-2".to_string()];
+    s605_2_mount_poll_complete(&server, "task-comp-two-adds", &keys).await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+            "--component",
+            "add:Frontend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "F3: expected exit 0; stderr={stderr}"
+    );
+
+    let posts = s605_2_captured_bulk_posts(&server).await;
+    assert_eq!(
+        posts.len(),
+        1,
+        "F3: two adds in one action must be ONE bulk POST, not one per component; got {posts:?}"
+    );
+
+    assert_eq!(
+        posts[0],
+        serde_json::json!({
+            "selectedIssueIdsOrKeys": ["FOO-1", "FOO-2"],
+            "selectedActions": ["components"],
+            "editedFieldsInput": {
+                "multiselectComponents": {
+                    "fieldId": "components",
+                    "components": [{"componentId": 10001}, {"componentId": 10002}],
+                    "bulkEditMultiSelectFieldOption": "ADD"
+                }
+            }
+        }),
+        "F3: expected an exact, ordered 2-element components array [Backend, Frontend]"
+    );
+}
+
 // ── AC-002 (BC-3.4.023 Postcondition 3 -- two sequential POSTs) ────────────
 
 /// `jr issue edit FOO-1 FOO-2 --component add:Backend --component
