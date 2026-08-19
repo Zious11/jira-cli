@@ -1782,11 +1782,16 @@ struct BulkComponentOpResult {
 /// `componentId` for EVERY resolved change -- name-resolved or
 /// id-passed-through alike -- so it performs the name -> id lookup inline
 /// against the SAME fetched candidate list, then the explicit `String` ->
-/// `u64` parse Invariant 2 requires. A parse failure at this point is an
-/// internal-invariant violation (every resolver-returned component id is
-/// itself a digit-only string on the wire) -- surfaced as
-/// `JrError::Internal`, never `JrError::UserError` (the malformed value did
-/// not come from user input at this point).
+/// `u64` parse Invariant 2 requires. A parse failure's error type depends on
+/// WHICH branch produced the id string (Step-4.5 Round-1 F4 fix): a
+/// resolver-returned NAME whose looked-up id is non-numeric is a genuine
+/// internal-invariant violation (every candidate list entry's id is itself
+/// a digit-only string on the wire) -- surfaced as `JrError::Internal`.
+/// A value from the §8.4 numeric-id bypass (BC-8.4.001 step 1 --
+/// all-ASCII-digit CLI input forwarded verbatim, skipping `partial_match`
+/// entirely) IS user input, and CAN overflow `u64` (e.g.
+/// `--component add:99999999999999999999999999`) -- that failure surfaces
+/// as `JrError::UserError` (exit 64), never `JrError::Internal`.
 async fn resolve_bulk_component_ids(
     client: &JiraClient,
     project_key: &str,
@@ -1840,34 +1845,51 @@ async fn resolve_bulk_component_ids(
             };
 
         // `matched_name` is either the passed-through numeric id
-        // (BC-8.4.001 step-1 bypass) or the resolved canonical component
-        // NAME. The bulk wire shape needs a numeric componentId either way
-        // (Invariant 2) -- resolve a name to its id via the same fetched
-        // candidate list.
-        let id_str = if !matched_name.is_empty() && matched_name.chars().all(|c| c.is_ascii_digit())
-        {
-            matched_name
-        } else {
-            component_list
-                .iter()
-                .find(|c| c.name.eq_ignore_ascii_case(&matched_name))
-                .map(|c| c.id.clone())
-                .ok_or_else(|| {
-                    JrError::Internal(format!(
-                        "Internal error: resolved component name {matched_name:?} was not \
-                         found in the fetched component list for project {project_key} -- \
-                         this should be unreachable (the resolver only returns names present \
-                         in the same list)."
-                    ))
-                })?
-        };
+        // (BC-8.4.001 step-1 bypass -- USER input, verbatim) or the resolved
+        // canonical component NAME (resolver output). The bulk wire shape
+        // needs a numeric componentId either way (Invariant 2) -- resolve a
+        // name to its id via the same fetched candidate list.
+        //
+        // Step-4.5 Round-1 F4 fix: track WHICH of the two branches produced
+        // `id_str` so a subsequent parse failure can be attributed
+        // correctly. The numeric bypass forwards raw user input verbatim
+        // (an all-ASCII-digit CLI value can still overflow u64, e.g.
+        // `--component add:99999999999999999999999999`) -- that failure
+        // came from user input and must be a `JrError::UserError` (exit
+        // 64), not `JrError::Internal`. `JrError::Internal` is reserved for
+        // the OTHER branch: a resolver-returned NAME whose looked-up id is
+        // somehow non-numeric, which genuinely should be unreachable.
+        let (id_str, id_is_user_input) =
+            if !matched_name.is_empty() && matched_name.chars().all(|c| c.is_ascii_digit()) {
+                (matched_name, true)
+            } else {
+                let id = component_list
+                    .iter()
+                    .find(|c| c.name.eq_ignore_ascii_case(&matched_name))
+                    .map(|c| c.id.clone())
+                    .ok_or_else(|| {
+                        JrError::Internal(format!(
+                            "Internal error: resolved component name {matched_name:?} was not \
+                             found in the fetched component list for project {project_key} -- \
+                             this should be unreachable (the resolver only returns names present \
+                             in the same list)."
+                        ))
+                    })?;
+                (id, false)
+            };
 
         let id: u64 = id_str.parse().map_err(|e| {
-            JrError::Internal(format!(
-                "Internal error: resolved componentId {id_str:?} is not numeric ({e}) -- \
-                 every resolver-returned component id should be a digit-only string on the \
-                 wire (BC-3.4.023 Invariant 2)."
-            ))
+            if id_is_user_input {
+                JrError::UserError(format!(
+                    "component id out of range or not found: {id_str} ({e})"
+                ))
+            } else {
+                JrError::Internal(format!(
+                    "Internal error: resolved componentId {id_str:?} is not numeric ({e}) -- \
+                     every resolver-returned component id should be a digit-only string on the \
+                     wire (BC-3.4.023 Invariant 2)."
+                ))
+            }
         })?;
 
         match change.action {

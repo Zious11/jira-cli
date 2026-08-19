@@ -9243,6 +9243,88 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_id_parse_failure_surfaces_as_
     );
 }
 
+// ── Step-4.5 Round-1 F4 fix (BC-3.4.023 Invariant 2 -- numeric-bypass
+//    oversized id is user input, not an internal invariant violation) ──────
+
+/// `--component add:<oversized-all-digit-string>` (a value that IS
+/// all-ASCII-digit, so it takes the §8.4 numeric-id bypass and skips
+/// `partial_match` entirely, but overflows `u64::MAX`) is USER input, not a
+/// resolver-returned name -- the parse failure must surface as
+/// `JrError::UserError` (exit 64), never `JrError::Internal`. Before this
+/// fix, `resolve_bulk_component_ids` mapped every `id.parse::<u64>()`
+/// failure to `JrError::Internal` regardless of source, incorrectly
+/// asserting (in both the code comment and the error text) that the value
+/// "did not come from user input" even on this bypass path.
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_oversized_numeric_id_is_user_error() {
+    let server = MockServer::start().await;
+
+    // The numeric bypass (helpers::resolve_component) never calls
+    // partial_match for an all-digit input, so the component-list GET is
+    // still made (candidate list fetch happens unconditionally before the
+    // per-change resolve loop) but its contents are irrelevant here.
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:99999999999999999999999999",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let exit_code = output.status.code();
+    assert_eq!(
+        exit_code,
+        Some(64),
+        "F4: an oversized numeric --component id is USER input (via the \
+         §8.4 numeric-id bypass) -- the parse failure must be a \
+         JrError::UserError (exit 64), not JrError::Internal; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("99999999999999999999999999"),
+        "F4: expected the offending value echoed in the error message; \
+         stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked at"),
+        "F4: must not surface as an unhandled Rust panic; stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    let bulk_posts: Vec<_> = received
+        .iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::POST
+                && r.url.path() == "/rest/api/3/bulk/issues/fields"
+        })
+        .collect();
+    assert!(
+        bulk_posts.is_empty(),
+        "F4: the oversized componentId must never reach the wire; got {bulk_posts:?}"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Step-4.5 Round-1 F1 fix (BC-3.4.023): multi-key `--component` mutual
 // exclusion with --summary/--priority/--type/--label. Before this fix,
