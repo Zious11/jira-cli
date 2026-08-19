@@ -9325,6 +9325,149 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_oversized_numeric_id_is_user_
     );
 }
 
+// ── Step-4.5 Round-1 F5 fix (BC-3.4.023 -- ExactMultiple/Ambiguous coverage
+//    on the bulk path) ──────────────────────────────────────────────────────
+//
+// AC-004 (`test_bc_3_4_023_issue_edit_bulk_component_unknown_name_zero_post`)
+// only exercises `MatchResult::None`. The `ExactMultiple` and `Ambiguous`
+// branches of `resolve_bulk_component_ids` (mirrors the single-key
+// MEDIUM-2 tests above, `test_bc_8_4_003_issue_edit_component_*`) had ZERO
+// coverage on the bulk (2+ key) path -- a mutation dropping either branch's
+// exit-64/zero-POST guard would have stayed green.
+
+/// Bulk path: a component-list GET returning two components whose names
+/// are identical case-insensitively ("Backend" id 10001, "backend" id
+/// 10002) -> `MatchResult::ExactMultiple` -> exit 64, ZERO bulk POST, exact
+/// BC-8.4.003 message (mirrors `test_bc_8_4_003_issue_edit_component_exact_multiple_exits_64`,
+/// applied to the 2+-key bulk resolver call).
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_exact_multiple_zero_post() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("10001", "Backend", None, None, None),
+            common::fixtures::component_response("10002", "backend", None, None, None),
+        ],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Backend",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F5 (ExactMultiple): expected exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "Multiple components named \"Backend\" found (IDs: 10001, 10002). \
+             Pass the numeric ID directly."
+        ),
+        "F5 (ExactMultiple): expected exact BC-8.4.003 message; stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    let bulk_posts: Vec<_> = received
+        .iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::POST
+                && r.url.path() == "/rest/api/3/bulk/issues/fields"
+        })
+        .collect();
+    assert!(
+        bulk_posts.is_empty(),
+        "F5 (ExactMultiple): zero bulk POSTs expected; got {bulk_posts:?}"
+    );
+}
+
+/// Bulk path: `--component add:Amb` where the project component list has
+/// two partial matches ("Ambition" id 20002, "Amber" id 20001, mounted in
+/// reverse-alphabetical fixture order) -> `MatchResult::Ambiguous` -> exit
+/// 64, ZERO bulk POST, exact BC-8.4.003 message (mirrors
+/// `test_bc_8_4_003_issue_edit_component_ambiguous_exits_64`, applied to
+/// the 2+-key bulk resolver call).
+#[tokio::test]
+async fn test_bc_3_4_023_issue_edit_bulk_component_ambiguous_zero_post() {
+    let server = MockServer::start().await;
+
+    s605_1_mock_components(
+        &server,
+        "FOO",
+        vec![
+            common::fixtures::component_response("20002", "Ambition", None, None, None),
+            common::fixtures::component_response("20001", "Amber", None, None, None),
+        ],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(501).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s605_1_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--component",
+            "add:Amb",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F5 (Ambiguous): expected exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Ambiguous component 'Amb'. Matches: Amber, Ambition."),
+        "F5 (Ambiguous): expected exact BC-8.4.003 message (alphabetically- \
+         sorted Matches list); stderr={stderr}"
+    );
+
+    let received = server.received_requests().await.unwrap();
+    let bulk_posts: Vec<_> = received
+        .iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::POST
+                && r.url.path() == "/rest/api/3/bulk/issues/fields"
+        })
+        .collect();
+    assert!(
+        bulk_posts.is_empty(),
+        "F5 (Ambiguous): zero bulk POSTs expected; got {bulk_posts:?}"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Step-4.5 Round-1 F1 fix (BC-3.4.023): multi-key `--component` mutual
 // exclusion with --summary/--priority/--type/--label. Before this fix,
