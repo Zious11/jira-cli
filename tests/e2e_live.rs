@@ -10194,8 +10194,26 @@ fn test_e2e_issue_list_component_filter_grammar() {
     // component-less issue. A regression that dropped the component
     // constraint on the bare path (returning all project issues unfiltered)
     // would still contain `key` and pass the assertion above. Re-query the
-    // same bare filter -- indexing lag is already absorbed by the successful
-    // poll above -- and assert the component-less CONTROL key is absent.
+    // same bare filter and assert the component-less CONTROL key is absent.
+    //
+    // MEDIUM fix (S-COMP-E2E-1 follow-up review): the poll above proves
+    // GET-by-key consistency for `key` via `poll_view` (issue view), NOT
+    // JQL-search-index consistency for `control_key` (issue list). Without
+    // an independent proof that `control_key` is actually JQL-searchable,
+    // the absence assertion below is vacuous: if a bare-filter regression
+    // dropped the component constraint AND `control_key` simply hasn't hit
+    // the search index yet, the assertion would pass for the wrong reason
+    // (not indexed, not "correctly excluded"). Prove indexing first, via a
+    // filter `control_key` MUST satisfy (`not:{comp}` -- it has no
+    // component) -- mirrors the discipline already used at AC-012/AC-013
+    // below. This poll doubles as AC-012's own control-indexing proof, so
+    // its result is reused there instead of polling a second time.
+    let control_found_not = poll_component_filter(&h, &proj, &format!("not:{comp}"), &control_key);
+    assert!(
+        control_found_not,
+        "issue list --component not:{comp} must contain the component-less control key \
+         {control_key} (AC-011/AC-012 indexing proof); search indexing may not have caught up"
+    );
     let bare_out = h
         .cmd()
         .args([
@@ -10225,16 +10243,12 @@ fn test_e2e_issue_list_component_filter_grammar() {
     );
 
     // AC-012: not:<comp> excludes the tagged key (issue HAS the component)
-    // and includes the control key (issue has NO component). Poll the
-    // control key's presence first -- it absorbs indexing lag for the
-    // control issue AND doubles as the "provably non-empty, self-controlled"
-    // evidence the LOW-1 non-empty check below used to lack.
-    let control_found_not = poll_component_filter(&h, &proj, &format!("not:{comp}"), &control_key);
-    assert!(
-        control_found_not,
-        "issue list --component not:{comp} must contain the component-less control key \
-         {control_key} (AC-012); search indexing may not have caught up"
-    );
+    // and includes the control key (issue has NO component). `control_found_not`
+    // was already proven true above (hoisted as the AC-011 indexing proof) --
+    // it absorbs indexing lag for the control issue AND doubles as the
+    // "provably non-empty, self-controlled" evidence the LOW-1 non-empty
+    // check below used to lack. Reused here rather than polling a second
+    // time for the identical filter/key pair.
     let not_out = h
         .cmd()
         .args([
