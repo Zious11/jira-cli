@@ -10116,25 +10116,125 @@ fn test_e2e_issue_list_component_filter_grammar() {
         .to_string();
     let _ = poll_view(&key, &h);
 
-    let key_in_results = |v: &Value| -> bool {
+    // LOW-A / flaky-risk fix (S-COMP-E2E-1 adversarial review, round 2): seed
+    // a SECOND, throwaway CONTROL issue that carries NO component. Without
+    // it, the bare-filter assertion below is positive-only (a regression
+    // that dropped the component constraint on the bare path would still
+    // contain `key`), and the `not:`/`none` non-empty assertions further
+    // down are only ever satisfied by externally-accumulated component-less
+    // issues in the project rather than anything this test controls. The
+    // control issue makes all three self-sufficient from this test's own
+    // fixtures.
+    let control_summary =
+        format!("[e2e {label}] list --component filter grammar (control, no component)");
+    let control_create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &control_summary,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue create (filter fixture control, no component)");
+    if !control_create_out.status.success() {
+        if skip_on_403_404(
+            &control_create_out,
+            "issue create (filter fixture control, no component)",
+            /* allow_404 */ true,
+        ) {
+            best_effort_close(&h, &key);
+            return;
+        }
+        panic!(
+            "issue create (filter fixture control, no component) failed (non-403/404 -- not a \
+             permission skip):\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&control_create_out.stdout),
+            String::from_utf8_lossy(&control_create_out.stderr)
+        );
+    }
+    let control_created: Value = serde_json::from_slice(&control_create_out.stdout)
+        .expect("issue create (filter fixture control, no component) output must be valid JSON");
+    let control_key = control_created
+        .get("key")
+        .and_then(Value::as_str)
+        .expect(
+            "issue create (filter fixture control, no component) JSON must contain a 'key' field",
+        )
+        .to_string();
+    let _ = poll_view(&control_key, &h);
+
+    let key_in_results = |v: &Value, target: &str| -> bool {
         v.as_array()
             .map(|arr| {
                 arr.iter()
-                    .any(|i| i.get("key").and_then(Value::as_str) == Some(key.as_str()))
+                    .any(|i| i.get("key").and_then(Value::as_str) == Some(target))
             })
             .unwrap_or(false)
     };
 
-    // AC-011: bare --component finds the key. Bounded poll to absorb JQL
-    // search indexing lag (EC-COMP-E2E-5).
+    // AC-011: bare --component finds the tagged key. Bounded poll to absorb
+    // JQL search indexing lag (EC-COMP-E2E-5).
     let found = poll_component_filter(&h, &proj, &comp, &key);
     assert!(
         found,
         "issue list --component {comp} must contain {key} (AC-011); \
          search indexing may not have caught up"
     );
+    // LOW-A (S-COMP-E2E-1 adversarial review): the assertion above is
+    // positive-only -- it never proves the bare filter EXCLUDES a
+    // component-less issue. A regression that dropped the component
+    // constraint on the bare path (returning all project issues unfiltered)
+    // would still contain `key` and pass the assertion above. Re-query the
+    // same bare filter -- indexing lag is already absorbed by the successful
+    // poll above -- and assert the component-less CONTROL key is absent.
+    let bare_out = h
+        .cmd()
+        .args([
+            "issue",
+            "list",
+            "--project",
+            &proj,
+            "--component",
+            &comp,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue list --component (AC-011 control check)");
+    assert!(
+        bare_out.status.success(),
+        "issue list --component {comp} (AC-011 control check) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&bare_out.stdout),
+        String::from_utf8_lossy(&bare_out.stderr)
+    );
+    let bare_v: Value = serde_json::from_slice(&bare_out.stdout)
+        .expect("issue list --component (AC-011 control check) output must be valid JSON");
+    assert!(
+        !key_in_results(&bare_v, &control_key),
+        "issue list --component {comp} must NOT contain the component-less control key \
+         {control_key} (AC-011); got: {bare_v}"
+    );
 
-    // AC-012: not:<comp> excludes the key (issue HAS the component).
+    // AC-012: not:<comp> excludes the tagged key (issue HAS the component)
+    // and includes the control key (issue has NO component). Poll the
+    // control key's presence first -- it absorbs indexing lag for the
+    // control issue AND doubles as the "provably non-empty, self-controlled"
+    // evidence the LOW-1 non-empty check below used to lack.
+    let control_found_not = poll_component_filter(&h, &proj, &format!("not:{comp}"), &control_key);
+    assert!(
+        control_found_not,
+        "issue list --component not:{comp} must contain the component-less control key \
+         {control_key} (AC-012); search indexing may not have caught up"
+    );
     let not_out = h
         .cmd()
         .args([
@@ -10158,16 +10258,18 @@ fn test_e2e_issue_list_component_filter_grammar() {
     let not_v: Value = serde_json::from_slice(&not_out.stdout)
         .expect("issue list --component not: output must be valid JSON");
     assert!(
-        !key_in_results(&not_v),
+        !key_in_results(&not_v, &key),
         "issue list --component not:{comp} must NOT contain {key} (AC-012); got: {not_v}"
     );
     // LOW-1 (S-COMP-E2E-1 adversarial review): the assertion above is
     // vacuously true if the filter returns an EMPTY result set — that would
     // also be a real regression (the filter over-excluding, or JQL
     // composition breaking outright), not evidence the exclusion worked. The
-    // E2E project accumulates many component-less closed issues across runs,
-    // so `not:` is expected to return a non-empty set; assert that directly
-    // rather than only the negative "target key absent" condition.
+    // control_found_not poll above already proves this test's OWN
+    // control fixture composes real, non-empty `not:` results; this
+    // assertion remains as a second, independent signal (and stays correct
+    // even in projects that also accumulate external component-less
+    // issues).
     assert!(
         not_v.as_array().is_some_and(|arr| !arr.is_empty()),
         "issue list --component not:{comp} must return a NON-EMPTY result set (AC-012); \
@@ -10175,7 +10277,15 @@ fn test_e2e_issue_list_component_filter_grammar() {
          proving the not: filter is composing real results; got: {not_v}"
     );
 
-    // AC-013: none excludes the key (issue HAS a component).
+    // AC-013: none excludes the tagged key (issue HAS a component) and
+    // includes the control key (issue has NO component). Same poll-first
+    // rationale as AC-012 above.
+    let control_found_none = poll_component_filter(&h, &proj, "none", &control_key);
+    assert!(
+        control_found_none,
+        "issue list --component none must contain the component-less control key \
+         {control_key} (AC-013); search indexing may not have caught up"
+    );
     let none_out = h
         .cmd()
         .args([
@@ -10199,13 +10309,16 @@ fn test_e2e_issue_list_component_filter_grammar() {
     let none_v: Value = serde_json::from_slice(&none_out.stdout)
         .expect("issue list --component none output must be valid JSON");
     assert!(
-        !key_in_results(&none_v),
+        !key_in_results(&none_v, &key),
         "issue list --component none must NOT contain {key} (AC-013); got: {none_v}"
     );
     // LOW-1 (S-COMP-E2E-1 adversarial review): same vacuous-empty-set concern
     // as the AC-012 assertion above — `none` returning zero results would
     // also (incorrectly) satisfy "target key absent" without proving the
-    // filter did any real exclusion.
+    // filter did any real exclusion. The control_found_none poll above
+    // already proves this test's OWN control fixture composes real,
+    // non-empty `none` results; this assertion remains as a second,
+    // independent signal.
     assert!(
         none_v.as_array().is_some_and(|arr| !arr.is_empty()),
         "issue list --component none must return a NON-EMPTY result set (AC-013); \
@@ -10214,6 +10327,7 @@ fn test_e2e_issue_list_component_filter_grammar() {
     );
 
     best_effort_close(&h, &key);
+    best_effort_close(&h, &control_key);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
