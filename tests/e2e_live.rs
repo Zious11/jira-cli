@@ -38,9 +38,11 @@
 //! | `JR_E2E_STATUS_DONE`        | no       | Status name for "closed"; default `"Done"`                    |
 //! | `JR_E2E_STATUS_IN_PROGRESS` | no       | Status name for "in progress"; default `"In Progress"`        |
 //! | `JR_E2E_ISSUE_TYPE`         | no       | Issue type for test-created issues; default `"Task"` (F-12)   |
-//! | `JR_E2E_POLL_MAX_ATTEMPTS`  | no       | Max poll iterations for `poll_jql`/`poll_view` (default 5);  |
+//! | `JR_E2E_POLL_MAX_ATTEMPTS`  | no       | Max poll iterations for `poll_jql`/`poll_view` (default 5)   |
+//! |                             |          | and `poll_component_filter` (default 7, run 32384091667);    |
 //! |                             |          | read by test code only — no `#[cfg(debug_assertions)]` needed |
-//! | `JR_E2E_POLL_INITIAL_MS`    | no       | Initial backoff milliseconds for `poll_jql` (default 250);   |
+//! | `JR_E2E_POLL_INITIAL_MS`    | no       | Initial backoff milliseconds for `poll_jql` (default 250)    |
+//! |                             |          | and `poll_component_filter` (default 500, run 32384091667);  |
 //! |                             |          | read by test code only — no `#[cfg(debug_assertions)]` needed |
 //! | `JR_E2E_PARENT_KEY`         | no       | Existing parent/epic key; enables `create --parent` test (E2E-HV-2) |
 //! | `JR_E2E_CHILD_TYPE`         | no       | Child issue type valid under the parent (e.g. `Sub-task`); paired with `JR_E2E_PARENT_KEY` |
@@ -9308,28 +9310,55 @@ fn discover_component(h: &E2eHarness, proj: &str, context: &str) -> Option<Strin
 /// Bounded-backoff poll for `jr issue list --project <proj> --component <comp>
 /// --output json`, returning `true` once `key` appears in the results.
 ///
-/// Reuses `poll_schedule`'s exponential-backoff SCHEDULE (EC-COMP-E2E-5) —
-/// 5 attempts, 250ms initial delay doubling each retry (250/500/1000/2000ms,
-/// ~3.75s total budget) — and drives the `--project`/`--component` flag form
-/// rather than `--jql`, since AC-011..AC-013 test the flag-composition
-/// grammar directly, not JQL string composition.
+/// Reuses `poll_schedule`'s exponential-backoff SCHEDULE (EC-COMP-E2E-5), and
+/// drives the `--project`/`--component` flag form rather than `--jql`, since
+/// AC-011..AC-013 test the flag-composition grammar directly, not JQL string
+/// composition.
+///
+/// # Budget (widened post-run-32384091667, see below)
+///
+/// Honors the same `JR_E2E_POLL_MAX_ATTEMPTS` / `JR_E2E_POLL_INITIAL_MS` env
+/// seams as `poll_jql` (identical parse-with-fallback pattern), so a caller
+/// can widen or narrow the budget uniformly across both pollers. When unset,
+/// defaults to `max_attempts=7, initial_ms=500` -> `poll_schedule(7, 500)` =
+/// `[500, 1000, 2000, 4000, 8000, 16000]`, a ~31.5s worst-case ceiling.
+///
+/// **Root cause for the wider default:** live e2e run 32384091667 on
+/// `develop` `d467f95a` failed `test_e2e_issue_list_component_filter_grammar`
+/// at the AC-011 positive poll — the old hardcoded `poll_schedule(5, 250)`
+/// budget (~3.75s total) was not enough for a just-created issue's component
+/// association to become JQL-SEARCH-indexed on live Jira Cloud, even though
+/// the component write itself had already landed (the other 4 component
+/// tests, which verify via GET-by-key `poll_view`, passed in the same run).
+/// This was a false-RED from search-index propagation lag, not a product
+/// bug. Because this loop still returns as soon as `key` appears, the happy
+/// path (indexed within a couple of seconds) is unaffected — only genuine
+/// index lag pays into the longer tail of the schedule.
 ///
 /// **LOW-2 (S-COMP-E2E-1 adversarial review) — this does NOT mirror
 /// `poll_jql`'s CALLER-FACING behavior**, only its backoff schedule.
 /// `poll_jql` offers a `PollJqlMode::SkipOnEmpty` / `FailOnShort` distinction
 /// so a caller can choose "clean-skip on empty" vs. "panic if results stay
 /// short of a minimum". This function has no such mode parameter: on budget
-/// exhaustion (empty OR non-matching results through all 5 attempts) it
-/// simply returns `false`, and its sole caller treats that as a hard
-/// `assert!` failure (AC-011), never a clean skip. That is intentional here —
-/// AC-014 documents this suite as a release gate, not a best-effort probe —
-/// but it means the two functions are NOT interchangeable and a caller
-/// expecting `poll_jql`-style skip semantics from this function will get a
-/// panic instead.
+/// exhaustion (empty OR non-matching results through all attempts) it simply
+/// returns `false`, and its sole caller treats that as a hard `assert!`
+/// failure (AC-011), never a clean skip. That is intentional here — AC-014
+/// documents this suite as a release gate, not a best-effort probe — but it
+/// means the two functions are NOT interchangeable and a caller expecting
+/// `poll_jql`-style skip semantics from this function will get a panic
+/// instead. Widening the budget does not change this: a truly-absent key
+/// still fails the test once the (now longer) budget is exhausted.
 fn poll_component_filter(h: &E2eHarness, proj: &str, comp: &str, key: &str) -> bool {
-    const MAX_ATTEMPTS: usize = 5;
-    let schedule = poll_schedule(MAX_ATTEMPTS, 250);
-    for attempt in 1..=MAX_ATTEMPTS {
+    let max_attempts: usize = match std::env::var("JR_E2E_POLL_MAX_ATTEMPTS") {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse().unwrap_or(7).max(1),
+        _ => 7,
+    };
+    let initial_ms: u64 = match std::env::var("JR_E2E_POLL_INITIAL_MS") {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse().unwrap_or(500),
+        _ => 500,
+    };
+    let schedule = poll_schedule(max_attempts, initial_ms);
+    for attempt in 1..=max_attempts {
         let out = h
             .cmd()
             .args([
@@ -9356,7 +9385,7 @@ fn poll_component_filter(h: &E2eHarness, proj: &str, comp: &str, key: &str) -> b
                 }
             }
         }
-        if attempt < MAX_ATTEMPTS {
+        if attempt < max_attempts {
             std::thread::sleep(Duration::from_millis(schedule[attempt - 1]));
         }
     }
