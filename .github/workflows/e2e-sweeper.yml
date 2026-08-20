@@ -135,3 +135,52 @@ jobs:
               echo "WARN: failed to close $KEY (will retry on next sweep)"
             fi
           done
+
+      - name: Sweep orphaned E2E components
+        env:
+          JR_BASE_URL: ${{ secrets.JR_E2E_BASE_URL }}
+          JR_E2E_PROJECT: ${{ vars.JR_E2E_PROJECT }}
+        run: |
+          echo "Sweeping orphaned E2E components in project $JR_E2E_PROJECT"
+
+          # Components carry no queryable creation timestamp (unlike issues,
+          # which expose `created` to JQL), so an age filter — the mechanism
+          # the issue-sweep step above uses — is not mechanically available
+          # here. Name-only matching is safe without it because this workflow
+          # shares the `jira-e2e` concurrency group with e2e.yml
+          # (cancel-in-progress: false, see the top of this file): the
+          # sweeper can never run while a live E2E run holds the group, so a
+          # fixture-marker name match can never delete an in-flight
+          # component — the race an age filter would otherwise guard against
+          # is closed by workflow-level serialization instead.
+          #
+          # The filter matches ONLY the three throwaway fixture-name markers
+          # produced by ComponentDropGuard in tests/e2e_live.rs:
+          # `-lifecycle-`, `-rename-src-`, `-rename-dst-`. This is
+          # deliberately narrower than any age/prefix/label heuristic — the
+          # ES E2E project also holds a PERMANENT component a human added for
+          # the AC-010 live-smoke-test precondition, and it must never be
+          # matched or deleted by this step.
+          #
+          # || true: acquisition failure (401, connection error, empty
+          # project) must never fail the workflow — the sweeper is
+          # best-effort, mirroring the issue-sweep step above.
+          NAMES=$(./target/debug/jr component list --project "$JR_E2E_PROJECT" --output json \
+            | jq -r '.[].name | select(test("-lifecycle-|-rename-src-|-rename-dst-"))' 2>/dev/null || true)
+
+          COUNT=$(echo "$NAMES" | grep -c '.' 2>/dev/null || echo 0)
+          echo "Sweeper: found $COUNT orphaned E2E component(s) to delete"
+
+          # Delete each matched component; || true on the per-name delete so
+          # one failure never aborts the sweep loop (mirrors the issue-sweep
+          # step's per-key isolation pattern). --orphan --yes is the same
+          # non-interactive disposition-required path ComponentDropGuard
+          # itself already uses for teardown — no new delete semantics.
+          echo "$NAMES" | while read -r NAME; do
+            [ -z "$NAME" ] && continue
+            if ./target/debug/jr component delete "$NAME" --project "$JR_E2E_PROJECT" --orphan --yes >/dev/null 2>&1; then
+              echo "swept: deleted component $NAME"
+            else
+              echo "WARN: failed to delete component $NAME (will retry on next sweep)"
+            fi
+          done
