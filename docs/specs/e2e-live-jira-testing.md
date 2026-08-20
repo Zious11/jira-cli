@@ -105,6 +105,35 @@ Uses `seed_issue` for issue creation (label ensures CI sweeper pick-up). Teardow
 `attachment delete <AID>` (step 7) + `best_effort_close` (step 9) run before assertions
 (collect-results-then-assert pattern). Covers BC-2.7.001/002/007, BC-3.9.001/008/009/010.
 
+### Component command family (S-COMP-E2E-1)
+Five tests closing the live-Jira coverage gap for `jr component *` and the
+`--component` issue-command surfaces. No new env vars — every scenario uses
+`JR_E2E_PROJECT` plus auto-discovery (`jr component list --project <proj>
+--output json`, take first, clean-skip on empty/403/404) or self-created
+throwaway component fixtures. Teardown for created components uses
+`ComponentDropGuard` (modeled verbatim on `AttachmentDropGuard`, S-576-6 —
+see the JSM attachment bullets below and CLAUDE.md's `AttachmentDropGuard`
+note) — a `Drop`-based best-effort `component delete --orphan --yes` that
+fires on both normal return and panic-unwind.
+- `test_e2e_component_lifecycle_roundtrip` — `component create` → `list` →
+  `edit` → `list` → `delete` → `list` full round-trip; exact JSON key-shape
+  assertions at each step (BC-8.1.001/002/005/007, BC-8.2.001/006/008)
+- `test_e2e_component_rename_roundtrip` — `component rename OLD NEW
+  --project` round-trip against a throwaway fixture; id-preservation across
+  the rename (BC-8.3.001)
+- `test_e2e_issue_create_component_single_key_roundtrip` — `issue create
+  --component <NAME>` sets the initial `components` array (BC-3.4.024/025)
+- `test_e2e_issue_edit_component_single_key_roundtrip` — `issue edit <KEY>
+  --component add:/remove:` on EXACTLY one key, the single-key native
+  `update`-verb wire shape (BC-3.4.022) — distinct from
+  `test_e2e_issue_edit_component_multikey_bulk_roundtrip` above, which always
+  supplies 2+ keys and only exercises the bulk `multiselectComponents` shape
+  (BC-3.4.023)
+- `test_e2e_issue_list_component_filter_grammar` — `issue list --component`
+  bare/`not:`/`none` filter grammar composed against a live JQL search
+  (BC-2.1.018/019/020); a bounded backoff poll (`poll_component_filter`)
+  absorbs JQL search indexing lag before the assertions
+
 ### Optional / feature-flagged
 - **JSM** (gated on `JR_E2E_JSM_PROJECT`; value `EJ`; skip cleanly when unset): thirteen-function
   JSM feature family — twelve require `JR_E2E_JSM_PROJECT`; one (`test_e2e_jsm_non_jsm_guard`,

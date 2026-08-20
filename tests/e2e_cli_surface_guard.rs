@@ -67,12 +67,17 @@ use assert_cmd::Command;
 // extraction parser; the flag table is hand-verified from `jr <path> --help`.
 
 const SURFACE: &[(&[&str], &[&str])] = &[
-    // issue list
-    (&["issue", "list"], &["--jql", "--output"]),
+    // issue list  (--project/--component added in S-COMP-E2E-1 AC-011..AC-013
+    // filter-grammar live tests)
+    (
+        &["issue", "list"],
+        &["--jql", "--output", "--project", "--component"],
+    ),
     // issue view
     (&["issue", "view"], &["--output"]),
     // issue create  (--request-type added in S-JSM-E2E-1 Scenarios 5+6;
-    //                --description/--description-stdin/--markdown/--points/--parent added in E2E-HV-2)
+    //                --description/--description-stdin/--markdown/--points/--parent added in E2E-HV-2;
+    //                --component added in S-COMP-E2E-1 AC-009 single-key live test)
     (
         &["issue", "create"],
         &[
@@ -87,6 +92,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--markdown",
             "--points",
             "--parent",
+            "--component",
         ],
     ),
     // issue edit  (--priority added: used in e2e_live.rs priority round-trip test;
@@ -246,6 +252,25 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     // on the smoke-test project, per BC-3.4.023 Delivery note's precondition
     // that the project must have >= 1 component defined)
     (&["component", "list"], &["--project", "--output"]),
+    // component create  (added in S-COMP-E2E-1 AC-001/AC-007 lifecycle + rename
+    // fixture live tests)
+    (
+        &["component", "create"],
+        &["--project", "--description", "--output"],
+    ),
+    // component edit  (added in S-COMP-E2E-1 AC-003 lifecycle live test)
+    (
+        &["component", "edit"],
+        &["--project", "--name", "--description", "--output"],
+    ),
+    // component delete  (added in S-COMP-E2E-1 AC-005 lifecycle live test +
+    // ComponentDropGuard best-effort teardown)
+    (
+        &["component", "delete"],
+        &["--project", "--orphan", "--yes", "--output"],
+    ),
+    // component rename  (added in S-COMP-E2E-1 AC-007 rename live test)
+    (&["component", "rename"], &["--project", "--output"]),
 ];
 
 // ---------------------------------------------------------------------------
