@@ -194,6 +194,39 @@ fn run_label() -> String {
     }
 }
 
+/// Returns a per-invocation-unique suffix for a component fixture NAME
+/// (distinct from `run_label()` itself, which stays a stable per-run/per-
+/// project marker used elsewhere for label-based sweeper cleanup).
+///
+/// **MED-2 (S-COMP-E2E-1 adversarial review):** in CI, `run_label()` is
+/// `e2e-{GITHUB_RUN_ID}` -- constant across "re-run failed jobs" (only
+/// `GITHUB_RUN_ATTEMPT` increments, `GITHUB_RUN_ID` does not). If a run is
+/// cancelled or killed before `ComponentDropGuard`'s best-effort `Drop`
+/// teardown fires, the component it created leaks under a name derived
+/// solely from `run_label()`; the re-run's `component create` call for that
+/// same fixture then collides on the still-live name and fails with a real
+/// (non-permission) HTTP 400 -- which under the OLD panic-on-any-non-403/404
+/// discipline would incorrectly read as a genuine regression rather than a
+/// leaked-fixture collision.
+///
+/// Deliberately scoped to component fixture NAMES only (`{label}-lifecycle`,
+/// `{label}-rename-src`/`-dst`) rather than changing `run_label()` itself,
+/// which many other tests in this suite depend on for label-based JQL
+/// filtering and sweeper-driven cleanup -- widening its shape is out of scope
+/// for this fix. Incorporates `GITHUB_RUN_ATTEMPT` (increments on every
+/// GitHub Actions re-run; absent locally) plus a nanosecond timestamp
+/// (guarantees uniqueness for local runs, which have no `GITHUB_RUN_ATTEMPT`
+/// at all, and adds defense-in-depth even in CI) so a leaked fixture from an
+/// earlier attempt can never collide with the current one's create call.
+fn component_fixture_suffix() -> String {
+    let attempt = env::var("GITHUB_RUN_ATTEMPT").unwrap_or_else(|_| "0".to_string());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_nanos();
+    format!("{attempt}-{nanos}")
+}
+
 /// Returns the E2E project key from the `JR_E2E_PROJECT` env var.
 ///
 /// Panics if the var is unset, empty, or whitespace-only — every live test
@@ -9187,21 +9220,43 @@ fn test_e2e_issue_edit_component_multikey_bulk_roundtrip() {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Returns `true` (and emits a `SKIP:` message) when `out` failed with a 403
-/// or 404 — the shared clean-skip predicate for this story's component-family
-/// E2E tests (EC-COMP-E2E-3, AC-014). Any OTHER non-zero exit is NOT a skip
-/// signal; callers must treat it as a genuine test failure and `panic!` with
-/// full stdout/stderr context, mirroring
-/// `test_e2e_issue_edit_component_multikey_bulk_roundtrip`'s release-gate
-/// discipline above.
-fn skip_on_403_404(out: &std::process::Output, context: &str) -> bool {
+/// -- or, when `allow_404` is `true`, also a 404 -- the shared clean-skip
+/// predicate for this story's component-family E2E tests (EC-COMP-E2E-3,
+/// AC-014). Any OTHER non-zero exit is NOT a skip signal; callers must treat
+/// it as a genuine test failure and `panic!` with full stdout/stderr context,
+/// mirroring `test_e2e_issue_edit_component_multikey_bulk_roundtrip`'s
+/// release-gate discipline above.
+///
+/// **MED-1 finding 1 (S-COMP-E2E-1 adversarial review):** the match is
+/// anchored to the exact rendered status-code token -- `"API error (403)"` /
+/// `"API error (404)"`, per `src/error.rs`'s `JrError::ApiError` Display impl
+/// (`"API error ({status}): {message}"`) and `main.rs`'s `eprintln!("Error:
+/// {e}")` / `--output json` error envelope, both of which route through that
+/// same Display -- rather than a bare `contains("403")` / `contains("404")`
+/// substring search. The bare form collided with digits appearing ANYWHERE
+/// in the error body (a component id like `10403`/`10404`, or a run-label
+/// fixture name echoed back by Jira), misclassifying a genuine 500/400
+/// failure as a permission skip.
+///
+/// **MED-1 finding 2:** `allow_404` distinguishes precondition probes -- where
+/// a 404 is a legitimate "feature/permission absent" signal (e.g.
+/// `discover_component`, or a `… create` call that has not yet created
+/// anything this test depends on existing) -- from post-create mutations
+/// (edit, delete, rename, or an issue-edit acting on a key this SAME test
+/// already created), where a 404 means the resource vanished mid-test: a real
+/// bug, never a permission gate. Post-create-mutation call sites MUST pass
+/// `allow_404: false`.
+fn skip_on_403_404(out: &std::process::Output, context: &str, allow_404: bool) -> bool {
     if out.status.success() {
         return false;
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if out.status.code() == Some(1) && (stderr.contains("403") || stderr.contains("404")) {
+    let is_403 = stderr.contains("API error (403)");
+    let is_404 = allow_404 && stderr.contains("API error (404)");
+    if out.status.code() == Some(1) && (is_403 || is_404) {
         eprintln!(
             "SKIP: {context} returned {code} -- permission/plan gate; skipping.\nstderr: {stderr}",
-            code = if stderr.contains("403") { "403" } else { "404" }
+            code = if is_403 { "403" } else { "404" }
         );
         true
     } else {
@@ -9224,7 +9279,7 @@ fn discover_component(h: &E2eHarness, proj: &str, context: &str) -> Option<Strin
         .output()
         .expect("failed to spawn jr for component list (discovery)");
     if !out.status.success() {
-        if skip_on_403_404(&out, context) {
+        if skip_on_403_404(&out, context, /* allow_404 */ true) {
             return None;
         }
         panic!(
@@ -9253,10 +9308,24 @@ fn discover_component(h: &E2eHarness, proj: &str, context: &str) -> Option<Strin
 /// Bounded-backoff poll for `jr issue list --project <proj> --component <comp>
 /// --output json`, returning `true` once `key` appears in the results.
 ///
-/// Mirrors `poll_jql`'s exponential-backoff convention (EC-COMP-E2E-5) but
-/// drives the `--project`/`--component` flag form rather than `--jql`, since
-/// AC-011..AC-013 test the flag-composition grammar directly, not JQL string
-/// composition.
+/// Reuses `poll_schedule`'s exponential-backoff SCHEDULE (EC-COMP-E2E-5) —
+/// 5 attempts, 250ms initial delay doubling each retry (250/500/1000/2000ms,
+/// ~3.75s total budget) — and drives the `--project`/`--component` flag form
+/// rather than `--jql`, since AC-011..AC-013 test the flag-composition
+/// grammar directly, not JQL string composition.
+///
+/// **LOW-2 (S-COMP-E2E-1 adversarial review) — this does NOT mirror
+/// `poll_jql`'s CALLER-FACING behavior**, only its backoff schedule.
+/// `poll_jql` offers a `PollJqlMode::SkipOnEmpty` / `FailOnShort` distinction
+/// so a caller can choose "clean-skip on empty" vs. "panic if results stay
+/// short of a minimum". This function has no such mode parameter: on budget
+/// exhaustion (empty OR non-matching results through all 5 attempts) it
+/// simply returns `false`, and its sole caller treats that as a hard
+/// `assert!` failure (AC-011), never a clean skip. That is intentional here —
+/// AC-014 documents this suite as a release gate, not a best-effort probe —
+/// but it means the two functions are NOT interchangeable and a caller
+/// expecting `poll_jql`-style skip semantics from this function will get a
+/// panic instead.
 fn poll_component_filter(h: &E2eHarness, proj: &str, comp: &str, key: &str) -> bool {
     const MAX_ATTEMPTS: usize = 5;
     let schedule = poll_schedule(MAX_ATTEMPTS, 250);
@@ -9374,7 +9443,9 @@ fn test_e2e_component_lifecycle_roundtrip() {
     let h = e2e_harness();
     let proj = project();
     let label = run_label();
-    let name = format!("{label}-lifecycle");
+    // MED-2: unique per invocation so a leaked fixture from a killed/cancelled
+    // prior CI attempt can never collide with this run's create call.
+    let name = format!("{label}-lifecycle-{}", component_fixture_suffix());
     let mut guard = ComponentDropGuard::new();
 
     // AC-001: create.
@@ -9394,7 +9465,7 @@ fn test_e2e_component_lifecycle_roundtrip() {
         .output()
         .expect("failed to spawn jr for component create");
     if !create_out.status.success() {
-        if skip_on_403_404(&create_out, "component create") {
+        if skip_on_403_404(&create_out, "component create", /* allow_404 */ true) {
             return;
         }
         panic!(
@@ -9454,6 +9525,15 @@ fn test_e2e_component_lifecycle_roundtrip() {
     );
 
     // AC-003: edit (only-supplied-fields; JSON result shape).
+    //
+    // LOW-3 (S-COMP-E2E-1 adversarial review): this is a BLACK-BOX assertion —
+    // it verifies the edit's observable result shape (id/name/project keys)
+    // and that `name` was actually updated, but it supplies BOTH `--name` and
+    // `--description` on this call, so it cannot distinguish "only supplied
+    // fields were sent on the wire" from "all fields were sent and happened
+    // to match". BC-8.1.007's "only-supplied-fields" wire-contract guarantee
+    // (e.g. that editing just `--name` does NOT also re-send `description`)
+    // is covered by wiremock/unit tests elsewhere, not by this live E2E test.
     let new_name = format!("{name}-renamed");
     let edit_out = h
         .cmd()
@@ -9473,7 +9553,7 @@ fn test_e2e_component_lifecycle_roundtrip() {
         .output()
         .expect("failed to spawn jr for component edit");
     if !edit_out.status.success() {
-        if skip_on_403_404(&edit_out, "component edit") {
+        if skip_on_403_404(&edit_out, "component edit", /* allow_404 */ false) {
             return;
         }
         panic!(
@@ -9543,7 +9623,7 @@ fn test_e2e_component_lifecycle_roundtrip() {
         .output()
         .expect("failed to spawn jr for component delete");
     if !delete_out.status.success() {
-        if skip_on_403_404(&delete_out, "component delete") {
+        if skip_on_403_404(&delete_out, "component delete", /* allow_404 */ false) {
             return;
         }
         panic!(
@@ -9623,8 +9703,12 @@ fn test_e2e_component_rename_roundtrip() {
     let h = e2e_harness();
     let proj = project();
     let label = run_label();
-    let old_name = format!("{label}-rename-src");
-    let new_name = format!("{label}-rename-dst");
+    // MED-2: unique per invocation (shared suffix across src/dst so the pair
+    // reads as one fixture) so a leaked fixture from a killed/cancelled prior
+    // CI attempt can never collide with this run's create call.
+    let suffix = component_fixture_suffix();
+    let old_name = format!("{label}-rename-src-{suffix}");
+    let new_name = format!("{label}-rename-dst-{suffix}");
     let mut guard = ComponentDropGuard::new();
 
     // Fresh throwaway component fixture (own guard instance, tracked by
@@ -9643,7 +9727,11 @@ fn test_e2e_component_rename_roundtrip() {
         .output()
         .expect("failed to spawn jr for component create (rename fixture)");
     if !create_out.status.success() {
-        if skip_on_403_404(&create_out, "component create (rename fixture)") {
+        if skip_on_403_404(
+            &create_out,
+            "component create (rename fixture)",
+            /* allow_404 */ true,
+        ) {
             return;
         }
         panic!(
@@ -9679,7 +9767,7 @@ fn test_e2e_component_rename_roundtrip() {
         .output()
         .expect("failed to spawn jr for component rename");
     if !rename_out.status.success() {
-        if skip_on_403_404(&rename_out, "component rename") {
+        if skip_on_403_404(&rename_out, "component rename", /* allow_404 */ false) {
             return;
         }
         panic!(
@@ -9793,7 +9881,11 @@ fn test_e2e_issue_create_component_single_key_roundtrip() {
         .output()
         .expect("failed to spawn jr for issue create --component");
     if !create_out.status.success() {
-        if skip_on_403_404(&create_out, "issue create --component") {
+        if skip_on_403_404(
+            &create_out,
+            "issue create --component",
+            /* allow_404 */ true,
+        ) {
             return;
         }
         panic!(
@@ -9891,7 +9983,11 @@ fn test_e2e_issue_edit_component_single_key_roundtrip() {
         .output()
         .expect("failed to spawn jr for single-key issue edit --component add");
     if !add_out.status.success() {
-        if skip_on_403_404(&add_out, "single-key issue edit --component add") {
+        if skip_on_403_404(
+            &add_out,
+            "single-key issue edit --component add",
+            /* allow_404 */ false,
+        ) {
             best_effort_close(&h, &key);
             return;
         }
@@ -9922,7 +10018,11 @@ fn test_e2e_issue_edit_component_single_key_roundtrip() {
         .output()
         .expect("failed to spawn jr for single-key issue edit --component remove");
     if !remove_out.status.success() {
-        if skip_on_403_404(&remove_out, "single-key issue edit --component remove") {
+        if skip_on_403_404(
+            &remove_out,
+            "single-key issue edit --component remove",
+            /* allow_404 */ false,
+        ) {
             best_effort_close(&h, &key);
             return;
         }
@@ -9991,7 +10091,11 @@ fn test_e2e_issue_list_component_filter_grammar() {
         .output()
         .expect("failed to spawn jr for issue create --component (filter fixture)");
     if !create_out.status.success() {
-        if skip_on_403_404(&create_out, "issue create --component (filter fixture)") {
+        if skip_on_403_404(
+            &create_out,
+            "issue create --component (filter fixture)",
+            /* allow_404 */ true,
+        ) {
             return;
         }
         panic!(
@@ -10055,6 +10159,19 @@ fn test_e2e_issue_list_component_filter_grammar() {
         !key_in_results(&not_v),
         "issue list --component not:{comp} must NOT contain {key} (AC-012); got: {not_v}"
     );
+    // LOW-1 (S-COMP-E2E-1 adversarial review): the assertion above is
+    // vacuously true if the filter returns an EMPTY result set — that would
+    // also be a real regression (the filter over-excluding, or JQL
+    // composition breaking outright), not evidence the exclusion worked. The
+    // E2E project accumulates many component-less closed issues across runs,
+    // so `not:` is expected to return a non-empty set; assert that directly
+    // rather than only the negative "target key absent" condition.
+    assert!(
+        not_v.as_array().is_some_and(|arr| !arr.is_empty()),
+        "issue list --component not:{comp} must return a NON-EMPTY result set (AC-012); \
+         an empty set would vacuously satisfy the exclusion check above without \
+         proving the not: filter is composing real results; got: {not_v}"
+    );
 
     // AC-013: none excludes the key (issue HAS a component).
     let none_out = h
@@ -10082,6 +10199,16 @@ fn test_e2e_issue_list_component_filter_grammar() {
     assert!(
         !key_in_results(&none_v),
         "issue list --component none must NOT contain {key} (AC-013); got: {none_v}"
+    );
+    // LOW-1 (S-COMP-E2E-1 adversarial review): same vacuous-empty-set concern
+    // as the AC-012 assertion above — `none` returning zero results would
+    // also (incorrectly) satisfy "target key absent" without proving the
+    // filter did any real exclusion.
+    assert!(
+        none_v.as_array().is_some_and(|arr| !arr.is_empty()),
+        "issue list --component none must return a NON-EMPTY result set (AC-013); \
+         an empty set would vacuously satisfy the exclusion check above without \
+         proving the none filter is composing real results; got: {none_v}"
     );
 
     best_effort_close(&h, &key);
