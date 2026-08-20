@@ -9482,6 +9482,12 @@ fn test_e2e_component_lifecycle_roundtrip() {
         .and_then(Value::as_str)
         .expect("component create JSON must contain an 'id' field")
         .to_string();
+
+    // Arm the guard IMMEDIATELY after create succeeds, before any further assertion --
+    // a panic in the shape/name/project assertions below must still trigger cleanup.
+    guard.project = Some(proj.clone());
+    guard.component_id = Some(id.clone());
+
     assert_eq!(
         created.as_object().map(|o| o.len()),
         Some(3),
@@ -9495,10 +9501,6 @@ fn test_e2e_component_lifecycle_roundtrip() {
         created.get("project").and_then(Value::as_str),
         Some(proj.as_str())
     );
-
-    // Arm the guard IMMEDIATELY after create succeeds, before any further assertion.
-    guard.project = Some(proj.clone());
-    guard.component_id = Some(id.clone());
 
     // AC-002: list reflects the created component.
     let list_out_1 = h
