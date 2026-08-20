@@ -124,6 +124,16 @@ jobs:
           # round-trip test (#331). Test clean-skips if unset. Must name a real issue
           # type in the E2E project's scheme, distinct from JR_E2E_ISSUE_TYPE (seed type).
           JR_E2E_ISSUE_TYPE_ALT: ${{ vars.JR_E2E_ISSUE_TYPE_ALT }}
+          # Wider JQL-index poll budget for ALL env-configurable polls (poll_jql,
+          # poll_view, poll_component_filter — they all read these two knobs).
+          # Rationale: live run 32388828850 failed test_e2e_pagination_dedup because
+          # poll_jql's default 5-attempt/~3.75s budget was too short for JQL
+          # search-index propagation of its 3 freshly-seeded issues (found 2/3).
+          # 7 attempts * 500ms initial (exponential backoff) gives ~31.5s worst case
+          # while preserving early-exit — fixes this systemic index-lag class across
+          # the whole suite, not just the one test that first tripped over it.
+          JR_E2E_POLL_MAX_ATTEMPTS: "7"
+          JR_E2E_POLL_INITIAL_MS: "500"
           # Individual secrets for auth header composition (composed in-script below)
           JR_E2E_EMAIL: ${{ secrets.JR_E2E_EMAIL }}
           JR_E2E_API_TOKEN: ${{ secrets.JR_E2E_API_TOKEN }}
