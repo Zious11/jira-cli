@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.7.0-dev.1] - 2026-08-19
+
 ### Breaking Changes
 
 - **`jr auth switch --profile <X> <NAME>` now exits 64** (S-663-1,
@@ -51,6 +53,12 @@ All notable changes to jr will be documented here.
 - **Due date visibility (S-668-1):** `jr issue view` and `jr issue list --output json`
   now include the `duedate` field. `jr issue view` shows a Due Date row; `jr issue list
   --duedate` adds an opt-in Due Date column. (#668)
+- **`jr component list`** (S-604-1, BC-8.1.001/002/003/004): lists a project's
+  components in table or `--output json` form; `--counts` enriches each row
+  with `relatedIssueCounts` via fail-soft N+1 GETs (per-component failure
+  degrades to `-`/`null` with a stderr warning rather than failing the
+  command). Foundation piece for the new component-management command family
+  (types, API, cache, resolver). (#604)
 - **`jr component create` and `jr component edit`** (S-604-2, BC-8.1.005/006/007):
   two new subcommands for managing Jira project components.
   `jr component create --project KEY NAME [--description …] [--lead …] [--assignee-type …]`
@@ -58,6 +66,52 @@ All notable changes to jr will be documented here.
   [--description …] [--lead …]` renames or updates an existing one. Numeric component IDs
   bypass the project-component list lookup. Leading-dash component names (e.g. `-legacy`)
   are accepted on both subcommands. (#604)
+- **`jr component delete`** (S-604-3, BC-8.2.001-008): deletes a project
+  component; refuses (exit 64) unless either `--move-to <NAME_OR_ID>`
+  (reassigns affected issues to another component before the DELETE) or
+  `--orphan` (interactive confirmation, or `--yes` non-interactively, naming
+  the affected-issue count) is supplied. Affected issue keys are snapshotted
+  via JQL *before* the DELETE fires. `--output json` reports `deleted`,
+  `movedIssuesTo`, `affectedIssueCount`, and `affectedIssues`. (#604)
+- **`jr component rename OLD NEW`** (S-608-1, BC-8.3.001-007): renames a
+  component in place (its `id` is unchanged by the rename). The
+  single-project form requires `--project KEY`; `--all-projects` fans the
+  rename out across every project with a component named `OLD`, per-project
+  fail-soft; `--dry-run` previews the change set (including the
+  `--all-projects` fan-out) without issuing any mutating HTTP call. (#608)
+- **`jr issue list --component`** (S-606-1, BC-2.1.018-022): filters issues
+  by component name. Bare `--component NAME` (repeatable) OR-combines;
+  `--component not:NAME` excludes (EMPTY-inclusive, since JQL `NOT IN`
+  excludes issues with no component); `--component none` matches issues with
+  no component (zero resolver HTTP calls); `--component all:NAME1,NAME2`
+  AND-combines. Names are resolved to ids up front; an unresolvable or
+  ambiguous name exits 64 before any JQL search fires. (#606)
+- **`jr issue create --component` and `jr issue edit --component`, single-key
+  path** (S-605-1, BC-3.4.022/024/025): `issue create --component NAME`
+  (repeatable) sets the issue's initial `components` on creation.
+  `issue edit KEY --component add:NAME --component remove:NAME` (single key)
+  sends native Jira `update`-verb PUT operations (`{"add":{"name":…}}` /
+  `{"remove":{"name":…}}`), with an editmeta-gated read-modify-write
+  fallback. Component name resolution is a single project-scoped
+  component-list GET; unknown/ambiguous names exit 64 pre-flight. (#605)
+- **`jr issue edit --component`, multi-key/`--jql` bulk path** (S-605-2,
+  BC-3.4.023): bulk `--component add:`/`remove:` across multiple keys or a
+  `--jql`-resolved set uses `POST /bulk/issues/fields` with a
+  `multiselectComponents` object and integer `componentId`s, issuing up to
+  two sequential POSTs when both `add:` and `remove:` are present in the
+  same invocation. (#605)
+
+### Fixed
+
+- **Component command family — F5 adversarial-hardening fixes** (#709,
+  #715): consolidated numeric component-ID resolution onto a single
+  codepath; `--project` is now accepted as a global flag (not just a
+  subcommand-local one) on `component create`; component names are
+  URL-encoded in outgoing API calls; `jr issue list --component`'s read path
+  now unions matches for case-only duplicate component names (e.g.
+  `Backend`/`backend`) instead of silently keeping only one; `jr component
+  rename --all-projects` now returns the correct exit code when no project
+  contains a matching component.
 
 ### Internal
 
