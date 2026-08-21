@@ -11481,26 +11481,34 @@ async fn test_bc_2_1_023_issue_list_updated_recent_rejects_combined_units_pre_ht
 /// `--recent` x `--created-after` pattern, not a bug to "fix".
 #[tokio::test]
 async fn test_bc_2_1_023_issue_list_updated_recent_conflicts_with_updated_after_only() {
-    let server = MockServer::start().await;
+    // (a) --updated-recent + --updated-after -> clap conflict, exit 2,
+    // native clap-level rejection (no HTTP, no handler code reached). Given
+    // its OWN MockServer (not shared with part (b)'s mounted mocks) so the
+    // "no HTTP" claim is actually asserted, not just stated in prose
+    // (pr-review cycle 1 Finding 4).
+    let server_conflict = MockServer::start().await;
     let cache_dir1 = tempfile::tempdir().unwrap();
     let config_dir1 = tempfile::tempdir().unwrap();
+    s606_1_expect_zero_http(&server_conflict).await;
 
-    // (a) --updated-recent + --updated-after -> clap conflict, exit 2,
-    // native clap-level rejection (no HTTP, no handler code reached).
-    let output_conflict = s606_1_cmd(&server.uri(), cache_dir1.path(), config_dir1.path())
-        .args([
-            "--no-input",
-            "issue",
-            "list",
-            "--project",
-            "FOO",
-            "--updated-recent",
-            "60d",
-            "--updated-after",
-            "2026-01-01",
-        ])
-        .output()
-        .unwrap();
+    let output_conflict = s606_1_cmd(
+        &server_conflict.uri(),
+        cache_dir1.path(),
+        config_dir1.path(),
+    )
+    .args([
+        "--no-input",
+        "issue",
+        "list",
+        "--project",
+        "FOO",
+        "--updated-recent",
+        "60d",
+        "--updated-after",
+        "2026-01-01",
+    ])
+    .output()
+    .unwrap();
     assert_eq!(
         output_conflict.status.code(),
         Some(2),
@@ -11513,26 +11521,31 @@ async fn test_bc_2_1_023_issue_list_updated_recent_conflicts_with_updated_after_
     // (b) --updated-recent + --updated-before -> NO conflict, composes both
     // clauses successfully (exit 0). This is the half that exercises the
     // still-`todo!()`'d clause-composition logic and so is the part that
-    // fails Red Gate today.
+    // fails Red Gate today. Its own MockServer, distinct from (a)'s.
+    let server_no_conflict = MockServer::start().await;
     let cache_dir2 = tempfile::tempdir().unwrap();
     let config_dir2 = tempfile::tempdir().unwrap();
-    s606_1_mock_project_exists(&server, "FOO").await;
-    s606_1_mock_search_empty(&server).await;
+    s606_1_mock_project_exists(&server_no_conflict, "FOO").await;
+    s606_1_mock_search_empty(&server_no_conflict).await;
 
-    let output_no_conflict = s606_1_cmd(&server.uri(), cache_dir2.path(), config_dir2.path())
-        .args([
-            "--no-input",
-            "issue",
-            "list",
-            "--project",
-            "FOO",
-            "--updated-recent",
-            "60d",
-            "--updated-before",
-            "2026-01-01",
-        ])
-        .output()
-        .unwrap();
+    let output_no_conflict = s606_1_cmd(
+        &server_no_conflict.uri(),
+        cache_dir2.path(),
+        config_dir2.path(),
+    )
+    .args([
+        "--no-input",
+        "issue",
+        "list",
+        "--project",
+        "FOO",
+        "--updated-recent",
+        "60d",
+        "--updated-before",
+        "2026-01-01",
+    ])
+    .output()
+    .unwrap();
     assert!(
         output_no_conflict.status.success(),
         "AC-003b: --updated-recent + --updated-before must NOT conflict \
@@ -11863,4 +11876,368 @@ async fn test_bc_2_1_023_issue_list_updated_recent_uses_updated_field_not_create
          --updated-recent must not be copy-pasted from --recent's template \
          verbatim), got: {jql}"
     );
+}
+
+/// pr-review cycle 1 Finding 1 regression guard (EC-2.1.023-4 backstop):
+/// a `.jr.toml` configuring only `board_id` (no `project` key), a scrum
+/// board, with NO active sprint is the one narrow configuration where the
+/// early guard's `board_id.is_none()` conjunct is too coarse — it lets
+/// `--updated-recent` alone through (a board IS configured), but the
+/// scrum "no active sprint" fallback then resolves `base_parts` to an EMPTY
+/// Vec (seeded only from `project_key`, which is `None` here), and
+/// `--updated-recent`'s own clause would otherwise make the final `all_parts`
+/// non-empty and silently bypass the end-of-function guard too — producing
+/// an unbounded, cross-project query. `jr issue list --updated-recent 60d`
+/// in this exact configuration MUST now exit 64 via the `base_parts`
+/// backstop guard, with the canonical no-filters-specified message.
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_board_scrum_no_active_sprint_no_project_exits_64()
+ {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let project_dir = tempfile::tempdir().unwrap();
+
+    // .jr.toml with ONLY board_id set -- no `project` key.
+    std::fs::write(project_dir.path().join(".jr.toml"), "board_id = 42\n").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("scrum")),
+        )
+        .mount(&server)
+        .await;
+
+    // NO active sprint -- empty `values` array.
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/sprint"))
+        .and(query_param("state", "active"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::sprint_list_response(vec![])),
+        )
+        .mount(&server)
+        .await;
+
+    // The composed JQL must never reach the search endpoint — the backstop
+    // guard must fire before any issue search is attempted.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::issue_search_response(vec![])),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .current_dir(project_dir.path())
+        .args(["--no-input", "issue", "list", "--updated-recent", "60d"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "board-scrum-no-active-sprint --updated-recent must exit 64, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError) from the base_parts backstop guard, \
+         got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("No project or filters specified"),
+        "expected the canonical no-filters-specified message, got: {stderr}"
+    );
+}
+
+// ── pr-review cycle 1 Finding 2: guard-conjunction coverage for the 9
+// filter flags not already exercised by an existing --updated-recent AC
+// test (project/recent/asset/updated_before/board_id are already covered
+// by AC-001/AC-004/AC-005/AC-003b/the board regression tests above). Each
+// test below pairs `--updated-recent 60d` with exactly one of the 9 flags
+// and asserts the combination does NOT trip the "no filters specified"
+// guard (BC-2.1.006) — assertions are minimal (exit code / stderr content
+// for the guard message only), since each flag's own clause composition is
+// already covered elsewhere.
+
+fn pr1_write_team_config(config_dir: &std::path::Path, team_field_id: &str) {
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "default_profile = \"default\"\n\n[profiles.default]\nurl = \"https://acme.atlassian.net\"\nteam_field_id = \"{team_field_id}\"\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// Asserts `output` did NOT trip the BC-2.1.006 "no filters specified"
+/// guard: neither an exit-64 UserError carrying the canonical message.
+/// A later, unrelated failure (e.g. a missing mock) is not what this
+/// assertion is checking — see each test's own success assertion for that.
+fn pr1_assert_guard_not_tripped(output: &std::process::Output, flag_desc: &str) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Finding 2: --updated-recent + {flag_desc} must not trip the \
+         no-filters guard, expected exit 0, got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("No project or filters specified"),
+        "Finding 2: --updated-recent + {flag_desc} must not emit the \
+         no-filters-specified message, got: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_assignee_does_not_trip_no_filters_guard() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--updated-recent",
+            "60d",
+            "--assignee",
+            "me",
+        ])
+        .output()
+        .unwrap();
+
+    pr1_assert_guard_not_tripped(&output, "--assignee me");
+}
+
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_reporter_does_not_trip_no_filters_guard() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--updated-recent",
+            "60d",
+            "--reporter",
+            "me",
+        ])
+        .output()
+        .unwrap();
+
+    pr1_assert_guard_not_tripped(&output, "--reporter me");
+}
+
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_status_does_not_trip_no_filters_guard() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": "1", "name": "To Do", "statusCategory": {"key": "new"}},
+            {"id": "2", "name": "In Progress", "statusCategory": {"key": "indeterminate"}},
+            {"id": "3", "name": "Done", "statusCategory": {"key": "done"}}
+        ])))
+        .mount(&server)
+        .await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--updated-recent",
+            "60d",
+            "--status",
+            "To Do",
+        ])
+        .output()
+        .unwrap();
+
+    pr1_assert_guard_not_tripped(&output, "--status \"To Do\"");
+}
+
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_team_does_not_trip_no_filters_guard() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // team_field_id configured + a UUID team value: both skip every HTTP
+    // resolution step (find_team_field_id, cache load, GraphQL discovery)
+    // via the UUID pass-through in `resolve_team_field`/`is_team_uuid`.
+    pr1_write_team_config(config_dir.path(), "customfield_10100");
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--updated-recent",
+            "60d",
+            "--team",
+            "12345678-1234-1234-1234-123456789012",
+        ])
+        .output()
+        .unwrap();
+
+    pr1_assert_guard_not_tripped(&output, "--team <uuid>");
+}
+
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_open_does_not_trip_no_filters_guard() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--updated-recent",
+            "60d",
+            "--open",
+        ])
+        .output()
+        .unwrap();
+
+    pr1_assert_guard_not_tripped(&output, "--open");
+}
+
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_component_does_not_trip_no_filters_guard() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // --component requires --project (BC-2.1.022) regardless of
+    // --updated-recent, so --project is included here — this test pins
+    // that the `component.is_empty()` conjunct does not ALSO independently
+    // trip the no-filters guard once the component preflight has passed.
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_components(
+        &server,
+        "FOO",
+        vec![common::fixtures::component_response(
+            "10001", "Backend", None, None, None,
+        )],
+    )
+    .await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--updated-recent",
+            "60d",
+            "--component",
+            "Backend",
+        ])
+        .output()
+        .unwrap();
+
+    pr1_assert_guard_not_tripped(&output, "--project FOO --component Backend");
+}
+
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_created_after_does_not_trip_no_filters_guard()
+ {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--updated-recent",
+            "60d",
+            "--created-after",
+            "2026-01-01",
+        ])
+        .output()
+        .unwrap();
+
+    pr1_assert_guard_not_tripped(&output, "--created-after 2026-01-01");
+}
+
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_created_before_does_not_trip_no_filters_guard()
+ {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--updated-recent",
+            "60d",
+            "--created-before",
+            "2026-01-01",
+        ])
+        .output()
+        .unwrap();
+
+    pr1_assert_guard_not_tripped(&output, "--created-before 2026-01-01");
+}
+
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_jql_does_not_trip_no_filters_guard() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--updated-recent",
+            "60d",
+            "--jql",
+            "project = FOO",
+        ])
+        .output()
+        .unwrap();
+
+    pr1_assert_guard_not_tripped(&output, "--jql \"project = FOO\"");
 }

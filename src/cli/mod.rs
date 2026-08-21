@@ -326,7 +326,7 @@ pub enum IssueCommand {
         #[arg(long)]
         recent: Option<String>,
         /// Show issues updated within duration (e.g., 7d, 4w, 2M)
-        #[arg(long = "updated-recent")]
+        #[arg(long)]
         updated_recent: Option<String>,
         /// Show only open issues (excludes Done status category)
         #[arg(long, conflicts_with = "status")]
