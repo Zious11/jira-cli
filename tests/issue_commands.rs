@@ -10757,8 +10757,12 @@ async fn test_bc_2_2_033_issue_list_fields_replaces_requested_field_set() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = output.stdout.clone();
-    let parsed: serde_json::Value = serde_json::from_slice(&stdout)
-        .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}\n{}", String::from_utf8_lossy(&stdout)));
+    let parsed: serde_json::Value = serde_json::from_slice(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "stdout not valid JSON: {e}\n{}",
+            String::from_utf8_lossy(&stdout)
+        )
+    });
     assert_eq!(parsed[0]["key"], "PROJ-1");
     assert_eq!(parsed[0]["fields"]["summary"], "Narrow fields issue");
 }
@@ -10805,8 +10809,8 @@ async fn test_bc_2_3_041_issue_view_fields_replaces_requested_field_set() {
         "Expected success, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("stdout must be valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
     assert_eq!(parsed["key"], "PROJ-5");
     assert_eq!(parsed["fields"]["summary"], "View narrow fields");
 }
@@ -10957,7 +10961,9 @@ async fn test_bc_2_3_041_issue_view_fields_key_always_present() {
         .unwrap()
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["issue", "view", "PROJ-8", "--fields", "summary", "--output", "json"])
+        .args([
+            "issue", "view", "PROJ-8", "--fields", "summary", "--output", "json",
+        ])
         .output()
         .unwrap();
 
