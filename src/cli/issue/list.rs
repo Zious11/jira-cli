@@ -35,6 +35,13 @@ fn extract_unique_status_names(issue_types: &[IssueTypeWithStatuses]) -> Vec<Str
 
 // ── List ──────────────────────────────────────────────────────────────
 
+/// BC-2.1.006 (amended, S-579-1): "no project or filters specified" guard
+/// message -- the amended 15-source enumeration, with `--updated-recent`
+/// appended immediately before `or --jql`. Shared between the end-of-function
+/// guard and the S-579-1 early EC-2.1.023-4 guard (`--updated-recent` alone,
+/// no project, no other filter) so the two call sites cannot drift apart.
+const NO_FILTERS_SPECIFIED_MSG: &str = "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --created-after, --created-before, --updated-after, --updated-before, --asset, --component, --updated-recent, or --jql. You can also set a default project in .jr.toml or run \"jr init\".";
+
 /// Build base JQL parts when `--jql` is provided.
 ///
 /// Returns `(base_parts, order_by)`. Strips any trailing `ORDER BY` clause
@@ -130,13 +137,42 @@ pub(super) async fn handle_list(
         crate::jql::validate_duration(d).map_err(JrError::UserError)?;
     }
 
-    // S-579-1 (BC-2.1.023): --updated-recent duration filter, the `updated`
-    // field parallel to --recent (`created`). STUB — Red Gate placeholder;
-    // real behavior (validate_duration + `updated >= -<dur>` JQL clause,
-    // ordered immediately after `recent` and before `asset` per BC-2.1.007)
-    // is implemented in a follow-up commit.
-    if updated_recent.is_some() {
-        todo!("S-579-1: --updated-recent")
+    // S-579-1 (BC-2.1.023 Precondition 2): --updated-recent duration filter,
+    // the `updated` field parallel to --recent (`created`). Reuses the SAME
+    // validator --recent uses (jql::validate_duration, NOT duration.rs) --
+    // combined units like `4w2d` are rejected pre-HTTP with the identical
+    // error shape --recent's own validation produces (AC-002).
+    if let Some(ref d) = updated_recent {
+        crate::jql::validate_duration(d).map_err(JrError::UserError)?;
+    }
+
+    // S-579-1 (BC-2.1.023 Edge Case EC-2.1.023-4): unlike `--recent`,
+    // `--updated-recent` does not by itself satisfy the "at least one filter
+    // source" requirement when used with no --project/configured project and
+    // no other filter -- it falls through to the same BC-2.1.006
+    // "no filters specified" guard a completely bare `jr issue list`
+    // invocation hits. This must be checked here (zero HTTP so far) rather
+    // than relying on the end-of-function "guard against unbounded query"
+    // below, because `--updated-recent`'s own composed clause would
+    // otherwise make the final assembled clause list non-empty and silently
+    // bypass that guard.
+    if updated_recent.is_some()
+        && project_key.is_none()
+        && jql.is_none()
+        && status.is_none()
+        && team.is_none()
+        && recent.is_none()
+        && !open
+        && asset_key.is_none()
+        && component.is_empty()
+        && created_after.is_none()
+        && created_before.is_none()
+        && updated_after.is_none()
+        && updated_before.is_none()
+        && assignee.is_none()
+        && reporter.is_none()
+    {
+        return Err(JrError::UserError(NO_FILTERS_SPECIFIED_MSG.into()).into());
     }
 
     // Validate date filter flags early (before any network calls)
@@ -314,6 +350,7 @@ pub(super) async fn handle_list(
         status: resolved_status.as_deref(),
         team_clause: team_clause.as_deref(),
         recent: recent.as_deref(),
+        updated_recent: updated_recent.as_deref(),
         open,
         asset_clause: asset_clause.as_deref(),
         component_clauses: &component_clauses,
@@ -402,12 +439,7 @@ pub(super) async fn handle_list(
 
     // Guard against unbounded query
     if all_parts.is_empty() {
-        return Err(JrError::UserError(
-            "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --created-after, --created-before, --updated-after, --updated-before, --asset, --component, or --jql. \
-             You can also set a default project in .jr.toml or run \"jr init\"."
-                .into(),
-        )
-        .into());
+        return Err(JrError::UserError(NO_FILTERS_SPECIFIED_MSG.into()).into());
     }
 
     let where_clause = all_parts.join(" AND ");
@@ -982,6 +1014,9 @@ struct FilterOptions<'a> {
     status: Option<&'a str>,
     team_clause: Option<&'a str>,
     recent: Option<&'a str>,
+    /// S-579-1 (BC-2.1.007 amendment): slots in immediately after `recent`
+    /// (`created >= -{d}`), before `asset_clause`.
+    updated_recent: Option<&'a str>,
     open: bool,
     asset_clause: Option<&'a str>,
     /// Zero, one, or two pre-composed `--component` clause fragments, already
@@ -1015,6 +1050,11 @@ fn build_filter_clauses(opts: FilterOptions<'_>) -> Vec<String> {
     }
     if let Some(d) = opts.recent {
         parts.push(format!("created >= -{d}"));
+    }
+    // S-579-1 (BC-2.1.007 amendment): --updated-recent's clause slots in
+    // immediately after `recent`, before `asset`.
+    if let Some(d) = opts.updated_recent {
+        parts.push(format!("updated >= -{d}"));
     }
     if let Some(a) = opts.asset_clause {
         parts.push(a.to_string());
@@ -1071,6 +1111,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
@@ -1090,6 +1131,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
@@ -1109,6 +1151,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: Some("7d"),
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
@@ -1128,6 +1171,7 @@ mod tests {
             status: Some("In Progress"),
             team_clause: Some(r#"customfield_10001 = "uuid-123""#),
             recent: Some("30d"),
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
@@ -1152,6 +1196,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
@@ -1171,6 +1216,7 @@ mod tests {
             status: Some("Done"),
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
@@ -1193,6 +1239,7 @@ mod tests {
             status: Some(r#"He said "hi" \o/"#),
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
@@ -1212,6 +1259,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: true,
             asset_clause: None,
             component_clauses: &[],
@@ -1231,6 +1279,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: true,
             asset_clause: None,
             component_clauses: &[],
@@ -1252,6 +1301,7 @@ mod tests {
             status: None, // status conflicts with open, so None here
             team_clause: Some(r#"customfield_10001 = "uuid-123""#),
             recent: Some("30d"),
+            updated_recent: None,
             open: true,
             asset_clause: None,
             component_clauses: &[],
@@ -1277,6 +1327,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: Some(clause),
             component_clauses: &[],
@@ -1297,6 +1348,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: Some(clause),
             component_clauses: &[],
@@ -1331,6 +1383,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: Some(asset_clause),
             component_clauses: &component_clauses,
@@ -1359,6 +1412,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
@@ -1378,6 +1432,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
@@ -1399,6 +1454,7 @@ mod tests {
             status: None,
             team_clause: None,
             recent: None,
+            updated_recent: None,
             open: false,
             asset_clause: None,
             component_clauses: &[],
