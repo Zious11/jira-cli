@@ -10716,11 +10716,15 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_success_renders_full_json_str
 async fn test_bc_2_2_033_issue_list_fields_replaces_requested_field_set() {
     let server = MockServer::start().await;
 
+    // F2 (adversary review, S-575-1): match on method+path only. The old
+    // `body_partial_json` matcher was INCLUSIVE (assert-json-diff) — it
+    // ignores trailing actual elements, so a future append-union regression
+    // (e.g. re-injecting a config-driven extra field onto the end of the
+    // array) would still satisfy it. The EXACT full-array assertion — the
+    // one that actually guards BC-2.2.033 Postcondition 1's REPLACE-not-UNION
+    // invariant — happens below via `server.received_requests()`.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .and(body_partial_json(serde_json::json!({
-            "fields": ["summary", "status", "comment"]
-        })))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::issue_search_response(vec![serde_json::json!({
                 "key": "PROJ-1",
@@ -10765,6 +10769,21 @@ async fn test_bc_2_2_033_issue_list_fields_replaces_requested_field_set() {
     });
     assert_eq!(parsed[0]["key"], "PROJ-1");
     assert_eq!(parsed[0]["fields"]["summary"], "Narrow fields issue");
+
+    let requests = server.received_requests().await.expect("requests recorded");
+    let search_request = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("search POST must have been made");
+    let body: serde_json::Value =
+        serde_json::from_slice(&search_request.body).expect("request body must be valid JSON");
+    assert_eq!(
+        body["fields"],
+        serde_json::json!(["summary", "status", "comment"]),
+        "fields array must be EXACTLY [\"summary\", \"status\", \"comment\"] \
+         (REPLACE semantics, no union) — got: {}",
+        body["fields"]
+    );
 }
 
 /// AC-002 / BC-2.3.041 Postcondition 1: `--fields` on `issue view` mirrors
@@ -10895,11 +10914,12 @@ async fn test_bc_2_2_033_issue_list_fields_unrequested_named_fields_are_null() {
 async fn test_bc_2_2_033_issue_list_fields_key_always_present_regardless_of_csv() {
     let server = MockServer::start().await;
 
+    // F2 (adversary review, S-575-1): method+path only — see the exact
+    // full-array assertion on `server.received_requests()` below, which is
+    // what actually guards REPLACE-not-UNION here (a `body_partial_json`
+    // match against `["summary"]` would not catch a trailing append).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .and(body_partial_json(serde_json::json!({
-            "fields": ["summary"]
-        })))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::issue_search_response(vec![serde_json::json!({
                 "key": "PROJ-7",
@@ -10937,6 +10957,21 @@ async fn test_bc_2_2_033_issue_list_fields_key_always_present_regardless_of_csv(
         parsed[0]["key"], "PROJ-7",
         "'key' must be present at issue top level even though 'key' does not \
          appear in the --fields CSV"
+    );
+
+    let requests = server.received_requests().await.expect("requests recorded");
+    let search_request = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("search POST must have been made");
+    let body: serde_json::Value =
+        serde_json::from_slice(&search_request.body).expect("request body must be valid JSON");
+    assert_eq!(
+        body["fields"],
+        serde_json::json!(["summary"]),
+        "fields array must be EXACTLY [\"summary\"] (REPLACE semantics, no \
+         union) — got: {}",
+        body["fields"]
     );
 }
 
@@ -10988,11 +11023,14 @@ async fn test_bc_2_3_041_issue_view_fields_key_always_present() {
 async fn test_bc_2_2_033_issue_list_fields_csv_segments_are_trimmed() {
     let server = MockServer::start().await;
 
+    // F2 (adversary review, S-575-1): method+path only — the exact
+    // full-array assertion below on `server.received_requests()` is what
+    // actually proves BOTH trimming ("summary, status" -> "summary"/"status"
+    // with no embedded whitespace) AND REPLACE-not-UNION (no trailing
+    // append); a `body_partial_json` inclusive match can't distinguish
+    // either from a superset.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .and(body_partial_json(serde_json::json!({
-            "fields": ["summary", "status"]
-        })))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::issue_search_response(vec![serde_json::json!({
                 "key": "PROJ-9",
@@ -11030,6 +11068,21 @@ async fn test_bc_2_2_033_issue_list_fields_csv_segments_are_trimmed() {
     let parsed: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
     assert_eq!(parsed[0]["key"], "PROJ-9");
+
+    let requests = server.received_requests().await.expect("requests recorded");
+    let search_request = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("search POST must have been made");
+    let body: serde_json::Value =
+        serde_json::from_slice(&search_request.body).expect("request body must be valid JSON");
+    assert_eq!(
+        body["fields"],
+        serde_json::json!(["summary", "status"]),
+        "fields array must be EXACTLY [\"summary\", \"status\"] — trimmed, \
+         REPLACE semantics, no union — got: {}",
+        body["fields"]
+    );
 }
 
 /// AC-010 / BC-2.6.052 Postcondition 2: the new field-override client
@@ -11053,11 +11106,13 @@ async fn test_bc_2_6_052_field_override_methods_send_verbatim_field_list() {
         .mount(&server)
         .await;
 
+    // F2 (adversary review, S-575-1): method+path only — the old
+    // `body_partial_json` matcher was inclusive and could not detect a
+    // trailing append-union regression. The exact full-array assertion
+    // below on `server.received_requests()` is the actual guard for
+    // BC-2.6.052 Postcondition 2's verbatim-pass-through contract.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .and(body_partial_json(serde_json::json!({
-            "fields": ["summary", "comment"]
-        })))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::issue_search_response(vec![serde_json::json!({
                 "key": "PROJ-2",
@@ -11082,6 +11137,21 @@ async fn test_bc_2_6_052_field_override_methods_send_verbatim_field_list() {
         .expect("search_issues_with_fields must send exactly the caller-supplied fields");
     assert_eq!(result.issues.len(), 1);
     assert_eq!(result.issues[0].key, "PROJ-2");
+
+    let requests = server.received_requests().await.expect("requests recorded");
+    let search_request = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("search POST must have been made");
+    let body: serde_json::Value =
+        serde_json::from_slice(&search_request.body).expect("request body must be valid JSON");
+    assert_eq!(
+        body["fields"],
+        serde_json::json!(["summary", "comment"]),
+        "search_issues_with_fields must send fields EXACTLY [\"summary\", \"comment\"] \
+         with no BASE_ISSUE_FIELDS union — got: {}",
+        body["fields"]
+    );
 }
 
 /// AC-010 / BC-2.6.052 Edge Case EC-2.6.052-1: an empty field slice reaching
@@ -11111,4 +11181,76 @@ async fn test_bc_2_6_052_field_override_methods_empty_slice_is_not_a_client_erro
         .await
         .expect("an empty field slice must not be rejected at the client layer");
     assert_eq!(issue.key, "PROJ-1");
+}
+
+/// F1 (adversary review, S-575-1): a user-supplied field name containing a
+/// URL-significant character (`&`, `#`, or a literal space) must be
+/// percent-encoded PER SEGMENT before being joined into the `fields` query
+/// param on `get_issue_with_fields`'s GET request — otherwise the raw
+/// character corrupts the query string (e.g. an unescaped `&` starts a new
+/// query param, silently dropping every field after it). This asserts the
+/// RAW (still-encoded) query string on the wire, not just the
+/// wiremock-decoded `query_param` matcher, so a regression that stops
+/// encoding would fail this test even though a naive decoded-value
+/// comparison might still appear to match.
+#[tokio::test]
+async fn test_get_issue_with_fields_url_encodes_special_characters_in_field_names() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .and(query_param("fields", "summary,field&name,with space"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-1",
+            "fields": { "summary": "Encoded fields" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    let issue = client
+        .get_issue_with_fields("PROJ-1", &["summary", "field&name", "with space"])
+        .await
+        .expect("special characters in field names must not break the request");
+    assert_eq!(issue.key, "PROJ-1");
+
+    // Inspect the RAW (still percent-encoded) query string actually sent on
+    // the wire — this is the assertion that would catch a regression back to
+    // unencoded `fields.join(",")`, since an unencoded `&`/space would still
+    // happen to round-trip through wiremock's decoded `query_param` matcher
+    // above in some cases but would corrupt a real Jira request.
+    let requests = server.received_requests().await.expect("requests recorded");
+    let request = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/issue/PROJ-1")
+        .expect("GET request must have been made");
+    let raw_query = request
+        .url
+        .query()
+        .expect("request must carry a query string");
+
+    assert!(
+        raw_query.contains("field%26name"),
+        "literal '&' in a field name must be percent-encoded as %26 on the wire; got: {raw_query}"
+    );
+    assert!(
+        !raw_query.contains("field&name"),
+        "an unencoded '&' would start a new query param and corrupt the fields list; got: {raw_query}"
+    );
+    assert!(
+        raw_query.contains("with%20space") || raw_query.contains("with+space"),
+        "literal space in a field name must be percent-encoded on the wire; got: {raw_query}"
+    );
+
+    // Decoded round-trip: the three original field names, and only those
+    // three, must survive encode -> Jira-side decode.
+    let fields_query = request
+        .url
+        .query_pairs()
+        .find(|(k, _)| k == "fields")
+        .map(|(_, v)| v.into_owned())
+        .expect("request must carry a `fields` query parameter");
+    assert_eq!(fields_query, "summary,field&name,with space");
 }

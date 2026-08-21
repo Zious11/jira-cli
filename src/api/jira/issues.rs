@@ -570,13 +570,27 @@ impl JiraClient {
     /// Precondition 3) is the sole enforcement point for a non-empty field
     /// list (EC-2.6.052-1).
     ///
-    /// STUB (S-575-1 Red Gate): body intentionally unimplemented pending
-    /// TDD implementation. Traces to BC-2.3.041 / BC-2.6.052.
+    /// Each field name is percent-encoded individually via
+    /// `urlencoding::encode` before being joined with a literal `,` (F1,
+    /// adversary review S-575-1). A user-supplied field name can contain
+    /// URL-significant characters (e.g. `&`, `#`, a space) — without
+    /// per-segment encoding, such a character would corrupt the query
+    /// string and silently break REPLACE fidelity by truncating or
+    /// misrouting the `fields` param. This restores parity with the
+    /// list/POST path (which sends `fields` as a JSON array body and is
+    /// therefore already safe): Jira receives each field name verbatim and
+    /// 400s on a genuinely-unknown field, exactly as before. The `,`
+    /// separator itself is intentionally NOT encoded — it is the field-list
+    /// delimiter Jira's `fields` query param expects.
     pub async fn get_issue_with_fields(&self, key: &str, fields: &[&str]) -> Result<Issue> {
+        let encoded_fields: Vec<String> = fields
+            .iter()
+            .map(|f| urlencoding::encode(f).into_owned())
+            .collect();
         let path = format!(
             "/rest/api/3/issue/{}?fields={}",
             urlencoding::encode(key),
-            fields.join(",")
+            encoded_fields.join(",")
         );
         self.get(&path).await
     }
