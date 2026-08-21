@@ -709,3 +709,237 @@ async fn test_search_issues_apr2025_overshoot_silenced_by_drift_dedupe() {
          Update this assertion if Risk #5 is fixed."
     );
 }
+
+// ---------------------------------------------------------------------------
+// search_issues_with_fields pagination/boundary/cursor mutation-kill tests
+// (S-575-1 CI fix). This is the field-projection sibling of `search_issues`
+// (same pagination/boundary/cursor-repeat logic, over the same
+// `/rest/api/3/search/jql` endpoint, differing only in that the request body
+// carries a caller-supplied `fields` slice instead of the fixed
+// `BASE_ISSUE_FIELDS`). PR #724's cargo-mutants `--in-diff` run found 8
+// surviving mutants clustered entirely in this function's truncation/
+// termination/cursor-repeat branches, because only a "sends the right fields
+// verbatim" test existed for it before this addition. These five tests mirror
+// the `search_issues` coverage above one-for-one, reusing `issue_body` /
+// `jql_issues_response`.
+//
+// Every mock below is registered with `up_to_n_times(1)` (never an unbounded
+// mock): a mutation that flips a loop-termination check into its inverse
+// must be made to fail FAST (an unmocked request produces an `Err` the test
+// unwraps/expects on) rather than spin for the full per-mutant timeout.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issues_with_fields_exact_limit_with_more_available_stops_at_one_page() {
+    let server = MockServer::start().await;
+
+    // Exactly 2 issues AND a non-null nextPageToken (page_has_more == true).
+    // Registering only ONE mock with up_to_n_times(1)/expect(1) proves the
+    // truncation-and-break block at line 367 fires and a second page is
+    // never fetched.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_issues_response(
+                &["TEST-1", "TEST-2"],
+                Some("more-available"),
+            )),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues_with_fields("q", Some(2), &["summary"])
+        .await
+        .expect("must stop after exactly one page when the limit is met");
+
+    assert_eq!(
+        result.issues.len(),
+        2,
+        "must return exactly `limit` issues from the single fetched page"
+    );
+    assert!(
+        result.has_more,
+        "has_more must be true: the page itself signalled more via nextPageToken"
+    );
+    // Kills 367:37 (`>=` -> `<`): under that mutant, the truncate-and-break
+    // block is skipped entirely and the loop attempts to fetch an unmocked
+    // second page, which fails fast via the up_to_n_times(1) cap above.
+}
+
+#[tokio::test]
+async fn test_search_issues_with_fields_overshoot_single_page_truncates_and_sets_has_more() {
+    let server = MockServer::start().await;
+
+    // One page returns MORE than the limit (3 issues for limit=2), with no
+    // nextPageToken (page_has_more == false).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_issues_response(&["TEST-1", "TEST-2", "TEST-3"], None)),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues_with_fields("q", Some(2), &["summary"])
+        .await
+        .expect("must succeed and truncate to the limit");
+
+    assert_eq!(
+        result.issues.len(),
+        2,
+        "issues must be truncated to the requested limit"
+    );
+    assert!(
+        result.has_more,
+        "has_more must be true: the single page overshot the limit (3 > 2), \
+         even though page_has_more was false"
+    );
+    // Kills 368:55 (`>` -> `<` and `>` -> `==`) and reinforces 368:70
+    // (`||` -> `&&`): under any of those mutants, `more_available` would
+    // incorrectly compute false (neither the strict-overshoot disjunct nor
+    // page_has_more, which is false here, would independently be true).
+}
+
+#[tokio::test]
+async fn test_search_issues_with_fields_exact_limit_no_more_available_sets_has_more_false() {
+    let server = MockServer::start().await;
+
+    // Exactly `limit` issues, no nextPageToken (page_has_more == false, and
+    // no overshoot).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_issues_response(&["TEST-1", "TEST-2"], None)),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues_with_fields("q", Some(2), &["summary"])
+        .await
+        .expect("must succeed at the exact boundary");
+
+    assert_eq!(
+        result.issues.len(),
+        2,
+        "exactly `limit` issues must be returned"
+    );
+    assert!(
+        !result.has_more,
+        "has_more must be false: no overshoot and no further pages available"
+    );
+    // Kills 368:55 (`>` -> `>=`): under that mutant, more_available would
+    // incorrectly compute true at the exact boundary (2 >= 2) despite there
+    // being no real overshoot and no more pages.
+}
+
+#[tokio::test]
+async fn test_search_issues_with_fields_repeated_cursor_abort_sets_has_more_true() {
+    let server = MockServer::start().await;
+
+    // Page 1 — initial fetch; returns [TEST-1] with nextPageToken: "stuck".
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({"jql": "q"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_issues_response(&["TEST-1"], Some("stuck"))),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2 — same nextPageToken repeated. Guard must fire here, aborting
+    // before any 3rd request is attempted.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(
+            serde_json::json!({"nextPageToken": "stuck"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_issues_response(&["TEST-2"], Some("stuck"))),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    // limit=None so the truncate-block (line 367) never fires, isolating the
+    // cursor-repeat guard at line 380.
+    let result = client
+        .search_issues_with_fields("q", None, &["summary"])
+        .await
+        .expect("guard must abort gracefully after exactly two page fetches");
+
+    assert!(
+        result.has_more,
+        "has_more must be true: the repeated-cursor guard aborted pagination"
+    );
+    assert_eq!(
+        result.issues.len(),
+        2,
+        "both pages' issues must be preserved before the guard aborts"
+    );
+    // Kills 380:38 (`&&` -> `||`): under that mutant, next_cursor.is_some()
+    // alone (true right after page 1, since prev_cursor is still None) would
+    // fire the guard prematurely — only 1 call would be made instead of 2,
+    // and the page-2 mock's expect(1) would fail the test.
+    // Kills 380:53 (`==` -> `!=`): under that mutant, the guard never fires
+    // on the genuine repeat, so the loop attempts an unmocked 3rd request,
+    // which fails fast via up_to_n_times(1) on both mocks above.
+}
+
+#[tokio::test]
+async fn test_search_issues_with_fields_single_page_no_limit_terminates() {
+    let server = MockServer::start().await;
+
+    // A single normal page: no limit supplied (so the truncate-block at
+    // lines 367-372 is entirely skipped) and no nextPageToken, so the loop's
+    // ONLY exit is the `!page_has_more` check at line 374.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_issues_response(&["TEST-1", "TEST-2", "TEST-3"], None)),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues_with_fields("q", None, &["summary"])
+        .await
+        .expect("must terminate after a single page with no more available");
+
+    assert_eq!(
+        result.issues.len(),
+        3,
+        "all issues from the single page must be returned"
+    );
+    assert!(
+        !result.has_more,
+        "has_more must be false: the single page had no nextPageToken"
+    );
+    // Kills 374:16 (`delete !`, the TIMEOUT mutant): under that mutant the
+    // loop does not terminate on this normal single-page case and attempts a
+    // second, unmocked request — which fails FAST via the up_to_n_times(1)
+    // cap above instead of hanging for the full per-mutant timeout budget.
+}
