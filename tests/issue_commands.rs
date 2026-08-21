@@ -11363,3 +11363,431 @@ async fn test_issue_view_fields_omitting_summary_does_not_error() {
         "summary must serialize as null when omitted from the --fields CSV, got: {parsed}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// S-579-1: `jr issue list --updated-recent <duration>` filter
+// (BC-2.1.023, amended BC-2.1.006/BC-2.1.007)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Red Gate: `--updated-recent` is a compilable stub in
+// `src/cli/issue/list.rs::handle_list` — `if updated_recent.is_some() {
+// todo!("S-579-1: --updated-recent") }` — so every test below MUST fail
+// today (panic/exit 101, or an assertion mismatch against the pre-amendment
+// 14-source stderr enumeration) until the real clause-composition logic
+// lands. Reuses the S-606-1 harness helpers (`s606_1_cmd`,
+// `s606_1_mock_project_exists`, `s606_1_mock_search_empty`,
+// `s606_1_composed_jql`, `s606_1_expect_zero_http`) defined above in this
+// same file — same isolated-cache/config pattern, same
+// `MockServer::received_requests()` JQL-capture technique.
+//
+// 8 acceptance-criteria tests (AC-001..008), one per story AC:
+//   - AC-001: clause composition (`updated >= -{d}`)
+//   - AC-002: pre-HTTP combined-units rejection via shared `jql::validate_duration`
+//   - AC-003: asymmetric `conflicts_with` (--updated-after only, not --updated-before)
+//   - AC-004: free composition with --recent (recent's clause precedes updated-recent's)
+//   - AC-005: BC-2.1.007 stable-order position (after recent, before asset)
+//   - AC-006: BC-2.1.006 15-source "no filters" stderr enumeration
+//   - AC-007: --updated-recent alone still requires project/filter scope
+//   - AC-008: field-swap fidelity (`updated`, not `created`)
+
+/// AC-001 / BC-2.1.023 Postcondition 1: `--updated-recent 60d` composes the
+/// clause `updated >= -60d` — the direct field-swapped analogue of
+/// `--recent`'s `created >= -{d}` template.
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_clause() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--updated-recent",
+            "60d",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "AC-001: expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("updated >= -60d"),
+        "AC-001: expected clause 'updated >= -60d' in composed JQL, got: {jql}"
+    );
+}
+
+/// AC-002 / BC-2.1.023 Precondition 2: `--updated-recent` is validated via
+/// the SAME `jql::validate_duration` validator `--recent` uses — combined
+/// units (`4w2d`) are rejected pre-HTTP with the identical error shape
+/// BC-2.1.008 pins for `--recent`, and zero HTTP calls are issued.
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_rejects_combined_units_pre_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--updated-recent",
+            "4w2d",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "AC-002: expected failure on combined-unit duration, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-002: invalid --updated-recent duration should exit 64 (UserError), \
+         got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "Invalid duration '4w2d'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+        ),
+        "AC-002: expected the shared jql::validate_duration error shape in stderr, got: {stderr}"
+    );
+}
+
+/// AC-003 / BC-2.1.023 Edge Case EC-2.1.023-2 (human-locked DEC-298):
+/// `--updated-recent` + `--updated-after` is a clap `conflicts_with`
+/// rejection (exit 2). `--updated-recent` + `--updated-before` does NOT
+/// conflict — deliberate asymmetry mirroring the pre-existing
+/// `--recent` x `--created-after` pattern, not a bug to "fix".
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_conflicts_with_updated_after_only() {
+    let server = MockServer::start().await;
+    let cache_dir1 = tempfile::tempdir().unwrap();
+    let config_dir1 = tempfile::tempdir().unwrap();
+
+    // (a) --updated-recent + --updated-after -> clap conflict, exit 2,
+    // native clap-level rejection (no HTTP, no handler code reached).
+    let output_conflict = s606_1_cmd(&server.uri(), cache_dir1.path(), config_dir1.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--updated-recent",
+            "60d",
+            "--updated-after",
+            "2026-01-01",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output_conflict.status.code(),
+        Some(2),
+        "AC-003a: --updated-recent + --updated-after must be a clap conflict \
+         (exit 2), got: {:?} (stderr: {})",
+        output_conflict.status.code(),
+        String::from_utf8_lossy(&output_conflict.stderr)
+    );
+
+    // (b) --updated-recent + --updated-before -> NO conflict, composes both
+    // clauses successfully (exit 0). This is the half that exercises the
+    // still-`todo!()`'d clause-composition logic and so is the part that
+    // fails Red Gate today.
+    let cache_dir2 = tempfile::tempdir().unwrap();
+    let config_dir2 = tempfile::tempdir().unwrap();
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output_no_conflict = s606_1_cmd(&server.uri(), cache_dir2.path(), config_dir2.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--updated-recent",
+            "60d",
+            "--updated-before",
+            "2026-01-01",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output_no_conflict.status.success(),
+        "AC-003b: --updated-recent + --updated-before must NOT conflict \
+         (asymmetric per DEC-298), expected exit 0, got: {:?} (stderr: {})",
+        output_no_conflict.status.code(),
+        String::from_utf8_lossy(&output_no_conflict.stderr)
+    );
+}
+
+/// AC-004 / BC-2.1.023 Postcondition 3 / Edge Case EC-2.1.023-3:
+/// `--updated-recent 30d --recent 30d` composes BOTH clauses, AND-joined,
+/// with `recent`'s clause emitted before `updated-recent`'s (per
+/// BC-2.1.007's stable order) — no error.
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_freely_with_recent() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--updated-recent",
+            "30d",
+            "--recent",
+            "30d",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "AC-004: expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    let recent_idx = jql
+        .find("created >= -30d")
+        .expect("AC-004: --recent clause 'created >= -30d' must be present");
+    let updated_recent_idx = jql
+        .find("updated >= -30d")
+        .expect("AC-004: --updated-recent clause 'updated >= -30d' must be present");
+    assert!(
+        recent_idx < updated_recent_idx,
+        "AC-004: 'recent' clause must precede 'updated-recent' clause \
+         per BC-2.1.007's stable order, got jql: {jql}"
+    );
+}
+
+/// AC-005 / BC-2.1.007 amendment (stable-order position): `--recent 7d
+/// --updated-recent 60d --asset CUST-5` composes clauses with
+/// `updated-recent` positioned immediately AFTER `recent` and BEFORE
+/// `asset` — verified via exact substring-index ordering (mirrors the
+/// S-606-1 AC-016 `Vec<String>`-positional discipline for clause order).
+#[tokio::test]
+async fn test_bc_2_1_007_issue_list_updated_recent_clause_ordering_after_recent_before_asset() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+
+    // CMDB fields discovery, required by build_asset_clause for a direct
+    // asset-key passthrough (mirrors tests/cli_handler.rs's
+    // test_handler_list_asset_key_passthrough_skips_assets_api pattern).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": "customfield_10191",
+                "name": "Client",
+                "custom": true,
+                "schema": {
+                    "type": "any",
+                    "custom": "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype",
+                    "customId": 10191
+                }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--recent",
+            "7d",
+            "--updated-recent",
+            "60d",
+            "--asset",
+            "CUST-5",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "AC-005: expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    let recent_idx = jql
+        .find("created >= -7d")
+        .expect("AC-005: --recent clause must be present");
+    let updated_recent_idx = jql
+        .find("updated >= -60d")
+        .expect("AC-005: --updated-recent clause must be present");
+    let asset_idx = jql
+        .find("aqlFunction")
+        .expect("AC-005: --asset clause must be present");
+
+    assert!(
+        recent_idx < updated_recent_idx,
+        "AC-005: updated-recent must come AFTER recent, got jql: {jql}"
+    );
+    assert!(
+        updated_recent_idx < asset_idx,
+        "AC-005: updated-recent must come BEFORE asset, got jql: {jql}"
+    );
+}
+
+/// AC-006 / BC-2.1.006 amendment: with no project, no filters, and no
+/// `--jql`, exit 64 with stderr enumerating all 15 filter sources —
+/// `--updated-recent` appended as source #15, immediately before `or --jql`.
+#[tokio::test]
+async fn test_bc_2_1_006_issue_list_no_filters_stderr_enumerates_15_sources() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "list"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "AC-006: expected failure with no project/filters, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-006: no-filters guard should exit 64 (UserError), got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "No project or filters specified. Use --project, --assignee, --reporter, --status, \
+             --open, --team, --recent, --created-after, --created-before, --updated-after, \
+             --updated-before, --asset, --component, --updated-recent, or --jql. \
+             You can also set a default project in .jr.toml or run \"jr init\"."
+        ),
+        "AC-006: expected the amended 15-source stderr enumeration (with \
+         --updated-recent inserted immediately before 'or --jql'), got: {stderr}"
+    );
+}
+
+/// AC-007 / BC-2.1.023 Edge Case EC-2.1.023-4: `--updated-recent` alone
+/// (no `--project`/configured project, no other filter) falls through to
+/// BC-2.1.006's amended "no filters specified" exit-64 guard exactly as
+/// every other filter source does — it does NOT independently satisfy the
+/// "at least one filter source" requirement by bypassing project scoping.
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_alone_still_requires_project_scope() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "list", "--updated-recent", "60d"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "AC-007: --updated-recent alone with no project must still fail the \
+         no-filters guard, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-007: expected exit 64 (UserError) from BC-2.1.006's no-filters \
+         guard, got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("No project or filters specified"),
+        "AC-007: expected the canonical no-filters-specified message, got: {stderr}"
+    );
+}
+
+/// AC-008 / BC-2.1.023 Postcondition 1 (field-swap fidelity): `--updated-recent
+/// 7d` produces `updated >= -7d` — NOT `created >= -7d` — confirming the
+/// field name is correctly swapped from `--recent`'s template rather than
+/// copy-pasted verbatim.
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_uses_updated_field_not_created() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--updated-recent",
+            "7d",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "AC-008: expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("updated >= -7d"),
+        "AC-008: expected 'updated >= -7d' in composed JQL, got: {jql}"
+    );
+    assert!(
+        !jql.contains("created >= -7d"),
+        "AC-008: must NOT emit 'created >= -7d' (field-swap fidelity — \
+         --updated-recent must not be copy-pasted from --recent's template \
+         verbatim), got: {jql}"
+    );
+}
