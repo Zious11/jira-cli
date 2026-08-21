@@ -442,6 +442,53 @@ Invalid justifications:
 - "Tests don't cover this" — that is a gap to close, not a reason to skip
 - "It's hard to test" — that is a refactoring opportunity, not a reason to skip
 
+## Exclusions
+
+`#[mutants::skip]` (above) marks a mutant unkillable at the *code* site. A small, distinct
+class of mutant is unkillable only in the *test-harness execution model*: the mutated code
+would run forever, and cargo-mutants runs the whole test binary as one process against each
+mutant — so no assertion can ever observe the hang before `--timeout` kills the run and the
+mutant is classified TIMEOUT (counted as survived, identically to MISSED). No amount of
+additional test coverage changes this outcome, because the failure mode is the wall-clock
+timeout itself, not a missing assertion. For this class, `#[mutants::skip]` on the enclosing
+function is too broad (it would also skip mutants on adjacent, genuinely-testable lines), so
+the exclusion is expressed instead as a single-mutant `exclude_re` entry in
+`.cargo/mutants.toml`, anchored to the mutant's exact `file:line:col` + function name so it
+cannot accidentally widen to cover any other mutant (including a same-shaped mutant in a
+sibling function).
+
+**Rules**, mirroring the Whitelist Convention above:
+- Every `exclude_re` entry MUST be preceded by a comment block in `.cargo/mutants.toml`
+  explaining (a) why the mutant is uncatchable-as-anything-but-timeout, not merely hard to
+  test, and (b) where the mutated behavior's *correctness* is positively verified by other
+  means (so the exclusion is not silently removing coverage of a real invariant).
+- The regex MUST be anchored precisely enough to match only the intended mutant — never a
+  bare function-name or file-name substring that could also match sibling mutants.
+- Record the exclusion here with the same justification, kept in sync with the config
+  comment.
+
+**Current exclusions:**
+
+- **`src/api/jira/issues.rs:374:16: delete ! in JiraClient::search_issues_with_fields`**
+  (S-575-1). This is the `if !page_has_more { break; }` terminal-page guard in
+  `search_issues_with_fields`'s cursor-pagination loop. Deleting the `!` makes the loop
+  fail to break on a terminal page; since a terminal page always has
+  `next_page_token == None`, the JRACLOUD-95368 repeated-cursor anti-loop guard
+  (`next_cursor.is_some() && next_cursor == prev_cursor`) never fires (`is_some()` is false
+  on `None`), so the mutant re-fetches the same terminal page **forever**. Every realistic
+  pagination test reaches a terminal page — that is how pagination is supposed to end — so
+  every such test hangs under this mutant, the whole `cargo-mutants` test-binary invocation
+  is killed by `--timeout 240`, and the outcome is TIMEOUT (survived) before any assertion
+  can run. No test can be added that catches this any other way — the infinite loop, not a
+  missing assertion, is what defeats every candidate test. The break's *correctness* is
+  positively verified by the multi-page termination tests already in the suite (e.g.
+  `test_search_issues_with_fields_two_page_pagination_terminates_at_terminal_page` in
+  `src/api/jira/issues.rs`, and the pagination-termination tests in
+  `tests/rate_limit_cap_tests.rs`), which assert the loop DOES terminate — exactly the
+  property this mutant would violate. The sibling `JiraClient::search_issues`
+  (`issues.rs:273`) has the identical `if !page_has_more { break; }` construct and is
+  deliberately **not** excluded — only this one, precisely-anchored mutant is.
+
 ## Deferral Policy
 
 The initial baseline PR (S-346) MUST NOT block on achieving 90% kill-rate on first run.
@@ -738,6 +785,7 @@ Path B is deferred until Path A's 240-minute budget proves insufficient in pract
 
 | Date | Cycle | Change |
 |------|-------|--------|
+| 2026-08-21 | S-575-1 | Added new "Exclusions" section (distinct from `#[mutants::skip]` Whitelist Convention) and a single `exclude_re` entry in `.cargo/mutants.toml` for `src/api/jira/issues.rs:374:16: delete ! in JiraClient::search_issues_with_fields` — an infinite-loop mutant uncatchable-as-anything-but-TIMEOUT under the whole-binary test-harness execution model. Termination correctness remains verified by existing multi-page pagination tests. |
 | 2026-08-14 | S-MUTANTS-SCOPE-1 | Scope widening + drift backfill: added `src/cli/queue.rs` and `src/main.rs` to `examine_globs` (16 → 18 entries). Backfilled §Scope bullets for 5 previously-undocumented `examine_globs` members: `src/cli/issue/interactions.rs`, `src/cli/issue/attachments.rs`, `src/api/jira/attachments.rs`, `src/api/jsm/attachments.rs`, `src/api/jsm/servicedesks.rs`. Closes drift item MUTANTS-SCOPE-GAP-QUEUE-MAIN. |
 | 2026-07-02 | DEC-149 / S-MUTANTS-EXAMINE-GLOBS-1 | Scope widening: added `src/cli/issue/edit.rs` (~99 mutants) and `src/cli/issue/jsm_create.rs` (~9 mutants) to `examine_globs`. Root cause: ADR-0012 Seam A (PR #556) and Seam B (PR #558) relocated `handle_edit`, `handle_edit_bulk_labels`, `handle_edit_bulk_fields` → `edit.rs` and `handle_jsm_create` → `jsm_create.rs` from `create.rs`, but `examine_globs` was not updated. Total scope: 594 → ~702 mutants (+18%). Corrected `create.rs` entry to reflect remaining functions (`parse_field_kv`, thin dispatcher) only. |
 | 2026-06-28 | MUTATION-CI-TIMEOUT (F5 doc-completeness, pass 3) | Added "Schema-Drift and False-Green Guards" section documenting @27 pin rationale + evidence basis, malformed-JSON guard, integer-validation guard, H-1 runtime schema-drift guard, and M-2 total_mutants reconciliation warning-only design decision. Disambiguated timeout_multiplier history (3.0 in S-346 original; 2.0 in pass-1; removed in pass-2). Softened .factory/cicd-setup.md reference from "canonical" to "historical/pending refresh." F5 final blocker F1 (HIGH) + O1 + O3. |

@@ -65,3 +65,32 @@ examine_globs = [
 # Match the CI test invocation so mutation runs use the same feature set as
 # the verifying suite.
 additional_cargo_test_args = ["--all-features"]
+
+# JUSTIFIED EXCLUSION (S-575-1) — see docs/specs/cargo-mutants-policy.md §Exclusions.
+#
+# `delete ! in JiraClient::search_issues_with_fields` (the `if !page_has_more { break; }`
+# terminal-page guard, src/api/jira/issues.rs) is uncatchable-as-anything-but-TIMEOUT, not
+# a coverage gap:
+#
+#   - Deleting `!` makes the loop NOT break on a terminal page. A terminal page always has
+#     `next_page_token == None`, so the JRACLOUD-95368 repeated-cursor anti-loop guard
+#     (`next_cursor.is_some() && next_cursor == prev_cursor`) never fires (`is_some()` is
+#     false on `None`) — the mutant re-fetches the same terminal page forever.
+#   - cargo-mutants runs the WHOLE test binary against each mutant. Any test that reaches a
+#     terminal page (which is every realistic pagination test — that's how pagination ends)
+#     hangs the process before any assertion can complete, so the run is killed by
+#     `--timeout 240` and classified TIMEOUT (= survived), never MISSED or CAUGHT.
+#   - Bounding one mock/test can't fix this: EVERY terminal-page test hangs identically —
+#     there is no assertion shape that observes the infinite loop before the timeout does.
+#   - The break's correctness is positively verified by the multi-page termination tests,
+#     e.g. `test_search_issues_with_fields_two_page_pagination_terminates_at_terminal_page`
+#     (src/api/jira/issues.rs) and the `rate_limit_cap_tests.rs` pagination-termination set —
+#     these assert the loop DOES terminate, which is the property this mutant would break.
+#
+# Regex is anchored to file:line:col + exact function name so it matches ONLY this one
+# mutant — NOT the sibling `delete ! in JiraClient::search_issues` (issues.rs:273, same
+# `if !page_has_more { break; }` shape, different function) or `search_issue_keys`, and not
+# any of the sibling `>`/`>=`/`||`/`&&`/`==` mutants at nearby lines in the same function.
+exclude_re = [
+    '^src/api/jira/issues\.rs:374:16: delete ! in JiraClient::search_issues_with_fields$',
+]
