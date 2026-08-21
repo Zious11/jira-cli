@@ -359,6 +359,14 @@ pub enum IssueCommand {
         /// Show issues updated on or before this date (YYYY-MM-DD)
         #[arg(long)]
         updated_before: Option<String>,
+        /// Comma-separated list of fields to request from Jira (e.g.
+        /// "summary,status,comment"), REPLACING the default field set
+        /// (BASE_ISSUE_FIELDS plus any --points/--assets/--duedate extras)
+        /// rather than unioning with it (DEC-298). Requires --output json;
+        /// combined with table mode (default or --output table) exits 64
+        /// pre-HTTP. See BC-2.2.033.
+        #[arg(long)]
+        fields: Option<String>,
     },
     /// Create a new issue
     Create {
@@ -435,6 +443,13 @@ pub enum IssueCommand {
     View {
         /// Issue key (e.g., FOO-123)
         key: String,
+        /// Comma-separated list of fields to request from Jira (e.g.
+        /// "summary,comment"), REPLACING the default field set rather than
+        /// unioning with it (DEC-298). Requires --output json; combined with
+        /// table mode (default or --output table) exits 64 pre-HTTP. See
+        /// BC-2.3.041.
+        #[arg(long)]
+        fields: Option<String>,
     },
     /// Edit issue fields
     Edit {

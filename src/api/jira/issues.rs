@@ -312,6 +312,29 @@ impl JiraClient {
         })
     }
 
+    /// Search issues using JQL with an explicit, caller-supplied field list —
+    /// REPLACES [`BASE_ISSUE_FIELDS`] entirely rather than unioning with it
+    /// (BC-2.2.033, BC-2.6.052, human-locked DEC-298). Additive sibling to
+    /// [`Self::search_issues`] — that method's signature and behavior are
+    /// unchanged.
+    ///
+    /// Thin, unvalidated pass-through: an empty `fields` slice is NOT
+    /// rejected here. CLI-layer pre-HTTP validation (BC-2.2.033
+    /// Precondition 3) is the sole enforcement point for a non-empty field
+    /// list (EC-2.6.052-1).
+    ///
+    /// STUB (S-575-1 Red Gate): body intentionally unimplemented pending
+    /// TDD implementation. Traces to BC-2.2.033 / BC-2.6.052.
+    pub async fn search_issues_with_fields(
+        &self,
+        jql: &str,
+        limit: Option<u32>,
+        fields: &[&str],
+    ) -> Result<SearchResult> {
+        let _ = (jql, limit, fields);
+        todo!("S-575-1: search_issues_with_fields — BC-2.2.033/BC-2.6.052 REPLACE-semantics fields= request")
+    }
+
     /// Search issues using JQL and return ONLY the matching issue keys.
     ///
     /// Lightweight variant of [`Self::search_issues`] — requests
@@ -470,6 +493,24 @@ impl JiraClient {
             fields.join(",")
         );
         self.get(&path).await
+    }
+
+    /// Get a single issue by key with an explicit, caller-supplied field
+    /// list — REPLACES [`BASE_ISSUE_FIELDS`] entirely rather than unioning
+    /// with it (BC-2.3.041, BC-2.6.052, human-locked DEC-298). Additive
+    /// sibling to [`Self::get_issue`] — that method's signature and
+    /// behavior are unchanged.
+    ///
+    /// Thin, unvalidated pass-through: an empty `fields` slice is NOT
+    /// rejected here. CLI-layer pre-HTTP validation (BC-2.3.041
+    /// Precondition 3) is the sole enforcement point for a non-empty field
+    /// list (EC-2.6.052-1).
+    ///
+    /// STUB (S-575-1 Red Gate): body intentionally unimplemented pending
+    /// TDD implementation. Traces to BC-2.3.041 / BC-2.6.052.
+    pub async fn get_issue_with_fields(&self, key: &str, fields: &[&str]) -> Result<Issue> {
+        let _ = (key, fields);
+        todo!("S-575-1: get_issue_with_fields — BC-2.3.041/BC-2.6.052 REPLACE-semantics fields= request")
     }
 
     /// Get the project key for an issue (P1-004, BC-3.9.003).

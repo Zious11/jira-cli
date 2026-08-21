@@ -21,9 +21,17 @@ pub(super) async fn handle_view(
     config: &Config,
     client: &JiraClient,
 ) -> Result<()> {
-    let IssueCommand::View { key } = command else {
+    let IssueCommand::View { key, fields } = command else {
         unreachable!()
     };
+
+    // S-575-1 STUB (Red Gate): `--fields <CSV>` pre-HTTP CSV validation +
+    // output-format gate + REPLACE-semantics request wiring
+    // (`get_issue_with_fields`) are not yet implemented. Traces to
+    // BC-2.3.041. Default behavior (fields == None) is untouched below.
+    if fields.is_some() {
+        todo!("S-575-1: issue view --fields validation + REPLACE-semantics wiring (BC-2.3.041)");
+    }
 
     let active = config.active_profile();
     let sp_field_id = active.story_points_field_id.as_deref();

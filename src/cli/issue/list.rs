@@ -80,10 +80,19 @@ pub(super) async fn handle_list(
         created_before,
         updated_after,
         updated_before,
+        fields,
     } = command
     else {
         unreachable!()
     };
+
+    // S-575-1 STUB (Red Gate): `--fields <CSV>` pre-HTTP CSV validation +
+    // output-format gate + REPLACE-semantics request wiring
+    // (`search_issues_with_fields`) are not yet implemented. Traces to
+    // BC-2.2.033. Default behavior (fields == None) is untouched below.
+    if fields.is_some() {
+        todo!("S-575-1: issue list --fields validation + REPLACE-semantics wiring (BC-2.2.033)");
+    }
 
     // Resolve project key once, before any HTTP call. Moved up from its
     // original position (immediately before the `project_exists` check)
