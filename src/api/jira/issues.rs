@@ -323,8 +323,10 @@ impl JiraClient {
     /// Precondition 3) is the sole enforcement point for a non-empty field
     /// list (EC-2.6.052-1).
     ///
-    /// STUB (S-575-1 Red Gate): body intentionally unimplemented pending
-    /// TDD implementation. Traces to BC-2.2.033 / BC-2.6.052.
+    /// Mirrors [`Self::search_issues`]'s cursor-pagination, dedupe, and
+    /// anti-loop-guard behavior, but sends the caller's `fields` verbatim
+    /// on each page request instead of [`BASE_ISSUE_FIELDS`]. Traces to
+    /// BC-2.2.033 / BC-2.6.052.
     pub async fn search_issues_with_fields(
         &self,
         jql: &str,
