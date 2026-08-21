@@ -148,16 +148,27 @@ pub(super) async fn handle_list(
 
     // S-579-1 (BC-2.1.023 Edge Case EC-2.1.023-4): unlike `--recent`,
     // `--updated-recent` does not by itself satisfy the "at least one filter
-    // source" requirement when used with no --project/configured project and
-    // no other filter -- it falls through to the same BC-2.1.006
-    // "no filters specified" guard a completely bare `jr issue list`
-    // invocation hits. This must be checked here (zero HTTP so far) rather
-    // than relying on the end-of-function "guard against unbounded query"
-    // below, because `--updated-recent`'s own composed clause would
-    // otherwise make the final assembled clause list non-empty and silently
-    // bypass that guard.
+    // source" requirement when used with no --project/configured project,
+    // no configured board (`.jr.toml`'s `board_id`), and no other filter --
+    // it falls through to the same BC-2.1.006 "no filters specified" guard a
+    // completely bare `jr issue list` invocation hits. This must be checked
+    // here (zero HTTP so far) rather than relying on the end-of-function
+    // "guard against unbounded query" below, because `--updated-recent`'s
+    // own composed clause would otherwise make the final assembled clause
+    // list non-empty and silently bypass that guard.
+    //
+    // `config.project.board_id` MUST be part of this conjunction (Pass 2
+    // MEDIUM fix): a `.jr.toml` with only `board_id` set (no `project` key)
+    // is a valid, board-scoped configuration -- see
+    // `Config::board_id`/`test_board_id_cli_override` in `src/config.rs`.
+    // Both a bare `jr issue list` and `jr issue list --recent <d>` succeed
+    // in that configuration by falling through to the active-sprint
+    // resolution below (~line 367, `config.project.board_id`); before this
+    // fix `--updated-recent` alone wrongly exited 64 in the same
+    // configuration, denying a legitimately bounded, board-scoped query.
     if updated_recent.is_some()
         && project_key.is_none()
+        && config.project.board_id.is_none()
         && jql.is_none()
         && status.is_none()
         && team.is_none()

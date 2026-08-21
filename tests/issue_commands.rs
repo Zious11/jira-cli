@@ -11754,6 +11754,72 @@ async fn test_bc_2_1_023_issue_list_updated_recent_alone_still_requires_project_
     );
 }
 
+/// Pass 2 MEDIUM regression guard: a `.jr.toml` configuring only `board_id`
+/// (no `project` key -- a valid state per `Config::board_id`/
+/// `test_board_id_cli_override` in `src/config.rs`) is a genuinely scoped
+/// configuration. `jr issue list --updated-recent 60d` must NOT trip the
+/// EC-2.1.023-4 "no filters specified" guard in that configuration -- it
+/// must fall through to the same active-sprint board resolution that a bare
+/// `jr issue list` and `jr issue list --recent 60d` both already succeed
+/// under, and the final composed JQL must contain both the sprint scope and
+/// the `updated >= -60d` clause.
+#[tokio::test]
+async fn test_bc_2_1_023_issue_list_updated_recent_with_configured_board_falls_through_to_sprint_scope()
+ {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let project_dir = tempfile::tempdir().unwrap();
+
+    // .jr.toml with ONLY board_id set -- no `project` key.
+    std::fs::write(project_dir.path().join(".jr.toml"), "board_id = 42\n").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("scrum")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/sprint"))
+        .and(query_param("state", "active"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::sprint_list_response(vec![common::fixtures::sprint(
+                100, "Sprint 1", "active",
+            )]),
+        ))
+        .mount(&server)
+        .await;
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .current_dir(project_dir.path())
+        .args(["--no-input", "issue", "list", "--updated-recent", "60d"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "board-scoped --updated-recent must NOT exit 64, got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("sprint = 100"),
+        "expected the active-sprint scope clause in the composed JQL, got: {jql}"
+    );
+    assert!(
+        jql.contains("updated >= -60d"),
+        "expected the --updated-recent clause in the composed JQL, got: {jql}"
+    );
+}
+
 /// AC-008 / BC-2.1.023 Postcondition 1 (field-swap fidelity): `--updated-recent
 /// 7d` produces `updated >= -7d` — NOT `created >= -7d` — confirming the
 /// field name is correctly swapped from `--recent`'s template rather than
