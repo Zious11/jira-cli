@@ -10693,3 +10693,416 @@ async fn test_bc_3_4_023_issue_edit_bulk_component_success_renders_full_json_str
         }
     }
 }
+
+// ─── S-575-1: `--fields <CSV>` on `issue list` / `issue view` (Red Gate) ───
+//
+// BC-2.2.033 (list), BC-2.3.041 (view), BC-2.6.052 (additive client
+// methods). Covers the REPLACE-semantics request composition (not UNION),
+// the typed-output null/extra-flatten postconditions, `key`-always-present,
+// CSV whitespace-trimming, and the new client methods' verbatim
+// pass-through. Table-mode rejection and empty-CSV pre-HTTP rejection are
+// covered separately in tests/issue_list_errors.rs and
+// tests/issue_view_errors.rs; the `--points` silent-no-op interaction is
+// covered in tests/all_flag_behavior.rs. AC-009 (the 10 existing
+// get_issue/search_issues call sites are unaffected) is explicitly
+// "no new test — verified via full regression suite" per the story, so no
+// dedicated test is added here for it.
+
+/// AC-001 / BC-2.2.033 Postcondition 1: `--fields` on `issue list` REPLACES
+/// `BASE_ISSUE_FIELDS` entirely — the `fields` array sent to
+/// `POST /rest/api/3/search/jql` must be EXACTLY the requested, trimmed,
+/// comma-joined CSV, in supplied order — no union, no config-driven extras.
+#[tokio::test]
+async fn test_bc_2_2_033_issue_list_fields_replaces_requested_field_set() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": ["summary", "status", "comment"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![serde_json::json!({
+                "key": "PROJ-1",
+                "fields": {
+                    "summary": "Narrow fields issue",
+                    "status": {"name": "To Do"},
+                    "comment": {"comments": []}
+                }
+            })]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--fields",
+            "summary,status,comment",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = output.stdout.clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&stdout)
+        .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}\n{}", String::from_utf8_lossy(&stdout)));
+    assert_eq!(parsed[0]["key"], "PROJ-1");
+    assert_eq!(parsed[0]["fields"]["summary"], "Narrow fields issue");
+}
+
+/// AC-002 / BC-2.3.041 Postcondition 1: `--fields` on `issue view` mirrors
+/// the list twin exactly — the `fields=` query param sent to
+/// `GET /rest/api/3/issue/<KEY>` (via the new `get_issue_with_fields`
+/// client method, BC-2.6.052) must be EXACTLY the requested CSV.
+#[tokio::test]
+async fn test_bc_2_3_041_issue_view_fields_replaces_requested_field_set() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-5"))
+        .and(query_param("fields", "summary,comment"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-5",
+            "fields": {
+                "summary": "View narrow fields",
+                "comment": {"comments": []}
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "view",
+            "PROJ-5",
+            "--fields",
+            "summary,comment",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("stdout must be valid JSON");
+    assert_eq!(parsed["key"], "PROJ-5");
+    assert_eq!(parsed["fields"]["summary"], "View narrow fields");
+}
+
+/// AC-003 / BC-2.2.033 Postcondition 2: named `IssueFields` struct fields
+/// NOT covered by the `--fields` request serialize as JSON `null`
+/// (missing-key -> `None`, standard serde `Option<T>` behavior); unnamed
+/// requested fields (e.g. a `customfield_NNNNN`) flow through
+/// `IssueFields.extra` (`#[serde(flatten)]`) verbatim.
+#[tokio::test]
+async fn test_bc_2_2_033_issue_list_fields_unrequested_named_fields_are_null() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": ["summary", "status", "customfield_10084"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![serde_json::json!({
+                "key": "PROJ-1",
+                "fields": {
+                    "summary": "Narrow fields issue",
+                    "status": {"name": "To Do"},
+                    "customfield_10084": "custom-value-xyz"
+                }
+            })]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--fields",
+            "summary,status,customfield_10084",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    let issue = &parsed[0];
+    assert_eq!(issue["fields"]["summary"], "Narrow fields issue");
+    assert!(
+        issue["fields"]["priority"].is_null(),
+        "unrequested named field 'priority' must serialize as null, got: {issue}"
+    );
+    assert!(
+        issue["fields"]["assignee"].is_null(),
+        "unrequested named field 'assignee' must serialize as null, got: {issue}"
+    );
+    assert!(
+        issue["fields"]["duedate"].is_null(),
+        "unrequested named field 'duedate' must serialize as null, got: {issue}"
+    );
+    assert_eq!(
+        issue["fields"]["customfield_10084"], "custom-value-xyz",
+        "unnamed requested field must round-trip verbatim through the extra flatten, got: {issue}"
+    );
+}
+
+/// AC-007 / BC-2.2.033 Postcondition 3: `key` is present in `issue list`
+/// JSON output regardless of whether `key` appears in the `--fields` CSV —
+/// Jira always returns it top-level. (The typed `Issue` struct has no
+/// top-level `id` field — only `key` is part of this contract; BC-2.2.033
+/// Postcondition 3 names `key` exclusively.)
+#[tokio::test]
+async fn test_bc_2_2_033_issue_list_fields_key_always_present_regardless_of_csv() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": ["summary"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![serde_json::json!({
+                "key": "PROJ-7",
+                "fields": { "summary": "Key-only fields request" }
+            })]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--fields",
+            "summary",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    assert_eq!(
+        parsed[0]["key"], "PROJ-7",
+        "'key' must be present at issue top level even though 'key' does not \
+         appear in the --fields CSV"
+    );
+}
+
+/// AC-012 / BC-2.3.041 Postcondition 3: `key` is present in `issue view`
+/// JSON output regardless of `--fields` CSV contents — same Jira guarantee
+/// as AC-007, verified independently on the view path.
+#[tokio::test]
+async fn test_bc_2_3_041_issue_view_fields_key_always_present() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-8"))
+        .and(query_param("fields", "summary"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-8",
+            "fields": { "summary": "View key-only fields request" }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "view", "PROJ-8", "--fields", "summary", "--output", "json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    assert_eq!(
+        parsed["key"], "PROJ-8",
+        "'key' must be present at issue top level even though 'key' does not \
+         appear in the --fields CSV"
+    );
+}
+
+/// AC-008 / BC-2.2.033 Edge Case EC-2.2.033-2: `--fields "summary, status"`
+/// (embedded whitespace around the comma) behaves identically to
+/// `--fields "summary,status"` — each CSV segment is trimmed before use.
+#[tokio::test]
+async fn test_bc_2_2_033_issue_list_fields_csv_segments_are_trimmed() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": ["summary", "status"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![serde_json::json!({
+                "key": "PROJ-9",
+                "fields": {
+                    "summary": "Trimmed CSV",
+                    "status": {"name": "To Do"}
+                }
+            })]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--fields",
+            "summary, status",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "embedded whitespace in --fields CSV must be trimmed before use, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    assert_eq!(parsed[0]["key"], "PROJ-9");
+}
+
+/// AC-010 / BC-2.6.052 Postcondition 2: the new field-override client
+/// methods (`get_issue_with_fields`, `search_issues_with_fields`) send the
+/// caller-supplied field list EXACTLY — comma-joined for the GET query
+/// param, as a JSON array for the POST body — with no `BASE_ISSUE_FIELDS`
+/// union. Exercised at the client layer directly (not via the CLI) so this
+/// pins the method contract independent of the CLI-layer wiring in
+/// list.rs/view.rs.
+#[tokio::test]
+async fn test_bc_2_6_052_field_override_methods_send_verbatim_field_list() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .and(query_param("fields", "summary,comment"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-1",
+            "fields": { "summary": "Narrow", "comment": {"comments": []} }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": ["summary", "comment"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![serde_json::json!({
+                "key": "PROJ-2",
+                "fields": { "summary": "Narrow2", "comment": {"comments": []} }
+            })]),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    let issue = client
+        .get_issue_with_fields("PROJ-1", &["summary", "comment"])
+        .await
+        .expect("get_issue_with_fields must send exactly the caller-supplied fields");
+    assert_eq!(issue.key, "PROJ-1");
+
+    let result = client
+        .search_issues_with_fields("project = PROJ", Some(10), &["summary", "comment"])
+        .await
+        .expect("search_issues_with_fields must send exactly the caller-supplied fields");
+    assert_eq!(result.issues.len(), 1);
+    assert_eq!(result.issues[0].key, "PROJ-2");
+}
+
+/// AC-010 / BC-2.6.052 Edge Case EC-2.6.052-1: an empty field slice reaching
+/// the new client method(s) is NOT a client-layer error — the method is a
+/// thin, unvalidated pass-through; CLI-layer pre-HTTP validation
+/// (BC-2.2.033/BC-2.3.041 Precondition 3) is the sole enforcement point for
+/// a non-empty field list.
+#[tokio::test]
+async fn test_bc_2_6_052_field_override_methods_empty_slice_is_not_a_client_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .and(query_param("fields", ""))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-1",
+            "fields": { "summary": "Empty fields slice" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    let issue = client
+        .get_issue_with_fields("PROJ-1", &[])
+        .await
+        .expect("an empty field slice must not be rejected at the client layer");
+    assert_eq!(issue.key, "PROJ-1");
+}

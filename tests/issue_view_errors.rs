@@ -206,3 +206,90 @@ async fn issue_view_corrupt_team_cache_falls_back_gracefully() {
     );
     assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
 }
+
+// ── S-575-1: `--fields <CSV>` pre-HTTP validation (BC-2.3.041) ─────────────
+
+/// AC-004 / BC-2.3.041 Precondition 2 / Edge Case EC-2.3.041-2: `--fields`
+/// combined with table mode (default output, no `--output json`) on
+/// `issue view` exits 64 PRE-HTTP with the canonical hint, and issues zero
+/// HTTP calls.
+#[tokio::test]
+async fn issue_view_fields_table_mode_exits_64() {
+    let server = MockServer::start().await;
+
+    // Zero HTTP calls expected — the CSV/output-format gate must fire
+    // before any request. `.expect(0)` makes wiremock itself fail the test
+    // (on Drop) if the issue endpoint is hit despite the guard.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-1",
+            "fields": { "summary": "Should never be fetched" }
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "view", "PROJ-1", "--fields", "summary,status"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "table-mode --fields should exit 64 (UserError), got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("--fields requires --output json."),
+        "Expected canonical hint in stderr, got: {stderr}"
+    );
+}
+
+/// AC-011 / BC-2.3.041 Edge Case EC-2.3.041-3: `--fields ""` (and the
+/// other empty/malformed CSV shapes from BC-2.2.033's edge cases, mirrored
+/// here for the view path) exits 64 PRE-HTTP with zero HTTP calls.
+#[tokio::test]
+async fn issue_view_fields_empty_csv_exits_64_pre_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-1",
+            "fields": { "summary": "Should never be fetched" }
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    for bad_csv in ["", ",", "summary,,status"] {
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .args([
+                "issue", "view", "PROJ-1", "--fields", bad_csv, "--output", "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "--fields {bad_csv:?} should exit 64 pre-HTTP, got: {:?} (stderr: {stderr})",
+            output.status.code()
+        );
+    }
+}

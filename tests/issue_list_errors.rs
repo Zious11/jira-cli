@@ -421,3 +421,94 @@ async fn issue_list_status_single_substring_rejected() {
         "Expected matched candidate 'In Progress' in stderr: {stderr}"
     );
 }
+
+// ── S-575-1: `--fields <CSV>` pre-HTTP validation (BC-2.2.033) ─────────────
+
+/// AC-004 / BC-2.2.033 Precondition 2 / Edge Case EC-2.2.033-3: `--fields`
+/// combined with table mode (default output, no `--output json`) exits 64
+/// PRE-HTTP with the canonical hint, and issues zero HTTP calls.
+#[tokio::test]
+async fn issue_list_fields_table_mode_exits_64() {
+    let server = MockServer::start().await;
+
+    // Zero HTTP calls expected — the CSV/output-format gate must fire
+    // before any request. `.expect(0)` makes wiremock itself fail the test
+    // (on Drop) if the search endpoint is hit despite the guard.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "issues": [], "nextPageToken": null
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let project_dir = tempfile::tempdir().unwrap();
+    std::fs::write(project_dir.path().join(".jr.toml"), "project = \"PROJ\"\n").unwrap();
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .current_dir(project_dir.path())
+        .args(["issue", "list", "--fields", "summary,status"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "table-mode --fields should exit 64 (UserError), got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("--fields requires --output json."),
+        "Expected canonical hint in stderr, got: {stderr}"
+    );
+}
+
+/// AC-005 / BC-2.2.033 Edge Cases EC-2.2.033-4/EC-2.2.033-5: an empty
+/// (`""`), all-empty (`","`), or embedded-empty-segment (`"summary,,status"`)
+/// `--fields` CSV is rejected PRE-HTTP with exit 64 — an empty segment is
+/// REJECTED, not silently dropped — and issues zero HTTP calls.
+#[tokio::test]
+async fn issue_list_fields_empty_csv_exits_64_pre_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "issues": [], "nextPageToken": null
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let project_dir = tempfile::tempdir().unwrap();
+    std::fs::write(project_dir.path().join(".jr.toml"), "project = \"PROJ\"\n").unwrap();
+
+    for bad_csv in ["", ",", "summary,,status"] {
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .current_dir(project_dir.path())
+            .args(["issue", "list", "--fields", bad_csv, "--output", "json"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "--fields {bad_csv:?} should exit 64 pre-HTTP, got: {:?} (stderr: {stderr})",
+            output.status.code()
+        );
+    }
+}

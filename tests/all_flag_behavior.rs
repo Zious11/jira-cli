@@ -684,3 +684,82 @@ async fn issue_changelog_default_caps_at_thirty() {
         entries.len()
     );
 }
+
+// ── S-575-1: `--fields` × `--points` silent no-op (BC-2.2.033 EC-6) ────────
+
+/// AC-006 / BC-2.2.033 Edge Case EC-2.2.033-6 / Postcondition 4: `--fields`
+/// combined with `--points` makes `--points` a SILENT no-op — its
+/// `customfield_10031` extra-field injection must NOT appear in the
+/// `fields=` request (REPLACE semantics wins), and no warning is emitted.
+#[tokio::test]
+async fn issue_list_fields_points_flag_becomes_silent_noop() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    let conf_dir = config_dir.path().join("jr");
+    std::fs::create_dir_all(&conf_dir).unwrap();
+    std::fs::write(
+        conf_dir.join("config.toml"),
+        r#"
+default_profile = "default"
+
+[profiles.default]
+url = "https://acme.atlassian.net"
+story_points_field_id = "customfield_10031"
+"#,
+    )
+    .unwrap();
+
+    // The request's "fields" array must be EXACTLY ["summary", "status"] —
+    // if --points's customfield_10031 injection were still active, this
+    // exact-array matcher would not match and the request would fall
+    // through to wiremock's default 404, failing the test.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": ["summary", "status"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![serde_json::json!({
+                "key": "PROJ-3",
+                "fields": {
+                    "summary": "Points no-op",
+                    "status": {"name": "To Do"}
+                }
+            })]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", &conf_dir)
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--fields",
+            "summary,status",
+            "--points",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        !stderr.to_lowercase().contains("warn"),
+        "--points combined with --fields must be a SILENT no-op — no warning \
+         expected, got stderr: {stderr}"
+    );
+}
