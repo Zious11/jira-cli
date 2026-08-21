@@ -7,6 +7,7 @@ use crate::api::assets::linked::{
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
+use crate::error::JrError;
 use crate::output;
 use crate::types::assets::LinkedAsset;
 use crate::types::assets::linked::format_linked_assets;
@@ -25,12 +26,22 @@ pub(super) async fn handle_view(
         unreachable!()
     };
 
-    // S-575-1 STUB (Red Gate): `--fields <CSV>` pre-HTTP CSV validation +
-    // output-format gate + REPLACE-semantics request wiring
-    // (`get_issue_with_fields`) are not yet implemented. Traces to
-    // BC-2.3.041. Default behavior (fields == None) is untouched below.
-    if fields.is_some() {
-        todo!("S-575-1: issue view --fields validation + REPLACE-semantics wiring (BC-2.3.041)");
+    // S-575-1 (BC-2.3.041): `--fields <CSV>` output-format gate + pre-HTTP
+    // CSV validation, both HTTP-free, followed by an early-return
+    // REPLACE-semantics fetch that skips the cmdb-field fetch/asset
+    // enrichment below entirely (not merely renders it inert) — mirrors
+    // `handle_list`'s BC-2.2.033 Postcondition 4 no-op treatment for
+    // `--points`/`--assets`/`--duedate`. Default behavior (fields == None)
+    // is untouched below.
+    if let Some(csv) = &fields {
+        if !matches!(output_format, OutputFormat::Json) {
+            return Err(JrError::UserError("--fields requires --output json.".into()).into());
+        }
+        let field_list = helpers::parse_fields_csv(csv)?;
+        let field_refs: Vec<&str> = field_list.iter().map(String::as_str).collect();
+        let issue = client.get_issue_with_fields(&key, &field_refs).await?;
+        output::print_output(output_format, &[], &[], &issue)?;
+        return Ok(());
     }
 
     let active = config.active_profile();

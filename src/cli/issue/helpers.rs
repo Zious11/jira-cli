@@ -5,6 +5,29 @@ use crate::config::Config;
 use crate::error::JrError;
 use crate::types::jira::User;
 
+/// Parse and validate a `--fields <CSV>` argument (BC-2.2.033 Precondition 3
+/// / BC-2.3.041 Precondition 3, S-575-1).
+///
+/// Each comma-separated segment is whitespace-trimmed; at least one
+/// non-empty segment is required. An empty CSV (`""`), an all-comma CSV
+/// (`","`), or a CSV with an embedded empty segment (`"summary,,status"`)
+/// are all REJECTED (exit 64 via `JrError::UserError`) — an empty segment is
+/// never silently dropped. Pure, HTTP-free — callers must invoke this (and
+/// the output-format gate) before any network call.
+pub(super) fn parse_fields_csv(csv: &str) -> Result<Vec<String>, JrError> {
+    let mut fields = Vec::new();
+    for segment in csv.split(',') {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            return Err(JrError::UserError(
+                "--fields must be a comma-separated list of non-empty field names.".into(),
+            ));
+        }
+        fields.push(trimmed.to_string());
+    }
+    Ok(fields)
+}
+
 /// Detect Atlassian team UUID format: 36 chars, hex digits split into
 /// 8-4-4-4-12 groups by hyphens. Case-insensitive on hex.
 ///

@@ -86,13 +86,20 @@ pub(super) async fn handle_list(
         unreachable!()
     };
 
-    // S-575-1 STUB (Red Gate): `--fields <CSV>` pre-HTTP CSV validation +
-    // output-format gate + REPLACE-semantics request wiring
-    // (`search_issues_with_fields`) are not yet implemented. Traces to
-    // BC-2.2.033. Default behavior (fields == None) is untouched below.
-    if fields.is_some() {
-        todo!("S-575-1: issue list --fields validation + REPLACE-semantics wiring (BC-2.2.033)");
-    }
+    // S-575-1 (BC-2.2.033): `--fields <CSV>` output-format gate + pre-HTTP
+    // CSV validation. Both run before ANY network call (project resolution,
+    // component resolution, `project_exists`, the search itself) so a
+    // rejected combination costs zero HTTP requests. Default behavior
+    // (fields == None) is untouched below.
+    let field_list: Option<Vec<String>> = match &fields {
+        Some(csv) => {
+            if !matches!(output_format, OutputFormat::Json) {
+                return Err(JrError::UserError("--fields requires --output json.".into()).into());
+            }
+            Some(helpers::parse_fields_csv(csv)?)
+        }
+        None => None,
+    };
 
     // Resolve project key once, before any HTTP call. Moved up from its
     // original position (immediately before the `project_exists` check)
@@ -395,6 +402,44 @@ pub(super) async fn handle_list(
 
     let where_clause = all_parts.join(" AND ");
     let effective_jql = format!("{where_clause} ORDER BY {order_by}");
+
+    // S-575-1 (BC-2.2.033 Postcondition 1/4, human-locked DEC-298): when
+    // `--fields` is present it REPLACES BASE_ISSUE_FIELDS entirely — no
+    // union with `extra` (story points / team field ids), and `--points` /
+    // `--assets` / `--duedate` become silent no-ops by never reaching any of
+    // the cmdb-field-fetch, asset-enrichment, or column-rendering logic
+    // below (that logic is entirely skipped, not merely made inert).
+    if let Some(field_list) = &field_list {
+        let field_refs: Vec<&str> = field_list.iter().map(String::as_str).collect();
+        let search_result = client
+            .search_issues_with_fields(&effective_jql, effective_limit, &field_refs)
+            .await?;
+        let has_more = search_result.has_more;
+        let issues = search_result.issues;
+
+        output::print_output(output_format, &[], &[], &issues)?;
+
+        if has_more && !all {
+            let count_jql = crate::jql::strip_order_by(&effective_jql);
+            match client.approximate_count(count_jql).await {
+                Ok(total) if total > 0 => {
+                    eprintln!(
+                        "Showing {} of ~{} results. Use --limit or --all to see more.",
+                        issues.len(),
+                        total
+                    );
+                }
+                Ok(_) | Err(_) => {
+                    eprintln!(
+                        "Showing {} results. Use --limit or --all to see more.",
+                        issues.len()
+                    );
+                }
+            }
+        }
+
+        return Ok(());
+    }
 
     let cmdb_fields = if show_assets {
         if let Some(fields) = asset_cmdb_fields {

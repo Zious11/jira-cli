@@ -331,8 +331,72 @@ impl JiraClient {
         limit: Option<u32>,
         fields: &[&str],
     ) -> Result<SearchResult> {
-        let _ = (jql, limit, fields);
-        todo!("S-575-1: search_issues_with_fields — BC-2.2.033/BC-2.6.052 REPLACE-semantics fields= request")
+        let max_per_page = limit.unwrap_or(50).min(100);
+        let mut all_issues: Vec<Issue> = Vec::new();
+        let mut next_page_token: Option<String> = None;
+
+        let mut more_available = false;
+        let mut seen_keys: HashSet<String> = HashSet::new();
+        let mut prev_cursor: Option<String> = None;
+
+        loop {
+            let mut body = serde_json::json!({
+                "jql": jql,
+                "maxResults": max_per_page,
+                "fields": fields
+            });
+
+            if let Some(ref token) = next_page_token {
+                body["nextPageToken"] = serde_json::json!(token);
+            }
+
+            let page: CursorPage<Issue> = self.post("/rest/api/3/search/jql", &body).await?;
+
+            let page_has_more = page.has_more();
+            let next_cursor = page.next_page_token.clone();
+
+            for issue in page.issues {
+                if seen_keys.insert(issue.key.clone()) {
+                    all_issues.push(issue);
+                }
+            }
+
+            if let Some(max) = limit {
+                if all_issues.len() >= max as usize {
+                    more_available = all_issues.len() > max as usize || page_has_more;
+                    all_issues.truncate(max as usize);
+                    break;
+                }
+            }
+
+            if !page_has_more {
+                break;
+            }
+
+            // Anti-loop guard: same rationale as `search_issues` — see that
+            // method's rustdoc for the full JRACLOUD-95368 explanation.
+            if next_cursor.is_some() && next_cursor == prev_cursor {
+                eprintln!(
+                    "[jr] WARNING: Atlassian /rest/api/3/search/jql returned the same \
+                     nextPageToken twice — aborting pagination to prevent an infinite \
+                     loop. Some results may be missing. Likely cause: live data \
+                     mutation between page fetches (snapshot-instability, \
+                     JRACLOUD-95368). Mitigation: end your JQL with `key ASC` in the \
+                     ORDER BY (append `, key ASC` to an existing sort, or use \
+                     `ORDER BY key ASC` if none)."
+                );
+                more_available = true;
+                break;
+            }
+
+            prev_cursor = next_cursor.clone();
+            next_page_token = next_cursor;
+        }
+
+        Ok(SearchResult {
+            issues: all_issues,
+            has_more: more_available,
+        })
     }
 
     /// Search issues using JQL and return ONLY the matching issue keys.
@@ -509,8 +573,12 @@ impl JiraClient {
     /// STUB (S-575-1 Red Gate): body intentionally unimplemented pending
     /// TDD implementation. Traces to BC-2.3.041 / BC-2.6.052.
     pub async fn get_issue_with_fields(&self, key: &str, fields: &[&str]) -> Result<Issue> {
-        let _ = (key, fields);
-        todo!("S-575-1: get_issue_with_fields — BC-2.3.041/BC-2.6.052 REPLACE-semantics fields= request")
+        let path = format!(
+            "/rest/api/3/issue/{}?fields={}",
+            urlencoding::encode(key),
+            fields.join(",")
+        );
+        self.get(&path).await
     }
 
     /// Get the project key for an issue (P1-004, BC-3.9.003).
