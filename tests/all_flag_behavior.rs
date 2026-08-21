@@ -711,15 +711,19 @@ story_points_field_id = "customfield_10031"
     )
     .unwrap();
 
-    // The request's "fields" array must be EXACTLY ["summary", "status"] —
-    // if --points's customfield_10031 injection were still active, this
-    // exact-array matcher would not match and the request would fall
-    // through to wiremock's default 404, failing the test.
+    // `body_partial_json` is an INCLUSIVE array matcher (assert-json-diff)
+    // — it only checks that the listed elements are present, and ignores
+    // any trailing actual elements. That means it can NOT catch a future
+    // append-union regression (e.g. --points's customfield_10031 sneaking
+    // back onto the end of the array): `["summary","status","customfield_10031"]`
+    // would still satisfy a `body_partial_json` match against
+    // `["summary","status"]`. So the mock below matches on method+path only
+    // (any body succeeds); the EXACT full-array assertion — the one that
+    // actually guards BC-2.2.033 Postcondition 4 / DEC-298's REPLACE-not-UNION
+    // invariant — happens below via `server.received_requests()` +
+    // `assert_eq!` on the parsed `fields` array (F2, adversary review S-575-1).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .and(body_partial_json(serde_json::json!({
-            "fields": ["summary", "status"]
-        })))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::issue_search_response(vec![serde_json::json!({
                 "key": "PROJ-3",
@@ -761,5 +765,28 @@ story_points_field_id = "customfield_10031"
         !stderr.to_lowercase().contains("warn"),
         "--points combined with --fields must be a SILENT no-op — no warning \
          expected, got stderr: {stderr}"
+    );
+
+    // F2 (adversary review, S-575-1): assert the wire-level "fields" array is
+    // EXACTLY ["summary", "status"] — not merely a superset containing those
+    // two elements. `body_partial_json` above cannot detect a trailing
+    // append (e.g. --points's customfield_10031 re-injected at the end), so
+    // this is the sole guard of BC-2.2.033 Postcondition 4 / DEC-298's
+    // human-locked REPLACE-not-UNION invariant: a future regression that
+    // unions rather than replaces would leave the request-succeeds and
+    // no-warning assertions above untouched, but must fail here.
+    let requests = server.received_requests().await.expect("requests recorded");
+    let search_request = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("search POST must have been made");
+    let body: Value =
+        serde_json::from_slice(&search_request.body).expect("request body must be valid JSON");
+    assert_eq!(
+        body["fields"],
+        serde_json::json!(["summary", "status"]),
+        "fields array must be EXACTLY [\"summary\", \"status\"] (REPLACE semantics) \
+         with no --points customfield union-appended; got: {}",
+        body["fields"]
     );
 }
