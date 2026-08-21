@@ -943,3 +943,77 @@ async fn test_search_issues_with_fields_single_page_no_limit_terminates() {
     // second, unmocked request — which fails FAST via the up_to_n_times(1)
     // cap above instead of hanging for the full per-mutant timeout budget.
 }
+
+#[tokio::test]
+async fn test_search_issues_with_fields_two_page_pagination_terminates_at_terminal_page() {
+    let server = MockServer::start().await;
+
+    // Page 1 — has a nextPageToken (page_has_more == true): the loop MUST
+    // continue and fetch page 2. Matched on `jql` + `fields` (no
+    // `nextPageToken` key present in this request's body at all, since
+    // `next_page_token` starts as `None`).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "jql": "q",
+            "fields": ["summary", "status"]
+        })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_issues_response(
+                &["TEST-1", "TEST-2"],
+                Some("page-2-cursor"),
+            )),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2 — terminal (no nextPageToken, page_has_more == false): the loop
+    // MUST stop here. Matched on the specific cursor from page 1's response,
+    // ranked after the page-1 mock (FIFO tie-break) and only reachable once
+    // the page-1 mock's up_to_n_times(1) budget is exhausted.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "nextPageToken": "page-2-cursor",
+            "fields": ["summary", "status"]
+        })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_issues_response(&["TEST-3"], None)),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    // limit=None so the truncate-block (line 367) never fires, isolating the
+    // `!page_has_more` termination check at line 374 across BOTH of its
+    // values within one test: true on page 1 (must NOT break), false on
+    // page 2 (must break).
+    let result = client
+        .search_issues_with_fields("q", None, &["summary", "status"])
+        .await
+        .expect("must fetch exactly two pages and terminate at the terminal page");
+
+    assert_eq!(
+        result.issues.len(),
+        3,
+        "issues from both pages must be collected"
+    );
+    assert!(
+        !result.has_more,
+        "has_more must be false: the second page terminated pagination cleanly"
+    );
+    // Kills 374:16 (`delete !`) from BOTH directions, closing the timeout gap
+    // left open by the single-page test above:
+    // - Wrongly-EARLY break: under `if page_has_more { break }`, page 1
+    //   (page_has_more == true) would break immediately instead of
+    //   continuing — the page-2 mock's `expect(1)` goes unmet, failing the
+    //   test at verification instead of hanging.
+    // - Wrongly-LATE / no break: under the same mutant, page 2
+    //   (page_has_more == false) would NOT break — the loop attempts an
+    //   unmocked 3rd request, which fails FAST (no mock matches) rather
+    //   than spinning for the per-mutant timeout budget.
+}
