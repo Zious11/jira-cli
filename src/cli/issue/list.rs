@@ -1404,6 +1404,41 @@ mod tests {
         );
     }
 
+    /// VP-UPDATED-RECENT-001 / AC-005 (M1 gap fix): `--recent`, `--updated-recent`,
+    /// and `--asset` together compose clauses with `updated >= -{d}` positioned
+    /// IMMEDIATELY AFTER `created >= -{d}` (recent) and BEFORE the asset clause.
+    /// Verified via exact `Vec<String>` positional equality — NOT substring-index
+    /// comparison — per AC-005's mandated discipline (mirrors
+    /// `test_bc_2_1_007_build_filter_clauses_component_immediately_after_asset`'s
+    /// style, the existing precedent for this discipline in this module).
+    #[test]
+    fn test_bc_2_1_007_build_filter_clauses_updated_recent_immediately_after_recent_before_asset() {
+        let asset_clause = r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#;
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: Some("7d"),
+            updated_recent: Some("60d"),
+            open: false,
+            asset_clause: Some(asset_clause),
+            component_clauses: &[],
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
+        assert_eq!(
+            parts,
+            vec![
+                "created >= -7d".to_string(),
+                "updated >= -60d".to_string(),
+                asset_clause.to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn build_jql_parts_created_after_clause() {
         let parts = build_filter_clauses(FilterOptions {

@@ -11593,8 +11593,15 @@ async fn test_bc_2_1_023_issue_list_updated_recent_composes_freely_with_recent()
 /// AC-005 / BC-2.1.007 amendment (stable-order position): `--recent 7d
 /// --updated-recent 60d --asset CUST-5` composes clauses with
 /// `updated-recent` positioned immediately AFTER `recent` and BEFORE
-/// `asset` — verified via exact substring-index ordering (mirrors the
-/// S-606-1 AC-016 `Vec<String>`-positional discipline for clause order).
+/// `asset`. This end-to-end integration test verifies only RELATIVE order,
+/// via `jql.find()` substring-index comparison — a smoke check that the
+/// composed JQL string contains the clauses in the right relative order,
+/// not a positional guarantee. The authoritative `Vec<String>`
+/// positional-equality check (AC-005's mandated discipline) lives in the
+/// unit test
+/// `test_bc_2_1_007_build_filter_clauses_updated_recent_immediately_after_recent_before_asset`
+/// in `src/cli/issue/list.rs`, which asserts exact `Vec<String>` equality
+/// on `build_filter_clauses`'s output.
 #[tokio::test]
 async fn test_bc_2_1_007_issue_list_updated_recent_clause_ordering_after_recent_before_asset() {
     let server = MockServer::start().await;
