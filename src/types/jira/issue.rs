@@ -55,7 +55,7 @@ pub struct IssueLinkTypesResponse {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct IssueFields {
-    pub summary: String,
+    pub summary: Option<String>,
     pub description: Option<Value>,
     pub status: Option<Status>,
     #[serde(rename = "issuetype")]

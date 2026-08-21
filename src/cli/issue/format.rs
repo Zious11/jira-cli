@@ -87,7 +87,7 @@ pub fn format_issue_row(
     if let Some(linked) = assets {
         row.push(format_linked_assets_short(linked));
     }
-    row.push(issue.fields.summary.clone());
+    row.push(issue.fields.summary.clone().unwrap_or_default());
     row
 }
 

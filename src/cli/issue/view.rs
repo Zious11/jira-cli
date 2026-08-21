@@ -109,7 +109,10 @@ pub(super) async fn handle_view(
 
             let mut rows = vec![
                 vec!["Key".into(), issue.key.clone()],
-                vec!["Summary".into(), issue.fields.summary.clone()],
+                vec![
+                    "Summary".into(),
+                    issue.fields.summary.clone().unwrap_or_default(),
+                ],
                 vec![
                     "Type".into(),
                     issue

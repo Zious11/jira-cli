@@ -11254,3 +11254,112 @@ async fn test_get_issue_with_fields_url_encodes_special_characters_in_field_name
         .expect("request must carry a `fields` query parameter");
     assert_eq!(fields_query, "summary,field&name,with space");
 }
+
+/// Adversary Pass 5 regression: `IssueFields.summary` was the only
+/// non-`Option` typed field on `IssueFields` — every sibling is
+/// `Option<...>`. Under REPLACE semantics a `--fields` CSV that omits
+/// `summary` (e.g. `--fields status`) makes Jira's response `.fields` omit
+/// the `summary` key entirely, which previously failed deserialization with
+/// `missing field \`summary\`` and errored the command instead of returning
+/// the requested projection. `summary` is now `Option<String>` like every
+/// other named field; this pins `jr issue list --fields status` succeeding
+/// with `summary` absent/null in the mocked response.
+#[tokio::test]
+async fn test_issue_list_fields_omitting_summary_does_not_error() {
+    let server = MockServer::start().await;
+
+    // Reproduces live Jira: the `fields` array requested is `["status"]`
+    // only, so the mocked `.fields` response object OMITS `summary`
+    // entirely — this is the exact shape that previously broke
+    // deserialization.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![serde_json::json!({
+                "key": "PROJ-11",
+                "fields": {
+                    "status": {"name": "To Do"}
+                }
+            })]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--fields",
+            "status",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "issue list --fields status (summary omitted from the CSV and from \
+         Jira's response) must not error, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    assert_eq!(parsed[0]["key"], "PROJ-11");
+    assert_eq!(parsed[0]["fields"]["status"]["name"], "To Do");
+    assert!(
+        parsed[0]["fields"]["summary"].is_null(),
+        "summary must serialize as null when omitted from the --fields CSV, got: {}",
+        parsed[0]
+    );
+}
+
+/// View-path twin of `test_issue_list_fields_omitting_summary_does_not_error`
+/// — `jr issue view <KEY> --fields status` must not error when Jira's
+/// response `.fields` omits `summary`.
+#[tokio::test]
+async fn test_issue_view_fields_omitting_summary_does_not_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-12"))
+        .and(query_param("fields", "status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-12",
+            "fields": {
+                "status": {"name": "In Progress"}
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue", "view", "PROJ-12", "--fields", "status", "--output", "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "issue view --fields status (summary omitted from the CSV and from \
+         Jira's response) must not error, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    assert_eq!(parsed["key"], "PROJ-12");
+    assert_eq!(parsed["fields"]["status"]["name"], "In Progress");
+    assert!(
+        parsed["fields"]["summary"].is_null(),
+        "summary must serialize as null when omitted from the --fields CSV, got: {parsed}"
+    );
+}

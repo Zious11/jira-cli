@@ -367,7 +367,7 @@ mod tests {
         Issue {
             key: key.to_string(),
             fields: IssueFields {
-                summary: "test".to_string(),
+                summary: Some("test".to_string()),
                 status: Some(Status {
                     name: "status".to_string(),
                     status_category: Some(StatusCategory {
