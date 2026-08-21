@@ -70,6 +70,7 @@ pub(super) async fn handle_list(
         assignee,
         reporter,
         recent,
+        updated_recent,
         open,
         points: show_points,
         assets: show_assets,
@@ -127,6 +128,15 @@ pub(super) async fn handle_list(
     // Validate --recent duration format early
     if let Some(ref d) = recent {
         crate::jql::validate_duration(d).map_err(JrError::UserError)?;
+    }
+
+    // S-579-1 (BC-2.1.023): --updated-recent duration filter, the `updated`
+    // field parallel to --recent (`created`). STUB — Red Gate placeholder;
+    // real behavior (validate_duration + `updated >= -<dur>` JQL clause,
+    // ordered immediately after `recent` and before `asset` per BC-2.1.007)
+    // is implemented in a follow-up commit.
+    if updated_recent.is_some() {
+        todo!("S-579-1: --updated-recent")
     }
 
     // Validate date filter flags early (before any network calls)
