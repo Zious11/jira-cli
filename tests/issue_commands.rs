@@ -12241,3 +12241,409 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_jql_does_not_trip_no_fil
 
     pr1_assert_guard_not_tripped(&output, "--jql \"project = FOO\"");
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// S-588-1: `jr issue list --sort <field>:asc|desc` (BC-2.1.024/BC-2.1.025)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Red Gate for S-588-1. `parse_sort`/`compose_order_by_with_sort`
+// (`src/cli/issue/list.rs`) are `todo!()` stubs at the time these tests are
+// written -- every `--sort`-bearing test below currently panics rather than
+// asserting a real mismatch. Reuses the `s606_1_*` harness helpers (mock
+// server + isolated cache/config dirs + composed-JQL capture) established by
+// S-606-1's `--component` test suite above, and the `.jr.toml board_id`
+// board-scoped pattern established by S-579-1's tests
+// (`test_bc_2_1_023_issue_list_updated_recent_with_configured_board_falls_through_to_sprint_scope`).
+
+/// AC-001 / BC-2.1.025 Edge Case EC-2.1.025-1: `--sort updated:desc` on the
+/// default-project branch composes `order_by = "updated DESC, key ASC"` --
+/// exact-string equality on the full composed JQL, not substring containment.
+#[tokio::test]
+async fn test_bc_2_1_025_issue_list_sort_composes_secondary_key_asc() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--sort",
+            "updated:desc",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert_eq!(
+        jql, "project = \"FOO\" ORDER BY updated DESC, key ASC",
+        "AC-001: --sort updated:desc must compose order_by = \"updated DESC, \
+         key ASC\", got: {jql}"
+    );
+}
+
+/// AC-002 / BC-2.1.025 Postcondition 2 / EC-2.1.025-2: `--sort key:asc`
+/// composes `order_by = "key ASC"` with NO redundant secondary `key ASC`
+/// clause appended.
+#[tokio::test]
+async fn test_bc_2_1_025_issue_list_sort_key_field_omits_secondary_clause() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--sort",
+            "key:asc",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert_eq!(
+        jql, "project = \"FOO\" ORDER BY key ASC",
+        "AC-002: --sort key:asc must compose order_by = \"key ASC\" with no \
+         redundant secondary clause, got: {jql}"
+    );
+}
+
+/// AC-003 / BC-2.1.024 postcondition 1: `--sort key:ASC` and `--sort
+/// key:AsC` parse identically to `--sort key:asc` -- case-insensitive
+/// direction matching.
+#[tokio::test]
+async fn test_bc_2_1_024_issue_list_sort_direction_case_insensitive() {
+    for value in ["key:ASC", "key:AsC", "key:asc"] {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+
+        s606_1_mock_project_exists(&server, "FOO").await;
+        s606_1_mock_search_empty(&server).await;
+
+        let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+            .args([
+                "--no-input",
+                "issue",
+                "list",
+                "--project",
+                "FOO",
+                "--sort",
+                value,
+            ])
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "--sort {value:?}: stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let jql = s606_1_composed_jql(&server).await;
+        assert_eq!(
+            jql, "project = \"FOO\" ORDER BY key ASC",
+            "AC-003: --sort {value:?} must parse identically to --sort \
+             key:asc, got: {jql}"
+        );
+    }
+}
+
+/// AC-005 / BC-2.1.025 Postcondition 3: `--sort` overrides the `--jql`
+/// branch's own default too -- both the hardcoded `"updated DESC"`
+/// replacement AND the user's own embedded `--jql` `ORDER BY` (already
+/// unconditionally stripped/replaced per BC-2.1.002 regardless of `--sort`).
+#[tokio::test]
+async fn test_bc_2_1_025_issue_list_sort_overrides_jql_branch_default() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--jql",
+            "project = FOO ORDER BY rank ASC",
+            "--sort",
+            "updated:desc",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert_eq!(
+        jql, "(project = FOO) ORDER BY updated DESC, key ASC",
+        "AC-005: --sort must override both the --jql branch's hardcoded \
+         \"updated DESC\" default and the user's own embedded --jql ORDER BY \
+         (independently stripped per BC-2.1.002), got: {jql}"
+    );
+}
+
+/// AC-006 / BC-2.1.025 Postcondition 4 / EC-2.1.025-4: `--sort rank:asc` on
+/// a kanban board (whose default `order_by` is `"rank ASC"` when `--sort` is
+/// absent, BC-2.1.004) overrides to `order_by = "rank ASC, key ASC"` -- NOT
+/// collapsed to the bare board default, since the `key`-omission rule is
+/// scoped to the literal field name `key`, not to a branch's own default
+/// sort field.
+#[tokio::test]
+async fn test_bc_2_1_025_issue_list_sort_overrides_kanban_board_rank_default() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let project_dir = tempfile::tempdir().unwrap();
+
+    // .jr.toml with both a default project and a kanban board_id.
+    std::fs::write(
+        project_dir.path().join(".jr.toml"),
+        "project = \"FOO\"\nboard_id = 42\n",
+    )
+    .unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("kanban")),
+        )
+        .mount(&server)
+        .await;
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .current_dir(project_dir.path())
+        .args(["--no-input", "issue", "list", "--sort", "rank:asc"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert_eq!(
+        jql, "project = \"FOO\" AND statusCategory != Done ORDER BY rank ASC, key ASC",
+        "AC-006: --sort rank:asc on a kanban board must override the board \
+         rank ASC default AND still append the key ASC secondary sort, got: {jql}"
+    );
+}
+
+/// BC-2.1.025 Postcondition 4 (scrum leg): `--sort` overrides the
+/// scrum-active-sprint branch's board-driven `"rank ASC"` default too --
+/// applied UNIFORMLY across both board branches (DEC-298 "always wins"), not
+/// merely the kanban leg covered by AC-006.
+#[tokio::test]
+async fn test_bc_2_1_025_issue_list_sort_overrides_scrum_active_sprint_rank_default() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let project_dir = tempfile::tempdir().unwrap();
+
+    // .jr.toml with ONLY board_id set -- no `project` key (mirrors S-579-1's
+    // scrum-board pattern).
+    std::fs::write(project_dir.path().join(".jr.toml"), "board_id = 42\n").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("scrum")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/sprint"))
+        .and(query_param("state", "active"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::sprint_list_response(vec![common::fixtures::sprint(
+                100, "Sprint 1", "active",
+            )]),
+        ))
+        .mount(&server)
+        .await;
+
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .current_dir(project_dir.path())
+        .args(["--no-input", "issue", "list", "--sort", "updated:desc"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert_eq!(
+        jql, "sprint = 100 ORDER BY updated DESC, key ASC",
+        "BC-2.1.025 Postcondition 4: --sort must override the \
+         scrum-active-sprint branch's board-driven rank ASC default too, \
+         got: {jql}"
+    );
+}
+
+/// Composes with filters: `--sort` combined with `--project`/`--assignee`
+/// puts the filter clause in the WHERE and the sort + key ASC secondary in
+/// the ORDER BY, without disturbing `build_filter_clauses`' output
+/// (BC-2.1.025 Postcondition 5 -- `--sort` does not push its own filter
+/// clause).
+#[tokio::test]
+async fn test_bc_2_1_025_issue_list_sort_composes_with_filters() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--assignee",
+            "me",
+            "--sort",
+            "updated:desc",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert_eq!(
+        jql, "project = \"FOO\" AND assignee = currentUser() ORDER BY updated DESC, key ASC",
+        "--sort must compose with existing filter clauses: WHERE carries the \
+         filter, ORDER BY carries the sort + key ASC secondary, got: {jql}"
+    );
+}
+
+/// AC-009 / BC-2.1.025 Postcondition 5 / BC-2.1.006 Note: `--sort` is NOT a
+/// member of BC-2.1.006's "no filters specified" filter-source enumeration
+/// -- `jr issue list --sort updated:desc` with no project/filters/`--jql`
+/// still exits 64 via the SAME guard a completely bare invocation hits.
+#[tokio::test]
+async fn test_bc_2_1_006_issue_list_sort_alone_does_not_satisfy_filter_requirement() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "list", "--sort", "updated:desc"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "AC-009: --sort alone with no project/filters must still fail the \
+         no-filters guard, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-009: expected exit 64 (UserError) from BC-2.1.006's no-filters \
+         guard, got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("No project or filters specified"),
+        "AC-009: --sort must NOT be treated as a filter source -- expected \
+         the canonical no-filters-specified message, got: {stderr}"
+    );
+}
+
+/// AC-010 / BC-2.1.025 Edge Case EC-2.1.025-3: `--sort KEY:desc` (a
+/// case-variant field name matching `key`) still triggers the secondary-sort
+/// omission (case-insensitive match on the FIELD name for that check only),
+/// but the field's OWN casing is passed through verbatim -- `order_by =
+/// "KEY DESC"`, not lowercased.
+#[tokio::test]
+async fn test_bc_2_1_025_issue_list_sort_key_omission_case_insensitive_field_casing_preserved() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--sort",
+            "KEY:desc",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert_eq!(
+        jql, "project = \"FOO\" ORDER BY KEY DESC",
+        "AC-010: the omission check must match \"KEY\" against \"key\" \
+         case-insensitively (no secondary clause), but the field's OWN \
+         casing must be preserved verbatim (not lowercased), got: {jql}"
+    );
+}
