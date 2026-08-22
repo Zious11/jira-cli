@@ -370,6 +370,15 @@ pub enum IssueCommand {
         /// pre-HTTP. See BC-2.2.033.
         #[arg(long)]
         fields: Option<String>,
+        /// Sort results by a field (e.g. "updated:desc", "key:asc"). Overrides
+        /// the default/board-driven ordering in every JQL composition branch
+        /// (including `--jql`'s own ORDER BY and scrum/kanban board rank
+        /// ordering); appends `, key ASC` as a stable secondary sort unless
+        /// the field is `key` itself. Field name is passed through to Jira
+        /// unvalidated -- the same trust posture as `--jql`. See BC-2.1.024
+        /// and BC-2.1.025.
+        #[arg(long)]
+        sort: Option<String>,
     },
     /// Create a new issue
     Create {

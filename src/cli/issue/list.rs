@@ -56,6 +56,47 @@ fn extract_unique_status_names(issue_types: &[IssueTypeWithStatuses]) -> Vec<Str
 /// raised on drift between the message text and any guard's conjunction.
 const NO_FILTERS_SPECIFIED_MSG: &str = "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --created-after, --created-before, --updated-after, --updated-before, --asset, --component, --updated-recent, or --jql. You can also set a default project in .jr.toml or run \"jr init\".";
 
+/// Sort direction for `--sort <field>:<direction>` (BC-2.1.024 postcondition 1).
+///
+/// STUB (S-588-1): scaffolding only -- construction sites are not yet wired
+/// up. Real parsing/validation lands under strict TDD (Red Gate).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SortDirection {
+    Asc,
+    Desc,
+}
+
+/// Parsed `--sort <field>:<direction>` value (BC-2.1.024 postcondition 1):
+/// `field` is preserved VERBATIM (original casing, no trimming beyond the
+/// split); `direction` is normalized to `Asc`/`Desc`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SortSpec {
+    pub(super) field: String,
+    pub(super) direction: SortDirection,
+}
+
+/// Parse and validate `--sort <field>:asc|desc` per BC-2.1.024.
+///
+/// STUB (S-588-1): unimplemented. Always panics via `todo!()` -- any
+/// `--sort` value currently causes `jr issue list --sort ...` to panic
+/// rather than parse. Implementation (split on first `:`, case-insensitive
+/// direction match, exit-64 `JrError::UserError` on malformed input) lands
+/// under strict TDD once the Red Gate (failing tests) is verified.
+fn parse_sort(_raw: &str) -> Result<SortSpec, JrError> {
+    todo!("S-588-1 BC-2.1.024: --sort <field>:asc|desc syntax parse/validate not yet implemented")
+}
+
+/// Compose the `order_by` JQL fragment for an overriding `--sort` value per
+/// BC-2.1.025: `"<FIELD> <DIR>, key ASC"`, except when `field` matches `key`
+/// case-insensitively, where the secondary sort is omitted.
+///
+/// STUB (S-588-1): unimplemented. Always panics via `todo!()`.
+fn compose_order_by_with_sort(_spec: &SortSpec) -> String {
+    todo!(
+        "S-588-1 BC-2.1.025: --sort order_by override/secondary-sort composition not yet implemented"
+    )
+}
+
 /// Build base JQL parts when `--jql` is provided.
 ///
 /// Returns `(base_parts, order_by)`. Strips any trailing `ORDER BY` clause
@@ -103,6 +144,7 @@ pub(super) async fn handle_list(
         updated_after,
         updated_before,
         fields,
+        sort,
     } = command
     else {
         unreachable!()
@@ -471,6 +513,26 @@ pub(super) async fn handle_list(
             }
             (parts, "updated DESC")
         }
+    };
+
+    // S-588-1 (BC-2.1.025): `--sort`, when present, OVERRIDES the `order_by`
+    // value computed by every branch above -- `--jql`, scrum-active-sprint,
+    // kanban, and default-project alike -- uniformly, including the
+    // board-driven `rank ASC` defaults (DEC-298 "always wins"). Absent
+    // `--sort`, `order_by` is byte-for-byte unchanged from the branches
+    // above (BC-2.1.002/003/004/005's pinned default literals).
+    //
+    // STUB (S-588-1): `parse_sort`/`compose_order_by_with_sort` are
+    // unimplemented and panic via `todo!()` -- any `--sort` value currently
+    // panics rather than overriding `order_by`. The absent-flag path below
+    // (`order_by.to_string()`) is untouched and preserves existing
+    // BC-2.1.002/003/004/005 pinned-literal behavior exactly.
+    let order_by: String = match sort {
+        Some(ref raw_sort) => {
+            let spec = parse_sort(raw_sort)?;
+            compose_order_by_with_sort(&spec)
+        }
+        None => order_by.to_string(),
     };
 
     // S-579-1 pr-review cycle 1 Finding 1 (EC-2.1.023-4 backstop): closes the
