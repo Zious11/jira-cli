@@ -619,6 +619,17 @@ pub(super) async fn handle_list(
     // `--assets` / `--duedate` become silent no-ops by never reaching any of
     // the cmdb-field-fetch, asset-enrichment, or column-rendering logic
     // below (that logic is entirely skipped, not merely made inert).
+    //
+    // DEFENSIVE (S-584-1, BC-2.2.034 Edge Case EC-2.2.034-3): an unnamed
+    // `--fields` request (e.g. `comment`) is not a named field on
+    // `IssueFields` — it lands in `IssueFields.extra`'s `#[serde(flatten)]`
+    // catch-all and is serialized to JSON below via `output::print_output`
+    // with ZERO transformation, i.e. raw ADF for `comment.comments[].body`.
+    // Do NOT post-process `extra` here (e.g. to run `comment` bodies through
+    // `adf::adf_to_text` for consistency with the `issue comments` command's
+    // flattened rendering) — that is explicitly OUT OF SCOPE and would
+    // violate BC-2.2.034 Postcondition 3 (raw ADF must be preserved
+    // byte-for-byte on this JSON output path). See also BC-2.3.042.
     if let Some(field_list) = &field_list {
         let field_refs: Vec<&str> = field_list.iter().map(String::as_str).collect();
         let search_result = client
