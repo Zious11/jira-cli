@@ -11826,12 +11826,15 @@ async fn test_issue_list_fields_and_sort_compose_end_to_end() {
 // (BC-2.1.023, amended BC-2.1.006/BC-2.1.007)
 // ═══════════════════════════════════════════════════════════════════════
 //
-// Red Gate: `--updated-recent` is a compilable stub in
-// `src/cli/issue/list.rs::handle_list` — `if updated_recent.is_some() {
-// todo!("S-579-1: --updated-recent") }` — so every test below MUST fail
-// today (panic/exit 101, or an assertion mismatch against the pre-amendment
+// Red Gate history: this block was authored RED-first during S-579-1 --
+// `--updated-recent` started as a compilable stub in
+// `src/cli/issue/list.rs::handle_list` (`if updated_recent.is_some() {
+// todo!("S-579-1: --updated-recent") }`), so every test below failed
+// (panic/exit 101, or an assertion mismatch against the pre-amendment
 // 14-source stderr enumeration) until the real clause-composition logic
-// lands. Reuses the S-606-1 harness helpers (`s606_1_cmd`,
+// landed. The stub has since been implemented, and, per DEC-306/FIX-F5-LRE-1,
+// the alone-case now proceeds rather than exiting 64 (see AC-007 below) --
+// every test in this block passes today. Reuses the S-606-1 harness helpers (`s606_1_cmd`,
 // `s606_1_mock_project_exists`, `s606_1_mock_search_empty`,
 // `s606_1_composed_jql`, `s606_1_expect_zero_http`) defined above in this
 // same file — same isolated-cache/config pattern, same
@@ -11981,8 +11984,8 @@ async fn test_bc_2_1_023_issue_list_updated_recent_conflicts_with_updated_after_
 
     // (b) --updated-recent + --updated-before -> NO conflict, composes both
     // clauses successfully (exit 0). This is the half that exercises the
-    // still-`todo!()`'d clause-composition logic and so is the part that
-    // fails Red Gate today. Its own MockServer, distinct from (a)'s.
+    // clause-composition logic (Red Gate-authored during S-579-1, since
+    // implemented). Its own MockServer, distinct from (a)'s.
     let server_no_conflict = MockServer::start().await;
     let cache_dir2 = tempfile::tempdir().unwrap();
     let config_dir2 = tempfile::tempdir().unwrap();
