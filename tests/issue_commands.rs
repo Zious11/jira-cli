@@ -11365,6 +11365,368 @@ async fn test_issue_view_fields_omitting_summary_does_not_error() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// S-584-1: Preserve raw ADF for `--fields comment`
+// (BC-2.2.034, BC-2.3.042)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// CONFIRMATORY story -- the raw-ADF-passthrough behavior already exists via
+// `IssueFields.extra`'s `#[serde(flatten)]` catch-all (S-575-1's `--fields`
+// REPLACE-semantics mechanism, BC-2.2.033/BC-2.3.041). These 4 tests are
+// expected to pass GREEN immediately with zero src/ changes -- there is no
+// fail-first Red Gate for this story, unlike most stories in this file. If
+// any of these 4 tests were to go RED, that would mean a real behavioral
+// gap exists and the story is no longer purely confirmatory.
+//
+// AC-001/AC-002 assert raw-ADF deep-equality on `issue list`/`issue view
+// --fields comment --output json`. AC-003/AC-004 are negative regression
+// tests confirming the two *other* pre-existing `adf_to_text` call sites
+// (`issue comments`, and `issue view`'s table-mode description row) remain
+// fully independent and unaffected by the new `--fields comment` path.
+
+/// A non-trivial ADF comment body -- a paragraph containing a `strong`-marked
+/// text run, followed by a two-item bullet list -- used as the canonical
+/// fixture across AC-001/AC-002/AC-003 so the raw-ADF deep-equality
+/// assertions (AC-001/AC-002) and the flattened-plain-text assertion
+/// (AC-003) are checking the SAME underlying content through the two
+/// independent code paths (`extra` passthrough vs. `adf_to_text`).
+fn s584_1_fixture_comment_adf() -> serde_json::Value {
+    serde_json::json!({
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "Testing "},
+                    {"type": "text", "text": "STRONGWORD", "marks": [{"type": "strong"}]},
+                    {"type": "text", "text": " marker."}
+                ]
+            },
+            {
+                "type": "bulletList",
+                "content": [
+                    {
+                        "type": "listItem",
+                        "content": [
+                            {"type": "paragraph", "content": [{"type": "text", "text": "AlphaItem"}]}
+                        ]
+                    },
+                    {
+                        "type": "listItem",
+                        "content": [
+                            {"type": "paragraph", "content": [{"type": "text", "text": "BetaItem"}]}
+                        ]
+                    }
+                ]
+            }
+        ]
+    })
+}
+
+/// AC-001 / BC-2.2.034 Postcondition 1: `jr issue list --fields comment
+/// --output json` returns `.fields.comment.comments[].body` as the raw ADF
+/// object Jira returned -- deep-equal to the fixture's non-trivial ADF,
+/// never a flattened plain-text string.
+#[tokio::test]
+async fn test_bc_2_2_034_issue_list_fields_comment_returns_raw_adf() {
+    let server = MockServer::start().await;
+    let adf = s584_1_fixture_comment_adf();
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![serde_json::json!({
+                "key": "PROJ-584",
+                "fields": {
+                    "summary": "Raw ADF comment fixture",
+                    "comment": {
+                        "comments": [
+                            {
+                                "id": "20001",
+                                "author": {
+                                    "accountId": "abc",
+                                    "displayName": "Alice",
+                                    "active": true
+                                },
+                                "body": adf,
+                                "created": "2026-08-21T10:00:00.000+0000"
+                            }
+                        ]
+                    }
+                }
+            })]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--fields",
+            "summary,comment",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    let body = parsed[0]["fields"]["comment"]["comments"][0]["body"].clone();
+    assert_eq!(
+        body,
+        s584_1_fixture_comment_adf(),
+        "AC-001: .fields.comment.comments[].body must deep-equal the raw ADF \
+         fixture, never a flattened string -- got: {body}"
+    );
+    assert_eq!(
+        body["type"], "doc",
+        "AC-001: body must be a raw ADF object with type=doc, got: {body}"
+    );
+}
+
+/// AC-002 / BC-2.3.042 Postcondition 1: `jr issue view <KEY> --fields
+/// comment --output json` returns `.fields.comment.comments[].body` as the
+/// same raw ADF object, via the same fixture -- the `issue view` twin of
+/// AC-001.
+#[tokio::test]
+async fn test_bc_2_3_042_issue_view_fields_comment_returns_raw_adf() {
+    let server = MockServer::start().await;
+    let adf = s584_1_fixture_comment_adf();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-584"))
+        .and(query_param("fields", "summary,comment"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-584",
+            "fields": {
+                "summary": "Raw ADF comment fixture",
+                "comment": {
+                    "comments": [
+                        {
+                            "id": "20001",
+                            "author": {
+                                "accountId": "abc",
+                                "displayName": "Alice",
+                                "active": true
+                            },
+                            "body": adf,
+                            "created": "2026-08-21T10:00:00.000+0000"
+                        }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "view",
+            "PROJ-584",
+            "--fields",
+            "summary,comment",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    let body = parsed["fields"]["comment"]["comments"][0]["body"].clone();
+    assert_eq!(
+        body,
+        s584_1_fixture_comment_adf(),
+        "AC-002: .fields.comment.comments[].body must deep-equal the raw ADF \
+         fixture, never a flattened string -- got: {body}"
+    );
+    assert_eq!(
+        body["type"], "doc",
+        "AC-002: body must be a raw ADF object with type=doc, got: {body}"
+    );
+}
+
+/// AC-003 / BC-2.2.034 Postcondition 2: `jr issue comments <KEY>` -- the
+/// PRE-EXISTING, unrelated command -- run against the SAME fixture issue
+/// still renders plain text via `adf::adf_to_text`, confirming the new
+/// `--fields comment` raw-ADF path (AC-001) and the pre-existing `issue
+/// comments` flattening path do not regress each other. Negative
+/// regression test: if `issue comments` output ever contained raw ADF
+/// (e.g. because a future maintainer wired `extra`-passthrough into it, or
+/// vice versa), this test would fail.
+#[tokio::test]
+async fn test_bc_2_2_034_issue_comments_command_unaffected_by_fields_comment_path() {
+    let server = MockServer::start().await;
+    let adf = s584_1_fixture_comment_adf();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-584/comment"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "comments": [
+                {
+                    "id": "20001",
+                    "author": {
+                        "accountId": "abc",
+                        "displayName": "Alice",
+                        "active": true
+                    },
+                    "body": adf,
+                    "created": "2026-08-21T10:00:00.000+0000"
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 100,
+            "total": 1
+        })))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "issue", "comments", "PROJ-584"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("STRONGWORD")
+            && stdout.contains("AlphaItem")
+            && stdout.contains("BetaItem"),
+        "AC-003: issue comments must still flatten the ADF body to plain \
+         text via adf_to_text, unaffected by the --fields comment raw-ADF \
+         path (AC-001) -- stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("\"type\":") && !stdout.contains("\"type\" :"),
+        "AC-003: issue comments output must never contain raw ADF JSON -- \
+         stdout:\n{stdout}"
+    );
+}
+
+/// AC-004 / BC-2.3.042 Postcondition 2 & Edge Case EC-2.3.042-2: `issue
+/// view`'s table-mode description row (the one existing `adf_to_text` call
+/// site inside `view.rs::handle_view`) is unaffected by this story.
+/// `--fields` is JSON-only (BC-2.3.041 Precondition 2), so combining
+/// `--fields comment` with default (table) output never reaches that code
+/// path at all -- it exits 64 pre-HTTP instead. Separately, a plain `issue
+/// view` (no `--fields`) confirms the table-mode description-row
+/// `adf_to_text` call site itself is still intact and functioning.
+#[tokio::test]
+async fn test_bc_2_3_042_view_table_mode_description_render_unaffected() {
+    let server = MockServer::start().await;
+
+    // Part 1: `--fields comment` without `--output json` (default table
+    // mode) must exit 64 PRE-HTTP -- the table-mode description-row code
+    // path is never reached in this combination.
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "issue",
+            "view",
+            "PROJ-584",
+            "--fields",
+            "summary,comment",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-004 part 1: --fields without --output json must exit 64, \
+         stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests recorded")
+            .is_empty(),
+        "AC-004 part 1: --fields + table-mode rejection must be pre-HTTP -- \
+         zero requests expected"
+    );
+
+    // Part 2: the table-mode description row's `adf_to_text` call site is
+    // untouched -- a plain `issue view` (no `--fields`) still flattens a
+    // description ADF to plain text.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-585"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ-585",
+            "fields": {
+                "summary": "Table mode description check",
+                "status": {"name": "To Do"},
+                "description": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": "PLAINDESC"}]
+                        }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output2 = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "issue", "view", "PROJ-585"])
+        .output()
+        .unwrap();
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    assert!(
+        output2.status.success(),
+        "AC-004 part 2: stderr: {}",
+        String::from_utf8_lossy(&output2.stderr)
+    );
+    assert!(
+        stdout2.contains("PLAINDESC"),
+        "AC-004 part 2: table-mode description row must still flatten the \
+         description ADF via adf_to_text -- stdout:\n{stdout2}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // S-579-1: `jr issue list --updated-recent <duration>` filter
 // (BC-2.1.023, amended BC-2.1.006/BC-2.1.007)
 // ═══════════════════════════════════════════════════════════════════════
