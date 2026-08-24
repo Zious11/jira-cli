@@ -55,10 +55,14 @@ fn extract_unique_status_names(issue_types: &[IssueTypeWithStatuses]) -> Vec<Str
 /// sources that refused (exit 64) when used alone; it now proceeds to a
 /// query exactly like every other filter source, including cross-project.
 ///
-/// Adding a 16th filter flag to `IssueCommand::List` requires updating this
-/// message's enumerated list AND the guard's conjunction above. Nothing
+/// Adding a 16th filter flag to `IssueCommand::List` requires keeping two
+/// things in sync: (a) this message's enumerated list, and (b)
+/// `build_filter_clauses`, which must emit the new flag's JQL clause into
+/// `all_parts` -- only then does the flag actually contribute to, and
+/// satisfy, the terminal `all_parts.is_empty()` guard above. Nothing
 /// currently enforces this mechanically -- no compile error is raised on
-/// drift between the message text and the guard's conjunction.
+/// drift between the message text and `build_filter_clauses`'s clause
+/// emission.
 const NO_FILTERS_SPECIFIED_MSG: &str = "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --created-after, --created-before, --updated-after, --updated-before, --asset, --component, --updated-recent, or --jql. You can also set a default project in .jr.toml or run \"jr init\".";
 
 /// Sort direction for `--sort <field>:<direction>` (BC-2.1.024 postcondition 1).
