@@ -42,9 +42,10 @@ pub(super) async fn handle_view(
     // `comment.comments[].body`. Do NOT post-process `extra` here (e.g. to
     // run `comment` bodies through `adf::adf_to_text` for consistency with
     // the `issue comments` command's flattened rendering) — that is
-    // explicitly OUT OF SCOPE and would violate BC-2.3.042 Postcondition 3
-    // (raw ADF must be preserved byte-for-byte on this JSON output path).
-    // See also BC-2.2.034.
+    // explicitly OUT OF SCOPE and would violate BC-2.3.042 Postcondition 1
+    // (raw ADF preserved byte-for-byte, mirroring BC-2.2.034 Postcondition 1)
+    // and Postcondition 3 (zero incremental transformation code, mirroring
+    // BC-2.2.034 Postcondition 3). See also BC-2.2.034.
     if let Some(csv) = &fields {
         if !matches!(output_format, OutputFormat::Json) {
             return Err(JrError::UserError("--fields requires --output json.".into()).into());

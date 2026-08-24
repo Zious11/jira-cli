@@ -628,8 +628,9 @@ pub(super) async fn handle_list(
     // Do NOT post-process `extra` here (e.g. to run `comment` bodies through
     // `adf::adf_to_text` for consistency with the `issue comments` command's
     // flattened rendering) — that is explicitly OUT OF SCOPE and would
-    // violate BC-2.2.034 Postcondition 3 (raw ADF must be preserved
-    // byte-for-byte on this JSON output path). See also BC-2.3.042.
+    // violate BC-2.2.034 Postcondition 1 (raw ADF preserved byte-for-byte)
+    // and Postcondition 3 (zero incremental transformation code). See also
+    // BC-2.3.042.
     if let Some(field_list) = &field_list {
         let field_refs: Vec<&str> = field_list.iter().map(String::as_str).collect();
         let search_result = client
