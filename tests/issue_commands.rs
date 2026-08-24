@@ -11726,6 +11726,101 @@ async fn test_bc_2_3_042_view_table_mode_description_render_unaffected() {
     );
 }
 
+/// ADV-LRE-F5-C-LOW-002 (Lens C cross-story combined-flag integration test):
+/// `jr issue list --jql "<scope>" --fields "summary,comment" --sort
+/// "updated:desc" --output json` proves `--fields` (S-575-1/BC-2.2.033) and
+/// `--sort` (S-588-1/BC-2.1.025) compose end-to-end in a single invocation
+/// -- the outgoing search request carries BOTH the `--fields` projection
+/// (`summary`, `comment`) AND the `--jql`-derived base clause with the
+/// `--sort`-composed `ORDER BY updated DESC, key ASC` fragment appended.
+#[tokio::test]
+async fn test_issue_list_fields_and_sort_compose_end_to_end() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![serde_json::json!({
+                "key": "PROJ-585",
+                "fields": {
+                    "summary": "Combined --fields + --sort fixture",
+                    "comment": { "comments": [] }
+                }
+            })]),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--jql",
+            "project = PROJ",
+            "--fields",
+            "summary,comment",
+            "--sort",
+            "updated:desc",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let received = server.received_requests().await.unwrap();
+    let search_req = received
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("search/jql request must have fired");
+    let body: serde_json::Value =
+        serde_json::from_slice(&search_req.body).expect("body must be valid JSON");
+
+    let fields = body["fields"]
+        .as_array()
+        .expect("fields must be an array")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields,
+        vec!["summary", "comment"],
+        "the outgoing request's fields projection must be exactly the \
+         --fields list, got: {fields:?}"
+    );
+
+    let jql = body["jql"].as_str().expect("jql field must be a string");
+    assert!(
+        jql.contains("ORDER BY updated DESC, key ASC"),
+        "the outgoing request's JQL must carry the --sort-composed \
+         ORDER BY fragment, got: {jql}"
+    );
+    assert!(
+        jql.contains("project = PROJ"),
+        "the outgoing request's JQL must still carry the --jql-supplied \
+         base clause, got: {jql}"
+    );
+
+    // Confirm the JSON output itself carries the projected `comment` field
+    // (proving --fields actually reached the field-projection path, not
+    // just the request body).
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
+    assert!(
+        parsed[0]["fields"]["comment"].is_object(),
+        "expected the projected 'comment' field in JSON output, got: {parsed}"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // S-579-1: `jr issue list --updated-recent <duration>` filter
 // (BC-2.1.023, amended BC-2.1.006/BC-2.1.007)
@@ -11749,7 +11844,11 @@ async fn test_bc_2_3_042_view_table_mode_description_render_unaffected() {
 //   - AC-004: free composition with --recent (recent's clause precedes updated-recent's)
 //   - AC-005: BC-2.1.007 stable-order position (after recent, before asset)
 //   - AC-006: BC-2.1.006 15-source "no filters" stderr enumeration
-//   - AC-007: --updated-recent alone still requires project/filter scope
+//   - AC-007: --updated-recent alone (FIX-F5-LRE-1, ADV-LRE-F5-A-MED-001):
+//     proceeds to a query exactly like `--recent` alone — see AC-007's
+//     current test for the amended assertion; the dedicated
+//     `--updated-recent`-alone exit-64 guard this AC originally exercised
+//     has been removed by human adjudication.
 //   - AC-008: field-swap fidelity (`updated`, not `created`)
 
 /// AC-001 / BC-2.1.023 Postcondition 1: `--updated-recent 60d` composes the
@@ -12091,53 +12190,63 @@ async fn test_bc_2_1_006_issue_list_no_filters_stderr_enumerates_15_sources() {
     );
 }
 
-/// AC-007 / BC-2.1.023 Edge Case EC-2.1.023-4: `--updated-recent` alone
-/// (no `--project`/configured project, no other filter) falls through to
-/// BC-2.1.006's amended "no filters specified" exit-64 guard exactly as
-/// every other filter source does — it does NOT independently satisfy the
-/// "at least one filter source" requirement by bypassing project scoping.
+/// AC-007 / BC-2.1.023 Edge Case EC-2.1.023-4 (AMENDED, FIX-F5-LRE-1,
+/// ADV-LRE-F5-A-MED-001, human-adjudicated): `--updated-recent` alone (no
+/// `--project`/configured project, no other filter) now PROCEEDS to a
+/// cross-project query exactly like `--recent` alone and every other filter
+/// source — `build_filter_clauses` composes the `updated >= -{d}` clause
+/// into `filter_parts` regardless of `base_parts`, so the end-of-function
+/// BC-2.1.006 guard sees a non-empty `all_parts` and does not fire. This
+/// supersedes the original AC-007 (dedicated `--updated-recent`-alone
+/// exit-64 guard), which was the only 1 of 15 filter sources with that
+/// special case — it has been removed so `--updated-recent` composes
+/// uniformly with the other fourteen.
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_alone_still_requires_project_scope() {
+async fn test_bc_2_1_023_issue_list_updated_recent_alone_proceeds_like_recent_alone() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
 
-    s606_1_expect_zero_http(&server).await;
+    s606_1_mock_search_empty(&server).await;
 
     let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .args(["--no-input", "issue", "list", "--updated-recent", "60d"])
         .output()
         .unwrap();
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !output.status.success(),
-        "AC-007: --updated-recent alone with no project must still fail the \
-         no-filters guard, got stdout: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert_eq!(
+        output.status.success(),
+        "AC-007 (amended): --updated-recent alone with no project must now \
+         proceed exactly like --recent alone, got exit: {:?} (stderr: {})",
         output.status.code(),
-        Some(64),
-        "AC-007: expected exit 64 (UserError) from BC-2.1.006's no-filters \
-         guard, got: {:?} (stderr: {stderr})",
-        output.status.code()
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("updated >= -60d"),
+        "AC-007 (amended): expected clause 'updated >= -60d' in composed \
+         JQL, got: {jql}"
     );
     assert!(
-        stderr.contains("No project or filters specified"),
-        "AC-007: expected the canonical no-filters-specified message, got: {stderr}"
+        !jql.contains("project ="),
+        "AC-007 (amended): --updated-recent alone with no configured \
+         project must not spuriously scope to a project, got: {jql}"
     );
 }
 
-/// Pass 2 MEDIUM regression guard: a `.jr.toml` configuring only `board_id`
-/// (no `project` key -- a valid state per `Config::board_id`/
-/// `test_board_id_cli_override` in `src/config.rs`) is a genuinely scoped
-/// configuration. `jr issue list --updated-recent 60d` must NOT trip the
-/// EC-2.1.023-4 "no filters specified" guard in that configuration -- it
-/// must fall through to the same active-sprint board resolution that a bare
-/// `jr issue list` and `jr issue list --recent 60d` both already succeed
-/// under, and the final composed JQL must contain both the sprint scope and
-/// the `updated >= -60d` clause.
+/// Pass 2 MEDIUM regression guard (retained post FIX-F5-LRE-1): a
+/// `.jr.toml` configuring only `board_id` (no `project` key -- a valid
+/// state per `Config::board_id`/`test_board_id_cli_override` in
+/// `src/config.rs`) is a genuinely scoped configuration.
+/// `jr issue list --updated-recent 60d` must fall through to the same
+/// active-sprint board resolution that a bare `jr issue list` and
+/// `jr issue list --recent 60d` both already succeed under, and the final
+/// composed JQL must contain both the sprint scope and the
+/// `updated >= -60d` clause. (No no-filters guard is in play here at all
+/// any more -- the dedicated `--updated-recent`-alone guard this test used
+/// to regression-guard against has been removed; this test now exercises
+/// pure clause composition in a board-scoped configuration.)
 #[tokio::test]
 async fn test_bc_2_1_023_issue_list_updated_recent_with_configured_board_falls_through_to_sprint_scope()
  {
@@ -12240,20 +12349,20 @@ async fn test_bc_2_1_023_issue_list_updated_recent_uses_updated_field_not_create
     );
 }
 
-/// pr-review cycle 1 Finding 1 regression guard (EC-2.1.023-4 backstop):
-/// a `.jr.toml` configuring only `board_id` (no `project` key), a scrum
-/// board, with NO active sprint is the one narrow configuration where the
-/// early guard's `board_id.is_none()` conjunct is too coarse — it lets
-/// `--updated-recent` alone through (a board IS configured), but the
-/// scrum "no active sprint" fallback then resolves `base_parts` to an EMPTY
-/// Vec (seeded only from `project_key`, which is `None` here), and
-/// `--updated-recent`'s own clause would otherwise make the final `all_parts`
-/// non-empty and silently bypass the end-of-function guard too — producing
-/// an unbounded, cross-project query. `jr issue list --updated-recent 60d`
-/// in this exact configuration MUST now exit 64 via the `base_parts`
-/// backstop guard, with the canonical no-filters-specified message.
+/// pr-review cycle 1 Finding 1 regression guard (AMENDED, FIX-F5-LRE-1,
+/// ADV-LRE-F5-A-MED-001, human-adjudicated): a `.jr.toml` configuring only
+/// `board_id` (no `project` key), a scrum board, with NO active sprint
+/// resolves `base_parts` to an EMPTY Vec (the scrum "no active sprint"
+/// fallback seeds `parts` from `project_key`, which is `None` here). The
+/// `base_parts.is_empty()` backstop guard this test used to regression-guard
+/// has been removed: `--updated-recent`'s own clause now makes the final
+/// `all_parts` non-empty and the query PROCEEDS, exactly like every other
+/// filter source composed with an otherwise-unscoped board configuration in
+/// this same shape (e.g. `--recent` alone would compose identically) — an
+/// unbounded, cross-project query is the deliberate, human-adjudicated new
+/// behavior, not a residual gap.
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_board_scrum_no_active_sprint_no_project_exits_64()
+async fn test_bc_2_1_023_issue_list_updated_recent_board_scrum_no_active_sprint_no_project_proceeds()
  {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
@@ -12283,17 +12392,8 @@ async fn test_bc_2_1_023_issue_list_updated_recent_board_scrum_no_active_sprint_
         .mount(&server)
         .await;
 
-    // The composed JQL must never reach the search endpoint — the backstop
-    // guard must fire before any issue search is attempted.
-    Mock::given(method("POST"))
-        .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(common::fixtures::issue_search_response(vec![])),
-        )
-        .expect(0)
-        .mount(&server)
-        .await;
+    // The query now proceeds -- the search endpoint IS expected to fire.
+    s606_1_mock_search_empty(&server).await;
 
     let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .current_dir(project_dir.path())
@@ -12301,34 +12401,44 @@ async fn test_bc_2_1_023_issue_list_updated_recent_board_scrum_no_active_sprint_
         .output()
         .unwrap();
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !output.status.success(),
-        "board-scrum-no-active-sprint --updated-recent must exit 64, got stdout: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert_eq!(
+        output.status.success(),
+        "board-scrum-no-active-sprint --updated-recent must now proceed \
+         (amended AC-007 behavior), got: {:?} (stderr: {})",
         output.status.code(),
-        Some(64),
-        "expected exit 64 (UserError) from the base_parts backstop guard, \
-         got: {:?} (stderr: {stderr})",
-        output.status.code()
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jql = s606_1_composed_jql(&server).await;
+    assert!(
+        jql.contains("updated >= -60d"),
+        "expected the --updated-recent clause in the composed JQL, got: {jql}"
     );
     assert!(
-        stderr.contains("No project or filters specified"),
-        "expected the canonical no-filters-specified message, got: {stderr}"
+        !jql.contains("sprint ="),
+        "no active sprint exists in this configuration, so no sprint scope \
+         should be present, got: {jql}"
+    );
+    assert!(
+        !jql.contains("project ="),
+        "no project is configured, so no project scope should be present, \
+         got: {jql}"
     );
 }
 
-// ── pr-review cycle 1 Finding 2: guard-conjunction coverage for the 9
-// filter flags not already exercised by an existing --updated-recent AC
-// test (project/recent/asset/updated_before/board_id are already covered
-// by AC-001/AC-004/AC-005/AC-003b/the board regression tests above). Each
-// test below pairs `--updated-recent 60d` with exactly one of the 9 flags
-// and asserts the combination does NOT trip the "no filters specified"
-// guard (BC-2.1.006) — assertions are minimal (exit code / stderr content
-// for the guard message only), since each flag's own clause composition is
-// already covered elsewhere.
+// ── pr-review cycle 1 Finding 2 (AMENDED, FIX-F5-LRE-1, ADV-LRE-F5-A-MED-001):
+// composition coverage for the 9 filter flags not already exercised by an
+// existing --updated-recent AC test (project/recent/asset/updated_before/
+// board_id are already covered by AC-001/AC-004/AC-005/AC-003b/the board
+// regression tests above). These tests originally regression-guarded a
+// dedicated `--updated-recent`-alone no-filters guard's conjunction; that
+// guard has been removed (human-adjudicated: `--updated-recent` alone now
+// proceeds like every other filter source, see the amended AC-007 test
+// above), so these 9 tests are reframed to their remaining value: proving
+// `--updated-recent` COMPOSES correctly (produces a valid combined JQL
+// containing BOTH the `updated >= -60d` clause and the paired flag's own
+// effect) when paired with each of the 9 flags, rather than merely
+// asserting a since-removed guard was not tripped.
 
 fn pr1_write_team_config(config_dir: &std::path::Path, team_field_id: &str) {
     std::fs::write(
@@ -12340,27 +12450,34 @@ fn pr1_write_team_config(config_dir: &std::path::Path, team_field_id: &str) {
     .unwrap();
 }
 
-/// Asserts `output` did NOT trip the BC-2.1.006 "no filters specified"
-/// guard: neither an exit-64 UserError carrying the canonical message.
-/// A later, unrelated failure (e.g. a missing mock) is not what this
-/// assertion is checking — see each test's own success assertion for that.
-fn pr1_assert_guard_not_tripped(output: &std::process::Output, flag_desc: &str) {
-    let stderr = String::from_utf8_lossy(&output.stderr);
+/// Asserts `--updated-recent` composed successfully alongside another
+/// filter flag: exit 0, and the composed JQL (captured from the mounted
+/// mock server) contains the `updated >= -60d` clause. Does not assert the
+/// paired flag's own clause shape -- that is covered by each flag's own
+/// dedicated test elsewhere; this only proves the PAIRING doesn't drop or
+/// corrupt `--updated-recent`'s contribution.
+async fn pr1_assert_composes_successfully(
+    output: &std::process::Output,
+    server: &MockServer,
+    flag_desc: &str,
+) {
     assert!(
         output.status.success(),
-        "Finding 2: --updated-recent + {flag_desc} must not trip the \
-         no-filters guard, expected exit 0, got: {:?} (stderr: {stderr})",
-        output.status.code()
+        "--updated-recent + {flag_desc} must compose successfully, \
+         expected exit 0, got: {:?} (stderr: {})",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
     );
+    let jql = s606_1_composed_jql(server).await;
     assert!(
-        !stderr.contains("No project or filters specified"),
-        "Finding 2: --updated-recent + {flag_desc} must not emit the \
-         no-filters-specified message, got: {stderr}"
+        jql.contains("updated >= -60d"),
+        "--updated-recent + {flag_desc} must still contribute the \
+         'updated >= -60d' clause to the composed JQL, got: {jql}"
     );
 }
 
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_with_assignee_does_not_trip_no_filters_guard() {
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_assignee() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -12380,11 +12497,11 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_assignee_does_not_trip_n
         .output()
         .unwrap();
 
-    pr1_assert_guard_not_tripped(&output, "--assignee me");
+    pr1_assert_composes_successfully(&output, &server, "--assignee me").await;
 }
 
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_with_reporter_does_not_trip_no_filters_guard() {
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_reporter() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -12404,11 +12521,11 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_reporter_does_not_trip_n
         .output()
         .unwrap();
 
-    pr1_assert_guard_not_tripped(&output, "--reporter me");
+    pr1_assert_composes_successfully(&output, &server, "--reporter me").await;
 }
 
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_with_status_does_not_trip_no_filters_guard() {
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_status() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -12437,11 +12554,11 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_status_does_not_trip_no_
         .output()
         .unwrap();
 
-    pr1_assert_guard_not_tripped(&output, "--status \"To Do\"");
+    pr1_assert_composes_successfully(&output, &server, "--status \"To Do\"").await;
 }
 
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_with_team_does_not_trip_no_filters_guard() {
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_team() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -12465,11 +12582,11 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_team_does_not_trip_no_fi
         .output()
         .unwrap();
 
-    pr1_assert_guard_not_tripped(&output, "--team <uuid>");
+    pr1_assert_composes_successfully(&output, &server, "--team <uuid>").await;
 }
 
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_with_open_does_not_trip_no_filters_guard() {
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_open() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -12488,19 +12605,17 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_open_does_not_trip_no_fi
         .output()
         .unwrap();
 
-    pr1_assert_guard_not_tripped(&output, "--open");
+    pr1_assert_composes_successfully(&output, &server, "--open").await;
 }
 
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_with_component_does_not_trip_no_filters_guard() {
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_component() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
 
     // --component requires --project (BC-2.1.022) regardless of
-    // --updated-recent, so --project is included here — this test pins
-    // that the `component.is_empty()` conjunct does not ALSO independently
-    // trip the no-filters guard once the component preflight has passed.
+    // --updated-recent, so --project is included here.
     s606_1_mock_project_exists(&server, "FOO").await;
     s606_1_mock_components(
         &server,
@@ -12527,12 +12642,11 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_component_does_not_trip_
         .output()
         .unwrap();
 
-    pr1_assert_guard_not_tripped(&output, "--project FOO --component Backend");
+    pr1_assert_composes_successfully(&output, &server, "--project FOO --component Backend").await;
 }
 
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_with_created_after_does_not_trip_no_filters_guard()
- {
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_created_after() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -12552,12 +12666,11 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_created_after_does_not_t
         .output()
         .unwrap();
 
-    pr1_assert_guard_not_tripped(&output, "--created-after 2026-01-01");
+    pr1_assert_composes_successfully(&output, &server, "--created-after 2026-01-01").await;
 }
 
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_with_created_before_does_not_trip_no_filters_guard()
- {
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_created_before() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -12577,11 +12690,11 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_created_before_does_not_
         .output()
         .unwrap();
 
-    pr1_assert_guard_not_tripped(&output, "--created-before 2026-01-01");
+    pr1_assert_composes_successfully(&output, &server, "--created-before 2026-01-01").await;
 }
 
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_with_jql_does_not_trip_no_filters_guard() {
+async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_jql() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -12601,7 +12714,7 @@ async fn test_bc_2_1_023_issue_list_updated_recent_with_jql_does_not_trip_no_fil
         .output()
         .unwrap();
 
-    pr1_assert_guard_not_tripped(&output, "--jql \"project = FOO\"");
+    pr1_assert_composes_successfully(&output, &server, "--jql \"project = FOO\"").await;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
