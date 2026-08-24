@@ -34,8 +34,8 @@ pub(super) async fn handle_view(
     // `--points`/`--assets`/`--duedate`. Default behavior (fields == None)
     // is untouched below.
     //
-    // DEFENSIVE (S-584-1, BC-2.3.042 Edge Case EC-2.2.034-3 / mirrors
-    // list.rs): an unnamed `--fields` request (e.g. `comment`) is not a
+    // DEFENSIVE (S-584-1, BC-2.3.042 per BC-2.2.034 Edge Case EC-2.2.034-3 /
+    // mirrors list.rs): an unnamed `--fields` request (e.g. `comment`) is not a
     // named field on `IssueFields` — it lands in `IssueFields.extra`'s
     // `#[serde(flatten)]` catch-all and is serialized to JSON below via
     // `output::print_output` with ZERO transformation, i.e. raw ADF for
