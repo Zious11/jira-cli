@@ -11634,7 +11634,7 @@ async fn test_bc_2_2_034_issue_comments_command_unaffected_by_fields_comment_pat
     );
 }
 
-/// AC-004 / BC-2.3.042 Postcondition 2 & Edge Case EC-2.3.042-2: `issue
+/// AC-004 / BC-2.3.042 Edge Case EC-2.3.042-2: `issue
 /// view`'s table-mode description row (the one existing `adf_to_text` call
 /// site inside `view.rs::handle_view`) is unaffected by this story.
 /// `--fields` is JSON-only (BC-2.3.041 Precondition 2), so combining
