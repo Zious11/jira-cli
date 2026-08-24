@@ -12202,7 +12202,7 @@ async fn test_bc_2_1_006_issue_list_no_filters_stderr_enumerates_15_sources() {
 /// special case — it has been removed so `--updated-recent` composes
 /// uniformly with the other fourteen.
 #[tokio::test]
-async fn test_bc_2_1_023_issue_list_updated_recent_alone_proceeds_like_recent_alone() {
+async fn test_bc_2_1_023_issue_list_updated_recent_alone_proceeds_like_recent() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -12232,6 +12232,20 @@ async fn test_bc_2_1_023_issue_list_updated_recent_alone_proceeds_like_recent_al
         !jql.contains("project ="),
         "AC-007 (amended): --updated-recent alone with no configured \
          project must not spuriously scope to a project, got: {jql}"
+    );
+
+    // ADV-FIXF5-P1-LOW-001 / VP-UPDATED-RECENT-002: the alone path must
+    // fire exactly ONE search/jql request -- no retry, no duplicate
+    // composition, no accidental second call.
+    let received = server.received_requests().await.unwrap();
+    let search_call_count = received
+        .iter()
+        .filter(|r| r.url.path() == "/rest/api/3/search/jql")
+        .count();
+    assert_eq!(
+        search_call_count, 1,
+        "VP-UPDATED-RECENT-002: --updated-recent alone must fire exactly \
+         one POST /rest/api/3/search/jql request, got: {search_call_count}"
     );
 }
 
