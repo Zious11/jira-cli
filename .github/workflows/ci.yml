@@ -301,7 +301,7 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1  # v2.85.13
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532  # v2.86.3
         with:
           tool: cargo-llvm-cov
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
@@ -393,7 +393,7 @@ jobs:
           # Need full history so `git diff origin/<base_ref>...HEAD` can resolve the
           # base ref (used by --in-diff to scope mutation testing to changed lines).
           fetch-depth: 0
-      - uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1  # v2.85.13
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532  # v2.86.3
         with:
           # Pin to cargo-mutants major v27 to protect the required gate's schema/exit-code
           # assumptions: v27 outcomes.json top-level summary keys
