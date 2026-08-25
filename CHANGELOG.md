@@ -4,6 +4,47 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.7.0-dev.2] - 2026-08-25
+
+### Added
+
+- **`jr issue list`/`jr issue view --fields <CSV>`** (S-575-1, #724): opt-in
+  field selection lets you request a specific comma-separated set of fields
+  in `--output json` responses instead of the full default payload.
+- **`jr issue list --updated-recent <duration>`** (S-579-1, #725): filters
+  issues updated within a rolling duration window (e.g. `1h`, `2d`), mirroring
+  the existing `--recent` (created-within) filter but scoped to `updated`.
+- **`jr issue list --sort <field>:asc|desc` shorthand** (S-588-1,
+  BC-2.1.024/025, #726): a compact `field:direction` form for specifying sort
+  order, alongside the existing sort flags.
+
+### Changed
+
+- **`--fields comment` now preserves raw ADF structure** on `issue list`/`issue
+  view` instead of flattening it (S-584-1, #732).
+- **`jr issue list --updated-recent` supplied alone now proceeds like
+  `--recent`** rather than requiring a companion filter (F5 reconciliation,
+  DEC-306, #733).
+
+### Fixed
+
+- **`validate_duration` returns `Err` instead of panicking on multibyte
+  input** (FIX-F6-LRE-1, #734): malformed duration strings containing
+  multibyte UTF-8 characters (e.g. `--updated-recent`) are now rejected with
+  a proper error instead of crashing on a byte-index panic.
+
+### Internal
+
+- **Live E2E coverage for the component command family** (S-COMP-E2E-1,
+  #719), with two follow-up poll-budget widenings to fix index-lag flakiness
+  in `poll_component_filter`/`poll_jql` (#720, #721), and an orphaned
+  component-fixture sweeper added to `e2e-sweeper.yml` (S-COMP-E2E-SWEEP-1,
+  #722).
+- **Dependency bumps:** `step-security/harden-runner` 2.20.1→2.21.0 (#723),
+  `clap_complete` 4.6.7→4.6.9 (#687), `Swatinem/rust-cache` (#711),
+  `taiki-e/install-action` 2.85.8→2.85.13 (#717),
+  `github/codeql-action/upload-sarif` (#718).
+
 ## [0.7.0-dev.1] - 2026-08-19
 
 ### Breaking Changes
