@@ -33,6 +33,19 @@ pub(super) async fn handle_view(
     // `handle_list`'s BC-2.2.033 Postcondition 4 no-op treatment for
     // `--points`/`--assets`/`--duedate`. Default behavior (fields == None)
     // is untouched below.
+    //
+    // DEFENSIVE (S-584-1, BC-2.3.042 per BC-2.2.034 Edge Case EC-2.2.034-3 /
+    // mirrors list.rs): an unnamed `--fields` request (e.g. `comment`) is not a
+    // named field on `IssueFields` — it lands in `IssueFields.extra`'s
+    // `#[serde(flatten)]` catch-all and is serialized to JSON below via
+    // `output::print_output` with ZERO transformation, i.e. raw ADF for
+    // `comment.comments[].body`. Do NOT post-process `extra` here (e.g. to
+    // run `comment` bodies through `adf::adf_to_text` for consistency with
+    // the `issue comments` command's flattened rendering) — that is
+    // explicitly OUT OF SCOPE and would violate BC-2.3.042 Postcondition 1
+    // (raw ADF preserved byte-for-byte, mirroring BC-2.2.034 Postcondition 1)
+    // and Postcondition 3 (zero incremental transformation code, mirroring
+    // BC-2.2.034 Postcondition 3). See also BC-2.2.034.
     if let Some(csv) = &fields {
         if !matches!(output_format, OutputFormat::Json) {
             return Err(JrError::UserError("--fields requires --output json.".into()).into());

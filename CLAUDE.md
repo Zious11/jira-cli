@@ -93,7 +93,8 @@ src/
 │       ├── servicedesks.rs  # list service desks, project meta orchestration
 │       ├── queues.rs        # list queues, get queue issues
 │       ├── request_types.rs # JSM request-type discovery
-│       └── requests.rs      # JSM request creation (`handle_jsm_create` path)
+│       ├── requests.rs      # JSM request creation (`handle_jsm_create` path)
+│       └── attachments.rs   # JSM two-step attachment upload (attachTemporaryFile / request attachment)
 ├── types/
 │   └── mod.rs           # module re-exports (assets, jira, jsm sub-modules)
 ├── types/assets/        # Serde structs for Assets API responses
@@ -126,15 +127,18 @@ src/
 └── error.rs             # JrError enum with exit codes (0/1/2/64/78/124/130)
 ```
 
-Product-namespaced `api/jira/` and `types/jira/` so future Confluence/JSM/Assets support adds sibling directories.
+Product-namespaced `api/jira/` and `types/jira/` so future JSM/Assets support adds sibling directories.
 
 ## Known Size Deviations
 
-- `cli/issue/list.rs`: 1,256 LOC post-split (target was ≤750 per `docs/specs/list-rs-split.md`; spec target not achieved but split was partial — `view.rs` and `comments.rs` already extracted). NFR-O-G: DOCUMENT-AS-IS-COMPLETE (S-3.08).
-- `cli/issue/create.rs`: 394 LOC post-Seam-B split (was 2,447; edit cluster extracted to `edit.rs`). Handles `issue create` platform path + JSM dispatch fork + `parse_field_kv`. ADR-0012. (PF-016)
+- `cli/issue/list.rs`: ~2,012 LOC (re-measured 2026-08-25; was documented as 1,256 LOC post-split, target was ≤750 per `docs/specs/list-rs-split.md`; spec target not achieved but split was partial — `view.rs` and `comments.rs` already extracted). Growth since the prior figure is attributable to the list-read-ergonomics additions (`--fields`, `--updated-recent`, `--sort`, `--component` — BC-2.1.023/024/025, BC-2.2.033, BC-2.3.041/042). NFR-O-G: DOCUMENT-AS-IS-COMPLETE (S-3.08).
+- `cli/issue/create.rs`: ~530 LOC (re-measured 2026-08-25; was documented as 394 LOC post-Seam-B split; was 2,447 pre-split, edit cluster extracted to `edit.rs`). Handles `issue create` platform path + JSM dispatch fork + `parse_field_kv`. ADR-0012. (PF-016)
 - `cli/issue/edit.rs`: ~3,187 LOC (Seam B extraction of `handle_edit` cluster from `create.rs`, originally 2,067 LOC; grew via S-605-1/S-605-2's single-key and bulk `--component` paths — BC-3.4.022/BC-3.4.023 — plus the Step-4.5 Round-1 through Round-3 adversarial-review fixes on top of S-605-2 (including the Round-3 F2 fix consolidating the `--dry-run` multi-key path's component-list fetch into a single `GET`), ~3× the ADR-0012 1,000-LOC threshold). Handles `issue edit`: single-key + bulk field/label/type/component paths, dry-run, type-error enrichment. ADR-0012. (PF-016)
 - `cli/issue/workflow.rs`: ~1,277 LOC — covers move/transitions/assign/open; 28% over the threshold. `handle_comment` extracted to `interactions.rs` (S-577-1). DOCUMENT-AS-IS. ADR-0012. (PF-017)
 - `cli/component.rs`: ~1,800 LOC — covers `jr component list/create/edit/delete/rename` (S-604-1/2/3, S-608-1 added `rename`'s single-project + `--all-projects` fan-out + `--dry-run` forms, ~700 LOC), ~80% over ADR-0012's 1,000-LOC shard threshold. ADR-0018 §1/§2 anticipated this size (numeric-vs-name resolution paths, disposition-required delete, snapshot-before-delete safety, and ADR-0018 §2 cache-invalidation call sites are all in this one file by design, for a single command family). DOCUMENT-AS-IS. (F5-C-002)
+- `cli/issue/attachments.rs`: ~3,472 LOC (measured 2026-08-25; previously undocumented) — over 3× the ADR-0012 1,000-LOC threshold. Covers the full attachment command family in one file: list, upload (platform + JSM two-step `--public`/`--internal` paths, multipart retry rebuild), download (two-step metadata+content, redirect/CDN handling), delete (targeted + bulk, dry-run, replace-existing), plus the CWE-22/CWE-116 filename-sanitization helpers (`sanitize_attachment_filename`, `display_sanitize_filename`) documented elsewhere in this file. Single command family with dual platform/JSM dispatch, mirroring `component.rs`'s rationale for staying as one file. DOCUMENT-AS-IS. (S-CLEANUP-2026-08-25)
+- `cli/mod.rs`: ~1,356 LOC (measured 2026-08-25; previously undocumented) — clap derive definitions for every subcommand/flag across the whole CLI surface (auth, issue, board, sprint, worklog, team, user, project, component, queue, requesttype, assets, api). Single derive tree by design; splitting would fragment `#[derive(Subcommand)]` enums across files with no natural seam. DOCUMENT-AS-IS. (S-CLEANUP-2026-08-25)
+- `cli/issue/helpers.rs`: ~1,113 LOC (measured 2026-08-25; previously undocumented) — team/points resolution, user resolution, and interactive prompt helpers shared across the `issue` command family. DOCUMENT-AS-IS. (S-CLEANUP-2026-08-25)
 
 ## Build & Test
 

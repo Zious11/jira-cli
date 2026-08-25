@@ -35,25 +35,34 @@ fn extract_unique_status_names(issue_types: &[IssueTypeWithStatuses]) -> Vec<Str
 
 // ── List ──────────────────────────────────────────────────────────────
 
-/// BC-2.1.006 (amended, S-579-1): "no project or filters specified" guard
-/// message -- the amended 15-source enumeration, with `--updated-recent`
-/// appended immediately before `or --jql`. Shared between THREE call sites
-/// in `handle_list`, all of which must stay in sync with each other and with
-/// this message's enumerated list:
-///   1. The early EC-2.1.023-4 guard (`--updated-recent` alone, no project,
-///      no configured board, no other filter) -- fires before any HTTP call.
-///   2. The `base_parts.is_empty()` backstop guard added by pr-review cycle 1
-///      Finding 1, immediately after `base_parts` is resolved -- closes the
-///      narrow board-configured-but-empty-scoping-clause gap the early
-///      guard's `board_id.is_none()` proxy cannot see (see the comment above
-///      guard #1 for the full explanation).
-///   3. The end-of-function `all_parts.is_empty()` guard -- the original
-///      BC-2.1.006 backstop for every other filter source.
+/// BC-2.1.006 (amended, S-579-1; FIX-F5-LRE-1 / ADV-LRE-F5-A-MED-001): "no
+/// project or filters specified" guard message -- the amended 15-source
+/// enumeration, with `--updated-recent` appended immediately before
+/// `or --jql`. `--updated-recent` is one filter source among the fifteen
+/// listed here, exactly like `--recent` and the other fourteen -- it
+/// contributes an `updated >= -{d}` clause via `build_filter_clauses` and, on
+/// its own, is sufficient to satisfy this guard (mirroring `--recent`'s
+/// long-standing behavior). There is exactly ONE call site left in
+/// `handle_list`:
+///   - The end-of-function `all_parts.is_empty()` guard -- the original
+///     BC-2.1.006 backstop, now covering all fifteen filter sources
+///     uniformly (including `--updated-recent`).
 ///
-/// Adding a 16th filter flag to `IssueCommand::List` requires updating this
-/// message's enumerated list AND all three guards' conjunctions above.
-/// Nothing currently enforces this mechanically -- no compile error is
-/// raised on drift between the message text and any guard's conjunction.
+/// FIX-F5-LRE-1 (human-adjudicated, ADV-LRE-F5-A-MED-001) removed the two
+/// `--updated-recent`-specific dedicated guards that used to run ahead of
+/// this one (an early pre-HTTP guard, and a `base_parts.is_empty()`
+/// backstop) -- `--updated-recent` was previously the only 1 of 15 filter
+/// sources that refused (exit 64) when used alone; it now proceeds to a
+/// query exactly like every other filter source, including cross-project.
+///
+/// Adding a 16th filter flag to `IssueCommand::List` requires keeping two
+/// things in sync: (a) this message's enumerated list, and (b)
+/// `build_filter_clauses`, which must emit the new flag's JQL clause into
+/// `all_parts` -- only then does the flag actually contribute to, and
+/// satisfy, the terminal `all_parts.is_empty()` guard above. Nothing
+/// currently enforces this mechanically -- no compile error is raised on
+/// drift between the message text and `build_filter_clauses`'s clause
+/// emission.
 const NO_FILTERS_SPECIFIED_MSG: &str = "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --created-after, --created-before, --updated-after, --updated-before, --asset, --component, --updated-recent, or --jql. You can also set a default project in .jr.toml or run \"jr init\".";
 
 /// Sort direction for `--sort <field>:<direction>` (BC-2.1.024 postcondition 1).
@@ -231,63 +240,20 @@ pub(super) async fn handle_list(
     // validator --recent uses (jql::validate_duration, NOT duration.rs) --
     // combined units like `4w2d` are rejected pre-HTTP with the identical
     // error shape --recent's own validation produces (AC-002).
+    //
+    // FIX-F5-LRE-1 (human-adjudicated, ADV-LRE-F5-A-MED-001): `--updated-recent`
+    // used alone (no other filter/scope) previously exited 64 here via a
+    // dedicated EC-2.1.023-4 guard -- the only 1 of 15 filter sources that
+    // refused when used alone. That guard (and its `base_parts.is_empty()`
+    // backstop, below where `base_parts` is resolved) has been removed:
+    // `--updated-recent` alone now proceeds to a query exactly like `--recent`
+    // and every other filter source -- `build_filter_clauses` already emits
+    // the `updated >= -{d}` clause for it, so the final `all_parts` is
+    // non-empty and the end-of-function BC-2.1.006 guard does not fire. The
+    // true no-filter case (a completely bare `jr issue list`) is still caught
+    // by that same end-of-function guard.
     if let Some(ref d) = updated_recent {
         crate::jql::validate_duration(d).map_err(JrError::UserError)?;
-    }
-
-    // S-579-1 (BC-2.1.023 Edge Case EC-2.1.023-4): unlike `--recent`,
-    // `--updated-recent` does not by itself satisfy the "at least one filter
-    // source" requirement when used with no --project/configured project,
-    // no configured board (`.jr.toml`'s `board_id`), and no other filter --
-    // it falls through to the same BC-2.1.006 "no filters specified" guard a
-    // completely bare `jr issue list` invocation hits. This must be checked
-    // here (zero HTTP so far) rather than relying on the end-of-function
-    // "guard against unbounded query" below, because `--updated-recent`'s
-    // own composed clause would otherwise make the final assembled clause
-    // list non-empty and silently bypass that guard.
-    //
-    // `config.project.board_id` MUST be part of this conjunction (Pass 2
-    // MEDIUM fix): a `.jr.toml` with only `board_id` set (no `project` key)
-    // is a valid, board-scoped configuration -- see
-    // `Config::board_id`/`test_board_id_cli_override` in `src/config.rs`.
-    //
-    // CORRECTION (pr-review cycle 1, Finding 1): `board_id.is_none()` is only
-    // a COARSE proxy for "the board contributes scoping" -- it does NOT hold
-    // in one narrow, verified subcase: a scrum board with NO active sprint,
-    // in a config with `board_id` set and no `project` key. In that exact
-    // configuration a completely bare `jr issue list` ALREADY exits 64 via
-    // this SAME guard (it does not "succeed by falling through" as an
-    // earlier revision of this comment incorrectly claimed) -- the scrum
-    // "no active sprint" fallback (below, ~line 392) seeds `base_parts` from
-    // `project_key` alone, which is `None` here, so `base_parts` ends up
-    // empty regardless of what tripped or didn't trip this early guard.
-    // `--updated-recent` alone in that same configuration is different: this
-    // early guard lets it through (a board IS configured), but the
-    // downstream scrum-no-active-sprint fallback still produces an empty
-    // `base_parts`, and `--updated-recent`'s own clause then makes the final
-    // `all_parts` non-empty, silently bypassing the end-of-function guard too
-    // -- an unbounded, cross-project query. A second, narrower backstop
-    // guard (below, immediately after `base_parts` is resolved) closes this
-    // specific hole by checking `base_parts.is_empty()` directly instead of
-    // trying to predict it from `board_id` alone.
-    if updated_recent.is_some()
-        && project_key.is_none()
-        && config.project.board_id.is_none()
-        && jql.is_none()
-        && status.is_none()
-        && team.is_none()
-        && recent.is_none()
-        && !open
-        && asset_key.is_none()
-        && component.is_empty()
-        && created_after.is_none()
-        && created_before.is_none()
-        && updated_after.is_none()
-        && updated_before.is_none()
-        && assignee.is_none()
-        && reporter.is_none()
-    {
-        return Err(JrError::UserError(NO_FILTERS_SPECIFIED_MSG.into()).into());
     }
 
     // Validate date filter flags early (before any network calls)
@@ -559,47 +525,14 @@ pub(super) async fn handle_list(
         None => order_by.to_string(),
     };
 
-    // S-579-1 pr-review cycle 1 Finding 1 (EC-2.1.023-4 backstop): closes the
-    // narrow gap the early guard above cannot see -- a `.jr.toml` with only
-    // `board_id` set (no `project` key), a scrum board, and NO active sprint
-    // resolves `base_parts` to an EMPTY Vec (the scrum "no active sprint"
-    // fallback above seeds `parts` from `project_key`, which is `None` in
-    // this exact config). The early guard's `board_id.is_none()` conjunct
-    // already let `--updated-recent` alone through in this configuration
-    // (a board IS configured), so this check is a direct, non-predictive
-    // test of the thing that actually matters: did the base-JQL resolution
-    // above actually produce a scoping clause? Checking `base_parts` itself
-    // rather than re-deriving "should it be empty" from `board_id`/board
-    // type/sprint state avoids the same coarse-proxy mistake the early guard
-    // made. This does not affect AC-007's zero-HTTP guarantee for the
-    // no-board case -- the early guard above already rejects that
-    // configuration before any HTTP call; every path that reaches here with
-    // an empty `base_parts` has a board configured, so the board-config and
-    // sprint-list HTTP calls above have already legitimately happened.
-    //
-    // Conjunction mirrors the early guard's, MINUS `config.project.board_id`
-    // (a board is always configured by the time `base_parts` can be empty
-    // here) and PLUS `base_parts.is_empty()`. See `NO_FILTERS_SPECIFIED_MSG`'s
-    // doc comment for the full three-call-site sync requirement.
-    if base_parts.is_empty()
-        && updated_recent.is_some()
-        && project_key.is_none()
-        && jql.is_none()
-        && status.is_none()
-        && team.is_none()
-        && recent.is_none()
-        && !open
-        && asset_key.is_none()
-        && component.is_empty()
-        && created_after.is_none()
-        && created_before.is_none()
-        && updated_after.is_none()
-        && updated_before.is_none()
-        && assignee.is_none()
-        && reporter.is_none()
-    {
-        return Err(JrError::UserError(NO_FILTERS_SPECIFIED_MSG.into()).into());
-    }
+    // FIX-F5-LRE-1 (human-adjudicated, ADV-LRE-F5-A-MED-001): the
+    // `--updated-recent`-specific `base_parts.is_empty()` backstop guard that
+    // used to live here (S-579-1 pr-review cycle 1 Finding 1) has been
+    // removed. `--updated-recent` alone now composes its `updated >= -{d}`
+    // clause into `filter_parts` regardless of whether `base_parts` is empty
+    // -- the same as `--recent` and every other filter source -- and the
+    // end-of-function `all_parts.is_empty()` guard below remains the single
+    // no-filter backstop for all fifteen filter sources.
 
     // Combine base + filters
     let mut all_parts = base_parts;
@@ -619,6 +552,18 @@ pub(super) async fn handle_list(
     // `--assets` / `--duedate` become silent no-ops by never reaching any of
     // the cmdb-field-fetch, asset-enrichment, or column-rendering logic
     // below (that logic is entirely skipped, not merely made inert).
+    //
+    // DEFENSIVE (S-584-1, BC-2.2.034 Edge Case EC-2.2.034-3): an unnamed
+    // `--fields` request (e.g. `comment`) is not a named field on
+    // `IssueFields` — it lands in `IssueFields.extra`'s `#[serde(flatten)]`
+    // catch-all and is serialized to JSON below via `output::print_output`
+    // with ZERO transformation, i.e. raw ADF for `comment.comments[].body`.
+    // Do NOT post-process `extra` here (e.g. to run `comment` bodies through
+    // `adf::adf_to_text` for consistency with the `issue comments` command's
+    // flattened rendering) — that is explicitly OUT OF SCOPE and would
+    // violate BC-2.2.034 Postcondition 1 (raw ADF preserved byte-for-byte)
+    // and Postcondition 3 (zero incremental transformation code). See also
+    // BC-2.3.042.
     if let Some(field_list) = &field_list {
         let field_refs: Vec<&str> = field_list.iter().map(String::as_str).collect();
         let search_result = client

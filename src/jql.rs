@@ -19,13 +19,23 @@ pub fn validate_duration(s: &str) -> Result<(), String> {
             "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
         ));
     }
-    let (digits, unit) = s.split_at(s.len() - 1);
+    // `s.len()` is a BYTE count, so the unit must be extracted char-safely rather
+    // than via a byte-offset `split_at` — a multibyte final character (e.g. "7é")
+    // would otherwise land the split mid-character and panic. `chars().next_back()`
+    // gets the last character, and slicing off exactly its UTF-8 byte length always
+    // lands on a valid char boundary.
+    let Some(unit) = s.chars().next_back() else {
+        return Err(format!(
+            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+        ));
+    };
+    let digits = &s[..s.len() - unit.len_utf8()];
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return Err(format!(
             "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
         ));
     }
-    if !matches!(unit, "y" | "M" | "w" | "d" | "h" | "m") {
+    if !matches!(unit, 'y' | 'M' | 'w' | 'd' | 'h' | 'm') {
         return Err(format!(
             "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
         ));
@@ -239,6 +249,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_duration_multibyte_unit_returns_err_not_panic() {
+        // FIX-F6-LRE-1: a multibyte final character used to land `split_at`
+        // mid-character and panic. These must all return the graceful
+        // invalid-duration Err instead.
+        for input in ["7é", "é", "€", "7€", "12ü", "—"] {
+            let result = validate_duration(input);
+            assert!(
+                result.is_err(),
+                "expected Err for multibyte input {input:?}, got {result:?}"
+            );
+            let err = result.unwrap_err();
+            assert!(
+                err.contains("Invalid duration") && err.contains("y, M, w, d, h, or m"),
+                "unexpected error message for {input:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn validate_asset_key_valid_simple() {
         assert!(validate_asset_key("CUST-5").is_ok());
     }
@@ -394,6 +423,14 @@ mod proptests {
                 s,
                 escaped
             );
+        }
+
+        // FIX-F6-LRE-1: validate_duration must never panic on arbitrary input,
+        // including multibyte/non-ASCII characters — it always returns a
+        // Result, never unwinds.
+        #[test]
+        fn validate_duration_never_panics(s in ".*") {
+            let _ = validate_duration(&s);
         }
     }
 }
