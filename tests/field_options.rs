@@ -14,7 +14,7 @@
 //!
 //! Pattern mirrors `tests/requesttype_commands.rs`: subprocess (`assert_cmd`)
 //! + wiremock + `JR_BASE_URL`/`JR_AUTH_HEADER` env overrides + isolated
-//! `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`/`JR_CONFIG_DIR`/`JR_CACHE_DIR` per test.
+//!   `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`/`JR_CONFIG_DIR`/`JR_CACHE_DIR` per test.
 //!
 //! Traces: BC-X.14.001..004, ADR-0019, VP-580-001..012,
 //! `.factory/stories/S-580-1-field-options-command.md` AC-001..014.
@@ -45,9 +45,7 @@ fn write_config_with_profile_project(config_home: &std::path::Path, url: &str, p
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("config.toml"),
-        format!(
-            "[instance]\nurl = \"{url}\"\n\n[profiles.default]\nproject = \"{project}\"\n"
-        ),
+        format!("[instance]\nurl = \"{url}\"\n\n[profiles.default]\nproject = \"{project}\"\n"),
     )
     .unwrap();
 }
@@ -483,9 +481,7 @@ async fn test_bc_x_14_004_ec_x_14_004_4_unknown_type_exits_64_before_createmeta(
     mount_issue_types(&h.server, "HELP", &[("10000", "Bug"), ("10001", "Task")]).await;
 
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .expect(0)
         .mount(&h.server)
@@ -727,9 +723,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_paginates_all_pages() {
 
     // Page 1: one unrelated field, total = 2.
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [{
@@ -747,9 +741,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_paginates_all_pages() {
 
     // Page 2 (startAt derived from actual page-1 length, 1): target field.
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .and(query_param("startAt", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [createmeta_field_10084()],
@@ -783,7 +775,11 @@ async fn test_bc_x_14_001_get_createmeta_fields_paginates_all_pages() {
     );
     let parsed: Value = serde_json::from_str(&stdout).unwrap();
     let arr = parsed.as_array().unwrap();
-    assert_eq!(arr.len(), 2, "expected the page-2 field's 2 options, got: {parsed}");
+    assert_eq!(
+        arr.len(),
+        2,
+        "expected the page-2 field's 2 options, got: {parsed}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -924,7 +920,10 @@ async fn test_bc_x_14_003_table_two_columns_cascading_indent() {
         "expected exit 0, got {:?}. stderr: {stderr}",
         output.status.code()
     );
-    assert!(stdout.contains("ID"), "table must have an ID column header; got: {stdout}");
+    assert!(
+        stdout.contains("ID"),
+        "table must have an ID column header; got: {stdout}"
+    );
     assert!(
         stdout.contains("Label"),
         "table must have a Label column header; got: {stdout}"
@@ -1288,7 +1287,11 @@ async fn test_bc_x_14_004_graceful_degrade_json_mode_empty_array_stderr_hint() {
     assert!(output.status.success(), "expected exit 0; stderr: {stderr}");
     let parsed: Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("expected valid JSON `[]`, got {stdout}\nerror: {e}"));
-    assert_eq!(parsed, json!([]), "graceful-degrade stdout must be an empty JSON array");
+    assert_eq!(
+        parsed,
+        json!([]),
+        "graceful-degrade stdout must be an empty JSON array"
+    );
     assert!(
         stderr.contains("no enumerable options"),
         "hint text must still be on stderr in JSON mode; got: {stderr}"
