@@ -1138,6 +1138,10 @@ pub(crate) struct CreateMetaField {
     pub schema: EditMetaFieldSchema,
     #[serde(rename = "allowedValues")]
     pub allowed_values: Option<Vec<AllowedValue>>,
+    /// See [`EditMetaField::auto_complete_url`] — same wire shape, same
+    /// BC-X.14.004 graceful-degrade consumer (`jr field options --type`).
+    #[serde(rename = "autoCompleteUrl", default)]
+    pub auto_complete_url: Option<String>,
 }
 
 /// Response wrapper for

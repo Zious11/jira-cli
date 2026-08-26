@@ -36,6 +36,13 @@ pub struct EditMetaField {
     /// Future use: required-field validation. Retained to avoid dropping data
     /// returned by the Jira API. See prd-delta-396.md §5 P3-LOW-002.
     pub required: bool,
+    /// Present for dynamic/lookup fields (user-picker, labels, etc.) whose
+    /// options are resolved live via a suggestion endpoint rather than
+    /// enumerated in `allowedValues`. Absent on fixed-value-set fields.
+    /// Consumed by `jr field options`'s BC-X.14.004 graceful-degrade hint
+    /// (AC-014: "+ autoCompleteUrl if present in the response").
+    #[serde(rename = "autoCompleteUrl", default)]
+    pub auto_complete_url: Option<String>,
 }
 
 /// Schema descriptor for a field in the editmeta response.

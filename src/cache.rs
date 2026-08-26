@@ -1871,6 +1871,7 @@ mod tests {
                 default_values: None,
                 valid_values: None,
                 jira_schema: serde_json::json!({"type": "string", "system": "summary"}),
+                auto_complete_url: None,
             }],
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2499,6 +2500,7 @@ mod request_type_cache_tests {
                 default_values: None,
                 valid_values: None,
                 jira_schema: serde_json::json!({"type": "string", "system": "summary"}),
+                auto_complete_url: None,
             }],
         }
     }

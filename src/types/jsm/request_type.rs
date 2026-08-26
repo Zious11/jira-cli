@@ -44,6 +44,13 @@ pub struct RequestTypeField {
     pub default_values: Option<Vec<serde_json::Value>>,
     pub valid_values: Option<Vec<serde_json::Value>>,
     pub jira_schema: serde_json::Value,
+    /// See `EditMetaField::auto_complete_url` (`src/types/jira/editmeta.rs`)
+    /// — same wire shape and BC-X.14.004 graceful-degrade consumer (`jr
+    /// field options --request-type`). Optional/absent on most JSM field
+    /// descriptors, so `#[serde(default)]` (unlike this struct's other
+    /// `Option` fields, which the fixture JSON always includes).
+    #[serde(default)]
+    pub auto_complete_url: Option<String>,
 }
 
 /// Response envelope for `GET .../requesttype/{id}/field`.
