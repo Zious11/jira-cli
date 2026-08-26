@@ -3,6 +3,7 @@ pub mod assets;
 pub mod auth;
 pub mod board;
 pub mod component;
+pub mod field;
 pub mod init;
 pub mod issue;
 pub mod project;
@@ -123,6 +124,11 @@ pub enum Command {
     Component {
         #[command(subcommand)]
         command: ComponentSubcommand,
+    },
+    /// Discover custom-field allowed options (issue #580)
+    Field {
+        #[command(subcommand)]
+        command: FieldCommand,
     },
     /// Make a raw authenticated HTTP request to the Jira REST API.
     Api {
@@ -1158,6 +1164,46 @@ pub enum RequestTypeCommand {
     Fields {
         /// Request type name (partial match supported) OR numeric ID
         name_or_id: String,
+    },
+}
+
+/// `jr field` subcommands (issue #580, BC-X.14.001..004).
+#[derive(Subcommand)]
+pub enum FieldCommand {
+    /// Enumerate a custom field's allowed options
+    ///
+    /// Exactly one of `--type`, `--request-type`, `--issue` selects the
+    /// enumeration mode; `--project` is a companion flag whose role
+    /// (required-or-defaulted / optional / ignored) depends on the selected
+    /// mode. See ADR-0019 §1 / BC-X.14.001.
+    Options {
+        /// `customfield_NNNNN` literal, or a human field name resolved via
+        /// `list_fields()` + `partial_match`
+        field: String,
+
+        /// M2: enumerate via project+issue-type createmeta. Requires a
+        /// resolvable `--project` (explicit flag or profile/config default).
+        #[arg(long = "type")]
+        r#type: Option<String>,
+
+        /// M3: enumerate via JSM request-type fields. `--project` is an
+        /// optional companion naming the service-desk project explicitly.
+        #[arg(long = "request-type")]
+        request_type: Option<String>,
+
+        /// M1: enumerate via an existing issue's editmeta. `--project` is
+        /// not consulted (the issue key alone supplies project context).
+        #[arg(long)]
+        issue: Option<String>,
+
+        /// Companion project override — required-or-defaulted for `--type`,
+        /// optional for `--request-type`, ignored for `--issue`.
+        #[arg(long)]
+        project: Option<String>,
+
+        /// Client-side, case-insensitive substring filter against id/label
+        #[arg(long)]
+        value: Option<String>,
     },
 }
 

@@ -1,6 +1,9 @@
 use crate::api::client::JiraClient;
 use crate::api::pagination::{CursorPage, OffsetPage};
-use crate::types::jira::{Comment, CreateIssueResponse, EditMeta, Issue, TransitionsResponse};
+use crate::types::jira::{
+    AllowedValue, Comment, CreateIssueResponse, EditMeta, EditMetaFieldSchema, Issue,
+    TransitionsResponse,
+};
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
@@ -1069,6 +1072,87 @@ impl JiraClient {
         }
         Ok(all)
     }
+
+    /// Enumerate a custom field's allowed options via project+issue-type
+    /// createmeta (M2, `jr field options --type <T>`, ADR-0019 §1).
+    ///
+    /// Calls `GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}`
+    /// — the current, non-deprecated createmeta-fields-by-issue-type form
+    /// (CHANGE-1304 deprecated the old `createmeta?expand=` shape). This is
+    /// a DIFFERENT endpoint from [`get_issue_types_for_project`], which
+    /// resolves the issue-type NAME to an id BEFORE this call — the two are
+    /// distinct, independently offset-paginated calls (Architecture
+    /// Compliance Rule 7).
+    ///
+    /// Offset-paginated internally (`startAt`/`maxResults`/`total`), same
+    /// pagination family as [`get_issue_types_for_project`]'s sibling call —
+    /// one or more `GET`s until all field pages are collected, so a target
+    /// field on page ≥2 still resolves (AC-008). Not cached — this is a
+    /// read-only, per-invocation enumeration.
+    pub(crate) async fn get_createmeta_fields(
+        &self,
+        project_key: &str,
+        issue_type_id: &str,
+    ) -> Result<Vec<CreateMetaField>> {
+        let page_size: u32 = 200;
+        let mut all: Vec<CreateMetaField> = Vec::new();
+        let mut start_at: u32 = 0;
+        loop {
+            let response: CreateMetaFieldsResponse = self
+                .get(&format!(
+                    "/rest/api/3/issue/createmeta/{}/issuetypes/{}?startAt={}&maxResults={}",
+                    urlencoding::encode(project_key),
+                    urlencoding::encode(issue_type_id),
+                    start_at,
+                    page_size,
+                ))
+                .await?;
+            let total = response.total;
+            let page_len = response.fields.len() as u32;
+            all.extend(response.fields);
+            if page_len == 0 || start_at + page_len >= total {
+                break;
+            }
+            start_at += page_len;
+        }
+        Ok(all)
+    }
+}
+
+/// A single field descriptor returned by
+/// `GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}`
+/// (M2 enumeration, ADR-0019 §1, `jr field options --type <T>`).
+///
+/// Reuses [`AllowedValue`]/[`EditMetaFieldSchema`] from
+/// `types::jira::editmeta` rather than redefining a second, structurally
+/// identical pair — both createmeta and editmeta's `allowedValues[].id`
+/// shape are the same "observed-not-typed" structure per Jira's v3 OpenAPI
+/// (ADR-0019 §1 "Type reuse" note). Kept inline in `issues.rs`, following
+/// the exact precedent [`IssueTypeEntry`]/[`CreatemetaIssueTypesResponse`]
+/// already established for the sibling createmeta-issuetypes call.
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateMetaField {
+    #[serde(rename = "fieldId")]
+    pub field_id: String,
+    pub name: String,
+    pub schema: EditMetaFieldSchema,
+    #[serde(rename = "allowedValues")]
+    pub allowed_values: Option<Vec<AllowedValue>>,
+}
+
+/// Response wrapper for
+/// `GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}`.
+///
+/// Offset-paginated (`startAt`/`maxResults`/`total`); prefers the `fields`
+/// key, tolerates the OpenAPI-synonymous `results` key (AC-008) — no
+/// `values`, no `nextPageToken`, same pagination family as the sibling
+/// [`CreatemetaIssueTypesResponse`].
+#[derive(Debug, Deserialize)]
+struct CreateMetaFieldsResponse {
+    #[serde(alias = "results", default)]
+    pub fields: Vec<CreateMetaField>,
+    #[serde(default)]
+    pub total: u32,
 }
 
 /// Issue type entry returned by `GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes`.
