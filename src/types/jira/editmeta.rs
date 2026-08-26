@@ -77,4 +77,14 @@ pub struct AllowedValue {
     /// children). Parsed from the API response; unused in v1 resolution logic.
     /// Future: v2 cascade-select name matching. See prd-delta-396.md §5 O-2.
     pub name: Option<String>,
+    /// Cascading child options (cascading-select fields). Additive, behavior-
+    /// preserving extension: `#[serde(default)]` means any existing caller
+    /// deserializing an `AllowedValue` without a `children` key is unaffected
+    /// (defaults to an empty `Vec`). Added by S-580-1 (`jr field options`,
+    /// AC-010, ADR-0019 §Amendment D4) for the READ-side cascading option
+    /// enumeration normalizer (`cli::field::normalize_from_allowed_values`);
+    /// D4 also reserves this field for S-578-2's WRITE-side `:option`
+    /// composer, which is a separate, later consumer of the same shape.
+    #[serde(default)]
+    pub children: Vec<AllowedValue>,
 }
