@@ -497,7 +497,8 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, FieldVa
         // Unicode-scalar-safe via str::find(char), never a raw byte index.
         let Some(eq_idx) = pair.find('=') else {
             return Err(JrError::UserError(format!(
-                "Invalid --field value '{pair}': expected NAME=VALUE"
+                "--field \"{pair}\" is not a valid NAME=VALUE pair: missing '='. \
+                 Use --field NAME=VALUE (e.g., --field customfield_10200=foo)."
             )));
         };
         let name_part = &pair[..eq_idx];
@@ -507,6 +508,26 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, FieldVa
         // before the '=' — Unicode-scalar-safe via str::rfind(char), never a
         // raw byte index (FIX-F6-LRE-1 class, #734).
         let (name, kind) = match name_part.rfind(':') {
+            // Whitespace fallback (PR #739 fresh-eyes review, Blocker 1):
+            // none of the four valid kind tags (`option`, `id`, `name`,
+            // `asset`) contain ASCII whitespace, so a non-empty candidate
+            // segment that DOES contain whitespace can never be a real kind
+            // tag — it is ordinary name text after a colon that happens to
+            // be followed by a space (the canonical example: a field
+            // literally named "Region: EMEA"). Treat this exactly like "no
+            // ':' found before '='" (step 4 below): `kind: None`, and the
+            // FULL original `name_part` (colon included) is the field name.
+            // This is additive — it only changes behavior for candidate
+            // segments that contain whitespace; an empty segment (EC-5) or
+            // a whitespace-free-but-invalid segment (EC-1/EC-7, e.g.
+            // "bogus") still fall through to the unknown-kind error below.
+            Some(colon_idx)
+                if name_part[colon_idx + 1..]
+                    .chars()
+                    .any(|c| c.is_whitespace()) =>
+            {
+                (name_part, None)
+            }
             Some(colon_idx) => {
                 let candidate_name = &name_part[..colon_idx];
                 let candidate_kind = &name_part[colon_idx + 1..];
@@ -934,6 +955,57 @@ mod field_value_kind_tests {
             "S-578-1: empty ':option' value must parse to kind Some(Option), value \"\" — \
              completes the empty-value matrix alongside :id/:name/:asset (EC-8/9/2a)"
         );
+    }
+
+    /// PR #739 fresh-eyes review, Blocker 1 (regression vs `develop`): a
+    /// field NAME containing a colon FOLLOWED BY WHITESPACE (e.g. the
+    /// canonical `"Region: EMEA"` example BC-3.4.026's own rationale text
+    /// cites) must keep working exactly as it did before this story's
+    /// `:kind`-tag parser landed. None of the four valid kind tags
+    /// (`option`, `id`, `name`, `asset`) contain ASCII whitespace, so a
+    /// candidate segment with whitespace can never be a real kind tag —
+    /// the parser must fall through to the bare-form branch (`kind: None`)
+    /// using the WHOLE original `NAME[:kind]` text (colon included) as the
+    /// field name, not just the portion before that colon.
+    #[test]
+    fn test_bc_3_4_026_colon_in_name_with_whitespace_after_falls_back_to_bare_form() {
+        let pairs = vec!["Region: EMEA=x".to_string()];
+        let result = parse_field_kv(&pairs)
+            .expect("colon-in-name-with-trailing-whitespace must parse as bare form, not error");
+        assert_eq!(result.len(), 1, "must produce exactly one map entry");
+        assert_eq!(
+            result.get("Region: EMEA"),
+            Some(&FieldValueSpec {
+                kind: None,
+                value: "x".to_string(),
+            }),
+            "regression pin: 'Region: EMEA=x' must parse to name 'Region: EMEA' \
+             (colon preserved verbatim), kind: None, value 'x' — matching develop's \
+             pre-existing first-'='-only split behavior"
+        );
+    }
+
+    /// PR #739 fresh-eyes review, Blocker 2: the missing-'=' error message
+    /// must include actionable guidance per CLAUDE.md's "Errors: Always
+    /// suggest what to do next" convention — a concrete `--field NAME=VALUE`
+    /// example, not just a bare restatement of the expected shape.
+    #[test]
+    fn test_bc_3_8_008_missing_equals_error_includes_actionable_guidance() {
+        let pairs = vec!["noequalssign".to_string()];
+        let err = parse_field_kv(&pairs).expect_err("a pair with no '=' must be rejected");
+        assert_eq!(err.exit_code(), 64, "missing '=' must map to exit code 64");
+        if let JrError::UserError(msg) = &err {
+            assert!(
+                msg.contains("--field NAME=VALUE"),
+                "message must contain actionable '--field NAME=VALUE' guidance, got: {msg}"
+            );
+            assert!(
+                msg.contains("customfield_10200=foo"),
+                "message must contain the concrete example 'customfield_10200=foo', got: {msg}"
+            );
+        } else {
+            panic!("expected JrError::UserError, got: {err:?}");
+        }
     }
 }
 

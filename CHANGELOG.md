@@ -4,6 +4,29 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **`--field` now parses opt-in `NAME:kind=VALUE` hint syntax** (S-578-1,
+  BC-3.4.026, BC-3.4.031). `parse_field_kv` (shared by `issue create`,
+  `issue edit`, and JSM `issue create`) now recognizes a trailing
+  `:option`/`:id`/`:name`/`:asset` kind tag before the `=`, in addition to the
+  existing bare `NAME=VALUE` form. This story ships the **parser only** —
+  real dispatch on the parsed `kind` lands in S-578-2/3/4. Until then, an
+  interim guard (`reject_unsupported_hint_kinds`) rejects any hinted
+  `NAME:kind=VALUE` pair on `issue edit` and JSM `issue create` with an exit-64
+  "field-value kind hints (:option/:id/:name/:asset) are not yet supported on
+  this command" error.
+  Bare `NAME=VALUE` is unaffected, **except**: a field NAME containing a colon
+  immediately followed by a short token that happens to match one of the four
+  kind names, or by a non-whitespace token with no space before the `=`, is
+  now parsed as a (possibly invalid) hinted pair rather than treated as
+  literal name text — e.g. `--field "Region:X=val"` (no space after the
+  colon) now exits 64 with "unknown field-value kind 'X'". A field NAME
+  containing a colon **followed by whitespace** — e.g.
+  `--field "Region: EMEA=val"` — is unaffected and continues to parse exactly
+  as it did before this story (name `"Region: EMEA"`, `kind: None`), because
+  none of the four valid kind tags contain whitespace.
+
 ## [0.7.0-dev.1] - 2026-08-19
 
 ### Breaking Changes
