@@ -399,14 +399,13 @@ fn degrade_hint_for_schema(display_name: &str, schema: DegradeSchemaInfo<'_>) ->
         || custom
             .map(|c| {
                 let c_lower = c.to_lowercase();
-                c_lower.contains("userpicker")
-                    || c_lower.contains("multiuserpicker")
-                    || c_lower.contains("approve")
+                c_lower.contains("userpicker") || c_lower.contains("approv")
             })
             .unwrap_or(false)
         || system
             .map(|s| s.eq_ignore_ascii_case("labels"))
-            .unwrap_or(false);
+            .unwrap_or(false)
+        || auto_complete_url.is_some();
 
     if is_dynamic {
         let mut hint = format!(
