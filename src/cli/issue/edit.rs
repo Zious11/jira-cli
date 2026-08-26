@@ -16,7 +16,7 @@ use crate::error::JrError;
 use crate::output;
 use crate::partial_match::MatchResult;
 
-use super::create::{parse_field_kv, reject_unsupported_hint_kinds};
+use super::create::parse_field_kv;
 use super::format;
 use super::helpers;
 use super::json_output;
@@ -75,12 +75,6 @@ pub(super) async fn handle_edit(
     // Parse --field NAME=VALUE pairs into a HashMap (last-wins on duplicate keys).
     // Per EC-3.4.017-10: duplicate keys are collapsed here before resolve_edit_fields sees them.
     let field_pairs = parse_field_kv(&field_raw)?;
-
-    // S-578-1 INTERIM GUARD: `:kind` dispatch is not implemented on this
-    // command yet (deferred to S-578-2) — reject a hinted pair loudly rather
-    // than silently treating it as bare. Remove this call once S-578-2 lands
-    // real dispatch. Placed immediately after parsing, before any HTTP call.
-    reject_unsupported_hint_kinds(&field_pairs)?;
 
     // Validate: at least one selector must be present (keys or --jql).
     // clap doesn't enforce this natively since both are optional — we validate here.
@@ -544,16 +538,19 @@ pub(super) async fn handle_edit(
         // H-3(a): table-mode --field echo uses println! (stdout), NOT eprintln!
         // (stderr), so the entire planned-changes preview is on one stream.
         let mut dr_changed: BTreeMap<String, String> = BTreeMap::new();
+        // AC-012: dr_planned carries the per-field dry-run preview — the
+        // composed wire shape for a hinted `--field` (:option/:id/:name/
+        // :asset), or the same simplified display string dr_changed carries
+        // for a bare field (documented exception to the general rule).
+        let mut dr_planned: BTreeMap<String, serde_json::Value> = BTreeMap::new();
         if !field_pairs.is_empty() {
             let dr_key = &effective_keys[0];
             let mut dr_fields = json!({});
-            // S-578-2: `resolve_edit_fields` now takes `FieldValueSpec` directly
-            // (threaded verbatim from `parse_field_kv`, S-578-1) so the
-            // hinted-bypass dispatch (:option/:id/:name/:asset) can read
-            // `spec.kind`. The dispatch itself is a `todo!()` stub as of this
-            // commit — unreachable via this call site today because
-            // `reject_unsupported_hint_kinds` (create.rs, called above) still
-            // exits 64 on any hinted pair before this block runs.
+            // S-578-2: `resolve_edit_fields` reads `FieldValueSpec.kind` and
+            // dispatches to the real hinted-bypass composer BEFORE falling
+            // through to the bare-form editmeta type-dispatch (AC-001, AC-013
+            // — the :asset cold-cache side effect runs here, unconditionally,
+            // even under --dry-run).
             helpers::resolve_edit_fields(
                 client,
                 &config.active_profile_name,
@@ -561,6 +558,7 @@ pub(super) async fn handle_edit(
                 &field_pairs,
                 &mut dr_fields,
                 &mut dr_changed,
+                &mut dr_planned,
             )
             .await?;
         }
@@ -754,8 +752,10 @@ pub(super) async fn handle_edit(
                 }
                 // H-3(b): merge resolved --field entries into plannedChanges BEFORE
                 // emitting the JSON object (resolve ran above, before this match arm).
-                for (field, value) in &dr_changed {
-                    planned.insert(field.clone(), json!(value));
+                // AC-012: dr_planned carries the composed wire shape for a hinted
+                // field, or the simplified display string for a bare field.
+                for (field, value) in &dr_planned {
+                    planned.insert(field.clone(), value.clone());
                 }
 
                 let payload = json!({
@@ -1041,8 +1041,9 @@ pub(super) async fn handle_edit(
     // at all -- unaffected by whether components ends up merged into the
     // same PUT.
     if !field_pairs.is_empty() {
-        // S-578-2: see the dry-run block above for the FieldValueSpec-threading
-        // rationale — same stub status applies to the live path.
+        // S-578-2: real hinted-bypass dispatch (see the dry-run block above);
+        // the live path doesn't render a plannedChanges preview, so the new
+        // output map is a throwaway.
         helpers::resolve_edit_fields(
             client,
             &config.active_profile_name,
@@ -1050,6 +1051,7 @@ pub(super) async fn handle_edit(
             &field_pairs,
             &mut fields,
             &mut changed_fields,
+            &mut BTreeMap::new(),
         )
         .await?;
         has_updates = true;
