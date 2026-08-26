@@ -1175,6 +1175,94 @@ async fn test_bc_x_14_001_get_createmeta_fields_paginates_all_pages() {
     );
 }
 
+/// C-LOW-2 (round-2 convergence, TDD RED): pagination must continue past a
+/// page whose response OMITS `total` entirely — `CreateMetaFieldsResponse
+/// .total` is `#[serde(default)]` (`u32`), so a missing `total` silently
+/// defaults to `0`. `get_createmeta_fields`'s termination check is
+/// `page_len == 0 || start_at + page_len >= total`; with `total` defaulted
+/// to `0`, `start_at + page_len >= 0` is true unconditionally on page 1 (any
+/// non-empty page), so pagination incorrectly stops after page 1 and NEVER
+/// issues the `startAt=200` request for page 2 — a target field placed on
+/// page 2 is silently lost. Page 1 here returns a FULL page (200 fields, the
+/// real `page_size`) to specifically exercise the "a full page must still
+/// continue" invariant (not merely "a short page correctly stops"), and
+/// neither page carries a `total` key. Expected to FAIL until the
+/// implementer fixes the termination check to not treat a missing `total`
+/// as "no more pages" (e.g. `Option<u32>` + explicit no-`total` handling, or
+/// continuing whenever the page was full).
+#[tokio::test]
+async fn test_bc_x_14_001_get_createmeta_fields_continues_pagination_when_total_absent() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "HELP", &[("10000", "Bug")]).await;
+
+    // Page 1: a FULL page (200 dummy fields), `total` intentionally absent.
+    let page_1_fields: Vec<Value> = (0..200)
+        .map(|i| {
+            json!({
+                "fieldId": format!("customfield_9{i:03}"),
+                "name": format!("Dummy {i}"),
+                "schema": {"type": "string"},
+                "allowedValues": null
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "fields": page_1_fields,
+            "startAt": 0,
+            "maxResults": 200
+            // "total" intentionally absent — defaults to 0 via #[serde(default)].
+        })))
+        .mount(&h.server)
+        .await;
+
+    // Page 2 (startAt=200): the target field. `total` also absent.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
+        .and(query_param("startAt", "200"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "fields": [createmeta_field_10084()],
+            "startAt": 200,
+            "maxResults": 200
+            // "total" intentionally absent.
+        })))
+        .mount(&h.server)
+        .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--type",
+        "Bug",
+        "--project",
+        "HELP",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "TDD RED (C-LOW-2): pagination must continue past a full page 1 onto \
+         page 2 even when `total` is absent from the response, so the target \
+         field on page 2 still resolves; got exit {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = parsed.as_array().unwrap();
+    assert_eq!(
+        arr.len(),
+        2,
+        "expected the page-2 field's 2 options, got: {parsed}"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AC-011 — <field> resolution (customfield_NNNNN bypass / list_fields + partial_match)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1653,9 +1741,17 @@ async fn test_bc_x_14_004_graceful_degrade_assets_field() {
         "graceful degrade must exit 0, not error; got {:?}. stderr: {stderr}",
         output.status.code()
     );
+    // B-M1 (round-2 convergence, MEDIUM): pin the EXACT Assets-branch phrase
+    // (matching the sibling `test_bc_x_14_004_graceful_degrade_array_typed_cmdb_field`
+    // assertion), not a bare `contains("Assets")` substring check — the
+    // fixture's own field name ("Affected Assets") would satisfy a bare
+    // "Assets" substring match via the GENERIC fall-through hint even if
+    // the CMDB classification itself were broken, making the original
+    // assertion non-discriminating.
     assert!(
-        stderr.contains("no enumerable options") && stderr.contains("Assets"),
-        "expected the Assets-specific degrade hint on stderr; got: {stderr}"
+        stderr.contains("no enumerable options") && stderr.contains("uses Assets (CMDB)"),
+        "expected the Assets-specific degrade hint (exact CMDB-branch phrase) on \
+         stderr, not merely a field-name coincidence; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty() || stdout.contains("No results"),
@@ -1820,6 +1916,129 @@ async fn test_bc_x_14_004_graceful_degrade_labels_field() {
         stderr.contains("no enumerable options") && stderr.contains("dynamic"),
         "a labels/suggestion-backed field must get the dynamic/lookup-field \
          degrade hint, not the generic hint; got: {stderr}"
+    );
+}
+
+/// Graceful degradation — A-MEDIUM (round-2 convergence, TDD RED):
+/// `autoCompleteUrl` presence should ITSELF classify a field as
+/// dynamic/suggestion-backed, independent of the keyword allowlist
+/// (`is_dynamic` in `degrade_hint_for_schema`). A group-picker field
+/// (`schema.type` "group", `schema.custom` naming `...:grouppicker`) sits
+/// OUTSIDE the current keyword set (`user`/`userpicker`/`multiuserpicker`/
+/// `approve`/`labels`) entirely, so it currently falls through to the
+/// GENERIC "no fixed value set" hint even though it carries a real
+/// `autoCompleteUrl` and is resolved live via a suggestion endpoint —
+/// contradicting BC-X.14.004's degrade table ("...Approvers/labels/OTHER
+/// suggestion-backed fields" — "OTHER" covers any field with an
+/// `autoCompleteUrl`, not just the named keyword families). Expected to
+/// FAIL until the implementer adds `|| auto_complete_url.is_some()` to
+/// `is_dynamic`'s classification.
+#[tokio::test]
+async fn test_bc_x_14_004_graceful_degrade_group_picker_classified_by_autocompleteurl() {
+    let h = Harness::new().await;
+    mount_editmeta(
+        &h.server,
+        "FOO-1",
+        json!({
+            "customfield_10200": {
+                "name": "Reviewer Group",
+                "schema": {
+                    "type": "group",
+                    "custom": "com.atlassian.jira.plugin.system.customfieldtypes:grouppicker"
+                },
+                "allowedValues": null,
+                "autoCompleteUrl": "https://example.atlassian.net/rest/api/1.0/groups/picker",
+                "operations": ["set"],
+                "required": false
+            }
+        }),
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10200",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "expected exit 0; stderr: {stderr}");
+    assert!(
+        stderr.contains("no enumerable options") && stderr.contains("dynamic"),
+        "a group-picker field carrying an autoCompleteUrl must be classified \
+         as dynamic/lookup — not the generic 'no fixed value set' hint — even \
+         though 'group'/'grouppicker' matches none of the keyword allowlist; \
+         got: {stderr}"
+    );
+    assert!(
+        stderr.contains("https://example.atlassian.net/rest/api/1.0/groups/picker"),
+        "the autoCompleteUrl must be surfaced in the dynamic-field hint; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no fixed value set"),
+        "must NOT fall through to the generic hint when autoCompleteUrl is \
+         present; got: {stderr}"
+    );
+}
+
+/// Graceful degradation — C-LOW-1 (round-2 convergence, TDD RED): a JSM
+/// Approvers field (`schema.custom` =
+/// `com.atlassian.servicedesk.approvals-plugin:sd-approvals`) must get the
+/// dynamic/lookup hint per BC-X.14.004's degrade table ("...Approvers/
+/// labels/other suggestion-backed fields"). Currently `is_dynamic`'s
+/// substring check is `c_lower.contains("approve")`, which does NOT match
+/// `"...approvals-plugin:sd-approvals"` (no literal "approve" substring —
+/// "approvals" lacks the trailing "e" after "approv"). Expected to FAIL
+/// until the implementer either widens the substring to `"approv"` or adds
+/// the `autoCompleteUrl` classifier from the sibling group-picker test
+/// above (this fixture carries one too, so either fix closes this gap).
+#[tokio::test]
+async fn test_bc_x_14_004_graceful_degrade_approvers_field() {
+    let h = Harness::new().await;
+    mount_editmeta(
+        &h.server,
+        "FOO-1",
+        json!({
+            "customfield_10300": {
+                "name": "Approvers",
+                "schema": {
+                    "type": "array",
+                    "custom": "com.atlassian.servicedesk.approvals-plugin:sd-approvals"
+                },
+                "allowedValues": null,
+                "autoCompleteUrl": "https://example.atlassian.net/rest/servicedeskapi/request/FOO-1/approver",
+                "operations": ["set"],
+                "required": false
+            }
+        }),
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10300",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "expected exit 0; stderr: {stderr}");
+    assert!(
+        stderr.contains("no enumerable options") && stderr.contains("dynamic"),
+        "a JSM Approvers field must get the dynamic/lookup-field degrade \
+         hint, not the generic 'no fixed value set' hint; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no fixed value set"),
+        "must NOT fall through to the generic hint for an Approvers field; \
+         got: {stderr}"
     );
 }
 

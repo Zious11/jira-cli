@@ -1296,6 +1296,123 @@ mod tests {
         );
     }
 
+    // ── B-M2 (round-2 convergence, MEDIUM): MAX_FIELD_OPTION_DEPTH=256
+    // regression pin. Existing proptests bound recursion depth at 3-4
+    // (`prop_recursive(4, 32, 4, ...)`), far below the 256 cap, so the
+    // `depth >= MAX_FIELD_OPTION_DEPTH` guard branch itself had ZERO
+    // coverage before these two tests. A ~300-level-deep fixture is built
+    // for each normalizer (M3's untyped-JSON path and M1/M2's typed
+    // `AllowedValue` path) so the guard actually fires: the TOP-LEVEL entry
+    // must always be preserved (never dropped, regardless of depth), and
+    // the entry sitting exactly AT nesting depth 256 must have its own
+    // `children` truncated to empty — even though the source data nests
+    // further beneath it. A mutant that deletes the guard (unconditional
+    // recursion) leaves that entry's `children` non-empty; a mutant that
+    // flips `>=` to `>` pushes truncation one level later (depth 257) —
+    // both are caught by the final `is_empty()` assertion below.
+
+    /// M3 (`normalize_from_valid_values`): depth-cap truncation over a
+    /// ~300-level-deep untyped-JSON `children` chain.
+    #[test]
+    fn test_bc_x_14_001_normalize_from_valid_values_depth_cap_truncates_children_beyond_256() {
+        // Build innermost-out: "n0" is the leaf; each wrap adds one level of
+        // nesting, so after the loop `node` is the OUTERMOST/top-level entry
+        // "n299" (depth 0), with "n0" nested 299 levels beneath it.
+        let mut node = serde_json::json!({"value": "n0", "label": "leaf"});
+        for i in 1..300 {
+            node = serde_json::json!({
+                "value": format!("n{i}"),
+                "label": format!("depth label {i}"),
+                "children": [node],
+            });
+        }
+        let values = vec![node];
+        let result = normalize_from_valid_values(&values);
+
+        // (a) the top-level entry is never dropped.
+        assert_eq!(
+            result.len(),
+            1,
+            "top-level entry must be preserved, never dropped"
+        );
+        assert_eq!(result[0].id, Some("n299".to_string()));
+
+        // Walk down 256 levels (depth 0 -> depth 256) via `.children[0]`;
+        // (b) this terminates cleanly (no stack overflow) by construction —
+        // reaching this point at all is part of the proof.
+        let mut cursor = &result[0];
+        for depth in 0..256 {
+            assert_eq!(
+                cursor.children.len(),
+                1,
+                "entry at depth {depth} must still carry its one child — \
+                 truncation starts strictly AT depth 256, not before"
+            );
+            cursor = &cursor.children[0];
+        }
+        // `cursor` is now the entry at depth 256, corresponding to source id
+        // "n43" (299 - 256 = 43) — built, never dropped.
+        assert_eq!(cursor.id, Some("n43".to_string()));
+        // (c) but its children ARE truncated, even though the source JSON
+        // nests further beneath it (down to "n0").
+        assert!(
+            cursor.children.is_empty(),
+            "MAX_FIELD_OPTION_DEPTH must truncate children beyond depth 256 — \
+             a mutant deleting the guard or flipping `>=` to `>` must fail \
+             this test"
+        );
+    }
+
+    /// M1/M2 (`normalize_from_allowed_values`): depth-cap truncation over a
+    /// ~300-level-deep typed `AllowedValue` `children` chain.
+    #[test]
+    fn test_bc_x_14_001_normalize_from_allowed_values_depth_cap_truncates_children_beyond_256() {
+        let mut node = AllowedValue {
+            id: Some("n0".to_string()),
+            value: Some("leaf".to_string()),
+            name: None,
+            children: Vec::new(),
+        };
+        for i in 1..300 {
+            node = AllowedValue {
+                id: Some(format!("n{i}")),
+                value: Some(format!("depth label {i}")),
+                name: None,
+                children: vec![node],
+            };
+        }
+        let values = vec![node];
+        let result = normalize_from_allowed_values(&values);
+
+        // (a) the top-level entry is never dropped.
+        assert_eq!(
+            result.len(),
+            1,
+            "top-level entry must be preserved, never dropped"
+        );
+        assert_eq!(result[0].id, Some("n299".to_string()));
+
+        // (b) walk down 256 levels cleanly (no stack overflow).
+        let mut cursor = &result[0];
+        for depth in 0..256 {
+            assert_eq!(
+                cursor.children.len(),
+                1,
+                "entry at depth {depth} must still carry its one child — \
+                 truncation starts strictly AT depth 256, not before"
+            );
+            cursor = &cursor.children[0];
+        }
+        assert_eq!(cursor.id, Some("n43".to_string()));
+        // (c) children beyond depth 256 are truncated.
+        assert!(
+            cursor.children.is_empty(),
+            "MAX_FIELD_OPTION_DEPTH must truncate children beyond depth 256 — \
+             a mutant deleting the guard or flipping `>=` to `>` must fail \
+             this test"
+        );
+    }
+
     // ── AC-012 / BC-X.14.002 / VP-580-007: --value client-side filter ──
 
     fn opt(id: Option<&str>, label: Option<&str>) -> FieldOption {
