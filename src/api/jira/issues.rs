@@ -1120,8 +1120,16 @@ impl JiraClient {
             // full-page heuristic: only stop once a page comes back short
             // of `page_size` (or empty) — a MISSING `total` on a FULL page
             // must not silently truncate to page 1 (C-LOW-2).
+            //
+            // `page_len == 0` is checked in BOTH branches (S-580-1, CWE-835):
+            // an empty page while `start_at < total` is reachable via
+            // permission-filtered short/empty pages (the JRACLOUD-71293/95368
+            // class — see `get_issue_types_for_project`'s identical guard
+            // above) and previously left `done` false in the `total > 0`
+            // branch, so `start_at += page_len` added 0 and the identical GET
+            // repeated forever.
             let done = if total > 0 {
-                start_at + page_len >= total
+                page_len == 0 || start_at + page_len >= total
             } else {
                 page_len == 0 || page_len < page_size
             };
