@@ -377,8 +377,18 @@ async fn test_bc_3_4_027_cascading_split_once_wire_shape() {
          stderr={stderr} stdout={stdout}"
     );
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    // NOTE: keyed by the literal `customfield_20002` bypass name, not the
+    // editmeta's own field name ("Cascade Field") — the `customfield_NNNNN`
+    // literal bypass (BC-3.4.015 Step 1) sets `human_name = name.clone()`
+    // (the literal itself) unconditionally, a resolution shared identically
+    // by the bare-form and hinted dispatch paths (Architecture Compliance
+    // Rule 1). Corrected to match the identical-scenario sibling assertions
+    // in `test_bc_3_4_021_dry_run_option_hint_cascading_preview_shape` and
+    // `test_changed_fields_echo_per_hint_kind`, both of which key on
+    // `"customfield_20002"` for this exact same `--field
+    // customfield_20002:option=Parent>Child` input.
     assert_eq!(
-        parsed["changed_fields"]["Cascade Field"].as_str(),
+        parsed["changed_fields"]["customfield_20002"].as_str(),
         Some("Parent > Child"),
         "AC-003: changed_fields echo must be '<parent> > <child>'; stdout={stdout}"
     );
