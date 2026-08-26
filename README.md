@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/Zious11/jira-cli/main/install.sh | 
 To install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Zious11/jira-cli/main/install.sh | sh -s -- v0.5.0
+curl -fsSL https://raw.githubusercontent.com/Zious11/jira-cli/main/install.sh | sh -s -- v0.6.0
 ```
 
 ### Install with mise
@@ -63,10 +63,10 @@ in per-tool in your `mise.toml`:
 "github:Zious11/jira-cli" = { version = "latest", prerelease = true }
 ```
 
-Windows users need `prerelease = true` for now: the current stable
-(`v0.5.0`) shipped without a Windows asset, so a plain `@latest` resolves
-to a release with no matching download until a Windows binary lands on a
-stable tag (planned for `v0.6.0`).
+Stable releases ship a Windows asset (`x86_64-pc-windows-msvc.zip`) as of
+`v0.6.0`, so `prerelease = true` is no longer required for Windows on a
+plain `@latest`. Set `prerelease = true` only if you want to track
+pre-release builds cut from `develop`, per the block above.
 
 If mise-installed `jr` refuses to launch on macOS with a Gatekeeper
 warning, clear the quarantine attribute. When mise is active in your
@@ -250,8 +250,8 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | `jr auth logout` | Clear OAuth tokens for the active profile (or `--profile NAME`); shared API token NOT touched |
 | `jr auth remove <NAME>` | Permanently delete a profile (config entry + cache + per-profile OAuth tokens). Cannot remove the active profile |
 | `jr me` | Show current user info |
-| `jr issue list` | List issues (`--assignee`, `--reporter`, `--recent`, `--status`, `--open`, `--team`, `--asset KEY`, `--jql`, `--limit`/`--all`, `--points`, `--assets`, `--duedate`) |
-| `jr issue view KEY` | View issue details (per-field asset rows, enriched JSON, story points, due date) |
+| `jr issue list` | List issues (`--assignee`, `--reporter`, `--recent`, `--updated-recent <duration>`, `--status`, `--open`, `--team`, `--asset KEY`, `--component NAME`, `--created-after`/`--created-before`/`--updated-after`/`--updated-before` (`YYYY-MM-DD`), `--jql`, `--limit`/`--all`, `--points`, `--assets`, `--duedate`, `--fields <CSV>` (requires `--output json`), `--sort <field>:asc\|desc`) |
+| `jr issue view KEY` | View issue details (per-field asset rows, enriched JSON, story points, due date; `--fields <CSV>` requires `--output json`) |
 | `jr issue create` | Create an issue (`--team`, `--points`) |
 | `jr issue edit KEY` | Edit issue fields (`--team`, `--points`, `--no-points`) |
 | `jr issue move KEY [STATUS]` | Transition issue (partial match on status name). `--resolution <name>` atomically sets resolution on the transition for JSM/resolution-required workflows. |
