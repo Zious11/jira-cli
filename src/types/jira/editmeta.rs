@@ -95,3 +95,58 @@ pub struct AllowedValue {
     #[serde(default)]
     pub children: Vec<AllowedValue>,
 }
+
+/// S-578-2 AC-011: `AllowedValue.children` serde round-trip.
+///
+/// Wire-absent `children` key and wire-present-but-empty `"children": []`
+/// both deserialize to `Vec::new()` — an identical "no cascading children"
+/// semantic, per ADR-0019 § Amendment D4 (`Vec`, NOT `Option<Vec<_>>`,
+/// because the two wire forms carry no distinguishable information here).
+///
+/// This test already passes today — `children` was added by S-580-1, prior
+/// to this story; it is not a Red Gate test for S-578-2's hinted-dispatch
+/// work, only a regression pin confirming the type-level prerequisite (D4)
+/// that BC-3.4.027's non-cascading-collision composer (`field_resolve.rs`)
+/// depends on is in place.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_allowed_value_children_field_serde_default() {
+        // `AllowedValue` does not derive `PartialEq`, so these assertions
+        // compare structural properties (`is_empty`/`len`/field values)
+        // rather than `assert_eq!`-ing whole `Vec<AllowedValue>` values.
+
+        // Wire-absent `children` key.
+        let absent: AllowedValue =
+            serde_json::from_str(r#"{"id":"10286","value":"High","name":null}"#)
+                .expect("must deserialize without a children key");
+        assert!(
+            absent.children.is_empty(),
+            "wire-absent children must default to an empty Vec"
+        );
+
+        // Wire-present-but-empty `"children": []`.
+        let empty: AllowedValue =
+            serde_json::from_str(r#"{"id":"10286","value":"High","name":null,"children":[]}"#)
+                .expect("must deserialize with an empty children array");
+        assert!(
+            empty.children.is_empty(),
+            "wire-present-but-empty children must also be an empty Vec"
+        );
+
+        // Both wire forms carry the identical semantic — no information loss.
+        assert_eq!(absent.children.len(), empty.children.len());
+
+        // Wire-present, non-empty `children` (cascading case) round-trips.
+        let cascading: AllowedValue = serde_json::from_str(
+            r#"{"id":"1","value":"Parent","name":null,"children":[
+                {"id":"2","value":"Child","name":null}
+            ]}"#,
+        )
+        .expect("must deserialize a populated children array");
+        assert_eq!(cascading.children.len(), 1);
+        assert_eq!(cascading.children[0].value.as_deref(), Some("Child"));
+    }
+}
