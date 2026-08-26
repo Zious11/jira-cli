@@ -3960,27 +3960,23 @@ async fn test_bc_3_4_016_option_idless_numeric_value_falls_through_to_label_matc
 }
 
 // ---------------------------------------------------------------------------
-// S-578-1 LOW-finding remediation — INTERIM GUARD (this test FAILS until a
-// follow-up implementer wires the guard; kind-hint DISPATCH itself is
-// S-578-2/3/4, out of scope here).
+// S-578-2 — real hinted-bypass dispatch supersedes the S-578-1 interim guard.
 //
-// `parse_field_kv` (src/cli/issue/create.rs) already recognizes `:kind`
-// hints (`:option`/`:id`/`:name`/`:asset`) and returns them as
-// `FieldValueSpec { kind: Some(_), .. }`, but `handle_edit`
-// (src/cli/issue/edit.rs) does not yet dispatch on `.kind` anywhere — it
-// unconditionally reads `.value` and silently treats a hinted pair exactly
-// like the bare `NAME=VALUE` form (see the "S-578-1: ... :kind dispatch is
-// not implemented yet" comments at edit.rs's dry-run and live PUT builders).
-// Per the project's no-silent-value-drop principle for write commands, this
-// interim state must be a CLEAR exit-64 error, not silent treat-as-bare.
-//
-// TODAY this test FAILS: `--field Severity:id=10042` is accepted and PUT
-// successfully (exit 0) because the `:id` hint is silently dropped at the
-// map-key-stripping step and the value "10042" is written to "Severity" as
-// if it were a bare pair. Once the interim guard lands, this must become an
-// exit-64 `JrError::UserError` naming the unsupported hints and pointing at
-// the bare `NAME=VALUE` form — BEFORE any HTTP call (fields-list GET,
-// editmeta GET, and PUT must never fire).
+// `parse_field_kv` (src/cli/issue/create.rs) recognizes `:kind` hints
+// (`:option`/`:id`/`:name`/`:asset`) and returns them as
+// `FieldValueSpec { kind: Some(_), .. }`. Through S-578-1, `handle_edit`
+// (src/cli/issue/edit.rs) rejected any such pair with exit 64 via the
+// interim guard `reject_unsupported_hint_kinds` — a deliberate, loud
+// placeholder, never a silent treat-as-bare. S-578-2 removes that guard's
+// call site on THIS command and wires real dispatch: `--field
+// Severity:id=10042` now bypasses `allowedValues` entirely and sends
+// `{"id": "10042"}` verbatim (BC-3.4.028). This test is the flipped
+// counterpart of the S-578-1 interim-guard pin — it now asserts the guard is
+// GONE and real dispatch fires, rather than that the guard fires. Full
+// per-kind coverage (:option/:id/:name/:asset, cascading, dry-run preview,
+// error taxonomy) lives in `tests/issue_field_hint_kinds.rs`; this test's
+// remaining job is a narrow regression pin at THIS exact call site
+// (`Severity:id=10042`) that the interim guard is no longer reachable here.
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3989,17 +3985,30 @@ async fn test_edit_field_kind_hint_exits_64_pending_dispatch_s578_1() {
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
 
-    // Full working mock set (mirrors test_bc_3_4_015_field_string_value_appears_in_table_echo)
-    // so that, TODAY, the un-guarded call-site succeeds end-to-end and this
-    // assertion cleanly fails on the exit-code mismatch rather than
-    // panicking on an unmatched/missing mock.
     mount_list_fields(&server, "customfield_10001", "Severity").await;
     mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
-    mount_put_204(&server, "TEST-1").await;
+    // `Severity`'s editmeta schema is "string" — the bare-form dispatch for
+    // that type would send the raw VALUE as a bare JSON STRING
+    // (`"customfield_10001": "10042"`), never an object. Asserting the wire
+    // body is `{"id": "10042"}` (an OBJECT) is what actually distinguishes
+    // real `:id` dispatch from a silent bare-form fallback that happens to
+    // echo the same display text — a body-blind mock (`mount_put_204`) would
+    // pass either way and not prove dispatch occurred.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(
+            serde_json::json!({"fields": {"customfield_10001": {"id": "10042"}}}),
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
+            "--output",
+            "json",
             "issue",
             "edit",
             "TEST-1",
@@ -4012,27 +4021,25 @@ async fn test_edit_field_kind_hint_exits_64_pending_dispatch_s578_1() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert_eq!(
-        output.status.code(),
-        Some(64),
-        "S-578-1 INTERIM GUARD: '--field Severity:id=10042' (a ':kind'-hinted pair) must be \
-         rejected with exit 64 until dispatch lands (S-578-2/3/4) — it must NEVER be silently \
-         treated as the bare form. This assertion is expected to FAIL today (no guard exists \
-         yet; the command currently exits 0 via silent treat-as-bare). \
+    assert!(
+        output.status.success(),
+        "S-578-2: '--field Severity:id=10042' (a ':kind'-hinted pair) must now dispatch for \
+         real — the S-578-1 interim guard's call site was removed from `issue edit` by \
+         S-578-2, so this must succeed (not exit 64), sending {{\"id\": \"10042\"}} verbatim; \
          stderr={stderr} stdout={stdout}"
     );
-
-    // Load-bearing substrings the guard's error message must contain once implemented:
-    // (1) states the ':kind' hints are not yet supported on this command, and
-    // (2) suggests the bare NAME=VALUE form as the escape hatch.
     assert!(
-        stderr.contains("not yet supported"),
-        "S-578-1 INTERIM GUARD: stderr must explain the ':kind' hint is 'not yet supported' \
-         on this command; stderr={stderr}"
+        !stderr.contains("not yet supported"),
+        "S-578-2: the interim guard's message must never fire on `issue edit` again; \
+         stderr={stderr}"
     );
-    assert!(
-        stderr.contains("NAME=VALUE"),
-        "S-578-1 INTERIM GUARD: stderr must suggest the bare 'NAME=VALUE' form; stderr={stderr}"
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be valid JSON: {e}; stdout={stdout}"));
+    assert_eq!(
+        parsed["changed_fields"]["Severity"].as_str(),
+        Some("10042"),
+        "S-578-2: :id echo must be the raw id literal, no reverse lookup; stdout={stdout}"
     );
 }
 
