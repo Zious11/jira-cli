@@ -1110,7 +1110,22 @@ impl JiraClient {
             let total = response.total;
             let page_len = response.fields.len() as u32;
             all.extend(response.fields);
-            if page_len == 0 || start_at + page_len >= total {
+            // `total` is `#[serde(default)]`, so a MISSING `total` in the
+            // wire response deserializes to 0 — indistinguishable from a
+            // genuinely-empty result set at the type level. When `total` is
+            // present (`> 0`), trust it: a page can legitimately be shorter
+            // than `page_size` while more pages remain (see the existing
+            // 2-page fixture, which returns 1-field pages against a
+            // `total: 2`). When `total` is absent/zero, fall back to the
+            // full-page heuristic: only stop once a page comes back short
+            // of `page_size` (or empty) — a MISSING `total` on a FULL page
+            // must not silently truncate to page 1 (C-LOW-2).
+            let done = if total > 0 {
+                start_at + page_len >= total
+            } else {
+                page_len == 0 || page_len < page_size
+            };
+            if done {
                 break;
             }
             start_at += page_len;
