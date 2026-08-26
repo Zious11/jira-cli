@@ -248,6 +248,55 @@ async fn mount_list_fields(server: &MockServer, fields: Vec<Value>) {
         .await;
 }
 
+/// M2 project-404: `GET .../createmeta/{project}/issuetypes` 404s (distinct
+/// from the M3 project-404 path, which goes through `GET
+/// /rest/api/3/project/{key}` via `mount_project_not_found` — VP-580-012
+/// covers BOTH enumeration paths, not just one).
+async fn mount_issue_types_not_found(server: &MockServer, project_key: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/rest/api/3/issue/createmeta/{project_key}/issuetypes"
+        )))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+            "errorMessages": [format!("No project could be found with key '{project_key}'.")],
+            "errors": {}
+        })))
+        .mount(server)
+        .await;
+}
+
+/// `GET /rest/servicedeskapi/servicedesk/{sd}/requesttype` — the M3
+/// `resolve_request_type_id` non-numeric name-resolution list call.
+async fn mount_list_request_types(server: &MockServer, sd_id: &str, types: &[(&str, &str)]) {
+    let values: Vec<Value> = types
+        .iter()
+        .map(|(id, name)| {
+            json!({
+                "id": id,
+                "name": name,
+                "description": null,
+                "helpText": null,
+                "issueTypeId": null,
+                "groupIds": []
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/rest/servicedeskapi/servicedesk/{sd_id}/requesttype"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": types.len(),
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "_links": {},
+            "values": values
+        })))
+        .mount(server)
+        .await;
+}
+
 /// A well-formed `allowedValues`-shaped M2/M1 createmeta field descriptor for
 /// `customfield_10084` with two options.
 fn createmeta_field_10084() -> Value {
@@ -425,12 +474,24 @@ async fn test_bc_x_14_001_m2_resolves_via_profile_default_project() {
     ]);
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(
         output.status.success(),
         "expected exit 0 using profile-default project, got {:?}. stderr: {stderr}",
         output.status.code()
     );
+    // Content assertion (S-580-1 convergence pass): the JSON body must be
+    // the actual enumerated options resolved via the profile-default
+    // project, not merely a successful exit code.
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got {stdout}\nerror: {e}"));
+    let arr = parsed.as_array().expect("expected a JSON array");
+    assert_eq!(arr.len(), 2, "expected 2 normalized options, got: {parsed}");
+    assert_eq!(arr[0]["id"], json!("10001"));
+    assert_eq!(arr[0]["label"], json!("Client A"));
+    assert_eq!(arr[1]["id"], json!("10002"));
+    assert_eq!(arr[1]["label"], json!("Client B"));
 }
 
 /// AC-005: `--type Bug` resolves to an `issueTypeId` via
@@ -512,6 +573,98 @@ async fn test_bc_x_14_004_ec_x_14_004_4_unknown_type_exits_64_before_createmeta(
     );
 }
 
+/// VP-580-012 (M2 half): `--project NOPE --type <T>` where the FIRST
+/// createmeta-family call (`get_issue_types_for_project`'s own
+/// `GET .../createmeta/{project}/issuetypes`) 404s -> exit 64, "project not
+/// found or not accessible", and `get_createmeta_fields`'s own endpoint is
+/// never reached (`.expect(0)`). Distinct from the pre-existing
+/// `test_bc_x_14_004_project_404_exits_64_message`, which only covers the
+/// M3 half of this VP via `get_or_fetch_project_meta`.
+#[tokio::test]
+async fn test_bc_x_14_004_m2_project_404_exits_64_message() {
+    let h = Harness::new().await;
+    mount_issue_types_not_found(&h.server, "NOPE").await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/NOPE/issuetypes/10000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&h.server)
+        .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--type",
+        "Bug",
+        "--project",
+        "NOPE",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 for a 404 project on the M2 path, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("project not found or not accessible"),
+        "VP-580-012 (M2 half): exact message pin; got: {stderr}"
+    );
+}
+
+/// EC-X.14.001-5 / EC-X.14.004-3 (M2 half): `<field>` resolves globally but
+/// is ABSENT from the createmeta Create-screen field set for the resolved
+/// project + issue type -> exit 64, per-context "not available for issue
+/// type" message. The M1 (editmeta) sibling of this row is already covered
+/// by `test_bc_x_14_004_field_absent_from_editmeta_context_exits_64`.
+#[tokio::test]
+async fn test_bc_x_14_004_field_absent_from_createmeta_context_exits_64() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "HELP", &[("10000", "Bug")]).await;
+    // The Create screen exists but does not carry customfield_10084 —
+    // only an unrelated "summary" field.
+    mount_createmeta_fields_single_page(
+        &h.server,
+        "HELP",
+        "10000",
+        vec![json!({
+            "fieldId": "summary",
+            "name": "Summary",
+            "schema": {"type": "string"},
+            "allowedValues": null
+        })],
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--type",
+        "Bug",
+        "--project",
+        "HELP",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 for a field absent from the createmeta field set, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("not available") || stderr.contains("Create screen"),
+        "expected a per-context 'not available on the Create screen' style message; got: {stderr}"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AC-006 — M3 --request-type [--project] resolution
 // ═══════════════════════════════════════════════════════════════════════════
@@ -556,12 +709,23 @@ async fn test_bc_x_14_001_m3_project_request_type_together_is_valid() {
     ]);
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(
         output.status.success(),
         "expected exit 0 for M3 --project + --request-type, got {:?}. stderr: {stderr}",
         output.status.code()
     );
+    // Content assertion (S-580-1 convergence pass): the JSON body must be
+    // the actual enumerated M3 options, not merely a successful exit code.
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got {stdout}\nerror: {e}"));
+    let arr = parsed.as_array().expect("expected a JSON array");
+    assert_eq!(arr.len(), 2, "expected 2 normalized options, got: {parsed}");
+    assert_eq!(arr[0]["id"], json!("10001"));
+    assert_eq!(arr[0]["label"], json!("Client A"));
+    assert_eq!(arr[1]["id"], json!("10002"));
+    assert_eq!(arr[1]["label"], json!("Client B"));
 }
 
 /// AC-006: a resolved project that is non-JSM (software) supplied on the M3
@@ -588,6 +752,235 @@ async fn test_bc_x_14_001_m3_non_jsm_project_exits_64_require_service_desk() {
     assert!(
         stderr.contains("Jira Service Management project"),
         "expected require_service_desk's non-JSM message; got: {stderr}"
+    );
+}
+
+/// AC-006 / EC-X.14.004-5: `--request-type` with NO `--project` companion
+/// and no profile/config default -> exit 64 before `require_service_desk`
+/// (or any request-type-fields HTTP) is ever reached — the field.rs-local
+/// "needs a resolvable project" guard fires first (mirrors the M2 M1
+/// incomplete-project taxonomy row, but on the M3 dispatch arm).
+#[tokio::test]
+async fn test_bc_x_14_004_m3_no_resolvable_project_exits_64() {
+    let h = Harness::new().await;
+    expect_zero_http(&h.server).await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--request-type",
+        "11001",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 for --request-type with no resolvable project, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("--request-type") && stderr.contains("resolvable project"),
+        "expected a 'needs a resolvable project' style message; got: {stderr}"
+    );
+}
+
+/// AC-006 / M3 `resolve_request_type_id` non-numeric name resolution — the
+/// `partial_match::Exact` branch: a single unambiguous name resolves to its
+/// request-type id, mirroring `jr requesttype fields`'s own name resolution.
+/// All pre-existing M3 tests use the all-ASCII-digit numeric bypass; this is
+/// the first to exercise the actual `partial_match` name-resolution path.
+#[tokio::test]
+async fn test_bc_x_14_001_m3_request_type_name_exact_match_resolves() {
+    let h = Harness::new().await;
+    mount_project_meta(&h.server, "HELP", "99", "service_desk").await;
+    mount_service_desk_list(&h.server, "99", "10").await;
+    mount_list_request_types(
+        &h.server,
+        "10",
+        &[("11001", "Get IT Help"), ("11002", "Password Reset")],
+    )
+    .await;
+    mount_request_type_fields(
+        &h.server,
+        "10",
+        "11001",
+        vec![json!({
+            "fieldId": "customfield_10084",
+            "name": "SOC Client",
+            "description": null,
+            "required": false,
+            "jiraSchema": {"type": "option"},
+            "validValues": [{"value": "10001", "label": "Client A"}],
+            "visible": true
+        })],
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--request-type",
+        "Get IT Help",
+        "--project",
+        "HELP",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0 for an unambiguous request-type name, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = parsed.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["id"], json!("10001"));
+}
+
+/// AC-006 / M3 `resolve_request_type_id` — the `partial_match::Ambiguous`
+/// branch: a substring matching MULTIPLE request-type names -> exit 64
+/// naming the request-type-list fallback, and `get_request_type_fields` is
+/// never called (`.expect(0)`).
+#[tokio::test]
+async fn test_bc_x_14_001_m3_request_type_name_ambiguous_exits_64() {
+    let h = Harness::new().await;
+    mount_project_meta(&h.server, "HELP", "99", "service_desk").await;
+    mount_service_desk_list(&h.server, "99", "10").await;
+    mount_list_request_types(
+        &h.server,
+        "10",
+        &[("11001", "Get IT Help"), ("11002", "Get HR Help")],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/10/requesttype/11001/field",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "canRaiseOnBehalfOf": false,
+            "canAddRequestParticipants": false,
+            "requestTypeFields": []
+        })))
+        .expect(0)
+        .mount(&h.server)
+        .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--request-type",
+        "Get",
+        "--project",
+        "HELP",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 for an ambiguous request-type name, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Ambiguous") || stderr.contains("ambiguous"),
+        "expected an ambiguous-request-type message; got: {stderr}"
+    );
+}
+
+/// AC-006 / M3 `resolve_request_type_id` — the `partial_match::None` branch:
+/// a name matching zero request types -> exit 64 naming the
+/// `jr requesttype list` fallback.
+#[tokio::test]
+async fn test_bc_x_14_001_m3_request_type_name_zero_match_exits_64() {
+    let h = Harness::new().await;
+    mount_project_meta(&h.server, "HELP", "99", "service_desk").await;
+    mount_service_desk_list(&h.server, "99", "10").await;
+    mount_list_request_types(&h.server, "10", &[("11001", "Get IT Help")]).await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--request-type",
+        "NonExistentRequestType",
+        "--project",
+        "HELP",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 for a zero-match request-type name, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("not found") || stderr.contains("requesttype list"),
+        "expected a request-type-not-found message; got: {stderr}"
+    );
+}
+
+/// EC-X.14.001-5 / EC-X.14.004-3 (M3 half): `<field>` resolves globally but
+/// is ABSENT from the resolved request type's `validValues`/field set ->
+/// exit 64, per-context "not a field on this request type" message.
+#[tokio::test]
+async fn test_bc_x_14_004_field_absent_from_request_type_context_exits_64() {
+    let h = Harness::new().await;
+    mount_project_meta(&h.server, "HELP", "99", "service_desk").await;
+    mount_service_desk_list(&h.server, "99", "10").await;
+    mount_request_type_fields(
+        &h.server,
+        "10",
+        "11001",
+        vec![json!({
+            "fieldId": "summary",
+            "name": "Summary",
+            "description": null,
+            "required": true,
+            "jiraSchema": {"type": "string"},
+            "validValues": [],
+            "visible": true
+        })],
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--request-type",
+        "11001",
+        "--project",
+        "HELP",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 for a field absent from the request-type field set, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("not available") || stderr.contains("request type"),
+        "expected a per-context 'not a field on this request type' style message; got: {stderr}"
     );
 }
 
@@ -872,6 +1265,106 @@ async fn test_bc_x_14_001_field_name_ambiguous_exits_64() {
     assert!(
         stderr.contains("customfield_10084") && stderr.contains("customfield_10085"),
         "ambiguous-field error must list candidate customfield_NNNNN ids; got: {stderr}"
+    );
+}
+
+/// AC-011: a human field name resolving to a SINGLE unambiguous match
+/// succeeds end-to-end — the field-name-resolution happy path via
+/// `list_fields()` + `partial_match`. All pre-existing tests use either the
+/// `customfield_NNNNN` bypass or the ambiguous-name error path; this is the
+/// first to exercise a successful human-name resolution.
+#[tokio::test]
+async fn test_bc_x_14_001_field_name_human_name_resolves_via_partial_match() {
+    let h = Harness::new().await;
+    mount_list_fields(
+        &h.server,
+        vec![
+            json!({"id": "customfield_10001", "name": "Story Points", "custom": true, "schema": null}),
+            json!({"id": "customfield_10002", "name": "Sprint", "custom": true, "schema": null}),
+        ],
+    )
+    .await;
+    mount_editmeta(
+        &h.server,
+        "FOO-1",
+        json!({
+            "customfield_10001": {
+                "name": "Story Points",
+                "schema": {"type": "option"},
+                "allowedValues": [{"id": "1", "value": "One"}, {"id": "2", "value": "Two"}],
+                "operations": ["set"],
+                "required": false
+            }
+        }),
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "Story Points",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0 for an unambiguous human field name, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = parsed.as_array().unwrap();
+    assert_eq!(
+        arr.len(),
+        2,
+        "expected the 2 options for the resolved field"
+    );
+}
+
+/// AC-011 / EC-3.4.015-1 parallel: a human field name resolving to ZERO
+/// candidates -> exit 64, hinting `jr project fields`, before any
+/// enumeration HTTP call.
+#[tokio::test]
+async fn test_bc_x_14_001_field_name_zero_match_exits_64() {
+    let h = Harness::new().await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "customfield_10002", "name": "Sprint", "custom": true, "schema": null})],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"fields": {}})))
+        .expect(0)
+        .mount(&h.server)
+        .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "NonExistentFieldName",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 for a zero-match field name, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("not found") || stderr.contains("project fields"),
+        "expected a field-not-found message; got: {stderr}"
     );
 }
 
@@ -1209,6 +1702,124 @@ async fn test_bc_x_14_004_graceful_degrade_userpicker_field() {
     assert!(
         stderr.contains("no enumerable options") && stderr.contains("dynamic"),
         "expected the dynamic/lookup-field degrade hint; got: {stderr}"
+    );
+    // BC-X.14.004 AC-014: "+ autoCompleteUrl if present in the response" —
+    // TDD RED (S-580-1 convergence pass, M3): `degrade_hint_for_schema`
+    // does not currently accept or emit `autoCompleteUrl` at all, and
+    // `EditMetaField`/`CreateMetaField` do not currently deserialize it —
+    // this assertion is expected to FAIL until the implementer threads
+    // `autoCompleteUrl` through both the wire types and the hint text.
+    assert!(
+        stderr.contains("https://example.atlassian.net/rest/api/1.0/users/picker"),
+        "AC-014: the dynamic/lookup-field hint must include autoCompleteUrl when \
+         the field schema carries one; got: {stderr}"
+    );
+}
+
+/// Graceful degradation — BROADER classification (BC-X.14.004, S-580-1
+/// convergence pass): an ARRAY-typed CMDB/Assets field (schema.type
+/// "array", not "object" — e.g. a multi-select Assets field) must STILL get
+/// the Assets-specific hint, not the generic "no fixed value set" hint.
+/// TDD RED: `degrade_hint_for_schema` currently gates the Assets branch on
+/// `field_type == "object"` exactly, so an "array"-typed CMDB field falls
+/// through to the generic hint — expected to FAIL until the implementer
+/// broadens the Assets classification to cover both shapes.
+#[tokio::test]
+async fn test_bc_x_14_004_graceful_degrade_array_typed_cmdb_field() {
+    let h = Harness::new().await;
+    mount_editmeta(
+        &h.server,
+        "FOO-1",
+        json!({
+            "customfield_10055": {
+                "name": "Connected Objects",
+                "schema": {
+                    "type": "array",
+                    "custom": "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype"
+                },
+                "allowedValues": null,
+                "operations": ["set"],
+                "required": false
+            }
+        }),
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10055",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "expected exit 0; stderr: {stderr}");
+    // Assert the SPECIFIC Assets-hint phrase (not a bare "Assets" substring
+    // match, which the field's own human-readable name could coincidentally
+    // satisfy) — pinned to the exact wording `degrade_hint_for_schema` emits
+    // on the object-typed CMDB branch.
+    assert!(
+        stderr.contains("no enumerable options") && stderr.contains("uses Assets (CMDB)"),
+        "an array-typed CMDB field must still get the Assets-specific degrade \
+         hint, not the generic hint; got: {stderr}"
+    );
+}
+
+/// Graceful degradation — BROADER classification (BC-X.14.004, S-580-1
+/// convergence pass): a `labels` field (a suggestion-backed, non-fixed-value
+/// field per BC-X.14.004's degrade table: "user-picker/multi-user-picker/
+/// Approvers/labels/other suggestion-backed fields") must get the
+/// dynamic/lookup-field hint, not the generic "no fixed value set" hint.
+/// TDD RED: `degrade_hint_for_schema` currently gates the dynamic branch on
+/// `field_type == "user"` exactly, so a `labels` field (schema.type
+/// "array", a Jira system field with no `custom` key) falls through to the
+/// generic hint — expected to FAIL until the implementer broadens the
+/// dynamic/suggestion-backed classification.
+#[tokio::test]
+async fn test_bc_x_14_004_graceful_degrade_labels_field() {
+    let h = Harness::new().await;
+    // "labels" is a human/system field name, not a `customfield_NNNNN`
+    // literal, so it resolves via `list_fields()` + `partial_match` first.
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "labels", "name": "Labels", "custom": false, "schema": null})],
+    )
+    .await;
+    mount_editmeta(
+        &h.server,
+        "FOO-1",
+        json!({
+            "labels": {
+                "name": "Labels",
+                "schema": {"type": "array", "system": "labels"},
+                "allowedValues": null,
+                "autoCompleteUrl": "https://example.atlassian.net/rest/api/1.0/labels/suggest",
+                "operations": ["add", "set", "remove"],
+                "required": false
+            }
+        }),
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "labels",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "expected exit 0; stderr: {stderr}");
+    assert!(
+        stderr.contains("no enumerable options") && stderr.contains("dynamic"),
+        "a labels/suggestion-backed field must get the dynamic/lookup-field \
+         degrade hint, not the generic hint; got: {stderr}"
     );
 }
 

@@ -751,15 +751,127 @@ mod tests {
         }
     }
 
+    // ── AC-011 / VP-580-004: field-name resolution (search_field_list /
+    // is_customfield_literal / resolve_field_id) — S-580-1 convergence pass ──
+
+    /// `is_customfield_literal`: the happy-path bypass, plus the malformed
+    /// shapes that must NOT bypass (no digits, non-digit suffix, bare
+    /// prefix, unrelated string).
+    #[test]
+    fn test_bc_x_14_001_is_customfield_literal_accepts_and_rejects() {
+        assert!(is_customfield_literal("customfield_10084"));
+        assert!(is_customfield_literal("customfield_0"));
+        assert!(
+            !is_customfield_literal("customfield_"),
+            "bare prefix with no digits must not bypass"
+        );
+        assert!(
+            !is_customfield_literal("customfield_abc"),
+            "non-digit suffix must not bypass"
+        );
+        assert!(
+            !is_customfield_literal("Story Points"),
+            "an ordinary human name must not bypass"
+        );
+        assert!(
+            !is_customfield_literal("customfield_10084x"),
+            "a digit run followed by a non-digit must not bypass"
+        );
+    }
+
+    /// `search_field_list`: a single case-insensitive EXACT match resolves
+    /// directly to that field's id.
+    #[test]
+    fn test_bc_x_14_001_search_field_list_exact_single_match() {
+        let list = vec![
+            ("customfield_10001".to_string(), "Story Points".to_string()),
+            ("customfield_10002".to_string(), "Sprint".to_string()),
+        ];
+        let result = search_field_list(&list, "story points", "Story Points").unwrap();
+        assert_eq!(result, Some("customfield_10001".to_string()));
+    }
+
+    /// `search_field_list`: exact match is case-insensitive — a differently
+    /// cased query still resolves to the single exact match.
+    #[test]
+    fn test_bc_x_14_001_search_field_list_case_insensitive() {
+        let list = vec![("customfield_10001".to_string(), "Story Points".to_string())];
+        // `query_lower` is the CALLER-lowercased form (resolve_field_id
+        // lowercases before calling); `query` retains the original casing
+        // for use in error messages only.
+        let result = search_field_list(&list, "story points", "STORY points").unwrap();
+        assert_eq!(result, Some("customfield_10001".to_string()));
+    }
+
+    /// `search_field_list`: no exact match, but a single case-insensitive
+    /// SUBSTRING match resolves to that field's id.
+    #[test]
+    fn test_bc_x_14_001_search_field_list_substring_single_match() {
+        let list = vec![
+            ("customfield_10084".to_string(), "SOC Client".to_string()),
+            ("customfield_10002".to_string(), "Sprint".to_string()),
+        ];
+        let result = search_field_list(&list, "soc", "soc").unwrap();
+        assert_eq!(result, Some("customfield_10084".to_string()));
+    }
+
+    /// `search_field_list`: no exact or substring match -> `Ok(None)` (the
+    /// caller decides whether to fall back to a fresh fetch or exit 64).
+    #[test]
+    fn test_bc_x_14_001_search_field_list_zero_match_returns_none() {
+        let list = vec![("customfield_10002".to_string(), "Sprint".to_string())];
+        let result = search_field_list(&list, "nonexistent", "nonexistent").unwrap();
+        assert_eq!(result, None);
+    }
+
+    /// `search_field_list`: multiple case-insensitive EXACT matches ->
+    /// `Err`, naming every candidate and its id.
+    #[test]
+    fn test_bc_x_14_001_search_field_list_exact_multiple_is_err() {
+        let list = vec![
+            ("customfield_10084".to_string(), "SOC Client".to_string()),
+            ("customfield_10085".to_string(), "soc client".to_string()),
+        ];
+        let err = search_field_list(&list, "soc client", "soc client").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("customfield_10084") && msg.contains("customfield_10085"));
+    }
+
+    /// `search_field_list`: multiple SUBSTRING matches (no exact match) ->
+    /// `Err`, naming every candidate and its id.
+    #[test]
+    fn test_bc_x_14_001_search_field_list_substring_multiple_is_err() {
+        let list = vec![
+            ("customfield_10084".to_string(), "SOC Client A".to_string()),
+            ("customfield_10085".to_string(), "SOC Client B".to_string()),
+        ];
+        let err = search_field_list(&list, "soc client", "soc client").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("customfield_10084") && msg.contains("customfield_10085"));
+    }
+
+    /// `resolve_field_id`: the `customfield_NNNNN` literal bypass never
+    /// touches the cache or performs HTTP — proven by pointing the client at
+    /// an address nothing listens on (`localhost:1`) and asserting the call
+    /// still succeeds, which is only possible if the bypass branch returns
+    /// before any `.await` on the client.
+    #[tokio::test]
+    async fn test_bc_x_14_001_resolve_field_id_customfield_literal_bypasses_http() {
+        let client = JiraClient::new_for_test("http://127.0.0.1:1".to_string(), "x".to_string());
+        let result = resolve_field_id(&client, "default", "customfield_10084").await;
+        assert_eq!(result.unwrap(), "customfield_10084");
+    }
+
     /// AC-001: `has_project` is not a parameter of `resolve_field_context` at
     /// all (ADR-0019 § Amendment D1) — this is enforced structurally by the
     /// function's own 3-argument signature (a 4th argument would be a compile
-    /// error), so there is no runtime behavior to assert beyond the arity
-    /// table above. This test exists as a documentation anchor only.
+    /// error). `resolve_field_context(true, false, false)` must resolve to
+    /// `Mode::Createmeta`, exercising the same call the documentation-anchor
+    /// version of this test only compiled without checking.
     #[test]
     fn test_bc_x_14_001_resolve_field_context_has_no_project_parameter() {
-        // Calling with exactly 3 arguments compiles; that IS the assertion.
-        let _ = resolve_field_context(true, false, false);
+        let result = resolve_field_context(true, false, false);
+        assert_eq!(result, Ok(Mode::Createmeta));
     }
 
     // ── AC-004 / VP-580-010: resolve_m2_project (flag OR profile default) ──
@@ -918,6 +1030,59 @@ mod tests {
                 ).prop_map(|m| serde_json::Value::Object(m.into_iter().collect())),
                 0..8,
             )
+        ) {
+            let result = normalize_from_valid_values(&entries);
+            prop_assert_eq!(result.len(), entries.len());
+        }
+    }
+
+    /// A recursive `serde_json::Value` strategy — bounded depth — used to
+    /// fuzz BOTH the top-level entry shape (Array/String/Number/Bool/Null,
+    /// not just Object) AND the recursive `children` branch of
+    /// `normalize_from_valid_values` (VP-580-005 §2 strengthening, S-580-1
+    /// convergence pass, LOW: "extend to non-object top-level entries and
+    /// nested `children` arrays"). Object keys are biased toward
+    /// `value`/`label`/`children` so generated fixtures actually exercise
+    /// the normalizer's real key lookups, not just its `_ => degrade`
+    /// fallback path.
+    fn arb_json_value() -> impl Strategy<Value = serde_json::Value> {
+        let leaf = prop_oneof![
+            Just(serde_json::Value::Null),
+            any::<bool>().prop_map(serde_json::Value::from),
+            any::<i64>().prop_map(serde_json::Value::from),
+            any::<String>().prop_map(serde_json::Value::from),
+        ];
+        leaf.prop_recursive(4, 32, 4, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..4).prop_map(serde_json::Value::from),
+                proptest::collection::hash_map(
+                    prop_oneof![
+                        Just("value".to_string()),
+                        Just("label".to_string()),
+                        Just("children".to_string()),
+                        "[a-z]{1,6}".prop_map(String::from),
+                    ],
+                    inner,
+                    0..4,
+                )
+                .prop_map(|m| serde_json::Value::Object(m.into_iter().collect())),
+            ]
+        })
+    }
+
+    proptest! {
+        /// VP-580-005 §2 strengthening (LOW, S-580-1 convergence pass): the
+        /// never-panic + never-drop guarantee must hold over ARBITRARY
+        /// top-level JSON shapes (not just well-formed objects) AND over
+        /// fixtures whose `children` key holds arbitrary nested JSON,
+        /// fuzzing the recursive branch of `normalize_from_valid_values`.
+        /// A non-object top-level entry (Array/String/Number/Bool/Null) has
+        /// no `.get("value")`/`.get("children")` to read at all — the
+        /// normalizer must degrade that entry to `{id: None, label: None,
+        /// children: []}` rather than panicking or dropping it.
+        #[test]
+        fn test_bc_x_14_001_normalize_from_valid_values_never_panics_arbitrary_shapes(
+            entries in proptest::collection::vec(arb_json_value(), 0..8)
         ) {
             let result = normalize_from_valid_values(&entries);
             prop_assert_eq!(result.len(), entries.len());
@@ -1120,6 +1285,62 @@ mod tests {
         let options2 = vec![opt(Some("MATCHID"), None)];
         let result2 = filter_options(&options2, Some("matchid"));
         assert_eq!(result2.len(), 1);
+    }
+
+    /// A recursive `FieldOption` strategy — bounded depth — for VP-580-007's
+    /// property test below. `id`/`label` are independently `Option<String>`
+    /// (including the fully-degenerate `{None, None}` combination) so the
+    /// property test exercises the `Option<String>` reconciliation
+    /// sub-points (g)/(h)/(i) alongside totality/monotonicity.
+    fn arb_field_option() -> impl Strategy<Value = FieldOption> {
+        let field = proptest::option::of("[a-zA-Z0-9]{0,6}");
+        let leaf = (field.clone(), field.clone())
+            .prop_map(|(id, label)| opt(id.as_deref(), label.as_deref()));
+        leaf.prop_recursive(3, 16, 4, move |inner| {
+            (
+                field.clone(),
+                field.clone(),
+                proptest::collection::vec(inner, 0..3),
+            )
+                .prop_map(|(id, label, children)| FieldOption {
+                    id,
+                    label,
+                    children,
+                })
+        })
+    }
+
+    proptest! {
+        /// VP-580-007 (LOW, S-580-1 convergence pass): `filter_options` is a
+        /// TOTAL function (never panics on a `None` field or a degenerate
+        /// entry) and NARROWING at the top level (never grows the result
+        /// beyond the input length) for an arbitrary substring needle.
+        #[test]
+        fn test_bc_x_14_002_filter_options_never_panics_and_is_narrowing(
+            options in proptest::collection::vec(arb_field_option(), 0..6),
+            needle in "[a-zA-Z0-9]{0,4}"
+        ) {
+            let result = filter_options(&options, Some(&needle));
+            prop_assert!(
+                result.len() <= options.len(),
+                "filter_options must never grow the top-level result beyond the input"
+            );
+        }
+
+        /// VP-580-007(i): `--value ""` and `--value` absent are IDENTICAL to
+        /// each other, and both are the identity over an arbitrary fixture —
+        /// including one containing a fully degenerate `{id: None, label:
+        /// None}` entry (never-drop preserved through the filter).
+        #[test]
+        fn test_bc_x_14_002_filter_options_empty_string_and_none_are_identity(
+            options in proptest::collection::vec(arb_field_option(), 0..6)
+        ) {
+            let with_none = filter_options(&options, None);
+            let with_empty = filter_options(&options, Some(""));
+            prop_assert_eq!(&with_none, &options);
+            prop_assert_eq!(&with_empty, &options);
+            prop_assert_eq!(with_none, with_empty);
+        }
     }
 
     // ── AC-013 / BC-X.14.003 / VP-580-008: table rendering ──
