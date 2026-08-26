@@ -6,12 +6,6 @@
 //! enumeration mechanism (M2 createmeta / M3 JSM requesttype-fields / M1
 //! editmeta respectively); `--project` is never itself a mode selector — it
 //! is a companion flag whose role depends on the selected mode.
-//!
-//! STUB NOTICE (S-580-1, stub-architect pass): every non-trivial body below
-//! is `todo!()` per BC-5.38.001 — the implementer fills these in against the
-//! Red Gate test suite in `tests/field_options.rs`. Types and signatures are
-//! real so the crate compiles and the CLI surface (`jr field options --help`)
-//! parses.
 
 use anyhow::{Result, anyhow};
 
@@ -34,6 +28,28 @@ const NULL_GLYPH: &str = "—";
 /// Table-mode literal for a missing `label` (BC-X.14.003). Never falls back
 /// to the entry's own `id`.
 const UNNAMED_LABEL: &str = "(unnamed)";
+
+/// Recursion-depth cap for the cascading-`children` walk (C-LOW, CWE-674).
+///
+/// `normalize_from_allowed_values`/`normalize_from_valid_values`/
+/// `filter_one`/`render_rows_recursive` all recurse into `FieldOption`'s
+/// (or the pre-normalized wire shape's) nested `children`. In practice
+/// Jira cascading-select nesting is 1-2 levels deep and serde's own
+/// deserialize recursion limit (~128) already bounds a *deserialized*
+/// input, but `normalize_from_valid_values` walks `serde_json::Value`
+/// AFTER deserialization (M3's `validValues` is untyped JSON), so a
+/// pathologically deep `children` array from a misbehaving/malicious
+/// Jira-shaped response is not otherwise bounded before it reaches this
+/// module's own recursion. Mirrors the precedent set by `adf.rs`'s
+/// `MAX_ADF_DEPTH` (SEC-001, BC-7.2.012) — same cap value, same "modest,
+/// explicit depth guard" rationale, applied here to a read-only
+/// enumeration path rather than ADF write construction. Least-surprising
+/// choice per the never-drop invariant (EC-X.14.001-7, which governs
+/// per-entry `id`/`label` presence, not tree depth): TRUNCATE — stop
+/// recursing at the cap and treat any child beyond it as a leaf with no
+/// further `children`, rather than erroring out or dropping the
+/// already-collected top-level/ancestor entries.
+const MAX_FIELD_OPTION_DEPTH: usize = 256;
 
 /// The enumeration mechanism selected by `resolve_field_context`'s pure
 /// arity check (ADR-0019 §1 / §Amendment D1).
@@ -140,6 +156,15 @@ pub async fn handle(
                 .await
                 .map_err(|e| map_project_not_found(e, &project_key))?;
             let type_lower = type_name.to_lowercase();
+            // `.find()` with no duplicate-name detection is the deliberate,
+            // established convention for this exact resolution shape — see
+            // `cli/issue/edit.rs::handle_edit_bulk_fields`'s `--type`
+            // resolver (BC-3.4.018/S-331), which this M2 path mirrors.
+            // Jira enforces unique issue-type names within one project, so
+            // ambiguity is not a realistic outcome here (unlike the field-
+            // name resolver above, which searches ACROSS all fields and can
+            // genuinely collide) — not adding a duplicate check that no
+            // real Jira project can ever trigger.
             let issue_type_id = issue_types
                 .iter()
                 .find(|it| it.name.to_lowercase() == type_lower)
@@ -170,8 +195,12 @@ pub async fn handle(
                 &target.name,
                 &target.allowed_values,
                 normalize_from_allowed_values,
-                &target.schema.field_type,
-                target.schema.custom.as_deref(),
+                DegradeSchemaInfo {
+                    field_type: &target.schema.field_type,
+                    custom: target.schema.custom.as_deref(),
+                    system: target.schema.system.as_deref(),
+                    auto_complete_url: target.auto_complete_url.as_deref(),
+                },
             )
         }
         Mode::RequestType => {
@@ -216,13 +245,22 @@ pub async fn handle(
                 .get("custom")
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
+            let schema_system = target
+                .jira_schema
+                .get("system")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
 
             normalize_or_degrade(
                 &target.name,
                 &target.valid_values,
                 normalize_from_valid_values,
-                &schema_type,
-                schema_custom.as_deref(),
+                DegradeSchemaInfo {
+                    field_type: &schema_type,
+                    custom: schema_custom.as_deref(),
+                    system: schema_system.as_deref(),
+                    auto_complete_url: target.auto_complete_url.as_deref(),
+                },
             )
         }
         Mode::Editmeta => {
@@ -242,8 +280,12 @@ pub async fn handle(
                 &target.name,
                 &target.allowed_values,
                 normalize_from_allowed_values,
-                &target.schema.field_type,
-                target.schema.custom.as_deref(),
+                DegradeSchemaInfo {
+                    field_type: &target.schema.field_type,
+                    custom: target.schema.custom.as_deref(),
+                    system: target.schema.system.as_deref(),
+                    auto_complete_url: target.auto_complete_url.as_deref(),
+                },
             )
         }
     };
@@ -280,6 +322,20 @@ fn map_issue_not_found(e: anyhow::Error, key: &str) -> anyhow::Error {
     }
 }
 
+/// Schema classification inputs for the BC-X.14.004 graceful-degrade hint,
+/// bundled into one struct so `normalize_or_degrade`/`degrade_hint_for_schema`
+/// stay under clippy's `too_many_arguments` threshold rather than growing an
+/// ever-longer flat parameter list (`field_type`/`custom`/`system`/
+/// `auto_complete_url` are always passed together, one per enumeration
+/// mode's schema shape — M1/M2's typed `EditMetaFieldSchema` or M3's raw
+/// `jiraSchema` JSON).
+struct DegradeSchemaInfo<'a> {
+    field_type: &'a str,
+    custom: Option<&'a str>,
+    system: Option<&'a str>,
+    auto_complete_url: Option<&'a str>,
+}
+
 /// Normalize a source `Option<Vec<T>>` into [`FieldOption`]s, or — when the
 /// field has no enumerable options at all (`None` or an empty `Vec`) —
 /// emit the BC-X.14.004 graceful-degrade hint to stderr and return an empty
@@ -288,48 +344,85 @@ fn normalize_or_degrade<T>(
     display_name: &str,
     values: &Option<Vec<T>>,
     normalize: impl Fn(&[T]) -> Vec<FieldOption>,
-    field_type: &str,
-    custom: Option<&str>,
+    schema: DegradeSchemaInfo<'_>,
 ) -> Vec<FieldOption> {
     match values.as_deref() {
         Some(v) if !v.is_empty() => normalize(v),
         _ => {
-            eprintln!(
-                "{}",
-                degrade_hint_for_schema(display_name, field_type, custom)
-            );
+            eprintln!("{}", degrade_hint_for_schema(display_name, schema));
             Vec::new()
         }
     }
 }
 
 /// BC-X.14.004 graceful-degrade hint text, classified from the field's
-/// schema `type`/`custom` (typed `EditMetaFieldSchema` for M1/M2, raw JSON
-/// for M3's `jiraSchema`). All three arms share the `"no enumerable
-/// options"` prefix so callers can detect a degrade uniformly. `display_name`
-/// is the field's human-readable name (`EditMetaField.name` /
-/// `CreateMetaField.name` / `RequestTypeField.name`) — folding it in here
+/// schema `type`/`system`/`custom` (typed `EditMetaFieldSchema` for M1/M2,
+/// raw JSON for M3's `jiraSchema`). All three arms share the `"no
+/// enumerable options"` prefix so callers can detect a degrade uniformly.
+/// `display_name` is the field's human-readable name (`EditMetaField.name`
+/// / `CreateMetaField.name` / `RequestTypeField.name`) — folding it in here
 /// gives every caller a real use of that field instead of leaving it dead.
-fn degrade_hint_for_schema(display_name: &str, field_type: &str, custom: Option<&str>) -> String {
+///
+/// Classification order (per the BC-X.14.004 "Graceful degradation" table):
+/// 1. **Assets/CMDB** — `schema.custom` names the CMDB object custom-field
+///    type, REGARDLESS of `schema.type` (`"object"` for a single-select
+///    Assets field, `"array"` for a multi-select one — EC-X.14.004-1 /
+///    the array-typed-CMDB broadening covers both shapes with one check).
+/// 2. **Dynamic/suggestion-backed** — user-picker (`type == "user"`),
+///    multi-user-picker/Approvers (`custom` names a user-picker-family
+///    type), or `labels` (a system field with no `custom` key at all,
+///    identified via `schema.system`) — anything Jira resolves live via a
+///    suggestion endpoint rather than a fixed `allowedValues`/`validValues`
+///    set. `+ autoCompleteUrl` is appended when the field schema carries
+///    one (AC-014).
+/// 3. **Free-text/number/date/other** — no finite option set and no
+///    suggestion endpoint.
+fn degrade_hint_for_schema(display_name: &str, schema: DegradeSchemaInfo<'_>) -> String {
+    let DegradeSchemaInfo {
+        field_type,
+        custom,
+        system,
+        auto_complete_url,
+    } = schema;
+
     let is_cmdb = custom
         .map(|c| c.to_lowercase().contains("cmdb"))
         .unwrap_or(false);
-    if field_type == "object" && is_cmdb {
-        format!(
+    if is_cmdb {
+        return format!(
             "no enumerable options for '{display_name}' — this field uses Assets (CMDB). \
              Search assets separately via `jr assets search`."
-        )
-    } else if field_type == "user" {
-        format!(
+        );
+    }
+
+    let is_dynamic = field_type == "user"
+        || custom
+            .map(|c| {
+                let c_lower = c.to_lowercase();
+                c_lower.contains("userpicker")
+                    || c_lower.contains("multiuserpicker")
+                    || c_lower.contains("approve")
+            })
+            .unwrap_or(false)
+        || system
+            .map(|s| s.eq_ignore_ascii_case("labels"))
+            .unwrap_or(false);
+
+    if is_dynamic {
+        let mut hint = format!(
             "no enumerable options for '{display_name}' (dynamic/lookup field) — values are \
              resolved live and cannot be enumerated by this command."
-        )
-    } else {
-        format!(
-            "no enumerable options for '{display_name}' — this field type has no fixed \
-             value set."
-        )
+        );
+        if let Some(url) = auto_complete_url {
+            hint.push_str(&format!(" autoCompleteUrl: {url}"));
+        }
+        return hint;
     }
+
+    format!(
+        "no enumerable options for '{display_name}' — this field type has no fixed \
+         value set."
+    )
 }
 
 /// Resolve `<field>` to a `customfield_NNNNN`-shaped field id (AC-011).
@@ -532,12 +625,27 @@ pub(crate) fn resolve_m2_project(cli_project: Option<&str>, config: &Config) -> 
 /// (EC-X.14.001-7). Cascading children nest recursively under `children`
 /// (EC-X.14.001-4). Pure core — no I/O.
 pub(crate) fn normalize_from_allowed_values(values: &[AllowedValue]) -> Vec<FieldOption> {
+    normalize_from_allowed_values_at_depth(values, 0)
+}
+
+/// Depth-tracked worker for [`normalize_from_allowed_values`]. See
+/// [`MAX_FIELD_OPTION_DEPTH`] — beyond the cap, a child's own `children`
+/// are truncated (treated as a leaf) rather than recursed into further;
+/// the child entry itself is never dropped.
+fn normalize_from_allowed_values_at_depth(
+    values: &[AllowedValue],
+    depth: usize,
+) -> Vec<FieldOption> {
     values
         .iter()
         .map(|v| FieldOption {
             id: v.id.clone(),
             label: v.value.clone(),
-            children: normalize_from_allowed_values(&v.children),
+            children: if depth >= MAX_FIELD_OPTION_DEPTH {
+                Vec::new()
+            } else {
+                normalize_from_allowed_values_at_depth(&v.children, depth + 1)
+            },
         })
         .collect()
 }
@@ -553,16 +661,33 @@ pub(crate) fn normalize_from_allowed_values(values: &[AllowedValue]) -> Vec<Fiel
 /// never-drop / cascading-children contract as
 /// [`normalize_from_allowed_values`]. Pure core — no I/O.
 pub(crate) fn normalize_from_valid_values(values: &[serde_json::Value]) -> Vec<FieldOption> {
+    normalize_from_valid_values_at_depth(values, 0)
+}
+
+/// Depth-tracked worker for [`normalize_from_valid_values`]. See
+/// [`MAX_FIELD_OPTION_DEPTH`] — beyond the cap, a child's own `children`
+/// are truncated (treated as a leaf) rather than recursed into further;
+/// the child entry itself is never dropped. Particularly load-bearing
+/// here versus the M1/M2 sibling: this walks untyped `serde_json::Value`
+/// AFTER deserialization, so serde's own recursion limit does not bound
+/// it.
+fn normalize_from_valid_values_at_depth(
+    values: &[serde_json::Value],
+    depth: usize,
+) -> Vec<FieldOption> {
     values
         .iter()
         .map(|v| {
             let id = v.get("value").and_then(|x| x.as_str()).map(str::to_string);
             let label = v.get("label").and_then(|x| x.as_str()).map(str::to_string);
-            let children = v
-                .get("children")
-                .and_then(|c| c.as_array())
-                .map(|arr| normalize_from_valid_values(arr))
-                .unwrap_or_default();
+            let children = if depth >= MAX_FIELD_OPTION_DEPTH {
+                Vec::new()
+            } else {
+                v.get("children")
+                    .and_then(|c| c.as_array())
+                    .map(|arr| normalize_from_valid_values_at_depth(arr, depth + 1))
+                    .unwrap_or_default()
+            };
             FieldOption {
                 id,
                 label,
@@ -594,7 +719,7 @@ pub(crate) fn filter_options(options: &[FieldOption], value: Option<&str>) -> Ve
             let needle = v.to_lowercase();
             options
                 .iter()
-                .filter_map(|opt| filter_one(opt, &needle))
+                .filter_map(|opt| filter_one(opt, &needle, 0))
                 .collect()
         }
     }
@@ -603,8 +728,11 @@ pub(crate) fn filter_options(options: &[FieldOption], value: Option<&str>) -> Ve
 /// Recursive per-entry filter helper for [`filter_options`]. A self-match
 /// retains the entry with ALL its children unfiltered; otherwise the entry
 /// is retained (as context, with only its matching children) if ANY
-/// descendant matches, and dropped entirely if none does.
-fn filter_one(opt: &FieldOption, needle: &str) -> Option<FieldOption> {
+/// descendant matches, and dropped entirely if none does. See
+/// [`MAX_FIELD_OPTION_DEPTH`] — beyond the cap, descendants are no longer
+/// searched (treated as non-matching), never causing the ancestor entry
+/// itself to be dropped.
+fn filter_one(opt: &FieldOption, needle: &str, depth: usize) -> Option<FieldOption> {
     let self_match = opt
         .id
         .as_deref()
@@ -620,10 +748,14 @@ fn filter_one(opt: &FieldOption, needle: &str) -> Option<FieldOption> {
         return Some(opt.clone());
     }
 
+    if depth >= MAX_FIELD_OPTION_DEPTH {
+        return None;
+    }
+
     let filtered_children: Vec<FieldOption> = opt
         .children
         .iter()
-        .filter_map(|c| filter_one(c, needle))
+        .filter_map(|c| filter_one(c, needle, depth + 1))
         .collect();
 
     if filtered_children.is_empty() {
@@ -651,7 +783,11 @@ pub(crate) fn render_option_rows(options: &[FieldOption]) -> Vec<Vec<String>> {
 
 /// Depth-first row emitter for [`render_option_rows`]. `depth` drives the
 /// two-space-per-level indent on the Label column; the ID column is never
-/// indented.
+/// indented. See [`MAX_FIELD_OPTION_DEPTH`] — every entry up to and
+/// including the cap is still rendered as its own row; only descendants
+/// beyond the cap stop recursing (defense-in-depth alongside the
+/// normalize-time truncation, which already keeps `children` empty past
+/// the cap in practice).
 fn render_rows_recursive(options: &[FieldOption], depth: usize, rows: &mut Vec<Vec<String>>) {
     let indent = "  ".repeat(depth);
     for opt in options {
@@ -661,7 +797,9 @@ fn render_rows_recursive(options: &[FieldOption], depth: usize, rows: &mut Vec<V
             .clone()
             .unwrap_or_else(|| UNNAMED_LABEL.to_string());
         rows.push(vec![id_str, format!("{indent}{label_str}")]);
-        render_rows_recursive(&opt.children, depth + 1, rows);
+        if depth < MAX_FIELD_OPTION_DEPTH {
+            render_rows_recursive(&opt.children, depth + 1, rows);
+        }
     }
 }
 
@@ -675,11 +813,6 @@ fn render_rows_recursive(options: &[FieldOption], depth: usize, rows: &mut Vec<V
 // Integration coverage for `handle()` (M1/M2/M3 dispatch, error taxonomy,
 // graceful degradation) lives in `tests/field_options.rs` (wiremock +
 // subprocess, mirroring `tests/requesttype_commands.rs`'s pattern).
-//
-// EVERY test below MUST currently FAIL — either by hitting a `todo!()` panic
-// (all functions in this module are still stubs) or, for the M1/M2 cascading
-// case, by a genuine assertion failure documented at that test (see the
-// KNOWN GAP comment on `test_bc_x_14_001_cascading_children_round_trip_m1_m2`).
 // ─────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
