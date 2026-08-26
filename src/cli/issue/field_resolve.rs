@@ -147,9 +147,8 @@ fn strip_integer_decimal_suffix(s: &str) -> Option<&str> {
 /// - `field_pairs`: `NAME → FieldValueSpec` map produced by `parse_field_kv`
 ///   (last-wins semantics; duplicates collapsed at parse time per
 ///   EC-3.4.017-10). `FieldValueSpec.kind` drives the S-578-2 hinted-bypass
-///   dispatch (STUB as of this commit — see the `todo!()` branch in Phase 3
-///   below); `kind: None` is the bare form and is resolved exactly as before
-///   this story (BC-3.4.015/016, unchanged).
+///   dispatch (Phase 3 below); `kind: None` is the bare form and is resolved
+///   exactly as before this story (BC-3.4.015/016, unchanged).
 /// - `fields`: mutable reference to the shared `fields` JSON object that will
 ///   be PUT to Jira. Resolution results are merged in here (Step 5).
 /// - `changed_fields`: mutable reference to the human-readable echo map
@@ -160,6 +159,14 @@ fn strip_integer_decimal_suffix(s: &str) -> Option<&str> {
 ///   PUT returns a non-2xx error, `?` propagates the error and the already-
 ///   populated `changed_fields` is never echoed. For option fields the value
 ///   is the human label, not the option id.
+/// - `planned_preview`: mutable reference to the dry-run `plannedChanges`
+///   preview map (S-578-2, BC-3.4.021 amended Postconditions, AC-012), keyed
+///   identically to `changed_fields`. For a HINTED pair (`spec.kind.is_some()`)
+///   the value is the composed wire shape itself (documented exception to the
+///   general rule); for a bare pair it is the same simplified display-value
+///   string `changed_fields` carries, JSON-wrapped. The live (non-dry-run)
+///   call site passes a throwaway map — this is a pure additional output, it
+///   never influences resolution or the PUT.
 ///
 /// # Errors
 /// Returns `Err` (which the caller propagates as exit 64) on any of:
@@ -192,6 +199,7 @@ pub(crate) async fn resolve_edit_fields(
     field_pairs: &HashMap<String, FieldValueSpec>,
     fields: &mut serde_json::Value,
     changed_fields: &mut BTreeMap<String, String>,
+    planned_preview: &mut BTreeMap<String, serde_json::Value>,
 ) -> Result<()> {
     use crate::cache::{read_fields_cache, write_fields_cache};
 
@@ -215,8 +223,7 @@ pub(crate) async fn resolve_edit_fields(
     // uninterpreted VALUE and the S-578-2 `FieldValueSpec.kind` hint through
     // to Phase 3, where the hinted-bypass dispatch reads it (STUB as of this
     // commit).
-    let mut resolved: Vec<(String, String, FieldValueSpec)> =
-        Vec::with_capacity(field_pairs.len());
+    let mut resolved: Vec<(String, String, FieldValueSpec)> = Vec::with_capacity(field_pairs.len());
 
     for (name, spec) in field_pairs {
         // Step 1: customfield_NNNNN literal bypass.
@@ -400,21 +407,16 @@ pub(crate) async fn resolve_edit_fields(
         // dispatch (Step 4 and its `field_type` match, BC-3.4.015/016) stays
         // UNCHANGED and PERMANENT for `kind: None`, per Architecture Compliance
         // Rule 1.
-        //
-        // STUB: each composer is a `todo!()` as of this commit — real dispatch
-        // lands in the S-578-2 IMPLEMENT step (Tasks 4-6). This branch is
-        // unreachable via any current call site: `edit.rs` still invokes
-        // `reject_unsupported_hint_kinds` (create.rs) before calling
-        // `resolve_edit_fields`, which exits 64 on any `kind: Some(_)` pair
-        // first. Do not remove that guard's call site here — only the
-        // IMPLEMENT step does that, once real dispatch replaces these stubs.
         if let Some(kind) = spec.kind {
             let (wire_value, display_value): (serde_json::Value, String) = match kind {
-                FieldValueKind::Option => compose_option_hint(&value, meta_field)?,
+                FieldValueKind::Option => compose_option_hint(&value, &human_name, meta_field)?,
                 FieldValueKind::Id => compose_id_hint(&value),
                 FieldValueKind::Name => compose_name_hint(&value),
                 FieldValueKind::Asset => compose_asset_hint(client, &value).await?,
             };
+            // AC-012: for a hinted field the dry-run preview IS the composed
+            // wire shape itself (documented exception to the general rule).
+            planned_preview.insert(human_name.clone(), wire_value.clone());
             fields[&field_id] = wire_value;
             changed_fields.insert(human_name, display_value);
             continue;
@@ -507,8 +509,15 @@ pub(crate) async fn resolve_edit_fields(
                 display_value = value.clone();
             }
             "option" => {
-                // Step 4a: option resolution.
-                // Precedence: exact id match → case-insensitive exact value match → substring.
+                // Step 4a: option resolution (BC-3.4.016). Extracted into the
+                // shared `resolve_option_value` helper (S-578-2) so the
+                // `:option` hinted-bypass composer's non-cascading path
+                // (`compose_option_hint`) can reuse the IDENTICAL algorithm —
+                // AC-002 requires byte-for-byte identical wire output between
+                // the bare form and `:option` for the same NAME/VALUE. This is
+                // a pure code-motion refactor: the bare-form dispatch's
+                // observable behavior is unchanged (Architecture Compliance
+                // Rule 1), verified by the full pre-existing regression suite.
                 let allowed = meta_field.allowed_values.as_deref().unwrap_or(&[]);
                 if allowed.is_empty() {
                     return Err(JrError::UserError(format!(
@@ -517,137 +526,9 @@ pub(crate) async fn resolve_edit_fields(
                     ))
                     .into());
                 }
-
-                // Option id bypass: if VALUE is a purely numeric string AND matches
-                // an allowedValues[].id exactly.  EC-3.4.016-4: id-bypass fires only
-                // for numeric strings.  Without the pre-filter, a label that happens to
-                // equal an option id would silently route through id-bypass, echoing the
-                // raw VALUE instead of the stored-casing label.  Mirroring the H-1
-                // customfield_NNNNN guard: non-empty + all-digits.
-                let id_match = if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
-                    allowed
-                        .iter()
-                        .find(|av| av.id.as_deref().map(|id| id == value).unwrap_or(false))
-                } else {
-                    None
-                };
-                if let Some(av) = id_match {
-                    // Defensive: unreachable today — the id_match predicate above already excludes id=None entries. Load-bearing only if that predicate is ever loosened (EC-3.4.016-8).
-                    let Some(ref option_id) = av.id else {
-                        return Err(JrError::UserError(format!(
-                            "option '{value}' has no machine-readable id and cannot be set \
-                             via --field. This typically occurs with user/group picker fields. \
-                             Use the Jira UI or the field's native picker to set this value."
-                        ))
-                        .into());
-                    };
-                    wire_value = serde_json::json!({"id": option_id});
-                    // Echo raw value (no reverse label lookup) when id-bypass fires.
-                    display_value = value.clone();
-                } else {
-                    // Case-insensitive exact match on value field.
-                    let value_lower = value.to_lowercase();
-                    let exact_av: Vec<&crate::types::jira::AllowedValue> = allowed
-                        .iter()
-                        .filter(|av| {
-                            av.value
-                                .as_deref()
-                                .map(|v| v.to_lowercase() == value_lower)
-                                .unwrap_or(false)
-                        })
-                        .collect();
-
-                    if exact_av.len() == 1 {
-                        let av = exact_av[0];
-                        let Some(ref option_id) = av.id else {
-                            return Err(JrError::UserError(format!(
-                                "option '{value}' has no machine-readable id and cannot be \
-                                 set via --field. This typically occurs with user/group picker \
-                                 fields. Use the Jira UI or the field's native picker to set \
-                                 this value."
-                            ))
-                            .into());
-                        };
-                        wire_value = serde_json::json!({"id": option_id});
-                        // Echo human label (stored casing), not id.
-                        display_value = av.value.clone().unwrap_or_else(|| value.clone());
-                    } else if exact_av.len() > 1 {
-                        let candidates: Vec<String> = exact_av
-                            .iter()
-                            .map(|av| {
-                                format!(
-                                    "{} (id: {})",
-                                    av.value.as_deref().unwrap_or("?"),
-                                    av.id.as_deref().unwrap_or("<no-id>")
-                                )
-                            })
-                            .collect();
-                        return Err(JrError::UserError(format!(
-                            "Option value '{value}' is ambiguous for field '{human_name}': {}. \
-                             Disambiguate via the option id (numeric).",
-                            candidates.join(", ")
-                        ))
-                        .into());
-                    } else {
-                        // Substring match.
-                        let sub_av: Vec<&crate::types::jira::AllowedValue> = allowed
-                            .iter()
-                            .filter(|av| {
-                                av.value
-                                    .as_deref()
-                                    .map(|v| v.to_lowercase().contains(&value_lower))
-                                    .unwrap_or(false)
-                            })
-                            .collect();
-
-                        if sub_av.is_empty() {
-                            let allowed_labels: Vec<String> = allowed
-                                .iter()
-                                .map(|av| {
-                                    av.value.clone().unwrap_or_else(|| {
-                                        av.id.clone().unwrap_or_else(|| "<no-id>".to_string())
-                                    })
-                                })
-                                .collect();
-                            return Err(JrError::UserError(format!(
-                                "Option value '{value}' not found for field '{human_name}'. \
-                                 Allowed values: {}.",
-                                allowed_labels.join(", ")
-                            ))
-                            .into());
-                        } else if sub_av.len() > 1 {
-                            let candidates: Vec<String> = sub_av
-                                .iter()
-                                .map(|av| {
-                                    format!(
-                                        "{} (id: {})",
-                                        av.value.as_deref().unwrap_or("?"),
-                                        av.id.as_deref().unwrap_or("<no-id>")
-                                    )
-                                })
-                                .collect();
-                            return Err(JrError::UserError(format!(
-                                "Option value '{value}' is ambiguous for field \
-                                 '{human_name}': {}. Use the option id directly.",
-                                candidates.join(", ")
-                            ))
-                            .into());
-                        } else {
-                            let av = sub_av[0];
-                            let Some(ref option_id) = av.id else {
-                                return Err(JrError::UserError(format!(
-                                    "option '{value}' has no machine-readable id and cannot be \
-                                     set via --field. This typically occurs with user/group \
-                                     picker fields. Use the Jira UI or the field's native \
-                                     picker to set this value."
-                                ))
-                                .into());
-                            };
-                            wire_value = serde_json::json!({"id": option_id});
-                            display_value = av.value.clone().unwrap_or_else(|| value.clone());
-                        }
-                    }
-                }
+                let (wv, dv) = resolve_option_value(&value, &human_name, allowed)?;
+                wire_value = wv;
+                display_value = dv;
             }
             other => {
                 return Err(JrError::UserError(format!(
@@ -661,6 +542,10 @@ pub(crate) async fn resolve_edit_fields(
         }
 
         // Step 5: merge (field_id, wire_value) into the shared fields JSON object.
+        // AC-012: the bare-form dry-run preview stays the SIMPLIFIED display
+        // string (general rule, unchanged) — only a hinted field's preview
+        // (above) is the real wire shape.
+        planned_preview.insert(human_name.clone(), serde_json::json!(display_value.clone()));
         fields[&field_id] = wire_value;
 
         // Step 6: insert (human_name, display_value) into changed_fields.
@@ -670,82 +555,380 @@ pub(crate) async fn resolve_edit_fields(
     Ok(())
 }
 
-/// STUB (S-578-2 Task 4): composes the `:option` hinted-bypass wire shape.
+/// Result of matching a value against an editmeta option field's
+/// `allowedValues` list (BC-3.4.016 Step 4a algorithm). Shared by the
+/// bare-form `option` dispatch (Step 4a above), the `:option` hinted
+/// composer's non-cascading path, and cascading parent/child resolution
+/// (S-578-2, AC-002/AC-003).
+struct OptionMatch<'a> {
+    matched: &'a crate::types::jira::AllowedValue,
+    /// `Some(raw_value)` when the numeric id-bypass path matched — the echo
+    /// must be the raw value verbatim, no reverse label lookup (EC-3.4.016-4).
+    /// `None` when a label match (exact or substring) fired — the echo is the
+    /// matched entry's stored-casing label.
+    id_bypass_echo: Option<String>,
+}
+
+/// Matches `value` against `allowed` using the exact BC-3.4.016 Step 4a
+/// precedence: numeric id-bypass → case-insensitive exact label match →
+/// case-insensitive substring label match. Extracted (S-578-2) so the
+/// bare-form `option` dispatch and the `:option` hinted composer (both
+/// non-cascading values and cascading parent/child segments) share one
+/// algorithm — required for AC-002's byte-identical wire-output guarantee.
+fn find_option_match<'a>(
+    value: &str,
+    human_name: &str,
+    allowed: &'a [crate::types::jira::AllowedValue],
+) -> Result<OptionMatch<'a>> {
+    // Option id bypass: if VALUE is a purely numeric string AND matches an
+    // allowedValues[].id exactly. EC-3.4.016-4: id-bypass fires only for
+    // numeric strings — a label that happens to equal an option id would
+    // otherwise silently route through id-bypass, echoing the raw VALUE
+    // instead of the stored-casing label.
+    let id_match = if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
+        allowed
+            .iter()
+            .find(|av| av.id.as_deref().map(|id| id == value).unwrap_or(false))
+    } else {
+        None
+    };
+    if let Some(av) = id_match {
+        return Ok(OptionMatch {
+            matched: av,
+            id_bypass_echo: Some(value.to_string()),
+        });
+    }
+
+    // Case-insensitive exact match on the value field.
+    let value_lower = value.to_lowercase();
+    let exact_av: Vec<&crate::types::jira::AllowedValue> = allowed
+        .iter()
+        .filter(|av| {
+            av.value
+                .as_deref()
+                .map(|v| v.to_lowercase() == value_lower)
+                .unwrap_or(false)
+        })
+        .collect();
+    if exact_av.len() == 1 {
+        return Ok(OptionMatch {
+            matched: exact_av[0],
+            id_bypass_echo: None,
+        });
+    }
+    if exact_av.len() > 1 {
+        let candidates: Vec<String> = exact_av
+            .iter()
+            .map(|av| {
+                format!(
+                    "{} (id: {})",
+                    av.value.as_deref().unwrap_or("?"),
+                    av.id.as_deref().unwrap_or("<no-id>")
+                )
+            })
+            .collect();
+        return Err(JrError::UserError(format!(
+            "Option value '{value}' is ambiguous for field '{human_name}': {}. \
+             Disambiguate via the option id (numeric).",
+            candidates.join(", ")
+        ))
+        .into());
+    }
+
+    // Substring match.
+    let sub_av: Vec<&crate::types::jira::AllowedValue> = allowed
+        .iter()
+        .filter(|av| {
+            av.value
+                .as_deref()
+                .map(|v| v.to_lowercase().contains(&value_lower))
+                .unwrap_or(false)
+        })
+        .collect();
+    if sub_av.is_empty() {
+        let allowed_labels: Vec<String> = allowed
+            .iter()
+            .map(|av| {
+                av.value
+                    .clone()
+                    .unwrap_or_else(|| av.id.clone().unwrap_or_else(|| "<no-id>".to_string()))
+            })
+            .collect();
+        return Err(JrError::UserError(format!(
+            "Option value '{value}' not found for field '{human_name}'. Allowed values: {}.",
+            allowed_labels.join(", ")
+        ))
+        .into());
+    }
+    if sub_av.len() > 1 {
+        let candidates: Vec<String> = sub_av
+            .iter()
+            .map(|av| {
+                format!(
+                    "{} (id: {})",
+                    av.value.as_deref().unwrap_or("?"),
+                    av.id.as_deref().unwrap_or("<no-id>")
+                )
+            })
+            .collect();
+        return Err(JrError::UserError(format!(
+            "Option value '{value}' is ambiguous for field '{human_name}': {}. \
+             Use the option id directly.",
+            candidates.join(", ")
+        ))
+        .into());
+    }
+    Ok(OptionMatch {
+        matched: sub_av[0],
+        id_bypass_echo: None,
+    })
+}
+
+/// Resolves a single (non-cascading) option value via [`find_option_match`]
+/// and composes the `{"id": "<optionId>"}` wire shape — the bare-form
+/// `option` dispatch's Step 4a algorithm (BC-3.4.016), shared verbatim
+/// (S-578-2) with the `:option` hinted composer's non-cascading path.
+fn resolve_option_value(
+    value: &str,
+    human_name: &str,
+    allowed: &[crate::types::jira::AllowedValue],
+) -> Result<(serde_json::Value, String)> {
+    let m = find_option_match(value, human_name, allowed)?;
+    let Some(ref option_id) = m.matched.id else {
+        return Err(JrError::UserError(format!(
+            "option '{value}' has no machine-readable id and cannot be set \
+             via --field. This typically occurs with user/group picker fields. \
+             Use the Jira UI or the field's native picker to set this value."
+        ))
+        .into());
+    };
+    let wire_value = serde_json::json!({"id": option_id});
+    let display_value = m
+        .id_bypass_echo
+        .unwrap_or_else(|| m.matched.value.clone().unwrap_or_else(|| value.to_string()));
+    Ok((wire_value, display_value))
+}
+
+/// Composes the `:option` hinted-bypass wire shape (S-578-2 Task 4).
 ///
-/// Non-cascading: byte-identical to the bare-form `option` dispatch above
-/// (BC-3.4.027 Description, VP-578-007). Cascading (`VALUE` contains `>`):
-/// `str::split_once('>')` MUST be used to separate `Parent` from `Child`
-/// (Architecture Compliance Rule 2 — never a char-index/fixed-byte-offset
-/// scheme); the parent segment resolves against `allowedValues[].value`, the
-/// child segment against the matched parent's `children[].value`
-/// (`AllowedValue.children`, already present on the type — see
-/// `src/types/jira/editmeta.rs`). Non-cascading-field `>` collision (D4,
-/// EC-3.4.027-7) is detected structurally via an empty `children` list on
-/// the matched parent, not a `schema.type` lookup.
+/// Non-cascading (`VALUE` contains no `>`): byte-identical to the bare-form
+/// `option` dispatch above (BC-3.4.027 Description, VP-578-007) — both share
+/// [`resolve_option_value`]. Cascading (`VALUE` contains `>`):
+/// `str::split_once('>')` (Architecture Compliance Rule 2 — never a
+/// char-index/fixed-byte-offset scheme); the parent segment resolves against
+/// `allowedValues[].value`, the child segment against the matched parent's
+/// `children[].value` (`AllowedValue.children`). Non-cascading-field `>`
+/// collision (D4, EC-3.4.027-7) is detected structurally via an empty
+/// `children` list on the matched parent, not a `schema.type` lookup.
 ///
 /// Returns `(wire_value, display_value)` — wire is `{"id": "<optionId>"}` for
 /// the non-cascading case or `{"value":"<parent>","child":{"value":"<child>"}}`
 /// for the cascading case; display is the matched label, or `"<parent> >
 /// <child>"` for cascading (BC-3.4.027 Postconditions "changed_fields echo").
-///
-/// NOT YET IMPLEMENTED — see `resolve_edit_fields`'s hinted-bypass branch
-/// (S-578-2 AC-001) for why this stub is currently unreachable via any CLI
-/// call site.
 fn compose_option_hint(
-    _value: &str,
-    _meta_field: &crate::types::jira::EditMetaField,
+    value: &str,
+    human_name: &str,
+    meta_field: &crate::types::jira::EditMetaField,
 ) -> Result<(serde_json::Value, String)> {
-    todo!("S-578-2 Task 4: :option hinted-bypass dispatch (cascading + non-cascading) not yet implemented")
+    let allowed = meta_field.allowed_values.as_deref().unwrap_or(&[]);
+    if allowed.is_empty() {
+        return Err(JrError::UserError(format!(
+            "Field '{human_name}' has no configured option values. \
+             An admin must populate the option list before values can be set."
+        ))
+        .into());
+    }
+
+    // D3 MUST: str::split_once('>'), never a char-index/fixed-byte-offset
+    // scheme — the whole delimiter-locate-and-slice operation is one call,
+    // eliminating the FIX-F6-LRE-1 panic class by construction.
+    match value.split_once('>') {
+        None => resolve_option_value(value, human_name, allowed),
+        Some((parent_raw, child_raw)) => {
+            // EC-3.4.027-6 (empty parent, `>Child`): same shape as
+            // EC-3.4.027-2 (unresolvable parent) — an empty parent segment
+            // can never legitimately match a real option label.
+            if parent_raw.is_empty() {
+                let allowed_labels: Vec<String> = allowed
+                    .iter()
+                    .map(|av| {
+                        av.value.clone().unwrap_or_else(|| {
+                            av.id.clone().unwrap_or_else(|| "<no-id>".to_string())
+                        })
+                    })
+                    .collect();
+                return Err(JrError::UserError(format!(
+                    "Option value '' not found for field '{human_name}'. Allowed values: {}.",
+                    allowed_labels.join(", ")
+                ))
+                .into());
+            }
+
+            let parent_match = find_option_match(parent_raw, human_name, allowed)?;
+            let parent_av = parent_match.matched;
+
+            // EC-3.4.027-6 (empty child, `Parent>`): same shape as
+            // EC-3.4.027-3 (resolvable parent, unresolvable child) — an empty
+            // child segment can never legitimately match a real child label,
+            // regardless of whether the field is genuinely cascading. This
+            // check MUST precede the D4 structural check below: D4 fires only
+            // for a NON-EMPTY child segment (its own precondition).
+            if child_raw.is_empty() {
+                let child_labels: Vec<String> = parent_av
+                    .children
+                    .iter()
+                    .map(|c| {
+                        c.value.clone().unwrap_or_else(|| {
+                            c.id.clone().unwrap_or_else(|| "<no-id>".to_string())
+                        })
+                    })
+                    .collect();
+                let parent_label = parent_av.value.as_deref().unwrap_or(parent_raw);
+                return Err(JrError::UserError(format!(
+                    "Option value '' not found for field '{human_name}' under parent \
+                     '{parent_label}'. Allowed child values: {}.",
+                    child_labels.join(", ")
+                ))
+                .into());
+            }
+
+            // D4 (adversary F-2): non-cascading-field `>` collision —
+            // detected structurally via an empty `children` list on the
+            // matched parent, never a `schema.type` lookup.
+            if parent_av.children.is_empty() {
+                return Err(JrError::UserError(format!(
+                    "field '{human_name}' is not a cascading select — remove the \
+                     '>{child_raw}' segment from the value."
+                ))
+                .into());
+            }
+
+            let child_match = find_option_match(child_raw, human_name, &parent_av.children)?;
+            let parent_label = parent_av
+                .value
+                .clone()
+                .unwrap_or_else(|| parent_raw.to_string());
+            let child_label = child_match
+                .matched
+                .value
+                .clone()
+                .unwrap_or_else(|| child_raw.to_string());
+            let wire_value = serde_json::json!({
+                "value": parent_label,
+                "child": {"value": child_label}
+            });
+            let display_value = format!("{parent_label} > {child_label}");
+            Ok((wire_value, display_value))
+        }
+    }
 }
 
-/// STUB (S-578-2 Task 5): composes the `:id` hinted-bypass wire shape —
-/// `VALUE` sent verbatim as `{"id": "<VALUE>"}`, with NO `allowedValues`
-/// lookup, NO label matching, and NO ambiguity detection (BC-3.4.028
+/// Composes the `:id` hinted-bypass wire shape (S-578-2 Task 5) — `VALUE`
+/// sent verbatim as `{"id": "<VALUE>"}`, with NO `allowedValues` lookup, NO
+/// label matching, and NO ambiguity detection (BC-3.4.028
 /// Description/Postconditions). `changed_fields` echo is `VALUE` itself (no
 /// reverse lookup).
-///
-/// NOT YET IMPLEMENTED — see `resolve_edit_fields`'s hinted-bypass branch
-/// (S-578-2 AC-001) for why this stub is currently unreachable via any CLI
-/// call site.
-fn compose_id_hint(_value: &str) -> (serde_json::Value, String) {
-    todo!("S-578-2 Task 5: :id hinted-bypass dispatch not yet implemented")
+fn compose_id_hint(value: &str) -> (serde_json::Value, String) {
+    (serde_json::json!({"id": value}), value.to_string())
 }
 
-/// STUB (S-578-2 Task 5): composes the `:name` hinted-bypass wire shape —
-/// `VALUE` sent verbatim as `{"name": "<VALUE>"}` (BC-3.4.029
-/// Description/Postconditions). For `priority` specifically, the caller's
-/// real implementation MUST reuse the dedicated `--priority` flag's existing
-/// wire-composition function rather than duplicating it (AC-007).
-///
-/// NOT YET IMPLEMENTED — see `resolve_edit_fields`'s hinted-bypass branch
-/// (S-578-2 AC-001) for why this stub is currently unreachable via any CLI
-/// call site.
-fn compose_name_hint(_value: &str) -> (serde_json::Value, String) {
-    todo!("S-578-2 Task 5: :name hinted-bypass dispatch not yet implemented")
+/// Composes the `:name` hinted-bypass wire shape (S-578-2 Task 5) — `VALUE`
+/// sent verbatim as `{"name": "<VALUE>"}` (BC-3.4.029
+/// Description/Postconditions). This is the identical shape the dedicated
+/// `--priority` flag already sends (`edit.rs`, `fields["priority"] =
+/// json!({"name": p})`), so `--field priority:name=Medium` produces
+/// byte-identical wire output to `--priority Medium` (AC-007) without a
+/// separate reusable function existing to call — the shape itself is the
+/// contract.
+fn compose_name_hint(value: &str) -> (serde_json::Value, String) {
+    (serde_json::json!({"name": value}), value.to_string())
 }
 
-/// STUB (S-578-2 Task 6): composes the `:asset` hinted-bypass wire shape —
+/// Composes the `:asset` hinted-bypass wire shape (S-578-2 Task 6) —
 /// `[{"workspaceId":"<resolved>","id":"<workspaceId>:<objectId>","objectId":"<objectId>"}]`
 /// (BC-3.4.030 Parsing rules/Postconditions). `VALUE` splits on the FIRST
-/// `:` via `str::split_once(':')` MUST (Architecture Compliance Rule 2,
-/// mirrors the `:option` cascading composer's `>` MUST); when no `:` is
-/// present, `objectId` is the whole `VALUE` and `workspaceId` resolves via
-/// the existing cached `get_or_fetch_workspace_id`
+/// `:` via `str::split_once(':')` (Architecture Compliance Rule 2, mirrors
+/// the `:option` cascading composer's `>` MUST); when no `:` is present,
+/// `objectId` is the whole `VALUE` and `workspaceId` resolves via the
+/// existing cached `get_or_fetch_workspace_id`
 /// (`crate::api::assets::workspace::get_or_fetch_workspace_id`) — called AT
 /// THIS L2 call site (Architecture Compliance Rule 3: never inside a sibling
-/// L4/JSM module), at most once per invocation. On a cold cache this is a
-/// genuine HTTP round-trip and can fail per BC-3.4.030's error taxonomy
-/// (AC-010) — 403/404 → "Assets is not available…"; 200 + zero entries →
-/// "No Assets workspace found…"; 401/5xx/network → standard mappings.
+/// L4/JSM module). On a cold cache this is a genuine HTTP round-trip and can
+/// fail per BC-3.4.030's error taxonomy (AC-010) — 403/404 → "Assets is not
+/// available…"; 200 + zero entries → "No Assets workspace found…"; 401/5xx/
+/// network → standard mappings (via `?` propagation from
+/// `get_or_fetch_workspace_id` itself).
 ///
-/// NOT YET IMPLEMENTED — see `resolve_edit_fields`'s hinted-bypass branch
-/// (S-578-2 AC-001) for why this stub is currently unreachable via any CLI
-/// call site.
+/// # Malformed-shape errors (BC-3.4.031 EC-2/EC-3, AC-009)
+/// Checked in this order (EC-2c's empty-workspace-segment check MUST run
+/// BEFORE the objectId-segment checks — `:asset=:` triggers EC-2c, never
+/// EC-2b):
+/// 1. Empty `VALUE` → "asset reference cannot be empty" (EC-2a).
+/// 2. `:` present, workspace segment empty → "workspace segment cannot be
+///    empty…" (EC-2c).
+/// 3. `:` present, remainder contains a SECOND `:` → "unexpected extra
+///    ':'…" (EC-2d) — checked before the generic numeric check so a
+///    multi-colon mistake gets its own message, not the generic one.
+/// 4. objectId segment (ASCII `[0-9]+` only, NOT Unicode `\d`) empty or
+///    non-numeric → "objectId must be numeric" (EC-2b/EC-3).
 async fn compose_asset_hint(
-    _client: &JiraClient,
-    _value: &str,
+    client: &JiraClient,
+    value: &str,
 ) -> Result<(serde_json::Value, String)> {
-    todo!("S-578-2 Task 6: :asset hinted-bypass dispatch not yet implemented")
+    if value.is_empty() {
+        return Err(JrError::UserError(
+            "asset reference cannot be empty. Use --field NAME:asset=OBJECTID (workspace \
+             id resolved from cache) or --field NAME:asset=WORKSPACE:OBJECTID."
+                .into(),
+        )
+        .into());
+    }
+
+    let (workspace_id, object_id): (String, String) = match value.split_once(':') {
+        Some((ws, rest)) => {
+            if ws.is_empty() {
+                return Err(JrError::UserError(
+                    "workspace segment cannot be empty when ':' is present; omit the \
+                     workspace prefix entirely to use the cached workspace id."
+                        .into(),
+                )
+                .into());
+            }
+            if rest.contains(':') {
+                return Err(JrError::UserError(format!(
+                    "unexpected extra ':' in :asset value '{value}' — expected \
+                     WORKSPACE:OBJECTID."
+                ))
+                .into());
+            }
+            if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
+                return Err(JrError::UserError(format!(
+                    "objectId must be numeric (ASCII digits only); got '{rest}'."
+                ))
+                .into());
+            }
+            (ws.to_string(), rest.to_string())
+        }
+        None => {
+            if !value.chars().all(|c| c.is_ascii_digit()) {
+                return Err(JrError::UserError(format!(
+                    "objectId must be numeric (ASCII digits only); got '{value}'."
+                ))
+                .into());
+            }
+            let workspace_id =
+                crate::api::assets::workspace::get_or_fetch_workspace_id(client).await?;
+            (workspace_id, value.to_string())
+        }
+    };
+
+    let wire_value = serde_json::json!([{
+        "workspaceId": workspace_id,
+        "id": format!("{workspace_id}:{object_id}"),
+        "objectId": object_id
+    }]);
+    let display_value = format!("{workspace_id}:{object_id}");
+    Ok((wire_value, display_value))
 }
 
 #[cfg(test)]
