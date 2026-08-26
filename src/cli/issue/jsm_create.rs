@@ -279,7 +279,12 @@ pub(super) async fn handle_jsm_create(
     };
 
     // Parse --field NAME=VALUE pairs (BC-3.8.008).
-    let extra_fields = parse_field_kv(&field_pairs)?;
+    // S-578-1: JsmRequestBuilder::extra_fields still takes bare NAME=VALUE
+    // pairs; :kind dispatch is not implemented yet (see parse_field_kv TODO).
+    let extra_fields: std::collections::HashMap<String, String> = parse_field_kv(&field_pairs)?
+        .into_iter()
+        .map(|(k, v)| (k, v.value))
+        .collect();
 
     // Build the POST body (BC-3.8.005..009).
     let body = JsmRequestBuilder {

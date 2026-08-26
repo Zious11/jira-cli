@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Result, bail};
 use serde_json::json;
@@ -541,11 +541,17 @@ pub(super) async fn handle_edit(
         if !field_pairs.is_empty() {
             let dr_key = &effective_keys[0];
             let mut dr_fields = json!({});
+            // S-578-1: resolve_edit_fields still takes bare NAME=VALUE pairs;
+            // :kind dispatch is not implemented yet (see parse_field_kv TODO).
+            let dr_field_values: HashMap<String, String> = field_pairs
+                .iter()
+                .map(|(k, v)| (k.clone(), v.value.clone()))
+                .collect();
             helpers::resolve_edit_fields(
                 client,
                 &config.active_profile_name,
                 dr_key,
-                &field_pairs,
+                &dr_field_values,
                 &mut dr_fields,
                 &mut dr_changed,
             )
@@ -1028,11 +1034,17 @@ pub(super) async fn handle_edit(
     // at all -- unaffected by whether components ends up merged into the
     // same PUT.
     if !field_pairs.is_empty() {
+        // S-578-1: resolve_edit_fields still takes bare NAME=VALUE pairs;
+        // :kind dispatch is not implemented yet (see parse_field_kv TODO).
+        let field_values: HashMap<String, String> = field_pairs
+            .iter()
+            .map(|(k, v)| (k.clone(), v.value.clone()))
+            .collect();
         helpers::resolve_edit_fields(
             client,
             &config.active_profile_name,
             key,
-            &field_pairs,
+            &field_values,
             &mut fields,
             &mut changed_fields,
         )

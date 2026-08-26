@@ -490,16 +490,36 @@ pub(crate) struct FieldValueSpec {
 /// `get_or_fetch_workspace_id` call (ADR-0019 §2 Architecture Compliance
 /// Rule 1); workspace-id resolution for `:asset` is a call-site (S-578-2/3/4)
 /// concern.
-pub(crate) fn parse_field_kv(
-    _pairs: &[String],
-) -> Result<HashMap<String, FieldValueSpec>, JrError> {
-    todo!(
-        "BC-3.4.026: implement NAME[:kind]=VALUE parser — first '=' split (step 1), \
-         last ':' before '=' split (step 2), closed-set kind validation \
-         {{option,id,name,asset}} (step 3, BC-3.4.031 EC-1/EC-5), bare-form fallback \
-         (step 4), Unicode-scalar-safe splitting via char_indices/str::find(char) only \
-         (step 5, VP-578-005). See S-578-1."
-    )
+pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, FieldValueSpec>, JrError> {
+    let mut map = HashMap::new();
+    for pair in pairs {
+        // Step 1 (unchanged BC-3.8.008 behavior): split on the FIRST '=' —
+        // Unicode-scalar-safe via str::find(char), never a raw byte index.
+        let Some(eq_idx) = pair.find('=') else {
+            return Err(JrError::UserError(format!(
+                "Invalid --field value '{pair}': expected NAME=VALUE"
+            )));
+        };
+        let name = &pair[..eq_idx];
+        let value = &pair[eq_idx + 1..];
+
+        // TODO(S-578-1): :kind tag parsing — see BC-3.4.026. Step 2-4 of the
+        // BC-3.4.026 parser contract (last ':' before '=' split, closed-set
+        // kind validation, bare-form fallback) are NOT implemented here yet.
+        // This is deliberately the OLD bare-form behavior only: the name is
+        // used verbatim (never stripped of a ':kind' suffix) and kind is
+        // always None. Implementing the hint-tag detection here would make
+        // S-578-1's Step-3 hint tests pass trivially against this stub,
+        // which is exactly what BC-5.38.005's self-check forbids.
+        map.insert(
+            name.to_string(),
+            FieldValueSpec {
+                kind: None,
+                value: value.to_string(),
+            },
+        );
+    }
+    Ok(map)
 }
 
 /// Proptest properties for `parse_field_kv` (AC-013, BC-3.8.008).
@@ -526,7 +546,7 @@ mod parse_field_kv_proptests {
                 .unwrap_or_else(|e| panic!("A.1: parse_field_kv must succeed for valid pair; got error: {e:?}"));
             let expected_value = format!("{value_prefix}={value_suffix}");
             prop_assert_eq!(
-                result.get(&name).map(String::as_str),
+                result.get(&name).map(|spec| spec.value.as_str()),
                 Some(expected_value.as_str()),
                 "A.1: BC-3.8.008 first-equals split must yield full value after first '='"
             );
@@ -542,7 +562,7 @@ mod parse_field_kv_proptests {
             let result = parse_field_kv(&pairs)
                 .unwrap_or_else(|e| panic!("A.2: parse_field_kv must accept 'name=' (empty value); got error: {e:?}"));
             prop_assert_eq!(
-                result.get(&name).map(String::as_str),
+                result.get(&name).map(|spec| spec.value.as_str()),
                 Some(""),
                 "A.2: BC-3.8.008 empty value after '=' must be accepted and preserved"
             );
@@ -563,7 +583,7 @@ mod parse_field_kv_proptests {
             let result = parse_field_kv(&pairs)
                 .unwrap_or_else(|e| panic!("A.3: parse_field_kv must succeed for duplicate key pairs; got error: {e:?}"));
             prop_assert_eq!(
-                result.get(&name).map(String::as_str),
+                result.get(&name).map(|spec| spec.value.as_str()),
                 Some(last_val.as_str()),
                 "A.3: BC-3.8.008 duplicate key: last value must win"
             );
