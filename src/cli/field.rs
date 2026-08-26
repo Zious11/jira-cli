@@ -1027,8 +1027,8 @@ mod tests {
             opt(Some("10002"), Some("In Progress")),
             opt(Some("BLK-99"), Some("Something else")),
         ];
-        let result = filter_options(&options, Some("blk"));
-        // Matches via label substring ("Blocked" contains "blk" case-insensitively)
+        let result = filter_options(&options, Some("bl"));
+        // Matches via label substring ("Blocked" contains "bl" case-insensitively)
         // AND via id substring ("BLK-99").
         assert_eq!(result.len(), 2);
         assert!(result.iter().any(|o| o.id.as_deref() == Some("10001")));
