@@ -38,6 +38,23 @@ fn write_minimal_config(config_home: &std::path::Path, url: &str) {
     .unwrap();
 }
 
+/// Write a config already in the post-migration multi-profile shape
+/// (`default_profile` plus `[profiles.default]`, no legacy `[instance]`
+/// block) — avoids the one-time `"Migrated config to multi-profile layout"`
+/// `eprintln!` that `write_minimal_config`'s legacy `[instance]` shape
+/// triggers on first load. Used by stderr-emptiness assertions where that
+/// migration notice would be a false-positive stderr leak unrelated to the
+/// command under test.
+fn write_premigrated_config(config_home: &std::path::Path, url: &str) {
+    let dir = config_home.join("jr");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        format!("default_profile = \"default\"\n\n[profiles.default]\nurl = \"{url}\"\n"),
+    )
+    .unwrap();
+}
+
 /// Write a config with a profile-level default `project` set — used by
 /// AC-004's profile-default resolution tests.
 fn write_config_with_profile_project(config_home: &std::path::Path, url: &str, project: &str) {
@@ -2173,9 +2190,13 @@ async fn test_bc_x_14_004_m3_assets_empty_validvalues_is_degrade_not_misconfig()
         "M3 empty validValues on an Assets field must degrade gracefully (exit 0), not error; got {:?}. stderr: {stderr}",
         output.status.code()
     );
+    // B-LOW (round-3 convergence): pin the exact hardened Assets-branch hint
+    // phrase, not the bare "Assets" substring -- a field literally named
+    // "Assets" could satisfy the looser assertion by coincidence. Matches
+    // the sibling CMDB tests' discriminating-phrase convention.
     assert!(
-        stderr.contains("Assets"),
-        "expected the Assets-specific degrade hint, not a generic misconfiguration message; got: {stderr}"
+        stderr.contains("uses Assets (CMDB)"),
+        "expected the exact Assets-branch hint phrase (defeats a field-name coincidence via the generic hint); got: {stderr}"
     );
 }
 
@@ -2261,5 +2282,272 @@ async fn test_bc_x_14_004_field_absent_from_editmeta_context_exits_64() {
     assert!(
         stderr.contains("Edit screen") || stderr.contains("not available"),
         "expected a per-context 'not on the Edit screen' style message; got: {stderr}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Round-3 convergence pins (S-580-1): HIGH regression pin for the CWE-835
+// empty-page infinite-loop fix (commit 7ea5e9d9), plus MEDIUM/LOW coverage
+// gaps identified in round-2 adversarial review.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// HIGH regression pin (CWE-835, commit 7ea5e9d9): `get_createmeta_fields`'s
+/// `total > 0` termination branch must treat an EMPTY page as `done`
+/// regardless of whether `start_at + page_len >= total` — otherwise
+/// `start_at += page_len` adds 0 forever and the identical `startAt=200` GET
+/// repeats without bound. Page 1 (`startAt=0`) returns a FULL 200-field page
+/// (with the target field embedded in it) against `total: 250`; page 2
+/// (`startAt=200`) returns an EMPTY `fields` array despite `total: 250`
+/// still exceeding `start_at + page_len` (200 + 0 = 200 < 250) — a
+/// permission-filtered short/empty page in the JRACLOUD-71293/95368 class.
+/// Without the `page_len == 0` guard in the `total > 0` branch, `done` stays
+/// `false` forever and the subprocess would hang until the test harness's
+/// timeout; with the guard, the command terminates immediately after the
+/// empty page and reports the page-1 field's options.
+#[tokio::test]
+async fn test_bc_x_14_001_get_createmeta_fields_empty_page_terminates_not_infinite_loop() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "HELP", &[("10000", "Bug")]).await;
+
+    // Page 1: a FULL page (200 fields) with the target field embedded, total = 250.
+    let mut page_1_fields: Vec<Value> = (0..199)
+        .map(|i| {
+            json!({
+                "fieldId": format!("customfield_9{i:03}"),
+                "name": format!("Dummy {i}"),
+                "schema": {"type": "string"},
+                "allowedValues": null
+            })
+        })
+        .collect();
+    page_1_fields.push(createmeta_field_10084());
+    assert_eq!(page_1_fields.len(), 200, "page 1 must be a full page");
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "fields": page_1_fields,
+            "startAt": 0,
+            "maxResults": 200,
+            "total": 250
+        })))
+        .mount(&h.server)
+        .await;
+
+    // Page 2 (startAt=200): EMPTY fields despite total=250 still exceeding
+    // start_at + page_len (200 + 0 = 200 < 250) -- must still terminate.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
+        .and(query_param("startAt", "200"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "fields": [],
+            "startAt": 200,
+            "maxResults": 200,
+            "total": 250
+        })))
+        .mount(&h.server)
+        .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--type",
+        "Bug",
+        "--project",
+        "HELP",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0 (empty page must terminate pagination, not loop forever), got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = parsed.as_array().unwrap();
+    assert_eq!(
+        arr.len(),
+        2,
+        "expected the page-1 field's 2 options, got: {parsed}"
+    );
+}
+
+/// B-M1 (round-2 MEDIUM): `--value` at the `handle()`/subprocess level
+/// against a NON-empty, multi-option enumeration must narrow the JSON array
+/// to exactly the matching subset. Every prior discriminating `--value` test
+/// exercises the pure `filter_options` fn directly; the only prior
+/// integration-level `--value` test runs against a zero-options degrade
+/// field (`test_bc_x_14_002_value_with_graceful_degrade_still_hints`), so a
+/// `handle()`-level defect that drops or mis-threads the `--value` arg
+/// before it ever reaches `filter_options` would be invisible.
+#[tokio::test]
+async fn test_bc_x_14_002_value_narrows_json_output_against_nonempty_enumeration() {
+    let h = Harness::new().await;
+    mount_editmeta(
+        &h.server,
+        "FOO-1",
+        json!({
+            "customfield_10084": {
+                "name": "SOC Client",
+                "schema": {"type": "option"},
+                "allowedValues": [
+                    {"id": "10001", "value": "Client A"},
+                    {"id": "10002", "value": "Client B"},
+                    {"id": "10003", "value": "Other Value"}
+                ],
+                "operations": ["set"],
+                "required": false
+            }
+        }),
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--issue",
+        "FOO-1",
+        "--value",
+        "Client",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let output = assert.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = parsed.as_array().unwrap();
+    assert_eq!(
+        arr.len(),
+        2,
+        "--value \"Client\" must narrow to exactly the 2 matching entries (Client A, Client B), not all 3 or 0; got: {parsed}"
+    );
+    let labels: Vec<&str> = arr.iter().map(|e| e["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"Client A"));
+    assert!(labels.contains(&"Client B"));
+    assert!(
+        !labels.contains(&"Other Value"),
+        "narrowed output must not include the non-matching entry; got: {parsed}"
+    );
+}
+
+/// B-M1 companion: `--value ""` (explicit empty string) and no `--value` at
+/// all are BOTH identity filters over the same enumeration and must produce
+/// byte-identical JSON output.
+#[tokio::test]
+async fn test_bc_x_14_002_value_empty_string_identical_to_value_absent() {
+    let h = Harness::new().await;
+    mount_editmeta(
+        &h.server,
+        "FOO-1",
+        json!({
+            "customfield_10084": {
+                "name": "SOC Client",
+                "schema": {"type": "option"},
+                "allowedValues": [
+                    {"id": "10001", "value": "Client A"},
+                    {"id": "10002", "value": "Client B"}
+                ],
+                "operations": ["set"],
+                "required": false
+            }
+        }),
+    )
+    .await;
+
+    let base_args = [
+        "field",
+        "options",
+        "customfield_10084",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+        "--output",
+        "json",
+    ];
+
+    let without_value = h.cmd(&base_args);
+    let stdout_without = String::from_utf8_lossy(&without_value.get_output().stdout).to_string();
+
+    let mut with_empty_args: Vec<&str> = base_args.to_vec();
+    with_empty_args.push("--value");
+    with_empty_args.push("");
+    let with_empty_value = h.cmd(&with_empty_args);
+    let stdout_with_empty =
+        String::from_utf8_lossy(&with_empty_value.get_output().stdout).to_string();
+
+    assert_eq!(
+        stdout_without, stdout_with_empty,
+        "--value \"\" must be identical to omitting --value entirely"
+    );
+}
+
+/// B-M2 (round-2 MEDIUM, VP-580-008 property 3): on an ordinary (non-degrade)
+/// success path, stderr must be EMPTY -- Profile-2 (Read-only) output-channel
+/// contract forbids any stray warning/hint/cache-write `eprintln!` on a plain
+/// enumeration success. Captures stdout/stderr SEPARATELY (not merely
+/// checking stdout has content) so a stray stderr leak cannot hide behind an
+/// otherwise-passing assertion.
+#[tokio::test]
+async fn test_bc_x_14_003_zero_stderr_on_ordinary_enumeration_success() {
+    let h = Harness::new().await;
+    // Overwrite the default legacy-shape config with an already-migrated one
+    // so the one-time migration `eprintln!` doesn't false-positive this
+    // stderr-emptiness assertion (unrelated to `field options` behavior).
+    write_premigrated_config(h.config_dir.path(), &h.server.uri());
+    mount_editmeta(
+        &h.server,
+        "FOO-1",
+        json!({
+            "customfield_10084": {
+                "name": "SOC Client",
+                "schema": {"type": "option"},
+                "allowedValues": [{"id": "10001", "value": "Client A"}],
+                "operations": ["set"],
+                "required": false
+            }
+        }),
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stdout.is_empty(),
+        "sanity check: stdout must carry the table output"
+    );
+    assert!(
+        stderr.is_empty(),
+        "ordinary enumeration success must emit ZERO stderr (Profile-2 output-channel contract); got: {stderr:?}"
     );
 }
