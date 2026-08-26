@@ -1111,6 +1111,159 @@ async fn test_jsm_create_field_missing_equals_exits_64() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// S-578-1 LOW-finding remediation — INTERIM GUARD (this test FAILS until a
+// follow-up implementer wires the guard; kind-hint DISPATCH itself is
+// S-578-2/3/4, out of scope here).
+//
+// `parse_field_kv` (src/cli/issue/create.rs) already recognizes `:kind`
+// hints (`:option`/`:id`/`:name`/`:asset`), but `handle_jsm_create`
+// (src/cli/issue/jsm_create.rs) does not dispatch on `.kind` yet — see the
+// "S-578-1: JsmRequestBuilder::extra_fields still takes bare NAME=VALUE
+// pairs; :kind dispatch is not implemented yet" comment immediately above
+// its `parse_field_kv` call site. It unconditionally maps every parsed pair
+// to `(name, spec.value)`, silently dropping any `:kind` hint and treating
+// a hinted pair exactly like the bare form. Per the project's
+// no-silent-value-drop principle for write commands, this interim state
+// must be a CLEAR exit-64 error, not silent treat-as-bare.
+//
+// TODAY this test FAILS: `--field cf:id=10042` is silently reduced to field
+// "cf" = "10042" and POSTed successfully (exit 0). Once the interim guard
+// lands, this must become an exit-64 `JrError::UserError` naming the
+// unsupported hints and pointing at the bare `NAME=VALUE` form — BEFORE the
+// POST to /rest/servicedeskapi/request.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_jsm_create_field_kind_hint_exits_64_pending_dispatch_s578_1() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_type_list(&server).await;
+
+    // Full working POST mock (no call-count expectation) so that, TODAY, the
+    // un-guarded call-site succeeds end-to-end and this assertion cleanly
+    // fails on the exit-code mismatch rather than panicking on an
+    // unmatched/missing mock or a wiremock expectation violation.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "cf:id=10042",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "S-578-1 INTERIM GUARD: '--field cf:id=10042' (a ':kind'-hinted pair) must be rejected \
+         with exit 64 until dispatch lands (S-578-2/3/4) — it must NEVER be silently treated \
+         as the bare form. This assertion is expected to FAIL today (no guard exists yet; the \
+         command currently exits 0 via silent treat-as-bare). stderr={stderr} stdout={stdout}"
+    );
+
+    // Load-bearing substrings the guard's error message must contain once implemented:
+    // (1) states the ':kind' hints are not yet supported on this command, and
+    // (2) suggests the bare NAME=VALUE form as the escape hatch.
+    assert!(
+        stderr.contains("not yet supported"),
+        "S-578-1 INTERIM GUARD: stderr must explain the ':kind' hint is 'not yet supported' \
+         on this command; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("NAME=VALUE"),
+        "S-578-1 INTERIM GUARD: stderr must suggest the bare 'NAME=VALUE' form; stderr={stderr}"
+    );
+}
+
+/// S-578-1 regression pin (paired with the interim-guard test above): a BARE
+/// `--field NAME=VALUE` pair (`kind: None`) must keep working exactly as
+/// before the interim guard lands — the guard must reject ONLY `kind: Some(_)`
+/// pairs, never fire on the unhinted form. This test PASSES today (it is a
+/// restatement of the existing last-wins coverage above, scoped narrowly to
+/// the guard-non-interference property) and must continue to pass after the
+/// guard is implemented.
+#[tokio::test]
+async fn test_jsm_create_field_bare_pair_unaffected_by_kind_hint_guard_s578_1() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_type_list(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "cf=10042",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "S-578-1 regression pin: a bare (unhinted) '--field cf=10042' pair must keep succeeding \
+         (kind: None must never trip the interim ':kind'-hint guard); \
+         stderr={stderr} stdout={stdout}"
+    );
+}
+
 // ─── AC-010: --on-behalf-of → raiseOnBehalfOf at top level ──────────────────
 
 /// AC-010 (BC-3.8.009): `--on-behalf-of` maps to top-level `raiseOnBehalfOf`

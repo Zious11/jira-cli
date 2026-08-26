@@ -873,6 +873,33 @@ mod field_value_kind_tests {
             let _ = parse_field_kv(&pairs); // must not panic
         }
     }
+
+    /// S-578-1 LOW-finding remediation — completes the empty-value pass-through
+    /// matrix. AC-009 (BC-3.4.031 EC completeness): an empty `:option=` value
+    /// is a PASS-THROUGH at the parser level, identically to EC-8 (`:id=`),
+    /// EC-9 (`:name=`), and EC-2a (`:asset=`) above —
+    /// `parse_field_kv` performs no empty-value rejection for `:option`
+    /// either; the pair carries `FieldValueSpec { kind: Some(Option), value: "" }`
+    /// unchanged. The `is_err`-style structural classification of `:option`'s
+    /// cascading `Parent>Child` syntax (whether an empty value is actually
+    /// invalid) is a downstream call-site composer concern (S-578-2/3/4),
+    /// out of this story's scope — this test only pins the PARSER-level
+    /// pass-through.
+    #[test]
+    fn test_bc_3_4_031_option_empty_value_passes_through_parser() {
+        let pairs = vec!["cf:option=".to_string()];
+        let result = parse_field_kv(&pairs)
+            .expect("S-578-1: empty ':option' value must PASS THROUGH the parser (not exit 64)");
+        assert_eq!(
+            result.get("cf"),
+            Some(&FieldValueSpec {
+                kind: Some(FieldValueKind::Option),
+                value: String::new(),
+            }),
+            "S-578-1: empty ':option' value must parse to kind Some(Option), value \"\" — \
+             completes the empty-value matrix alongside :id/:name/:asset (EC-8/9/2a)"
+        );
+    }
 }
 
 /// Proptest properties for `parse_field_kv` (AC-013, BC-3.8.008).
@@ -880,7 +907,7 @@ mod field_value_kind_tests {
 /// Properties A.1–A.4 cover the four invariants stated in the verification delta.
 #[cfg(test)]
 mod parse_field_kv_proptests {
-    use super::parse_field_kv;
+    use super::{FieldValueKind, FieldValueSpec, parse_field_kv};
     use proptest::prelude::*;
 
     proptest! {
@@ -969,6 +996,115 @@ mod parse_field_kv_proptests {
         #[test]
         fn prop_field_hint_split_no_panic(raw in "\\PC{0,80}") {
             let _ = parse_field_kv(&[raw]); // must not panic
+        }
+
+        /// VP-578-006 (BC-3.4.026 Rule, ADR-0019 §2(b)), PROPTEST form —
+        /// sibling to `prop_parse_field_kv_last_value_wins_on_duplicates`
+        /// (A.3, bare-form only). For a single NAME with N>=2 repeated
+        /// `--field NAME[:kind]=VALUE` occurrences, where BOTH the `:kind`
+        /// hint AND the value vary independently across occurrences,
+        /// `parse_field_kv` must yield EXACTLY ONE map entry for that NAME,
+        /// equal to the LAST occurrence's whole `FieldValueSpec` (kind AND
+        /// value) — kinds are never merged or compared across duplicate NAME
+        /// occurrences, only the last one survives.
+        #[test]
+        fn prop_field_kv_last_wins_across_kinds(
+            name in "[a-z][a-z0-9_]{0,19}",
+            occurrences in prop::collection::vec(
+                (
+                    prop_oneof![
+                        Just(None),
+                        Just(Some("option")),
+                        Just(Some("id")),
+                        Just(Some("name")),
+                        Just(Some("asset")),
+                    ],
+                    "[a-z0-9]{0,10}",
+                ),
+                2..6,
+            ),
+        ) {
+            let pairs: Vec<String> = occurrences
+                .iter()
+                .map(|(kind, value): &(Option<&str>, String)| match kind {
+                    Some(k) => format!("{name}:{k}={value}"),
+                    None => format!("{name}={value}"),
+                })
+                .collect();
+
+            let result = parse_field_kv(&pairs).unwrap_or_else(|e| {
+                panic!(
+                    "VP-578-006: parse_field_kv must succeed for well-formed duplicate-NAME \
+                     pairs across kinds; got error: {e:?}"
+                )
+            });
+
+            prop_assert_eq!(
+                result.len(),
+                1,
+                "VP-578-006: duplicate NAME across kinds must collapse to exactly one map entry"
+            );
+
+            let (last_kind_str, last_value) = occurrences.last().expect("2..6 is never empty");
+            let expected_kind = last_kind_str.map(|k| match k {
+                "option" => FieldValueKind::Option,
+                "id" => FieldValueKind::Id,
+                "name" => FieldValueKind::Name,
+                "asset" => FieldValueKind::Asset,
+                _ => unreachable!("strategy only generates the four known kind strings"),
+            });
+
+            prop_assert_eq!(
+                result.get(&name),
+                Some(&FieldValueSpec {
+                    kind: expected_kind,
+                    value: last_value.clone(),
+                }),
+                "VP-578-006: the LAST occurrence's whole FieldValueSpec (kind AND value) must \
+                 win across kind boundaries, not just across value boundaries"
+            );
+        }
+
+        /// VP-578-005 property 3 (BC-3.4.026 step 5, Multibyte-safety MUST):
+        /// the parsed `value` is byte-for-byte the substring after the FIRST
+        /// '=', including embedded '=', ':', and MULTIBYTE scalars — never
+        /// re-encoded, trimmed, or otherwise altered. `\PC` generates
+        /// arbitrary Unicode scalar values, including multibyte ones. This
+        /// closes the verification-delta gap where multibyte VALUE
+        /// preservation was previously only no-panic-checked
+        /// (`prop_field_hint_split_no_panic`) but never asserted equal to
+        /// the exact expected substring.
+        #[test]
+        fn prop_field_hint_value_bytes_preserved(
+            name in "[a-z][a-z0-9_]{0,19}",
+            value in "\\PC{0,80}",
+        ) {
+            let pair = format!("{name}={value}");
+            let pairs = vec![pair.clone()];
+            let result = parse_field_kv(&pairs).unwrap_or_else(|e| {
+                panic!(
+                    "VP-578-005 property 3: parse_field_kv must succeed for a bare \
+                     NAME=VALUE pair; got error: {e:?}"
+                )
+            });
+
+            // The substring after the FIRST '=' — since `name` is pure
+            // `[a-z][a-z0-9_]*` (no '=' or ':'), this is unambiguous and
+            // equals `value` byte-for-byte even when `value` itself embeds
+            // '=' or ':' characters.
+            let expected_value = &pair[name.len() + 1..];
+            prop_assert_eq!(
+                expected_value,
+                value.as_str(),
+                "sanity: substring-after-first-'=' must equal the original value verbatim"
+            );
+
+            prop_assert_eq!(
+                result.get(&name).map(|spec| spec.value.as_str()),
+                Some(expected_value),
+                "VP-578-005 property 3: parsed value must be byte-for-byte the substring after \
+                 the first '=', including embedded '=', ':', and multibyte scalars"
+            );
         }
     }
 }

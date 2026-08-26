@@ -3958,3 +3958,118 @@ async fn test_bc_3_4_016_option_idless_numeric_value_falls_through_to_label_matc
         "Stderr must contain '--field' (EC-3.4.016-8 load-bearing substring); stderr={stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S-578-1 LOW-finding remediation — INTERIM GUARD (this test FAILS until a
+// follow-up implementer wires the guard; kind-hint DISPATCH itself is
+// S-578-2/3/4, out of scope here).
+//
+// `parse_field_kv` (src/cli/issue/create.rs) already recognizes `:kind`
+// hints (`:option`/`:id`/`:name`/`:asset`) and returns them as
+// `FieldValueSpec { kind: Some(_), .. }`, but `handle_edit`
+// (src/cli/issue/edit.rs) does not yet dispatch on `.kind` anywhere — it
+// unconditionally reads `.value` and silently treats a hinted pair exactly
+// like the bare `NAME=VALUE` form (see the "S-578-1: ... :kind dispatch is
+// not implemented yet" comments at edit.rs's dry-run and live PUT builders).
+// Per the project's no-silent-value-drop principle for write commands, this
+// interim state must be a CLEAR exit-64 error, not silent treat-as-bare.
+//
+// TODAY this test FAILS: `--field Severity:id=10042` is accepted and PUT
+// successfully (exit 0) because the `:id` hint is silently dropped at the
+// map-key-stripping step and the value "10042" is written to "Severity" as
+// if it were a bare pair. Once the interim guard lands, this must become an
+// exit-64 `JrError::UserError` naming the unsupported hints and pointing at
+// the bare `NAME=VALUE` form — BEFORE any HTTP call (fields-list GET,
+// editmeta GET, and PUT must never fire).
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_field_kind_hint_exits_64_pending_dispatch_s578_1() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // Full working mock set (mirrors test_bc_3_4_015_field_string_value_appears_in_table_echo)
+    // so that, TODAY, the un-guarded call-site succeeds end-to-end and this
+    // assertion cleanly fails on the exit-code mismatch rather than
+    // panicking on an unmatched/missing mock.
+    mount_list_fields(&server, "customfield_10001", "Severity").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity:id=10042",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "S-578-1 INTERIM GUARD: '--field Severity:id=10042' (a ':kind'-hinted pair) must be \
+         rejected with exit 64 until dispatch lands (S-578-2/3/4) — it must NEVER be silently \
+         treated as the bare form. This assertion is expected to FAIL today (no guard exists \
+         yet; the command currently exits 0 via silent treat-as-bare). \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    // Load-bearing substrings the guard's error message must contain once implemented:
+    // (1) states the ':kind' hints are not yet supported on this command, and
+    // (2) suggests the bare NAME=VALUE form as the escape hatch.
+    assert!(
+        stderr.contains("not yet supported"),
+        "S-578-1 INTERIM GUARD: stderr must explain the ':kind' hint is 'not yet supported' \
+         on this command; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("NAME=VALUE"),
+        "S-578-1 INTERIM GUARD: stderr must suggest the bare 'NAME=VALUE' form; stderr={stderr}"
+    );
+}
+
+/// S-578-1 regression pin (paired with the interim-guard test above): a BARE
+/// `--field NAME=VALUE` pair (`kind: None`) must keep working exactly as
+/// before the interim guard lands — the guard must reject ONLY `kind: Some(_)`
+/// pairs, never fire on the unhinted form. This test PASSES today and must
+/// continue to pass after the guard is implemented.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_field_bare_pair_unaffected_by_kind_hint_guard_s578_1() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_list_fields(&server, "customfield_10001", "Severity").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "S-578-1 regression pin: a bare (unhinted) '--field Severity=Critical' pair must keep \
+         succeeding (kind: None must never trip the interim ':kind'-hint guard); \
+         stderr={stderr} stdout={stdout}"
+    );
+}
