@@ -633,6 +633,91 @@ async fn test_bc_x_14_004_m2_project_404_exits_64_message() {
     );
 }
 
+/// B-M2 (round-4 mutation-coverage sweep): `--type` resolves the
+/// issueTypeId successfully (`get_issue_types_for_project` 200s), but the
+/// SUBSEQUENT `get_createmeta_fields` call 400s — a TOCTOU (the issue type
+/// existed a moment ago; the createmeta-fields-by-issue-type endpoint
+/// itself now rejects the request). This propagates as a raw
+/// `JrError::ApiError` (exit 1), NOT `JrError::UserError` (exit 64) —
+/// pinning that `get_createmeta_fields`'s call site in `handle()`
+/// (`Mode::Createmeta` arm, `src/cli/field.rs`) is deliberately NOT wrapped
+/// in `map_project_not_found`, unlike the sibling `get_issue_types_for_project`
+/// call one statement above it.
+#[tokio::test]
+async fn test_bc_x_14_004_createmeta_fields_400_exits_1_not_64() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "HELP", &[("10000", "Bug")]).await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "errorMessages": ["The issue type selected is invalid."],
+            "errors": {}
+        })))
+        .mount(&h.server)
+        .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--type",
+        "Bug",
+        "--project",
+        "HELP",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "get_createmeta_fields 400 must propagate as a raw ApiError (exit 1), \
+         NOT exit 64 (it is deliberately not wrapped in map_project_not_found); \
+         got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+}
+
+/// B-M2 5xx variant (round-4 mutation-coverage sweep): a transient
+/// `get_createmeta_fields` 500 must ALSO propagate as exit 1 (`ApiError`),
+/// not exit 64 — same taxonomy pin as the 400 case above, over the other
+/// half of the `map_err`-vs-propagate distinction (client vs server error).
+#[tokio::test]
+async fn test_bc_x_14_004_createmeta_fields_500_exits_1_not_64() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "HELP", &[("10000", "Bug")]).await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "errorMessages": ["Internal server error."],
+            "errors": {}
+        })))
+        .mount(&h.server)
+        .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--type",
+        "Bug",
+        "--project",
+        "HELP",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "get_createmeta_fields 500 must propagate as a raw ApiError (exit 1), \
+         got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+}
+
 /// EC-X.14.001-5 / EC-X.14.004-3 (M2 half): `<field>` resolves globally but
 /// is ABSENT from the createmeta Create-screen field set for the resolved
 /// project + issue type -> exit 64, per-context "not available for issue

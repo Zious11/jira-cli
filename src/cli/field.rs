@@ -982,6 +982,68 @@ mod tests {
         assert!(msg.contains("customfield_10084") && msg.contains("customfield_10085"));
     }
 
+    /// `resolve_request_type_id`'s `MatchResult::ExactMultiple` arm
+    /// (round-4 mutation-coverage sweep, B-M1) — sibling of
+    /// `search_field_list`'s `exact_multiple_is_err` test above, which was
+    /// already covered; `resolve_request_type_id`'s own `ExactMultiple`
+    /// branch had NO discriminating test until this one. Two request types
+    /// sharing an IDENTICAL name (`partial_match::ExactMultiple`, distinct
+    /// from `Ambiguous` — a SUBSTRING match across several DIFFERENT names,
+    /// already covered by `test_bc_x_14_001_m3_request_type_name_ambiguous_exits_64`
+    /// in `tests/field_options.rs`) must exit via `JrError::UserError`
+    /// naming BOTH gathered candidate IDs, never silently pick the first.
+    #[tokio::test]
+    async fn test_bc_x_14_001_resolve_request_type_id_exact_multiple_is_err() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/servicedeskapi/servicedesk/10/requesttype"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "size": 2,
+                "start": 0,
+                "limit": 50,
+                "isLastPage": true,
+                "_links": {},
+                "values": [
+                    {
+                        "id": "11001",
+                        "name": "Get Help",
+                        "description": null,
+                        "helpText": null,
+                        "issueTypeId": null,
+                        "groupIds": []
+                    },
+                    {
+                        "id": "11002",
+                        "name": "Get Help",
+                        "description": null,
+                        "helpText": null,
+                        "issueTypeId": null,
+                        "groupIds": []
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+        let err = resolve_request_type_id("Get Help", "10", "HELP", &client)
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Multiple request types named"),
+            "expected the ExactMultiple canonical message; got: {msg}"
+        );
+        assert!(
+            msg.contains("11001") && msg.contains("11002"),
+            "expected BOTH gathered candidate IDs (not just the first) in the \
+             error message; got: {msg}"
+        );
+    }
+
     /// `resolve_field_id`: the `customfield_NNNNN` literal bypass never
     /// touches the cache or performs HTTP — proven by pointing the client at
     /// an address nothing listens on (`localhost:1`) and asserting the call
@@ -1608,16 +1670,52 @@ mod tests {
             assert_eq!(row.len(), 2, "exactly two columns: ID, Label");
         }
         assert_eq!(rows[0], vec!["p1".to_string(), "Parent".to_string()]);
-        // The child row's label must be indented relative to the parent's.
-        assert!(
-            rows[1][1].starts_with("  ") || rows[1][1] != "Child",
-            "cascading child row must render indented under its parent; got {:?}",
+        // EXACT indent pin (round-4 mutation-coverage sweep, LOW #4): the
+        // child (depth 1) row's label column must be byte-for-byte
+        // `"  Child"` — exactly `"  ".repeat(1)` prepended, no more, no
+        // less. The prior assertion (`starts_with("  ") ||
+        // rows[1][1] != "Child"`) was vacuously true for ANY label content
+        // that wasn't the bare, unindented string "Child" — a mutant
+        // reducing `"  ".repeat(depth)` to one space, three spaces, or a
+        // tab all satisfied it. Byte-equality closes that gap.
+        assert_eq!(
+            rows[1],
+            vec!["c1".to_string(), "  Child".to_string()],
+            "child row must be exactly \"  \" (two spaces per level) + label, \
+             not flattened, not under/over-indented; got {:?}",
             rows[1]
         );
-        assert!(
-            rows[1][1].trim() == "Child",
-            "child row label content must still be 'Child' once indentation is trimmed; got {:?}",
-            rows[1]
+    }
+
+    /// EXACT indent pin, THREE levels deep (round-4 mutation-coverage sweep,
+    /// LOW #4 companion): closes the residual gap the two-level test above
+    /// cannot — depth-1 and depth-2 indentation are NOT numerically related
+    /// by a single-space-per-level mutant (e.g. `"  ".repeat(depth)` mutated
+    /// to a CONSTANT `"  "` for every depth would still pass the depth-1
+    /// case but must fail here at depth 2), and a mutant that FLATTENS the
+    /// tree (drops nesting, emits all rows at depth 0) is caught by the
+    /// grandchild row's presence/indent at all.
+    #[test]
+    fn test_bc_x_14_003_render_option_rows_exact_indent_three_levels_deep() {
+        let options = vec![opt_with_children(
+            Some("p1"),
+            Some("Parent"),
+            vec![opt_with_children(
+                Some("c1"),
+                Some("Child"),
+                vec![opt(Some("g1"), Some("Grandchild"))],
+            )],
+        )];
+        let rows = render_option_rows(&options);
+        assert_eq!(rows.len(), 3, "parent + child + grandchild = 3 rows");
+        assert_eq!(rows[0], vec!["p1".to_string(), "Parent".to_string()]);
+        assert_eq!(rows[1], vec!["c1".to_string(), "  Child".to_string()]);
+        assert_eq!(
+            rows[2],
+            vec!["g1".to_string(), format!("{}Grandchild", "  ".repeat(2))],
+            "depth-2 grandchild must be indented exactly twice the per-level \
+             amount (four spaces), not the same as depth-1; got {:?}",
+            rows[2]
         );
     }
 
@@ -1653,5 +1751,142 @@ mod tests {
         assert!(obj.contains_key("label"));
         assert_eq!(obj.get("label"), Some(&serde_json::Value::Null));
         assert_eq!(obj.get("children"), Some(&serde_json::Value::Array(vec![])));
+    }
+
+    // ── BC-X.14.004 / degrade_hint_for_schema classifier — SOLE-TRIGGER
+    // pins for each `is_dynamic` disjunct (round-4 mutation-coverage sweep,
+    // LOW #3). The integration tests in `tests/field_options.rs`
+    // (userpicker, labels, group-picker, Approvers) each pile TWO+
+    // classifying signals onto one fixture (e.g. `field_type == "user"`
+    // together with a real `autoCompleteUrl`), so a mutant that deletes any
+    // ONE disjunct from the `||` chain still passes every existing test —
+    // the remaining disjunct(s) independently trip `is_dynamic`. These
+    // unit tests call `degrade_hint_for_schema` directly (pure fn, no HTTP)
+    // with exactly ONE signal present at a time, isolating each disjunct.
+
+    /// `field_type == "user"` ALONE (no `autoCompleteUrl`, no
+    /// userpicker-family `custom`, no `labels` `system`) must still trip
+    /// `is_dynamic`.
+    #[test]
+    fn test_bc_x_14_004_is_dynamic_sole_trigger_field_type_user() {
+        let hint = degrade_hint_for_schema(
+            "Nominee",
+            DegradeSchemaInfo {
+                field_type: "user",
+                custom: None,
+                system: None,
+                auto_complete_url: None,
+            },
+        );
+        assert!(
+            hint.contains("dynamic"),
+            "field_type == \"user\" alone must trip is_dynamic; got: {hint}"
+        );
+        assert!(
+            !hint.contains("autoCompleteUrl"),
+            "no autoCompleteUrl was supplied — the hint must not fabricate one; got: {hint}"
+        );
+    }
+
+    /// `system.eq_ignore_ascii_case("labels")` ALONE (no `autoCompleteUrl`,
+    /// no user-type `field_type`, no userpicker/approver `custom`) must
+    /// still trip `is_dynamic`.
+    #[test]
+    fn test_bc_x_14_004_is_dynamic_sole_trigger_system_labels() {
+        let hint = degrade_hint_for_schema(
+            "Labels",
+            DegradeSchemaInfo {
+                field_type: "array",
+                custom: None,
+                system: Some("labels"),
+                auto_complete_url: None,
+            },
+        );
+        assert!(
+            hint.contains("dynamic"),
+            "system == \"labels\" alone must trip is_dynamic; got: {hint}"
+        );
+    }
+
+    /// `custom` containing `"userpicker"` ALONE must still trip
+    /// `is_dynamic` — closes the disjunct a fixture piling on
+    /// `field_type == "user"` too can never isolate.
+    #[test]
+    fn test_bc_x_14_004_is_dynamic_sole_trigger_custom_userpicker() {
+        let hint = degrade_hint_for_schema(
+            "Reviewers",
+            DegradeSchemaInfo {
+                field_type: "array",
+                custom: Some("com.atlassian.jira.plugin.system.customfieldtypes:multiuserpicker"),
+                system: None,
+                auto_complete_url: None,
+            },
+        );
+        assert!(
+            hint.contains("dynamic"),
+            "custom containing \"userpicker\" alone must trip is_dynamic; got: {hint}"
+        );
+    }
+
+    /// `custom` containing `"approv"` ALONE must still trip `is_dynamic`.
+    #[test]
+    fn test_bc_x_14_004_is_dynamic_sole_trigger_custom_approv() {
+        let hint = degrade_hint_for_schema(
+            "Approvers",
+            DegradeSchemaInfo {
+                field_type: "array",
+                custom: Some("com.atlassian.servicedesk.approvals-plugin:sd-approvals"),
+                system: None,
+                auto_complete_url: None,
+            },
+        );
+        assert!(
+            hint.contains("dynamic"),
+            "custom containing \"approv\" alone must trip is_dynamic; got: {hint}"
+        );
+    }
+
+    /// `auto_complete_url.is_some()` ALONE (none of the keyword/system
+    /// signals present) must still trip `is_dynamic` — the "OTHER
+    /// suggestion-backed fields" branch of BC-X.14.004's degrade table.
+    #[test]
+    fn test_bc_x_14_004_is_dynamic_sole_trigger_autocompleteurl_only() {
+        let hint = degrade_hint_for_schema(
+            "Reviewer Group",
+            DegradeSchemaInfo {
+                field_type: "group",
+                custom: Some("com.atlassian.jira.plugin.system.customfieldtypes:grouppicker"),
+                system: None,
+                auto_complete_url: Some("https://example.atlassian.net/rest/api/1.0/groups/picker"),
+            },
+        );
+        assert!(
+            hint.contains("dynamic"),
+            "autoCompleteUrl alone (no keyword/system match) must trip is_dynamic; got: {hint}"
+        );
+        assert!(hint.contains("https://example.atlassian.net/rest/api/1.0/groups/picker"));
+    }
+
+    /// Negative control: NONE of the `is_dynamic` disjuncts present ->
+    /// the generic "no fixed value set" hint, not the dynamic one. Without
+    /// this, a mutant that always returns `true` for `is_dynamic` (or
+    /// `||`s in an unconditional `true`) would pass every sole-trigger test
+    /// above.
+    #[test]
+    fn test_bc_x_14_004_is_dynamic_negative_control_generic_hint() {
+        let hint = degrade_hint_for_schema(
+            "Description",
+            DegradeSchemaInfo {
+                field_type: "string",
+                custom: None,
+                system: None,
+                auto_complete_url: None,
+            },
+        );
+        assert!(
+            hint.contains("no fixed value set"),
+            "with zero dynamic signals, the generic hint must fire; got: {hint}"
+        );
+        assert!(!hint.contains("dynamic"));
     }
 }
