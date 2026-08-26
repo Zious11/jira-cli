@@ -5,6 +5,8 @@ use anyhow::Result;
 use crate::api::client::JiraClient;
 use crate::error::JrError;
 
+use super::create::{FieldValueKind, FieldValueSpec};
+
 /// Convert a parsed f64 numeric value into the JSON wire form expected by the Jira
 /// REST API: emit a whole-number integer as i64 (Atlassian's editmeta `number`
 /// schema accepts both i64 and f64, but i64 is the canonical form for whole values
@@ -142,8 +144,12 @@ fn strip_integer_decimal_suffix(s: &str) -> Option<&str> {
 ///   cache reader/writer takes `profile: &str`; cross-profile field-ID leakage
 ///   is a correctness bug because sandbox/prod custom-field IDs can differ).
 /// - `key`: the issue key being edited (used for `get_editmeta` call).
-/// - `field_pairs`: `NAME → VALUE` map produced by `parse_field_kv` (last-wins
-///   semantics; duplicates collapsed at parse time per EC-3.4.017-10).
+/// - `field_pairs`: `NAME → FieldValueSpec` map produced by `parse_field_kv`
+///   (last-wins semantics; duplicates collapsed at parse time per
+///   EC-3.4.017-10). `FieldValueSpec.kind` drives the S-578-2 hinted-bypass
+///   dispatch (STUB as of this commit — see the `todo!()` branch in Phase 3
+///   below); `kind: None` is the bare form and is resolved exactly as before
+///   this story (BC-3.4.015/016, unchanged).
 /// - `fields`: mutable reference to the shared `fields` JSON object that will
 ///   be PUT to Jira. Resolution results are merged in here (Step 5).
 /// - `changed_fields`: mutable reference to the human-readable echo map
@@ -183,7 +189,7 @@ pub(crate) async fn resolve_edit_fields(
     client: &JiraClient,
     profile: &str,
     key: &str,
-    field_pairs: &HashMap<String, String>,
+    field_pairs: &HashMap<String, FieldValueSpec>,
     fields: &mut serde_json::Value,
     changed_fields: &mut BTreeMap<String, String>,
 ) -> Result<()> {
@@ -205,10 +211,14 @@ pub(crate) async fn resolve_edit_fields(
     // contract asserted by BC-3.4.015 / test 24).
     let mut api_fetched = false;
 
-    // Resolved items: (field_id, human_name, value)
-    let mut resolved: Vec<(String, String, String)> = Vec::with_capacity(field_pairs.len());
+    // Resolved items: (field_id, human_name, spec). `spec` carries both the
+    // uninterpreted VALUE and the S-578-2 `FieldValueSpec.kind` hint through
+    // to Phase 3, where the hinted-bypass dispatch reads it (STUB as of this
+    // commit).
+    let mut resolved: Vec<(String, String, FieldValueSpec)> =
+        Vec::with_capacity(field_pairs.len());
 
-    for (name, value) in field_pairs {
+    for (name, spec) in field_pairs {
         // Step 1: customfield_NNNNN literal bypass.
         // BC-3.4.015 Step 1: requires `customfield_` followed by ONE OR MORE digits.
         // `.all(...)` on an empty iterator returns true, so we must also check that
@@ -220,7 +230,7 @@ pub(crate) async fn resolve_edit_fields(
 
         if is_literal_bypass {
             // Literal: use NAME as-is; no list_fields() call.
-            resolved.push((name.clone(), name.clone(), value.clone()));
+            resolved.push((name.clone(), name.clone(), spec.clone()));
         } else {
             // EC-3.4.015-9: empty NAME guard.  `--field =VALUE` (no name before `=`)
             // is parsed by `parse_field_kv` into ("", VALUE).  Without this check,
@@ -353,7 +363,7 @@ pub(crate) async fn resolve_edit_fields(
                 }
             };
 
-            resolved.push((field_id, human_name, value.clone()));
+            resolved.push((field_id, human_name, spec.clone()));
         }
     }
 
@@ -362,7 +372,9 @@ pub(crate) async fn resolve_edit_fields(
     let editmeta = client.get_editmeta(key).await?;
 
     // --- Phase 3: Per-pair editmeta validation + type dispatch (Steps 3b–6). ---
-    for (field_id, human_name, value) in resolved {
+    for (field_id, human_name, spec) in resolved {
+        let value = spec.value.clone();
+
         // Step 3: validate field is in editmeta (present on the Edit screen).
         let meta_field = editmeta.fields.get(&field_id).ok_or_else(|| {
             JrError::UserError(format!(
@@ -381,6 +393,31 @@ pub(crate) async fn resolve_edit_fields(
                 meta_field.operations.join(", ")
             ))
             .into());
+        }
+
+        // S-578-2 (AC-001): hinted-bypass dispatch runs BEFORE the existing
+        // `schema.type` match below when `spec.kind` is present — the bare-form
+        // dispatch (Step 4 and its `field_type` match, BC-3.4.015/016) stays
+        // UNCHANGED and PERMANENT for `kind: None`, per Architecture Compliance
+        // Rule 1.
+        //
+        // STUB: each composer is a `todo!()` as of this commit — real dispatch
+        // lands in the S-578-2 IMPLEMENT step (Tasks 4-6). This branch is
+        // unreachable via any current call site: `edit.rs` still invokes
+        // `reject_unsupported_hint_kinds` (create.rs) before calling
+        // `resolve_edit_fields`, which exits 64 on any `kind: Some(_)` pair
+        // first. Do not remove that guard's call site here — only the
+        // IMPLEMENT step does that, once real dispatch replaces these stubs.
+        if let Some(kind) = spec.kind {
+            let (wire_value, display_value): (serde_json::Value, String) = match kind {
+                FieldValueKind::Option => compose_option_hint(&value, meta_field)?,
+                FieldValueKind::Id => compose_id_hint(&value),
+                FieldValueKind::Name => compose_name_hint(&value),
+                FieldValueKind::Asset => compose_asset_hint(client, &value).await?,
+            };
+            fields[&field_id] = wire_value;
+            changed_fields.insert(human_name, display_value);
+            continue;
         }
 
         // Step 4: type dispatch.
@@ -631,6 +668,84 @@ pub(crate) async fn resolve_edit_fields(
     }
 
     Ok(())
+}
+
+/// STUB (S-578-2 Task 4): composes the `:option` hinted-bypass wire shape.
+///
+/// Non-cascading: byte-identical to the bare-form `option` dispatch above
+/// (BC-3.4.027 Description, VP-578-007). Cascading (`VALUE` contains `>`):
+/// `str::split_once('>')` MUST be used to separate `Parent` from `Child`
+/// (Architecture Compliance Rule 2 — never a char-index/fixed-byte-offset
+/// scheme); the parent segment resolves against `allowedValues[].value`, the
+/// child segment against the matched parent's `children[].value`
+/// (`AllowedValue.children`, already present on the type — see
+/// `src/types/jira/editmeta.rs`). Non-cascading-field `>` collision (D4,
+/// EC-3.4.027-7) is detected structurally via an empty `children` list on
+/// the matched parent, not a `schema.type` lookup.
+///
+/// Returns `(wire_value, display_value)` — wire is `{"id": "<optionId>"}` for
+/// the non-cascading case or `{"value":"<parent>","child":{"value":"<child>"}}`
+/// for the cascading case; display is the matched label, or `"<parent> >
+/// <child>"` for cascading (BC-3.4.027 Postconditions "changed_fields echo").
+///
+/// NOT YET IMPLEMENTED — see `resolve_edit_fields`'s hinted-bypass branch
+/// (S-578-2 AC-001) for why this stub is currently unreachable via any CLI
+/// call site.
+fn compose_option_hint(
+    _value: &str,
+    _meta_field: &crate::types::jira::EditMetaField,
+) -> Result<(serde_json::Value, String)> {
+    todo!("S-578-2 Task 4: :option hinted-bypass dispatch (cascading + non-cascading) not yet implemented")
+}
+
+/// STUB (S-578-2 Task 5): composes the `:id` hinted-bypass wire shape —
+/// `VALUE` sent verbatim as `{"id": "<VALUE>"}`, with NO `allowedValues`
+/// lookup, NO label matching, and NO ambiguity detection (BC-3.4.028
+/// Description/Postconditions). `changed_fields` echo is `VALUE` itself (no
+/// reverse lookup).
+///
+/// NOT YET IMPLEMENTED — see `resolve_edit_fields`'s hinted-bypass branch
+/// (S-578-2 AC-001) for why this stub is currently unreachable via any CLI
+/// call site.
+fn compose_id_hint(_value: &str) -> (serde_json::Value, String) {
+    todo!("S-578-2 Task 5: :id hinted-bypass dispatch not yet implemented")
+}
+
+/// STUB (S-578-2 Task 5): composes the `:name` hinted-bypass wire shape —
+/// `VALUE` sent verbatim as `{"name": "<VALUE>"}` (BC-3.4.029
+/// Description/Postconditions). For `priority` specifically, the caller's
+/// real implementation MUST reuse the dedicated `--priority` flag's existing
+/// wire-composition function rather than duplicating it (AC-007).
+///
+/// NOT YET IMPLEMENTED — see `resolve_edit_fields`'s hinted-bypass branch
+/// (S-578-2 AC-001) for why this stub is currently unreachable via any CLI
+/// call site.
+fn compose_name_hint(_value: &str) -> (serde_json::Value, String) {
+    todo!("S-578-2 Task 5: :name hinted-bypass dispatch not yet implemented")
+}
+
+/// STUB (S-578-2 Task 6): composes the `:asset` hinted-bypass wire shape —
+/// `[{"workspaceId":"<resolved>","id":"<workspaceId>:<objectId>","objectId":"<objectId>"}]`
+/// (BC-3.4.030 Parsing rules/Postconditions). `VALUE` splits on the FIRST
+/// `:` via `str::split_once(':')` MUST (Architecture Compliance Rule 2,
+/// mirrors the `:option` cascading composer's `>` MUST); when no `:` is
+/// present, `objectId` is the whole `VALUE` and `workspaceId` resolves via
+/// the existing cached `get_or_fetch_workspace_id`
+/// (`crate::api::assets::workspace::get_or_fetch_workspace_id`) — called AT
+/// THIS L2 call site (Architecture Compliance Rule 3: never inside a sibling
+/// L4/JSM module), at most once per invocation. On a cold cache this is a
+/// genuine HTTP round-trip and can fail per BC-3.4.030's error taxonomy
+/// (AC-010) — 403/404 → "Assets is not available…"; 200 + zero entries →
+/// "No Assets workspace found…"; 401/5xx/network → standard mappings.
+///
+/// NOT YET IMPLEMENTED — see `resolve_edit_fields`'s hinted-bypass branch
+/// (S-578-2 AC-001) for why this stub is currently unreachable via any CLI
+/// call site.
+async fn compose_asset_hint(
+    _client: &JiraClient,
+    _value: &str,
+) -> Result<(serde_json::Value, String)> {
+    todo!("S-578-2 Task 6: :asset hinted-bypass dispatch not yet implemented")
 }
 
 #[cfg(test)]
