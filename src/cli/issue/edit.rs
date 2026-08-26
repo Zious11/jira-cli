@@ -16,7 +16,7 @@ use crate::error::JrError;
 use crate::output;
 use crate::partial_match::MatchResult;
 
-use super::create::parse_field_kv;
+use super::create::{parse_field_kv, reject_unsupported_hint_kinds};
 use super::format;
 use super::helpers;
 use super::json_output;
@@ -75,6 +75,12 @@ pub(super) async fn handle_edit(
     // Parse --field NAME=VALUE pairs into a HashMap (last-wins on duplicate keys).
     // Per EC-3.4.017-10: duplicate keys are collapsed here before resolve_edit_fields sees them.
     let field_pairs = parse_field_kv(&field_raw)?;
+
+    // S-578-1 INTERIM GUARD: `:kind` dispatch is not implemented on this
+    // command yet (deferred to S-578-2) — reject a hinted pair loudly rather
+    // than silently treating it as bare. Remove this call once S-578-2 lands
+    // real dispatch. Placed immediately after parsing, before any HTTP call.
+    reject_unsupported_hint_kinds(&field_pairs)?;
 
     // Validate: at least one selector must be present (keys or --jql).
     // clap doesn't enforce this natively since both are optional — we validate here.

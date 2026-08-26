@@ -10,7 +10,7 @@ use crate::error::{API_TOKEN_EXPIRY_HINT, JrError};
 use crate::output;
 use crate::partial_match::{self, MatchResult};
 
-use super::create::parse_field_kv;
+use super::create::{parse_field_kv, reject_unsupported_hint_kinds};
 use super::helpers;
 
 /// Argument bundle for `handle_jsm_create`.
@@ -279,9 +279,15 @@ pub(super) async fn handle_jsm_create(
     };
 
     // Parse --field NAME=VALUE pairs (BC-3.8.008).
-    // S-578-1: JsmRequestBuilder::extra_fields still takes bare NAME=VALUE
-    // pairs; :kind dispatch is not implemented yet (see parse_field_kv TODO).
-    let extra_fields: std::collections::HashMap<String, String> = parse_field_kv(&field_pairs)?
+    let parsed_field_pairs = parse_field_kv(&field_pairs)?;
+
+    // S-578-1 INTERIM GUARD: `:kind` dispatch is not implemented on this
+    // command yet (deferred to S-578-3) — reject a hinted pair loudly rather
+    // than silently treating it as bare. Remove this call once S-578-3 lands
+    // real dispatch. Placed immediately after parsing, before the POST.
+    reject_unsupported_hint_kinds(&parsed_field_pairs)?;
+
+    let extra_fields: std::collections::HashMap<String, String> = parsed_field_pairs
         .into_iter()
         .map(|(k, v)| (k, v.value))
         .collect();
