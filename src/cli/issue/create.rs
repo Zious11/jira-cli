@@ -500,21 +500,43 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, FieldVa
                 "Invalid --field value '{pair}': expected NAME=VALUE"
             )));
         };
-        let name = &pair[..eq_idx];
+        let name_part = &pair[..eq_idx];
         let value = &pair[eq_idx + 1..];
 
-        // TODO(S-578-1): :kind tag parsing — see BC-3.4.026. Step 2-4 of the
-        // BC-3.4.026 parser contract (last ':' before '=' split, closed-set
-        // kind validation, bare-form fallback) are NOT implemented here yet.
-        // This is deliberately the OLD bare-form behavior only: the name is
-        // used verbatim (never stripped of a ':kind' suffix) and kind is
-        // always None. Implementing the hint-tag detection here would make
-        // S-578-1's Step-3 hint tests pass trivially against this stub,
-        // which is exactly what BC-5.38.005's self-check forbids.
+        // Step 2: within NAME[:kind], split on the LAST ':' that appears
+        // before the '=' — Unicode-scalar-safe via str::rfind(char), never a
+        // raw byte index (FIX-F6-LRE-1 class, #734).
+        let (name, kind) = match name_part.rfind(':') {
+            Some(colon_idx) => {
+                let candidate_name = &name_part[..colon_idx];
+                let candidate_kind = &name_part[colon_idx + 1..];
+                // Step 3: validate the candidate segment against the closed
+                // set (case-sensitive, lowercase only — BC-3.4.026
+                // Invariant 3). Unknown kind, including the empty-segment
+                // case (BC-3.4.031 EC-5), exits 64.
+                let kind = match candidate_kind {
+                    "option" => FieldValueKind::Option,
+                    "id" => FieldValueKind::Id,
+                    "name" => FieldValueKind::Name,
+                    "asset" => FieldValueKind::Asset,
+                    _ => {
+                        return Err(JrError::UserError(format!(
+                            "Invalid --field value '{pair}': unknown field-value kind \
+                             '{candidate_kind}' — valid kinds are: option, id, name, asset"
+                        )));
+                    }
+                };
+                (candidate_name, Some(kind))
+            }
+            // Step 4: no ':' found before '=' -> bare form (unchanged
+            // BC-3.4.015/016 auto-detect dispatch).
+            None => (name_part, None),
+        };
+
         map.insert(
             name.to_string(),
             FieldValueSpec {
-                kind: None,
+                kind,
                 value: value.to_string(),
             },
         );
@@ -522,16 +544,16 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, FieldVa
     Ok(map)
 }
 
-/// S-578-1 Red Gate tests for the `--field NAME:kind=VALUE` hint-tag parser
+/// S-578-1 tests for the `--field NAME:kind=VALUE` hint-tag parser
 /// (BC-3.4.026 parser contract, BC-3.4.031 malformed-hint catalog).
 ///
-/// These tests exercise the NEW `:kind` tag parsing behavior that Step 2 left
-/// as a `// TODO(S-578-1)` stub (`parse_field_kv` currently always returns
-/// `kind: None` and never strips a `:kind` suffix from the map key). Every
-/// test below that supplies a `:kind`-tagged pair MUST fail against that stub
-/// with a clean assertion mismatch (e.g. `assert_eq!` left=`None`), not a
-/// panic or a build error — the stub compiles and runs; it just produces the
-/// wrong (bare-form) `FieldValueSpec`.
+/// These tests exercise the `:kind` tag parsing behavior implemented in Step
+/// 3 of the BC-3.4.026 parser contract (last ':' before '=' split, closed-set
+/// kind validation, bare-form fallback). Prior to Step 3, `parse_field_kv`
+/// was a bare-form-only stub (always `kind: None`, no ':kind' suffix
+/// stripping); every test below that supplies a `:kind`-tagged pair failed
+/// cleanly against that stub (e.g. `assert_eq!` left=`None`), never via panic
+/// or a build error.
 #[cfg(test)]
 mod field_value_kind_tests {
     use super::{FieldValueKind, FieldValueSpec, parse_field_kv};
