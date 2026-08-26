@@ -522,6 +522,337 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, FieldVa
     Ok(map)
 }
 
+/// S-578-1 Red Gate tests for the `--field NAME:kind=VALUE` hint-tag parser
+/// (BC-3.4.026 parser contract, BC-3.4.031 malformed-hint catalog).
+///
+/// These tests exercise the NEW `:kind` tag parsing behavior that Step 2 left
+/// as a `// TODO(S-578-1)` stub (`parse_field_kv` currently always returns
+/// `kind: None` and never strips a `:kind` suffix from the map key). Every
+/// test below that supplies a `:kind`-tagged pair MUST fail against that stub
+/// with a clean assertion mismatch (e.g. `assert_eq!` left=`None`), not a
+/// panic or a build error — the stub compiles and runs; it just produces the
+/// wrong (bare-form) `FieldValueSpec`.
+#[cfg(test)]
+mod field_value_kind_tests {
+    use super::{FieldValueKind, FieldValueSpec, parse_field_kv};
+    use crate::error::JrError;
+
+    /// AC-001 (BC-3.4.026 Return-type change / Postconditions): a well-formed
+    /// hinted pair produces `FieldValueSpec { kind: Some(_), value }` — never
+    /// `kind: None`. Red Gate: the current stub always sets `kind: None`
+    /// regardless of a `:kind` suffix, so this fails with
+    /// `assert_eq!` left=`FieldValueSpec { kind: None, .. }` until Task 3
+    /// implements the parser contract's steps 2-4.
+    #[test]
+    fn test_bc_3_4_026_parse_field_kv_returns_field_value_spec_map() {
+        let pairs = vec!["cf:option=High".to_string()];
+        let result = parse_field_kv(&pairs).expect("well-formed hinted pair must parse");
+        assert_eq!(
+            result.get("cf"),
+            Some(&FieldValueSpec {
+                kind: Some(FieldValueKind::Option),
+                value: "High".to_string(),
+            }),
+            "AC-001: hinted pair must produce kind: Some(Option) under the bare map key 'cf'"
+        );
+    }
+
+    /// AC-002 (BC-3.4.026 parser contract steps 1-3): the first '=' splits
+    /// `NAME[:kind]` from `VALUE`; the segment after the last ':' before that
+    /// '=' is validated as the kind tag and stripped from the map key — the
+    /// key is NEVER a composite `"name:kind"` string (ADR-0019 §2(b)).
+    #[test]
+    fn test_bc_3_4_026_first_equals_then_last_colon_split() {
+        let pairs = vec!["cf:id=10042".to_string()];
+        let result = parse_field_kv(&pairs).expect("well-formed hinted pair must parse");
+        assert_eq!(
+            result.get("cf"),
+            Some(&FieldValueSpec {
+                kind: Some(FieldValueKind::Id),
+                value: "10042".to_string(),
+            }),
+            "AC-002: 'cf:id=10042' must split into name 'cf', kind Id, value '10042'"
+        );
+        assert!(
+            !result.contains_key("cf:id"),
+            "AC-002/BC-3.4.026 Rule (ADR-0019 §2(b)): map key must never be composite 'name:kind'"
+        );
+    }
+
+    /// AC-002 / VP-578-005 (BC-3.4.026 step 2, colon-in-NAME case flagged in
+    /// the verification delta's coverage note): a field NAME may legitimately
+    /// contain a colon (e.g. a custom field literally named "Region: EMEA").
+    /// The parser MUST split on the LAST ':' before the '=', not the first,
+    /// so the multi-colon NAME survives intact and only the short trailing
+    /// segment is read as the candidate kind.
+    #[test]
+    fn test_bc_3_4_026_multi_colon_name_isolates_kind_from_last_colon() {
+        let pairs = vec!["Region: EMEA:option=X".to_string()];
+        let result =
+            parse_field_kv(&pairs).expect("multi-colon NAME with a valid trailing kind must parse");
+        assert_eq!(
+            result.get("Region: EMEA"),
+            Some(&FieldValueSpec {
+                kind: Some(FieldValueKind::Option),
+                value: "X".to_string(),
+            }),
+            "VP-578-005: last-':'-before-'=' split must isolate name 'Region: EMEA' \
+             (internal colon preserved verbatim) and kind Option"
+        );
+    }
+
+    /// Regression pin: the bare (unhinted) `NAME=VALUE` form is UNCHANGED —
+    /// `kind: None`, name used verbatim, no stripping. This must already pass
+    /// against the Step-2 stub (BC-3.4.026 Invariant 1, "bare form is
+    /// permanent, not deprecated").
+    #[test]
+    fn test_bc_3_4_026_bare_form_no_kind_tag_unchanged() {
+        let pairs = vec!["summary=New title".to_string()];
+        let result = parse_field_kv(&pairs).expect("bare NAME=VALUE must parse");
+        assert_eq!(
+            result.get("summary"),
+            Some(&FieldValueSpec {
+                kind: None,
+                value: "New title".to_string(),
+            }),
+            "Bare form regression pin: no ':kind' suffix must yield kind: None, name unchanged"
+        );
+    }
+
+    /// AC-004 / VP-578-006 (BC-3.4.026 Rule, ADR-0019 §2(b)): the map key is
+    /// ALWAYS the bare field name. Two occurrences of the same NAME with
+    /// DIFFERENT kinds must collapse into exactly ONE map entry, and the
+    /// LAST occurrence's whole `FieldValueSpec` (kind AND value) wins —
+    /// kinds are never merged or compared across duplicate NAME occurrences.
+    #[test]
+    fn test_bc_3_4_026_last_wins_across_kinds_single_map_entry() {
+        let pairs = vec!["cf:option=A".to_string(), "cf:id=B".to_string()];
+        let result = parse_field_kv(&pairs).expect("repeated NAME with differing kinds must parse");
+        assert_eq!(
+            result.len(),
+            1,
+            "VP-578-006: duplicate NAME across kinds must collapse to exactly one map entry \
+             (never a composite 'cf:option' + 'cf:id' pair of entries)"
+        );
+        assert_eq!(
+            result.get("cf"),
+            Some(&FieldValueSpec {
+                kind: Some(FieldValueKind::Id),
+                value: "B".to_string(),
+            }),
+            "VP-578-006: the LAST occurrence's whole FieldValueSpec (kind AND value) must win"
+        );
+    }
+
+    /// AC-006 / BC-3.4.031 EC-1: an unknown kind tag exits 64
+    /// (`JrError::UserError`) and the message lists the four valid kinds.
+    /// Load-bearing substring: "unknown field-value kind".
+    #[test]
+    fn test_bc_3_4_031_ec1_unknown_kind_exits_64() {
+        let pairs = vec!["cf:bogus=X".to_string()];
+        let err = parse_field_kv(&pairs).expect_err("unknown kind must be rejected");
+        assert_eq!(
+            err.exit_code(),
+            64,
+            "EC-1: unknown kind must map to exit code 64"
+        );
+        if let JrError::UserError(msg) = &err {
+            assert!(
+                msg.contains("unknown field-value kind"),
+                "EC-1: message must contain the load-bearing substring \
+                 'unknown field-value kind', got: {msg}"
+            );
+            for kind in ["option", "id", "name", "asset"] {
+                assert!(
+                    msg.contains(kind),
+                    "EC-1: message must list the valid kind '{kind}', got: {msg}"
+                );
+            }
+        } else {
+            panic!("EC-1: expected JrError::UserError, got: {err:?}");
+        }
+    }
+
+    /// AC-007 / BC-3.4.031 EC-5: an empty `:kind` segment (`cf:=VALUE`) is
+    /// treated as EC-1 (unknown kind — the empty string is not in the closed
+    /// set `{option, id, name, asset}`) → exit 64 with the same
+    /// four-valid-kinds message.
+    #[test]
+    fn test_bc_3_4_031_ec5_empty_kind_segment_treated_as_unknown_kind() {
+        let pairs = vec!["cf:=VALUE".to_string()];
+        let err = parse_field_kv(&pairs).expect_err("empty ':kind' segment must be rejected");
+        assert_eq!(
+            err.exit_code(),
+            64,
+            "EC-5: empty kind segment must map to exit code 64"
+        );
+        if let JrError::UserError(msg) = &err {
+            assert!(
+                msg.contains("unknown field-value kind"),
+                "EC-5: empty kind segment must fire the SAME unknown-kind message as EC-1, got: {msg}"
+            );
+        } else {
+            panic!("EC-5: expected JrError::UserError, got: {err:?}");
+        }
+    }
+
+    /// AC-008 / BC-3.4.031 EC-6 (regression pin): a ':' appearing in VALUE
+    /// (after the first '=') is NOT reinterpreted as a nested hint — the
+    /// step-1 split on '=' happens before the step-2 ':kind' split, and step
+    /// 2 only ever inspects the pre-'=' portion. This MUST resolve normally,
+    /// not error.
+    #[test]
+    fn test_bc_3_4_031_ec6_colon_in_value_resolves_normally() {
+        let pairs = vec!["cf:option=High:Priority".to_string()];
+        let result = parse_field_kv(&pairs)
+            .expect("EC-6 regression pin: a colon in VALUE (after '=') must resolve normally");
+        assert_eq!(
+            result.get("cf"),
+            Some(&FieldValueSpec {
+                kind: Some(FieldValueKind::Option),
+                value: "High:Priority".to_string(),
+            }),
+            "EC-6: VALUE must be 'High:Priority' verbatim, kind must be Option — \
+             the ':' after '=' is never treated as a second hint delimiter"
+        );
+    }
+
+    /// AC-008 / BC-3.4.031 EC-7 (regression pin): multiple ':' in the NAME
+    /// segment before '=', where the last-colon split isolates a segment
+    /// that is NOT a valid kind, must fire the SPECIFIC unknown-kind error
+    /// (EC-1) — not a different, wrong error (e.g. not silently treated as a
+    /// bare NAME containing colons).
+    #[test]
+    fn test_bc_3_4_031_ec7_multi_colon_name_fires_unknown_kind_not_other_error() {
+        let pairs = vec!["Region: EMEA:bogus=X".to_string()];
+        let err = parse_field_kv(&pairs).expect_err(
+            "EC-7 regression pin: last-colon split isolating an invalid kind must error",
+        );
+        assert_eq!(err.exit_code(), 64, "EC-7: must map to exit code 64");
+        if let JrError::UserError(msg) = &err {
+            assert!(
+                msg.contains("unknown field-value kind"),
+                "EC-7: must fire the SPECIFIC unknown-kind (EC-1) message, not a different error, got: {msg}"
+            );
+        } else {
+            panic!("EC-7: expected JrError::UserError, got: {err:?}");
+        }
+    }
+
+    /// AC-009 / BC-3.4.031 EC-8: an empty `:id` value (`cf:id=`) is a
+    /// PASS-THROUGH at the parser level, NOT a `jr`-side exit-64 —
+    /// `parse_field_kv` performs no empty-value rejection for `:id`; the pair
+    /// carries `FieldValueSpec { kind: Some(Id), value: "" }` unchanged.
+    #[test]
+    fn test_bc_3_4_031_ec8_empty_id_value_passes_through_parser() {
+        let pairs = vec!["cf:id=".to_string()];
+        let result = parse_field_kv(&pairs)
+            .expect("EC-8: empty ':id' value must PASS THROUGH the parser (not exit 64)");
+        assert_eq!(
+            result.get("cf"),
+            Some(&FieldValueSpec {
+                kind: Some(FieldValueKind::Id),
+                value: String::new(),
+            }),
+            "EC-8: empty ':id' value must parse to kind Some(Id), value \"\" — \
+             the server is the sole validator of an empty id (BC-3.4.028 Invariant 1)"
+        );
+    }
+
+    /// AC-009 / BC-3.4.031 EC-9: an empty `:name` value (`cf:name=`) is a
+    /// PASS-THROUGH at the parser level, identically to EC-8's `:id` case.
+    #[test]
+    fn test_bc_3_4_031_ec9_empty_name_value_passes_through_parser() {
+        let pairs = vec!["cf:name=".to_string()];
+        let result = parse_field_kv(&pairs)
+            .expect("EC-9: empty ':name' value must PASS THROUGH the parser (not exit 64)");
+        assert_eq!(
+            result.get("cf"),
+            Some(&FieldValueSpec {
+                kind: Some(FieldValueKind::Name),
+                value: String::new(),
+            }),
+            "EC-9: empty ':name' value must parse to kind Some(Name), value \"\" — \
+             the server is the sole validator of an empty name (BC-3.4.029 Invariant 1)"
+        );
+    }
+
+    /// BC-3.4.031 EC-2a, PARSER-LEVEL scope (AC-009 note + Architecture
+    /// Compliance Rule 1/2): `:asset`'s empty-value exit-64 IS real (BC-3.4.031
+    /// EC-2a), but it fires at the CALL-SITE composer (S-578-2/3/4 scope) —
+    /// never inside `parse_field_kv` itself, per the story's explicit
+    /// boundary ("Only `:asset`'s EC-2a is a `jr`-side exit-64 for empty
+    /// value, and that check lives at the CALL SITE composer... never inside
+    /// `parse_field_kv` itself"). `parse_field_kv` MUST stay pure (no HTTP, no
+    /// structural array composition) and MUST NOT pre-validate `:asset`'s
+    /// `WORKSPACE:OBJECTID` shape (Architecture Compliance Rule 2: the value
+    /// is deliberately UNINTERPRETED). At THIS layer, an empty `:asset=`
+    /// value therefore parses successfully, exactly like `:id`/`:name`.
+    #[test]
+    fn test_bc_3_4_031_ec2a_empty_asset_value_passes_through_parser_level() {
+        let pairs = vec!["cf:asset=".to_string()];
+        let result = parse_field_kv(&pairs).expect(
+            "EC-2a at the PARSER level: parse_field_kv must not itself reject an empty \
+             ':asset' value — the structural exit-64 belongs to the call-site composer \
+             (S-578-2/3/4), out of this story's scope (AC-009)",
+        );
+        assert_eq!(
+            result.get("cf"),
+            Some(&FieldValueSpec {
+                kind: Some(FieldValueKind::Asset),
+                value: String::new(),
+            }),
+            "EC-2a (parser scope): empty ':asset' value must parse to kind Some(Asset), value \"\""
+        );
+    }
+
+    /// AC-010 (BC-3.4.026 Invariant 3): kind validation is case-sensitive,
+    /// lowercase-only. `:Option=`/`:OPTION=`/etc. are NOT recognized as the
+    /// `option` kind — they fall through to the unknown-kind exit-64 path
+    /// (EC-1), never silently treated as bare NAME text containing a colon.
+    #[test]
+    fn test_bc_3_4_026_kind_validation_case_sensitive_lowercase_only() {
+        for variant in [
+            "cf:Option=X",
+            "cf:OPTION=X",
+            "cf:Id=Y",
+            "cf:ASSET=Z",
+            "cf:Name=W",
+        ] {
+            let pairs = vec![variant.to_string()];
+            let err = parse_field_kv(&pairs).expect_err(&format!(
+                "AC-010: '{variant}' (mixed/upper-case kind) must be rejected"
+            ));
+            assert_eq!(
+                err.exit_code(),
+                64,
+                "AC-010: '{variant}' must map to exit code 64"
+            );
+            if let JrError::UserError(msg) = &err {
+                assert!(
+                    msg.contains("unknown field-value kind"),
+                    "AC-010: '{variant}' must fire the SAME unknown-kind message as a genuinely \
+                     unknown kind (deliberate strictness — typos fail loud), got: {msg}"
+                );
+            } else {
+                panic!("AC-010: '{variant}' expected JrError::UserError, got: {err:?}");
+            }
+        }
+    }
+
+    /// AC-003 / VP-578-005 regression pins: concrete multibyte inputs at the
+    /// ':'/'=' split boundaries must never panic (the FIX-F6-LRE-1 class,
+    /// #734, `jql::validate_duration`'s multibyte byte-index panic). Ok or
+    /// Err is both acceptable; only a panic is forbidden.
+    #[test]
+    fn test_field_hint_multibyte_kind_and_value_no_panic() {
+        for raw in ["cf:optioné=x", "世=界", "a:asset=W:🦀"] {
+            let pairs = vec![raw.to_string()];
+            let _ = parse_field_kv(&pairs); // must not panic
+        }
+    }
+}
+
 /// Proptest properties for `parse_field_kv` (AC-013, BC-3.8.008).
 ///
 /// Properties A.1–A.4 cover the four invariants stated in the verification delta.
@@ -604,6 +935,18 @@ mod parse_field_kv_proptests {
             // Ok or Err is both acceptable; only panics are forbidden.
             let pairs = vec![raw];
             let _ = parse_field_kv(&pairs); // must not panic
+        }
+
+        /// AC-003 / VP-578-005 (BC-3.4.026 step 5, Multibyte-safety MUST): the
+        /// hint-tag splitter must never panic on arbitrary UTF-8 input,
+        /// including multibyte scalars landing adjacent to the new `:`/`='
+        /// split points the S-578-1 kind-tag parser introduces (the
+        /// FIX-F6-LRE-1 class, #734, `jql::validate_duration`'s byte-index
+        /// panic on multibyte input). `\PC` generates arbitrary Unicode
+        /// scalar values, including multibyte ones.
+        #[test]
+        fn prop_field_hint_split_no_panic(raw in "\\PC{0,80}") {
+            let _ = parse_field_kv(&[raw]); // must not panic
         }
     }
 }
