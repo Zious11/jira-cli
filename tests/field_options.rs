@@ -1365,6 +1365,73 @@ async fn test_bc_x_14_001_get_createmeta_fields_continues_pagination_when_total_
     );
 }
 
+/// SEC-001 (S-580-1, CWE-400/770): a server that ALWAYS returns a full page
+/// (`page_len == page_size == 200`) with `total` absent never satisfies
+/// EITHER termination condition in `get_createmeta_fields`'s `done`
+/// computation — this is exactly the shape the two 240s-timeout mutants
+/// (`||`→`&&` on the fallback branch, `+=`→`*=` on `start_at`) exploited to
+/// hang forever. `MAX_CREATEMETA_PAGES` (500) must fire independently of
+/// that computation and return a loud error instead of looping. Kept fast
+/// (well under a few seconds locally) since 500 in-process loopback
+/// round-trips of a small fixed payload each cost microseconds — no real
+/// per-mutant 240s timeout risk here, the pagination loop is exercised
+/// directly, no timing dependency.
+#[tokio::test]
+async fn test_bc_x_14_001_get_createmeta_fields_hard_cap_prevents_infinite_loop() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "HELP", &[("10000", "Bug")]).await;
+
+    // A single full page's worth of minimal, distinct-enough field
+    // descriptors — reused verbatim on every request since the mock does
+    // not vary on `startAt`, which is exactly the point: nothing in the
+    // response ever signals "this is the last page".
+    let full_page: Vec<Value> = (0..200)
+        .map(|i| {
+            json!({
+                "fieldId": format!("customfield_9{i:03}"),
+                "name": format!("Dummy {i}"),
+                "schema": {"type": "string"}
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "fields": full_page,
+            "maxResults": 200
+            // "total" intentionally absent on every page, and every page is
+            // a full 200-length page — both fallback-branch legs
+            // (`page_len == 0` / `page_len < page_size`) are false forever.
+        })))
+        .mount(&h.server)
+        .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--type",
+        "Bug",
+        "--project",
+        "HELP",
+        "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit 1 (JrError::Internal) once the hard page cap is hit \
+         instead of an infinite loop; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("exceeded") && stderr.contains("pages"),
+        "expected a loud 'exceeded N pages' error naming the cap; got: {stderr}"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AC-011 — <field> resolution (customfield_NNNNN bypass / list_fields + partial_match)
 // ═══════════════════════════════════════════════════════════════════════════

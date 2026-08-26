@@ -33,6 +33,20 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
     "issuelinks",
 ];
 
+/// Hard cap on the number of pages [`JiraClient::get_createmeta_fields`] will
+/// fetch (S-580-1, SEC-001, CWE-400/770 — "no hard iteration cap").
+///
+/// At `page_size = 200` this comfortably exceeds any realistic Jira
+/// project's create-screen field count (`500 * 200 = 100,000` fields), so it
+/// never fires in real usage or in the existing test suite — it exists
+/// purely as a fail-loud backstop against an unbounded loop, the same
+/// TRUNCATE-vs-cap tradeoff class as
+/// [`crate::cli::field::MAX_FIELD_OPTION_DEPTH`], except here the response
+/// is a loud `Err` rather than a silent truncation, since a runaway
+/// pagination loop (unlike option-tree depth) has no sensible "leaf" to
+/// stop at.
+const MAX_CREATEMETA_PAGES: u32 = 500;
+
 /// A resolved `--component` add/remove target's WIRE identity (Step-4.5
 /// Round 3, F1 fix; BC-3.4.022/BC-3.4.024, BC-8.4.001, BC-8.1.008).
 ///
@@ -1089,15 +1103,38 @@ impl JiraClient {
     /// one or more `GET`s until all field pages are collected, so a target
     /// field on page ≥2 still resolves (AC-008). Not cached — this is a
     /// read-only, per-invocation enumeration.
+    ///
+    /// Bounded by [`MAX_CREATEMETA_PAGES`] (S-580-1, SEC-001, CWE-400/770):
+    /// the `done` computation below combines two independently-derived
+    /// signals (`total`-driven vs `page_size`-driven) and is therefore not
+    /// the sole termination guarantee — a mutated/degenerate `done`
+    /// expression, or a malicious/misbehaving server that never reports a
+    /// short or empty page, would otherwise loop forever, repeating the
+    /// identical GET. The iteration count is checked at the TOP of every
+    /// loop pass, independent of `done`, so it terminates the loop even if
+    /// `done`'s logic is defeated entirely.
     pub(crate) async fn get_createmeta_fields(
         &self,
         project_key: &str,
         issue_type_id: &str,
     ) -> Result<Vec<CreateMetaField>> {
+        use crate::error::JrError;
+
         let page_size: u32 = 200;
         let mut all: Vec<CreateMetaField> = Vec::new();
         let mut start_at: u32 = 0;
+        let mut pages_fetched: u32 = 0;
         loop {
+            if pages_fetched >= MAX_CREATEMETA_PAGES {
+                return Err(anyhow::anyhow!(JrError::Internal(format!(
+                    "Internal error: createmeta field pagination for project '{project_key}' \
+                     issue type '{issue_type_id}' exceeded {MAX_CREATEMETA_PAGES} pages \
+                     without completing — aborting to avoid an unbounded loop. This should \
+                     not happen against a well-behaved Jira instance; if it does, please \
+                     report it as a bug."
+                ))));
+            }
+            pages_fetched += 1;
             let response: CreateMetaFieldsResponse = self
                 .get(&format!(
                     "/rest/api/3/issue/createmeta/{}/issuetypes/{}?startAt={}&maxResults={}",
