@@ -426,21 +426,80 @@ async fn resolve_create_components(
 /// # Errors
 ///
 /// Returns `JrError::UserError` if any pair is missing `=`.
-pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, String>, JrError> {
-    let mut map = HashMap::new();
-    for pair in pairs {
-        let Some(eq_pos) = pair.find('=') else {
-            return Err(JrError::UserError(format!(
-                "--field \"{pair}\" is not a valid NAME=VALUE pair: missing '='. \
-                 Use --field NAME=VALUE (e.g., --field customfield_10200=foo)."
-            )));
-        };
-        let key = pair[..eq_pos].to_string();
-        let value = pair[eq_pos + 1..].to_string();
-        // Last-wins for duplicate keys (BC-3.8.008).
-        map.insert(key, value);
-    }
-    Ok(map)
+/// `--field NAME:kind=VALUE` hint tag (BC-3.4.026 parser contract, step 3).
+///
+/// Closed set `{option, id, name, asset}` — case-sensitive, lowercase-only
+/// (BC-3.4.026 Invariant 3). `None` in [`FieldValueSpec::kind`] represents the
+/// bare (unhinted) form, not a fifth variant of this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FieldValueKind {
+    Option,
+    Id,
+    Name,
+    Asset,
+}
+
+/// A single `--field` pair, parsed by [`parse_field_kv`] (BC-3.4.026).
+///
+/// `kind: Some(_)` for a well-formed hinted pair (`NAME:kind=VALUE`);
+/// `kind: None` for a well-formed bare pair (`NAME=VALUE`, BC-3.4.015/016
+/// auto-detect dispatch, unchanged). `value` is deliberately UNINTERPRETED —
+/// `parse_field_kv` does not pre-split `:option`'s cascading `Parent>Child`
+/// syntax or `:asset`'s `WORKSPACE:OBJECTID` compact form; those remain
+/// call-site concerns (S-578-2/3/4), per ADR-0019 §2 Architecture Compliance
+/// Rule 2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FieldValueSpec {
+    pub kind: Option<FieldValueKind>,
+    pub value: String,
+}
+
+/// Parses `--field NAME[:kind]=VALUE` pairs into a `NAME → FieldValueSpec` map
+/// (BC-3.4.026, BC-3.4.031).
+///
+/// Shared verbatim by `create.rs`'s platform path (BC-3.3.010), `edit.rs`
+/// (BC-3.4.027-030), and `jsm_create.rs` (BC-3.8.008 amendment) — no
+/// per-call-site parsing divergence (BC-3.4.026 Postconditions).
+///
+/// Parser contract (BC-3.4.026, 5 steps):
+/// 1. Split each argument on the FIRST `=` — this splits `NAME[:kind]` from
+///    `VALUE` (existing BC-3.8.008 behavior, unchanged).
+/// 2. Within `NAME[:kind]`, split on the LAST `:` that appears before the
+///    `=`. A field NAME may legitimately contain a colon (e.g. a custom
+///    field literally named `"Region: EMEA"`); a real kind tag is always the
+///    short, rightmost segment before `=`.
+/// 3. If a `:`-delimited segment is found: validate it against the CLOSED set
+///    `{option, id, name, asset}` (case-sensitive, lowercase only —
+///    BC-3.4.026 Invariant 3). Unknown kind → exit 64 (BC-3.4.031 EC-1),
+///    including the empty-segment case (BC-3.4.031 EC-5). Known kind → the
+///    pair carries `Some(kind)`.
+/// 4. No `:`-delimited segment found before `=` → `kind: None` (bare form —
+///    UNCHANGED BC-3.4.015/016 auto-detect dispatch).
+/// 5. **Multibyte-safety MUST**: all splitting in steps 1-2 operates on
+///    Unicode scalar boundaries (`char_indices`/`str::find(char)`), NEVER
+///    raw byte-index slicing — the FIX-F6-LRE-1 class (#734,
+///    `jql::validate_duration`). See VP-578-005 /
+///    `prop_field_hint_split_no_panic`.
+///
+/// The map key is ALWAYS the bare field name (ADR-0019 §2(b), normative) —
+/// never a composite `"name:kind"` key. Last-wins on duplicate NAME across
+/// kind boundaries (VP-578-006): the whole `FieldValueSpec` of the last
+/// occurrence overwrites any prior entry for the same NAME.
+///
+/// `parse_field_kv` MUST stay pure — no HTTP, no cache access, no
+/// `get_or_fetch_workspace_id` call (ADR-0019 §2 Architecture Compliance
+/// Rule 1); workspace-id resolution for `:asset` is a call-site (S-578-2/3/4)
+/// concern.
+pub(crate) fn parse_field_kv(
+    _pairs: &[String],
+) -> Result<HashMap<String, FieldValueSpec>, JrError> {
+    todo!(
+        "BC-3.4.026: implement NAME[:kind]=VALUE parser — first '=' split (step 1), \
+         last ':' before '=' split (step 2), closed-set kind validation \
+         {{option,id,name,asset}} (step 3, BC-3.4.031 EC-1/EC-5), bare-form fallback \
+         (step 4), Unicode-scalar-safe splitting via char_indices/str::find(char) only \
+         (step 5, VP-578-005). See S-578-1."
+    )
 }
 
 /// Proptest properties for `parse_field_kv` (AC-013, BC-3.8.008).
