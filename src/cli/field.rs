@@ -13,11 +13,16 @@
 //! real so the crate compiles and the CLI surface (`jr field options --help`)
 //! parses.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use crate::api::client::JiraClient;
+use crate::api::jsm::servicedesks;
+use crate::cache;
 use crate::cli::{FieldCommand, OutputFormat};
 use crate::config::Config;
+use crate::error::JrError;
+use crate::output;
+use crate::partial_match::{self, MatchResult};
 use crate::types::jira::AllowedValue;
 
 /// Table-mode glyph for a missing `id` (BC-X.14.003 degenerate-entry
@@ -90,15 +95,391 @@ pub async fn handle(
     client: &JiraClient,
     project_override: Option<&str>,
 ) -> Result<()> {
-    // Non-trivial effectful shell — mode-selector arity check, `<field>`
-    // resolution (customfield_NNNNN bypass / list_fields + partial_match),
-    // per-mode enumeration (M1 editmeta / M2 createmeta / M3 requesttype
-    // fields, via `api::jsm::servicedesks::{require_service_desk,
-    // get_or_fetch_project_meta}` and `cache::{read,write}_fields_cache`),
-    // `--value` filtering, and table/JSON rendering all compose here.
-    // Implementer fills this in against tests/field_options.rs.
-    let _ = (command, output_format, config, client, project_override);
-    todo!("jr field options handler — implemented in TDD Red→Green cycle")
+    let FieldCommand::Options {
+        field,
+        r#type,
+        request_type,
+        issue,
+        project,
+        value,
+    } = command;
+
+    // Step 1 (BC-X.14.001 Invariant 1): pure mode-selector arity check,
+    // BEFORE any HTTP call of any kind.
+    let mode = resolve_field_context(r#type.is_some(), request_type.is_some(), issue.is_some())
+        .map_err(|_| {
+            JrError::UserError(
+                "You must specify exactly one of --type, --request-type, --issue.".to_string(),
+            )
+        })?;
+
+    // Step 2 (AC-011): resolve <field> to a field id. `customfield_NNNNN`
+    // literals bypass `list_fields()` entirely; otherwise resolved via the
+    // per-profile fields cache / `list_fields()` + `partial_match`.
+    let profile = &config.active_profile_name;
+    let field_id = resolve_field_id(client, profile, &field).await?;
+
+    // `--project` companion: the FieldCommand::Options-local flag wins over
+    // the global `--project` (ADR-0019 — the local flag lets `--project`
+    // appear after the subcommand without relying on clap's global-arg
+    // positioning rules).
+    let cli_project = project.as_deref().or(project_override);
+
+    let options: Vec<FieldOption> = match mode {
+        Mode::Createmeta => {
+            let project_key = resolve_m2_project(cli_project, config).ok_or_else(|| {
+                JrError::UserError(
+                    "--type needs a resolvable project — pass --project <P> or configure a default."
+                        .to_string(),
+                )
+            })?;
+            let type_name = r#type.expect("Mode::Createmeta implies --type is Some");
+
+            let issue_types = client
+                .get_issue_types_for_project(&project_key)
+                .await
+                .map_err(|e| map_project_not_found(e, &project_key))?;
+            let type_lower = type_name.to_lowercase();
+            let issue_type_id = issue_types
+                .iter()
+                .find(|it| it.name.to_lowercase() == type_lower)
+                .map(|it| it.id.clone())
+                .ok_or_else(|| {
+                    let valid: Vec<&str> = issue_types.iter().map(|it| it.name.as_str()).collect();
+                    JrError::UserError(format!(
+                        "Issue type '{type_name}' not found for project {project_key}. \
+                         Valid types: {}.",
+                        valid.join(", ")
+                    ))
+                })?;
+
+            let fields = client
+                .get_createmeta_fields(&project_key, &issue_type_id)
+                .await?;
+            let target = fields
+                .into_iter()
+                .find(|f| f.field_id == field_id)
+                .ok_or_else(|| {
+                    JrError::UserError(format!(
+                        "Field '{field_id}' is not available for issue type '{type_name}' \
+                         in project '{project_key}'."
+                    ))
+                })?;
+
+            normalize_or_degrade(
+                &target.name,
+                &target.allowed_values,
+                normalize_from_allowed_values,
+                &target.schema.field_type,
+                target.schema.custom.as_deref(),
+            )
+        }
+        Mode::RequestType => {
+            let project_key = resolve_m2_project(cli_project, config).ok_or_else(|| {
+                JrError::UserError(
+                    "--request-type needs a resolvable project — pass --project <P> or \
+                     configure a default."
+                        .to_string(),
+                )
+            })?;
+            let rt_query = request_type.expect("Mode::RequestType implies --request-type is Some");
+
+            let sd_id = servicedesks::require_service_desk(
+                client,
+                &project_key,
+                "`jr field options --request-type` requires",
+            )
+            .await
+            .map_err(|e| map_project_not_found(e, &project_key))?;
+
+            let rt_id = resolve_request_type_id(&rt_query, &sd_id, &project_key, client).await?;
+
+            let response = client.get_request_type_fields(&sd_id, &rt_id).await?;
+            let target = response
+                .request_type_fields
+                .into_iter()
+                .find(|f| f.field_id == field_id)
+                .ok_or_else(|| {
+                    JrError::UserError(format!(
+                        "Field '{field_id}' is not available on request type '{rt_query}'."
+                    ))
+                })?;
+
+            let schema_type = target
+                .jira_schema
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let schema_custom = target
+                .jira_schema
+                .get("custom")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+
+            normalize_or_degrade(
+                &target.name,
+                &target.valid_values,
+                normalize_from_valid_values,
+                &schema_type,
+                schema_custom.as_deref(),
+            )
+        }
+        Mode::Editmeta => {
+            let issue_key = issue.expect("Mode::Editmeta implies --issue is Some");
+            let editmeta = client
+                .get_editmeta(&issue_key)
+                .await
+                .map_err(|e| map_issue_not_found(e, &issue_key))?;
+            let target = editmeta.fields.get(&field_id).ok_or_else(|| {
+                JrError::UserError(format!(
+                    "Field '{field_id}' is not on the Edit screen for issue {issue_key} \
+                     (or is not available)."
+                ))
+            })?;
+
+            normalize_or_degrade(
+                &target.name,
+                &target.allowed_values,
+                normalize_from_allowed_values,
+                &target.schema.field_type,
+                target.schema.custom.as_deref(),
+            )
+        }
+    };
+
+    let filtered = filter_options(&options, value.as_deref());
+    let rows = render_option_rows(&filtered);
+    output::print_output(output_format, &["ID", "Label"], &rows, &filtered)
+}
+
+/// Map a 404 from a project-resolution HTTP call (`get_issue_types_for_project`
+/// / `require_service_desk` → `get_or_fetch_project_meta`) to the canonical
+/// VP-580-012 exit-64 message. Every other error variant (401/403/UserError/
+/// network) passes through unchanged.
+fn map_project_not_found(e: anyhow::Error, project_key: &str) -> anyhow::Error {
+    match e.downcast::<JrError>() {
+        Ok(JrError::ApiError { status: 404, .. }) => anyhow!(JrError::UserError(format!(
+            "Could not resolve project \"{project_key}\" — project not found or not accessible. \
+             Run `jr project list` to see available projects."
+        ))),
+        Ok(other) => anyhow!(other),
+        Err(other) => other,
+    }
+}
+
+/// Map a 404 from `get_editmeta` (M1 `--issue` resolution) to the canonical
+/// exit-64 message. Every other error variant passes through unchanged.
+fn map_issue_not_found(e: anyhow::Error, key: &str) -> anyhow::Error {
+    match e.downcast::<JrError>() {
+        Ok(JrError::ApiError { status: 404, .. }) => anyhow!(JrError::UserError(format!(
+            "Issue {key} not found or not accessible."
+        ))),
+        Ok(other) => anyhow!(other),
+        Err(other) => other,
+    }
+}
+
+/// Normalize a source `Option<Vec<T>>` into [`FieldOption`]s, or — when the
+/// field has no enumerable options at all (`None` or an empty `Vec`) —
+/// emit the BC-X.14.004 graceful-degrade hint to stderr and return an empty
+/// list (exit 0, never an error).
+fn normalize_or_degrade<T>(
+    display_name: &str,
+    values: &Option<Vec<T>>,
+    normalize: impl Fn(&[T]) -> Vec<FieldOption>,
+    field_type: &str,
+    custom: Option<&str>,
+) -> Vec<FieldOption> {
+    match values.as_deref() {
+        Some(v) if !v.is_empty() => normalize(v),
+        _ => {
+            eprintln!(
+                "{}",
+                degrade_hint_for_schema(display_name, field_type, custom)
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// BC-X.14.004 graceful-degrade hint text, classified from the field's
+/// schema `type`/`custom` (typed `EditMetaFieldSchema` for M1/M2, raw JSON
+/// for M3's `jiraSchema`). All three arms share the `"no enumerable
+/// options"` prefix so callers can detect a degrade uniformly. `display_name`
+/// is the field's human-readable name (`EditMetaField.name` /
+/// `CreateMetaField.name` / `RequestTypeField.name`) — folding it in here
+/// gives every caller a real use of that field instead of leaving it dead.
+fn degrade_hint_for_schema(display_name: &str, field_type: &str, custom: Option<&str>) -> String {
+    let is_cmdb = custom
+        .map(|c| c.to_lowercase().contains("cmdb"))
+        .unwrap_or(false);
+    if field_type == "object" && is_cmdb {
+        format!(
+            "no enumerable options for '{display_name}' — this field uses Assets (CMDB). \
+             Search assets separately via `jr assets search`."
+        )
+    } else if field_type == "user" {
+        format!(
+            "no enumerable options for '{display_name}' (dynamic/lookup field) — values are \
+             resolved live and cannot be enumerated by this command."
+        )
+    } else {
+        format!(
+            "no enumerable options for '{display_name}' — this field type has no fixed \
+             value set."
+        )
+    }
+}
+
+/// Resolve `<field>` to a `customfield_NNNNN`-shaped field id (AC-011).
+///
+/// `customfield_NNNNN` literals bypass `list_fields()` entirely (zero HTTP).
+/// Otherwise resolves via the per-profile fields cache (`cache::
+/// read_fields_cache`), falling back to `list_fields()` on a cache miss or
+/// a field absent from the cached list, writing the fresh list back
+/// (best-effort) before re-searching exactly once.
+async fn resolve_field_id(client: &JiraClient, profile: &str, query: &str) -> Result<String> {
+    if is_customfield_literal(query) {
+        return Ok(query.to_string());
+    }
+    if query.is_empty() {
+        return Err(JrError::UserError(
+            "Field '' not found. The field name must not be empty.".to_string(),
+        )
+        .into());
+    }
+
+    let query_lower = query.to_lowercase();
+
+    if let Some(fc) = cache::read_fields_cache(profile)? {
+        if let Some(found) = search_field_list(&fc.fields, &query_lower, query)? {
+            return Ok(found);
+        }
+    }
+
+    // Cache miss (or field absent from the cached list) — fetch fresh once.
+    let raw = client.list_fields().await?;
+    let fresh: Vec<(String, String)> = raw.into_iter().map(|f| (f.id, f.name)).collect();
+    cache::write_fields_cache(profile, &fresh)?;
+
+    match search_field_list(&fresh, &query_lower, query)? {
+        Some(found) => Ok(found),
+        None => Err(JrError::UserError(format!(
+            "Field '{query}' not found. Run `jr project fields --output json` to list \
+             available fields."
+        ))
+        .into()),
+    }
+}
+
+/// `customfield_NNNNN` literal-bypass predicate (mirrors
+/// `resolve_edit_fields`'s Step 1 in `cli/issue/field_resolve.rs`).
+fn is_customfield_literal(query: &str) -> bool {
+    const PREFIX: &str = "customfield_";
+    query.starts_with(PREFIX)
+        && query.len() > PREFIX.len()
+        && query[PREFIX.len()..].chars().all(|c| c.is_ascii_digit())
+}
+
+/// Search a resolved `(id, name)` field list for `query` — exact match
+/// first, then case-insensitive substring. `Ok(None)` means "not found in
+/// THIS list" (caller may still fall back to a fresh fetch); `Err` means a
+/// definitive ambiguity the caller must surface immediately.
+fn search_field_list(
+    list: &[(String, String)],
+    query_lower: &str,
+    query: &str,
+) -> Result<Option<String>> {
+    let exact: Vec<&(String, String)> = list
+        .iter()
+        .filter(|(_, n)| n.to_lowercase() == query_lower)
+        .collect();
+    if exact.len() == 1 {
+        return Ok(Some(exact[0].0.clone()));
+    }
+    if exact.len() > 1 {
+        let candidates: Vec<String> = exact.iter().map(|(id, n)| format!("{n} ({id})")).collect();
+        return Err(JrError::UserError(format!(
+            "Field name '{query}' matches multiple fields: {}. Use the field ID directly \
+             (e.g. customfield_NNNNN) to disambiguate.",
+            candidates.join(", ")
+        ))
+        .into());
+    }
+
+    let sub: Vec<&(String, String)> = list
+        .iter()
+        .filter(|(_, n)| n.to_lowercase().contains(query_lower))
+        .collect();
+    if sub.len() == 1 {
+        return Ok(Some(sub[0].0.clone()));
+    }
+    if sub.len() > 1 {
+        let candidates: Vec<String> = sub.iter().map(|(id, n)| format!("{n} ({id})")).collect();
+        return Err(JrError::UserError(format!(
+            "Field name '{query}' is ambiguous — matches: {}. Use a more specific name or \
+             the field ID directly (e.g. customfield_NNNNN).",
+            candidates.join(", ")
+        ))
+        .into());
+    }
+    Ok(None)
+}
+
+/// Resolve M3's `--request-type` value to a request-type id. All-ASCII-digit
+/// input bypasses resolution (numeric-ID convention shared with `jr
+/// requesttype fields`); otherwise resolves via `list_request_types` +
+/// `partial_match`.
+async fn resolve_request_type_id(
+    query: &str,
+    sd_id: &str,
+    project_key: &str,
+    client: &JiraClient,
+) -> Result<String> {
+    if !query.is_empty() && query.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(query.to_string());
+    }
+
+    let types = client.list_request_types(sd_id, None).await?;
+    let names: Vec<String> = types.iter().map(|t| t.name.clone()).collect();
+
+    match partial_match::partial_match(query, &names) {
+        MatchResult::Exact(name) => Ok(types
+            .iter()
+            .find(|t| t.name == name)
+            .map(|t| t.id.clone())
+            .expect("matched name from partial_match::Exact must exist in types")),
+        MatchResult::ExactMultiple(name) => {
+            let name_lower = name.to_lowercase();
+            let ids: Vec<String> = types
+                .iter()
+                .filter(|t| t.name.to_lowercase() == name_lower)
+                .map(|t| t.id.clone())
+                .collect();
+            Err(JrError::UserError(format!(
+                "Multiple request types named \"{name}\" found (IDs: {}). Pass the numeric \
+                 ID directly.",
+                ids.join(", ")
+            ))
+            .into())
+        }
+        MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
+            "Ambiguous request type \"{query}\" matches: {}. Run `jr requesttype list \
+             --project {project_key}` to see all request types.",
+            matches
+                .iter()
+                .map(|m| format!("\"{m}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .into()),
+        MatchResult::None(_) => Err(JrError::UserError(format!(
+            "Request type \"{query}\" not found. Run `jr requesttype list --project \
+             {project_key}` to see all request types."
+        ))
+        .into()),
+    }
 }
 
 /// Pure arity check over the three MODE-SELECTOR booleans ONLY.
@@ -116,7 +497,14 @@ pub(crate) fn resolve_field_context(
     has_request_type: bool,
     has_issue: bool,
 ) -> std::result::Result<Mode, ArityError> {
-    todo!("pure mode-selector arity check — see BC-X.14.001 Invariant 1 / VP-580-006")
+    let count = u8::from(has_type) + u8::from(has_request_type) + u8::from(has_issue);
+    match count {
+        1 if has_type => Ok(Mode::Createmeta),
+        1 if has_request_type => Ok(Mode::RequestType),
+        1 => Ok(Mode::Editmeta),
+        0 => Err(ArityError::Zero),
+        _ => Err(ArityError::Multiple),
+    }
 }
 
 /// Post-arity, M2-only project resolution step (ADR-0019 §Amendment D1).
@@ -131,7 +519,7 @@ pub(crate) fn resolve_field_context(
 /// — reads only already-loaded in-process `Config` state, no HTTP
 /// (VP-580-010).
 pub(crate) fn resolve_m2_project(cli_project: Option<&str>, config: &Config) -> Option<String> {
-    todo!("M2 project resolution — flag OR profile/config default, see ADR-0019 §Amendment D1")
+    config.project_key(cli_project)
 }
 
 /// Normalize M1 (editmeta) / M2 (createmeta) `allowedValues[]` entries into
@@ -144,7 +532,14 @@ pub(crate) fn resolve_m2_project(cli_project: Option<&str>, config: &Config) -> 
 /// (EC-X.14.001-7). Cascading children nest recursively under `children`
 /// (EC-X.14.001-4). Pure core — no I/O.
 pub(crate) fn normalize_from_allowed_values(values: &[AllowedValue]) -> Vec<FieldOption> {
-    todo!("M1/M2 allowedValues[] -> Vec<FieldOption> normalizer, never-drop (EC-X.14.001-7)")
+    values
+        .iter()
+        .map(|v| FieldOption {
+            id: v.id.clone(),
+            label: v.value.clone(),
+            children: normalize_from_allowed_values(&v.children),
+        })
+        .collect()
 }
 
 /// Normalize M3 (JSM requesttype-fields) `validValues[]` entries into
@@ -158,7 +553,23 @@ pub(crate) fn normalize_from_allowed_values(values: &[AllowedValue]) -> Vec<Fiel
 /// never-drop / cascading-children contract as
 /// [`normalize_from_allowed_values`]. Pure core — no I/O.
 pub(crate) fn normalize_from_valid_values(values: &[serde_json::Value]) -> Vec<FieldOption> {
-    todo!("M3 validValues[] -> Vec<FieldOption> normalizer, never-drop (EC-X.14.001-7)")
+    values
+        .iter()
+        .map(|v| {
+            let id = v.get("value").and_then(|x| x.as_str()).map(str::to_string);
+            let label = v.get("label").and_then(|x| x.as_str()).map(str::to_string);
+            let children = v
+                .get("children")
+                .and_then(|c| c.as_array())
+                .map(|arr| normalize_from_valid_values(arr))
+                .unwrap_or_default();
+            FieldOption {
+                id,
+                label,
+                children,
+            }
+        })
+        .collect()
 }
 
 /// Client-side `--value <substring>` filter (BC-X.14.002).
@@ -172,7 +583,58 @@ pub(crate) fn normalize_from_valid_values(values: &[serde_json::Value]) -> Vec<F
 /// (matches every entry unconditionally, including a fully degenerate
 /// entry); `value == None` returns `options` unchanged. Pure core — no I/O.
 pub(crate) fn filter_options(options: &[FieldOption], value: Option<&str>) -> Vec<FieldOption> {
-    todo!("BC-X.14.002 client-side --value substring filter, id-or-label, cascading-aware")
+    match value {
+        // Absent filter, and the identity `""` filter, both return every
+        // entry unchanged (including a fully degenerate one) — handled as a
+        // single early return so `filter_one`'s "does this entry match"
+        // logic never needs to special-case an always-true needle.
+        None => options.to_vec(),
+        Some("") => options.to_vec(),
+        Some(v) => {
+            let needle = v.to_lowercase();
+            options
+                .iter()
+                .filter_map(|opt| filter_one(opt, &needle))
+                .collect()
+        }
+    }
+}
+
+/// Recursive per-entry filter helper for [`filter_options`]. A self-match
+/// retains the entry with ALL its children unfiltered; otherwise the entry
+/// is retained (as context, with only its matching children) if ANY
+/// descendant matches, and dropped entirely if none does.
+fn filter_one(opt: &FieldOption, needle: &str) -> Option<FieldOption> {
+    let self_match = opt
+        .id
+        .as_deref()
+        .map(|s| s.to_lowercase().contains(needle))
+        .unwrap_or(false)
+        || opt
+            .label
+            .as_deref()
+            .map(|s| s.to_lowercase().contains(needle))
+            .unwrap_or(false);
+
+    if self_match {
+        return Some(opt.clone());
+    }
+
+    let filtered_children: Vec<FieldOption> = opt
+        .children
+        .iter()
+        .filter_map(|c| filter_one(c, needle))
+        .collect();
+
+    if filtered_children.is_empty() {
+        None
+    } else {
+        Some(FieldOption {
+            id: opt.id.clone(),
+            label: opt.label.clone(),
+            children: filtered_children,
+        })
+    }
 }
 
 /// Render `options` into table rows (BC-X.14.003) — ID / Label columns,
@@ -182,8 +644,25 @@ pub(crate) fn filter_options(options: &[FieldOption], value: Option<&str>) -> Ve
 /// (`"—"`), missing `label` -> [`UNNAMED_LABEL`] (`"(unnamed)"`, never a
 /// fallback to the entry's own `id`). Pure core — no I/O.
 pub(crate) fn render_option_rows(options: &[FieldOption]) -> Vec<Vec<String>> {
-    let _ = (NULL_GLYPH, UNNAMED_LABEL);
-    todo!("BC-X.14.003 table rendering — ID/Label columns, cascading indentation")
+    let mut rows = Vec::new();
+    render_rows_recursive(options, 0, &mut rows);
+    rows
+}
+
+/// Depth-first row emitter for [`render_option_rows`]. `depth` drives the
+/// two-space-per-level indent on the Label column; the ID column is never
+/// indented.
+fn render_rows_recursive(options: &[FieldOption], depth: usize, rows: &mut Vec<Vec<String>>) {
+    let indent = "  ".repeat(depth);
+    for opt in options {
+        let id_str = opt.id.clone().unwrap_or_else(|| NULL_GLYPH.to_string());
+        let label_str = opt
+            .label
+            .clone()
+            .unwrap_or_else(|| UNNAMED_LABEL.to_string());
+        rows.push(vec![id_str, format!("{indent}{label_str}")]);
+        render_rows_recursive(&opt.children, depth + 1, rows);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -218,8 +697,7 @@ mod tests {
         for has_type in [false, true] {
             for has_request_type in [false, true] {
                 for has_issue in [false, true] {
-                    let popcount =
-                        has_type as u8 + has_request_type as u8 + has_issue as u8;
+                    let popcount = has_type as u8 + has_request_type as u8 + has_issue as u8;
                     let result = resolve_field_context(has_type, has_request_type, has_issue);
                     match popcount {
                         1 => {
@@ -287,8 +765,10 @@ mod tests {
     // ── AC-004 / VP-580-010: resolve_m2_project (flag OR profile default) ──
 
     fn config_with_profile_project(project: Option<&str>) -> Config {
-        let mut config = Config::default();
-        config.active_profile_name = "default".to_string();
+        let mut config = Config {
+            active_profile_name: "default".to_string(),
+            ..Default::default()
+        };
         config.global.profiles.insert(
             "default".to_string(),
             ProfileConfig {
@@ -343,21 +823,34 @@ mod tests {
                 id: Some("10001".to_string()),
                 value: Some("Well-formed".to_string()),
                 name: None,
+                // NOTE (S-580-1 implementer pass): `children` added here — a
+                // mechanical consequence of the AUTHORIZED SCOPE CORRECTION
+                // extending `AllowedValue` with `#[serde(default)] pub
+                // children: Vec<AllowedValue>` (ADR-0019 §Amendment D4).
+                // This struct-literal fixture predates that extension and
+                // would not compile without it; the value (`Vec::new()`) is
+                // fully consistent with the test's own trailing assertion
+                // (`assert!(opt.children.is_empty())` for every entry) —
+                // no assertion or behavior in this test changed.
+                children: Vec::new(),
             },
             AllowedValue {
                 id: None,
                 value: Some("Missing id".to_string()),
                 name: None,
+                children: Vec::new(),
             },
             AllowedValue {
                 id: Some("10003".to_string()),
                 value: None,
                 name: None,
+                children: Vec::new(),
             },
             AllowedValue {
                 id: None,
                 value: None,
                 name: None,
+                children: Vec::new(),
             },
         ];
         let result = normalize_from_allowed_values(&values);
@@ -553,7 +1046,11 @@ mod tests {
             ],
         )];
         let result = filter_options(&options, Some("matching"));
-        assert_eq!(result.len(), 1, "parent retained as context for the matching child");
+        assert_eq!(
+            result.len(),
+            1,
+            "parent retained as context for the matching child"
+        );
         assert_eq!(
             result[0].children.len(),
             1,
@@ -583,10 +1080,7 @@ mod tests {
 
     #[test]
     fn test_bc_x_14_002_value_empty_string_is_identity_filter_including_degenerate() {
-        let options = vec![
-            opt(Some("10001"), Some("Anything")),
-            opt(None, None),
-        ];
+        let options = vec![opt(Some("10001"), Some("Anything")), opt(None, None)];
         let result = filter_options(&options, Some(""));
         assert_eq!(
             result.len(),
@@ -607,12 +1101,12 @@ mod tests {
 
     #[test]
     fn test_bc_x_14_002_value_none_returns_unchanged() {
-        let options = vec![
-            opt(Some("10001"), Some("A")),
-            opt(Some("10002"), Some("B")),
-        ];
+        let options = vec![opt(Some("10001"), Some("A")), opt(Some("10002"), Some("B"))];
         let result = filter_options(&options, None);
-        assert_eq!(result, options, "--value absent returns the full list unchanged");
+        assert_eq!(
+            result, options,
+            "--value absent returns the full list unchanged"
+        );
     }
 
     #[test]
