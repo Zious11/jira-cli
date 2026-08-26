@@ -2636,3 +2636,122 @@ async fn test_bc_x_14_003_zero_stderr_on_ordinary_enumeration_success() {
         "ordinary enumeration success must emit ZERO stderr (Profile-2 output-channel contract); got: {stderr:?}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// S-580-1 convergence pass — final LOW coverage pins
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `resolve_field_id`'s empty-field-name guard (`src/cli/field.rs` §
+/// `if query.is_empty()`): an empty `<field>` positional must exit 64 with
+/// the canonical "must not be empty" message, BEFORE any cache read or HTTP
+/// call — a mutant deleting this guard would fall through to
+/// `search_field_list(&fields, "", "")`, which matches every field's name
+/// (an empty substring is contained in every string) and would silently
+/// resolve to whichever field a real Jira instance happens to return first.
+#[tokio::test]
+async fn test_bc_x_14_001_empty_field_name_exits_64_zero_http() {
+    let h = Harness::new().await;
+    expect_zero_http(&h.server).await;
+
+    let assert = h.cmd(&["field", "options", "", "--issue", "FOO-1", "--no-input"]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 for an empty field name, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Field '' not found") && stderr.contains("must not be empty"),
+        "expected the canonical empty-field-name message; got: {stderr}"
+    );
+}
+
+/// AC-011 warm-cache contract: when the per-profile fields cache
+/// (`~/.cache/jr/v1/<profile>/fields.json`) is already warm and contains
+/// the queried field, `resolve_field_id` must resolve directly from the
+/// cache WITHOUT issuing `GET /rest/api/3/field` at all. Every other
+/// human-name-resolution test in this file starts cold (empty cache dir),
+/// so the warm-cache early-return branch was previously untested — a
+/// mutant deleting the `if let Some(fc) = cache::read_fields_cache(...)`
+/// block (or its early `return Ok(found)`) would be invisible to those
+/// tests since they'd still pass via the cold-fetch fallback.
+#[tokio::test]
+async fn test_bc_x_14_001_warm_cache_resolves_without_list_fields_call() {
+    let h = Harness::new().await;
+
+    // Pre-populate the profile's fields cache (profile = "default", the
+    // legacy `[instance]`-shape config's implicit profile) at the exact
+    // path `cache::write_fields_cache` would have written, mirroring the
+    // `FieldsCache { fields, fetched_at }` shape in `src/cache.rs`.
+    let cache_file = h
+        .cache_dir
+        .path()
+        .join("jr")
+        .join("v1")
+        .join("default")
+        .join("fields.json");
+    std::fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
+    let fetched_at = chrono::Utc::now().to_rfc3339();
+    std::fs::write(
+        &cache_file,
+        json!({
+            "fields": [["customfield_10001", "Story Points"], ["customfield_10002", "Sprint"]],
+            "fetched_at": fetched_at
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // `GET /rest/api/3/field` must NEVER be called — the warm cache alone
+    // must satisfy resolution.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&h.server)
+        .await;
+    mount_editmeta(
+        &h.server,
+        "FOO-1",
+        json!({
+            "customfield_10001": {
+                "name": "Story Points",
+                "schema": {"type": "option"},
+                "allowedValues": [{"id": "1", "value": "One"}, {"id": "2", "value": "Two"}],
+                "operations": ["set"],
+                "required": false
+            }
+        }),
+    )
+    .await;
+
+    let assert = h.cmd(&[
+        "field",
+        "options",
+        "Story Points",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0 resolving a human field name via the warm cache, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let arr = parsed.as_array().unwrap();
+    assert_eq!(
+        arr.len(),
+        2,
+        "expected the 2 options for the cache-resolved field"
+    );
+}
