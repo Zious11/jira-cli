@@ -413,6 +413,23 @@ pub(super) async fn handle_jsm_create(
 /// (`compose_asset_wire`) ever receives; it never sees an unresolved bare
 /// value.
 ///
+/// # Malformed-shape errors (BC-3.4.031 EC-2/EC-3, BC-3.8.008 shared malformed-hint
+/// catalog, adversary Pass-1 HIGH ADV-S578-3-P1-001)
+///
+/// Mirrors `field_resolve.rs::compose_asset_hint`'s validation EXACTLY — same
+/// checks, same precedence, same canonical message substrings — so a malformed
+/// `:asset` value fires ZERO workspace GET and ZERO POST on the JSM path,
+/// matching the platform path's behavior. Checked in this order (EC-2c's
+/// empty-workspace-segment check MUST run BEFORE the objectId-segment checks —
+/// `:asset=:` triggers EC-2c, never EC-2b):
+/// 1. Empty `VALUE` → "asset reference cannot be empty" (EC-2a).
+/// 2. `:` present, workspace segment empty → "workspace segment cannot be
+///    empty…" (EC-2c).
+/// 3. `:` present, remainder contains a SECOND `:` → "unexpected extra
+///    ':'…" (EC-2d).
+/// 4. objectId segment (ASCII `[0-9]+` only, NOT Unicode `\d`) empty or
+///    non-numeric → "objectId must be numeric" (EC-2b/EC-3).
+///
 /// # Errors
 ///
 /// Propagates `get_or_fetch_workspace_id`'s cold-cache failure taxonomy
@@ -420,12 +437,48 @@ pub(super) async fn handle_jsm_create(
 /// 200 + zero entries → "No Assets workspace found…"; 401/5xx/network →
 /// standard `JrError` mappings.
 async fn resolve_asset_field_l2(client: &JiraClient, value: &str) -> Result<FieldValueSpec> {
+    if value.is_empty() {
+        return Err(JrError::UserError(
+            "asset reference cannot be empty. Use --field NAME:asset=OBJECTID (workspace \
+             id resolved from cache) or --field NAME:asset=WORKSPACE:OBJECTID."
+                .into(),
+        )
+        .into());
+    }
+
     let resolved_value = match value.split_once(':') {
         Some((workspace_id, object_id)) => {
+            if workspace_id.is_empty() {
+                return Err(JrError::UserError(
+                    "workspace segment cannot be empty when ':' is present; omit the \
+                     workspace prefix entirely to use the cached workspace id."
+                        .into(),
+                )
+                .into());
+            }
+            if object_id.contains(':') {
+                return Err(JrError::UserError(format!(
+                    "unexpected extra ':' in :asset value '{value}' — expected \
+                     WORKSPACE:OBJECTID."
+                ))
+                .into());
+            }
+            if object_id.is_empty() || !object_id.chars().all(|c| c.is_ascii_digit()) {
+                return Err(JrError::UserError(format!(
+                    "objectId must be numeric (ASCII digits only); got '{object_id}'."
+                ))
+                .into());
+            }
             // Explicit WORKSPACE:OBJECTID — compose directly, no cache lookup.
             format!("{workspace_id}:{object_id}")
         }
         None => {
+            if !value.chars().all(|c| c.is_ascii_digit()) {
+                return Err(JrError::UserError(format!(
+                    "objectId must be numeric (ASCII digits only); got '{value}'."
+                ))
+                .into());
+            }
             // Bare <objectId> — resolve workspace id via cache/API first.
             let workspace_id =
                 crate::api::assets::workspace::get_or_fetch_workspace_id(client).await?;
