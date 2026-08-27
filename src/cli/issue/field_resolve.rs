@@ -531,13 +531,7 @@ pub(crate) async fn resolve_edit_fields(
                 display_value = dv;
             }
             other => {
-                return Err(JrError::UserError(format!(
-                    "Field '{human_name}' has type '{other}' which is not supported by \
-                     `--field` in this version. Supported types: string, number, option, \
-                     date, datetime, user. Array and CMDB fields are not supported — \
-                     use the Jira UI for {other}-type fields."
-                ))
-                .into());
+                return Err(unsupported_field_type_error(other, &human_name).into());
             }
         }
 
@@ -709,6 +703,21 @@ fn resolve_option_value(
     Ok((wire_value, display_value))
 }
 
+/// Builds BC-3.4.015's canonical "unsupported type" error (Step 4's bare-form
+/// `other` type-dispatch arm). Extracted as a shared helper (S-578-2,
+/// EC-3.4.027-1 / AC-019 sub-case (a)) so the `:option` hinted composer's
+/// entry-point type gate can reuse this EXACT message for `array`/`any`
+/// fields rather than re-deriving a similar-but-different string — the
+/// literal `field_type` value must appear verbatim in both call sites.
+fn unsupported_field_type_error(field_type: &str, human_name: &str) -> JrError {
+    JrError::UserError(format!(
+        "Field '{human_name}' has type '{field_type}' which is not supported by \
+         `--field` in this version. Supported types: string, number, option, \
+         date, datetime, user. Array and CMDB fields are not supported — \
+         use the Jira UI for {field_type}-type fields."
+    ))
+}
+
 /// Composes the `:option` hinted-bypass wire shape (S-578-2 Task 4).
 ///
 /// Non-cascading (`VALUE` contains no `>`): byte-identical to the bare-form
@@ -730,6 +739,39 @@ fn compose_option_hint(
     human_name: &str,
     meta_field: &crate::types::jira::EditMetaField,
 ) -> Result<(serde_json::Value, String)> {
+    // EC-3.4.027-1 (AC-019): entry-point `schema.type` gate. Runs BEFORE any
+    // `allowedValues`/`children` inspection below — this is what makes a
+    // non-option field with EMPTY/absent `allowedValues` (e.g. a "number"
+    // field) get THIS gate's "is not an option field" message rather than
+    // falling through to BC-3.4.016's "no configured option values" message,
+    // which presupposes the field already passed this gate. Orthogonal to
+    // AC-004's D4 structural `children.is_empty()` check further down (which
+    // stays structural, per Invariant 6, and only ever runs for a field that
+    // has already cleared this gate).
+    let field_type = meta_field.schema.field_type.as_str();
+    match field_type {
+        "option" | "option-with-child" => {}
+        "array" | "any" => {
+            // Sub-case (a): reuse BC-3.4.015's EXACT "unsupported type"
+            // message (EC-3.4.015-5) rather than inventing a new one — the
+            // literal `field_type` string ("array"/"any") must match.
+            return Err(unsupported_field_type_error(field_type, human_name).into());
+        }
+        other => {
+            // Sub-case (b): a distinct message — this is NOT BC-3.4.015's
+            // "unsupported `--field` type" case (the bare form CAN set a
+            // string/number/date/datetime/user field); it's specifically
+            // that `:option` doesn't apply to this field's type.
+            return Err(JrError::UserError(format!(
+                "Field '{human_name}' has type '{other}' which is not an option \
+                 field — `:option` requires a field of type 'option' or \
+                 'option-with-child'. Use the bare form `--field NAME=VALUE` \
+                 (no `:option` hint) to set a '{other}'-type field instead."
+            ))
+            .into());
+        }
+    }
+
     let allowed = meta_field.allowed_values.as_deref().unwrap_or(&[]);
     if allowed.is_empty() {
         return Err(JrError::UserError(format!(
