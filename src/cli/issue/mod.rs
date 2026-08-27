@@ -2,7 +2,11 @@ mod assets;
 pub mod attachments;
 mod changelog;
 mod comments;
-mod create;
+// S-578-3: pub(crate) (not private) so `FieldValueSpec`/`FieldValueKind`
+// (BC-3.8.008 amendment) are reachable from `api::jsm::requests` — a
+// different top-level module tree that needs the shared hint-kind type to
+// thread `JsmRequestBuilder.extra_fields` (S-578-1's shared parser output).
+pub(crate) mod create;
 mod edit;
 mod field_resolve;
 mod format;

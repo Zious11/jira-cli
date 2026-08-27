@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 
 use crate::api::client::JiraClient;
+use crate::cli::issue::create::{FieldValueKind, FieldValueSpec};
 use crate::error::JrError;
 use crate::types::jsm::JsmRequestCreated;
 
@@ -72,7 +73,12 @@ pub struct JsmRequestBuilder<'a> {
     pub priority: Option<&'a str>,
     pub labels: &'a [String],
     pub on_behalf_of: Option<&'a str>,
-    pub extra_fields: &'a HashMap<String, String>,
+    /// S-578-3 (BC-3.8.008 amendment): `FieldValueSpec` map, not a plain
+    /// `String` map — carries the shared `:option`/`:id`/`:name`/`:asset`
+    /// hint-kind tag produced by `parse_field_kv` (S-578-1), so `build()`
+    /// can dispatch kind-aware `requestFieldValues` serialization instead of
+    /// the old unconditional string-wrap.
+    pub(crate) extra_fields: &'a HashMap<String, FieldValueSpec>,
 }
 
 impl<'a> JsmRequestBuilder<'a> {
@@ -116,8 +122,25 @@ impl<'a> JsmRequestBuilder<'a> {
         }
 
         // Merge extra fields from --field NAME=VALUE (BC-3.8.008, last-wins).
-        for (k, v) in self.extra_fields {
-            rfv.insert(k.clone(), serde_json::Value::String(v.clone()));
+        //
+        // S-578-3 STUB: kind-aware dispatch is not yet implemented. The
+        // `None`/`Some(Option)` arm is the pre-existing, UNCHANGED bare-form
+        // string-wrap (AC-002, AC-008/VP-578-015 byte-identity regression
+        // pin) — real logic, not a stub. The `Id`/`Name`/`Asset` arms are
+        // `todo!()` stubs pending the IMPLEMENT step (Task 3); they are
+        // unreachable today because `jsm_create.rs`'s interim
+        // `reject_unsupported_hint_kinds` guard (S-578-1) still rejects any
+        // hinted pair before it can reach `build()`.
+        for (k, spec) in self.extra_fields {
+            let wire_value = match spec.kind {
+                None | Some(FieldValueKind::Option) => {
+                    serde_json::Value::String(spec.value.clone())
+                }
+                Some(FieldValueKind::Id) => compose_id_wire(&spec.value),
+                Some(FieldValueKind::Name) => compose_name_wire(&spec.value),
+                Some(FieldValueKind::Asset) => compose_asset_wire(&spec.value),
+            };
+            rfv.insert(k.clone(), wire_value);
         }
 
         // Assemble top-level body.
@@ -150,6 +173,55 @@ impl<'a> JsmRequestBuilder<'a> {
 
         Ok(serde_json::Value::Object(body))
     }
+}
+
+/// STUB (S-578-3 Task 3): `:id` kind-aware `requestFieldValues` composer.
+///
+/// Target shape (by analogy to `field_resolve.rs::compose_id_hint`,
+/// VP-578-016 parity-PENDING): `{"id": VALUE}`. Not implemented — signature
+/// only, wired in the IMPLEMENT step.
+///
+/// # Panics
+///
+/// Always — `todo!()`. Unreachable in the current build: the interim
+/// `reject_unsupported_hint_kinds` guard (S-578-1, called from
+/// `jsm_create.rs`) rejects every hinted pair before `build()` runs.
+fn compose_id_wire(_value: &str) -> serde_json::Value {
+    todo!("S-578-3 IMPLEMENT step (AC-002): :id -> {{\"id\": VALUE}} requestFieldValues shape")
+}
+
+/// STUB (S-578-3 Task 3): `:name` kind-aware `requestFieldValues` composer.
+///
+/// Target shape (by analogy to `field_resolve.rs::compose_name_hint`,
+/// VP-578-016 parity-PENDING): `{"name": VALUE}`. Not implemented — signature
+/// only, wired in the IMPLEMENT step.
+///
+/// # Panics
+///
+/// Always — `todo!()`. Unreachable today; see [`compose_id_wire`].
+fn compose_name_wire(_value: &str) -> serde_json::Value {
+    todo!("S-578-3 IMPLEMENT step (AC-002): :name -> {{\"name\": VALUE}} requestFieldValues shape")
+}
+
+/// STUB (S-578-3 Task 3): `:asset` kind-aware `requestFieldValues` composer.
+///
+/// MUST perform PURE array-wrapping ONLY when implemented (Architecture
+/// Compliance Rule 1) — it must never call `get_or_fetch_workspace_id` or
+/// otherwise reach into `api::assets::*`. Workspace-id resolution is owned
+/// exclusively by `jsm_create.rs` (L2, Architecture Compliance Rule 2); by
+/// the time a value reaches this function it is expected to already be
+/// resolved (or a pre-qualified `WORKSPACE:OBJECTID` pair). Not implemented
+/// — signature only, wired in the IMPLEMENT step.
+///
+/// # Panics
+///
+/// Always — `todo!()`. Unreachable today; see [`compose_id_wire`].
+fn compose_asset_wire(_value: &str) -> serde_json::Value {
+    todo!(
+        "S-578-3 IMPLEMENT step (AC-002/AC-006): pure array-wrap of an already-L2-resolved \
+         :asset value — build() must never call get_or_fetch_workspace_id (Architecture \
+         Compliance Rule 1)"
+    )
 }
 
 /// Proptest properties for [`JsmRequestBuilder`] (AC-014, BC-3.8.001..009).
