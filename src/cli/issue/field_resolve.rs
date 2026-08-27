@@ -221,8 +221,7 @@ pub(crate) async fn resolve_edit_fields(
 
     // Resolved items: (field_id, human_name, spec). `spec` carries both the
     // uninterpreted VALUE and the S-578-2 `FieldValueSpec.kind` hint through
-    // to Phase 3, where the hinted-bypass dispatch reads it (STUB as of this
-    // commit).
+    // to Phase 3, where the hinted-bypass dispatch reads it.
     let mut resolved: Vec<(String, String, FieldValueSpec)> = Vec::with_capacity(field_pairs.len());
 
     for (name, spec) in field_pairs {
