@@ -6160,6 +6160,338 @@ async fn test_bc_3_8_008_asset_bare_form_l2_resolves_workspace_before_build() {
     );
 }
 
+// ─── ADV-S578-3-P1-002: malformed `:asset` value negative coverage ──────────
+//
+// GAP (adversary Pass-1 finding ADV-S578-3-P1-002): the two AC-006 tests
+// above cover only WELL-FORMED `:asset` values (explicit
+// `WORKSPACE:OBJECTID` and bare `<objectId>`). The malformed-shape catalog
+// that BC-3.4.030 EC-3.4.030-3 + BC-3.4.031 EC-2a/EC-2b/EC-2d mandate for the
+// platform path — `src/cli/issue/field_resolve.rs::compose_asset_hint`,
+// mirrored by `tests/issue_field_hint_kinds.rs::test_bc_3_4_031_ec2a/ec2b/
+// ec2c/ec2d/ec3` — was never exercised on the JSM path via BC-3.8.008's
+// shared malformed-hint exit-64 catalog. This let a real HIGH impl gap ship:
+// `resolve_asset_field_l2` (`jsm_create.rs`) and `compose_asset_wire`
+// (`requests.rs`) perform ZERO validation today — a malformed value sails
+// straight through the L2 workspace fetch and/or the JSM POST instead of
+// being rejected pre-flight, exactly mirroring the platform path's four
+// `compose_asset_hint` checks.
+//
+// RED today, by design: every test below is expected to FAIL — the command
+// exits 0 (not 64), and the workspace-discovery GET and/or the JSM POST fire
+// when they must not, because `resolve_asset_field_l2` does no validation.
+// Once `resolve_asset_field_l2` is amended to mirror `compose_asset_hint`'s
+// four checks (empty value, empty workspace segment, extra colon, non-numeric
+// objectId) BEFORE either the L2 workspace fetch or `build()`, these tests
+// turn green.
+
+/// EC-2a (via BC-3.8.008's shared malformed-hint catalog): `--field
+/// cf:asset=` (empty value) must exit 64 with the exact "asset reference
+/// cannot be empty" message `compose_asset_hint` uses on the platform path —
+/// BEFORE any workspace-discovery GET or JSM POST.
+#[tokio::test]
+async fn test_ec_3_8_008_asset_empty_value_exits_64_zero_post() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_type_list(&server).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 25, "isLastPage": true,
+            "values": [{"workspaceId": "should-not-be-fetched"}]
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "customfield_54001:asset=",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "ADV-S578-3-P1-002 EC-2a: expected exit 64 for empty :asset value \
+         (RED today — resolve_asset_field_l2 does no validation); \
+         got exit {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("asset reference cannot be empty"),
+        "ADV-S578-3-P1-002 EC-2a: message must match compose_asset_hint's \
+         platform-path wording verbatim; stderr={stderr}"
+    );
+}
+
+/// EC-2c/EC-2b (via BC-3.8.008's shared malformed-hint catalog): `--field
+/// cf:asset=:777` (colon present, empty workspace segment) must exit 64 with
+/// the exact "workspace segment cannot be empty" message `compose_asset_hint`
+/// uses on the platform path — BEFORE any workspace-discovery GET or JSM
+/// POST. This value has a numeric objectId segment ("777"), so the
+/// empty-workspace check must fire and take PRECEDENCE over the generic
+/// numeric check, exactly as the platform sibling's EC-2c precedence test
+/// asserts.
+#[tokio::test]
+async fn test_ec_3_8_008_asset_empty_workspace_segment_exits_64_zero_post() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_type_list(&server).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 25, "isLastPage": true,
+            "values": [{"workspaceId": "should-not-be-fetched"}]
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "customfield_54002:asset=:777",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "ADV-S578-3-P1-002 EC-2c/EC-2b: expected exit 64 for empty workspace \
+         segment (RED today — resolve_asset_field_l2 does no validation); \
+         got exit {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("workspace segment cannot be empty"),
+        "ADV-S578-3-P1-002 EC-2c/EC-2b: message must match compose_asset_hint's \
+         platform-path wording verbatim; stderr={stderr}"
+    );
+}
+
+/// EC-2d (via BC-3.8.008's shared malformed-hint catalog): `--field
+/// cf:asset=W:Y:Z` (extra colon) must exit 64 with the exact "unexpected
+/// extra ':'" message `compose_asset_hint` uses on the platform path —
+/// BEFORE any workspace-discovery GET or JSM POST. This must be a DISTINCT
+/// message from the generic "objectId must be numeric" error, mirroring the
+/// platform sibling's EC-2d precedence test.
+#[tokio::test]
+async fn test_ec_3_8_008_asset_extra_colon_exits_64_zero_post() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_type_list(&server).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 25, "isLastPage": true,
+            "values": [{"workspaceId": "should-not-be-fetched"}]
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "customfield_54003:asset=W:Y:Z",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "ADV-S578-3-P1-002 EC-2d: expected exit 64 for extra ':' in :asset \
+         value (RED today — resolve_asset_field_l2 does no validation); \
+         got exit {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("unexpected extra ':'"),
+        "ADV-S578-3-P1-002 EC-2d: message must name the extra-colon mistake \
+         specifically (compose_asset_hint's platform-path wording verbatim), \
+         not the generic numeric-objectId message; stderr={stderr}"
+    );
+}
+
+/// EC-3 (via BC-3.8.008's shared malformed-hint catalog): `--field
+/// cf:asset=abc` (bare, non-numeric objectId) and `--field
+/// cf:asset=WS:abc` (explicit workspace, non-numeric objectId) must both
+/// exit 64 with the exact "objectId must be numeric" message
+/// `compose_asset_hint` uses on the platform path — BEFORE any
+/// workspace-discovery GET or JSM POST.
+#[tokio::test]
+async fn test_ec_3_8_008_asset_non_numeric_objectid_exits_64_zero_post() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_type_list(&server).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 25, "isLastPage": true,
+            "values": [{"workspaceId": "should-not-be-fetched"}]
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    for value in ["abc", "WS:abc"] {
+        let field_arg = format!("customfield_54004:asset={value}");
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "Password Reset",
+                "--summary",
+                "test",
+                "--field",
+                &field_arg,
+                "--no-input",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "ADV-S578-3-P1-002 EC-3: expected exit 64 for non-numeric \
+             objectId (RED today — resolve_asset_field_l2 does no \
+             validation); value={value:?}; got exit {:?}. stderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("objectId must be numeric"),
+            "ADV-S578-3-P1-002 EC-3: message must match compose_asset_hint's \
+             platform-path wording verbatim; value={value:?}; stderr={stderr}"
+        );
+    }
+}
+
 // ─── AC-007 (BC-3.4.030 taxonomy, VP-578-022): JSM-path independent assertion ─
 
 /// AC-007 (VP-578-022 — 1 of 3 shared call sites; this is `jsm_create.rs`'s
