@@ -10,7 +10,7 @@ use crate::error::{API_TOKEN_EXPIRY_HINT, JrError};
 use crate::output;
 use crate::partial_match::{self, MatchResult};
 
-use super::create::{FieldValueSpec, parse_field_kv, reject_unsupported_hint_kinds};
+use super::create::{FieldValueKind, FieldValueSpec, parse_field_kv};
 use super::helpers;
 
 /// Argument bundle for `handle_jsm_create`.
@@ -281,22 +281,23 @@ pub(super) async fn handle_jsm_create(
     // Parse --field NAME=VALUE pairs (BC-3.8.008).
     let parsed_field_pairs = parse_field_kv(&field_pairs)?;
 
-    // S-578-1 INTERIM GUARD: `:kind` dispatch is not implemented on this
-    // command yet (deferred to S-578-3) — reject a hinted pair loudly rather
-    // than silently treating it as bare. Remove this call once S-578-3 lands
-    // real dispatch. Placed immediately after parsing, before the POST.
-    reject_unsupported_hint_kinds(&parsed_field_pairs)?;
-
-    // S-578-3 STUB: `extra_fields` is now the `FieldValueSpec` map directly
-    // (BC-3.8.008 amendment) rather than an unwrapped `.value`-only map —
-    // `JsmRequestBuilder::build()` needs `spec.kind` to dispatch kind-aware
-    // `requestFieldValues` serialization. This is not yet a real L2
-    // resolution step: `reject_unsupported_hint_kinds` above still rejects
-    // every `kind: Some(_)` pair, so every entry that reaches `build()` here
-    // is guaranteed `kind: None` until the IMPLEMENT step wires real
-    // `:asset` workspace-id resolution (Task 4, see
-    // `resolve_asset_field_l2` below) and removes this guard call.
-    let extra_fields: std::collections::HashMap<String, FieldValueSpec> = parsed_field_pairs;
+    // S-578-3 (BC-3.8.008 amendment, AC-006): resolve `:asset` hints' L2-side
+    // workspace-id segment BEFORE `JsmRequestBuilder::build()` ever sees the
+    // value — mirrors `edit.rs`/`field_resolve.rs`'s L2-resolves/L4-wraps
+    // split for the platform path (S-578-2, ADR-0019 §2 Architecture
+    // Compliance Rules 1-3). `build()`'s `Some(Asset)` match arm performs
+    // PURE array-wrapping only; it is never given an unresolved bare
+    // `:asset` value.
+    let mut extra_fields: std::collections::HashMap<String, FieldValueSpec> =
+        std::collections::HashMap::with_capacity(parsed_field_pairs.len());
+    for (name, spec) in parsed_field_pairs {
+        if spec.kind == Some(FieldValueKind::Asset) {
+            let resolved = resolve_asset_field_l2(client, &spec.value).await?;
+            extra_fields.insert(name, resolved);
+        } else {
+            extra_fields.insert(name, spec);
+        }
+    }
 
     // Build the POST body (BC-3.8.005..009).
     let body = JsmRequestBuilder {
@@ -396,32 +397,45 @@ pub(super) async fn handle_jsm_create(
     Ok(())
 }
 
-/// STUB (S-578-3 Task 4): resolves the `:asset` hint's L2-side workspace-id
-/// segment before `JsmRequestBuilder::build()` sees it — mirrors S-578-2's
+/// Resolves the `:asset` hint's L2-side workspace-id segment before
+/// `JsmRequestBuilder::build()` sees it (S-578-3, AC-006) — mirrors S-578-2's
 /// L2-resolves/L4-wraps split (`field_resolve.rs::compose_asset_hint`) for
 /// this (JSM create) call site (Architecture Compliance Rule 2/3): an
-/// explicit `WORKSPACE:OBJECTID` value composes directly with no cache
-/// lookup; a bare `<objectId>` value calls
-/// `crate::api::assets::workspace::get_or_fetch_workspace_id` first.
-/// `get_or_fetch_workspace_id` must be called AT MOST ONCE per invocation
-/// (mirrors the platform-path invariant, AC-006).
+/// explicit `WORKSPACE:OBJECTID` value (a `:` present) composes directly
+/// with NO cache lookup; a bare `<objectId>` value (no `:`) calls
+/// [`crate::api::assets::workspace::get_or_fetch_workspace_id`] first.
+/// `get_or_fetch_workspace_id` is called AT MOST ONCE per invocation
+/// (mirrors the platform-path invariant).
 ///
-/// NOT YET WIRED — the interim `reject_unsupported_hint_kinds` guard
-/// (S-578-1, called above in [`handle_jsm_create`]) still rejects every
-/// `kind: Some(_)` pair before this function would ever run. Real dispatch,
-/// including the AC-007 cold-cache failure taxonomy (VP-578-022), lands in
-/// the IMPLEMENT step.
+/// Returns a [`FieldValueSpec`] with `kind: Some(FieldValueKind::Asset)` and
+/// `value` set to the fully-qualified `WORKSPACE:OBJECTID` pair — this is
+/// the ONLY shape `JsmRequestBuilder::build()`'s `Some(Asset)` arm
+/// (`compose_asset_wire`) ever receives; it never sees an unresolved bare
+/// value.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Always — `todo!()`.
-#[allow(
-    dead_code,
-    reason = "S-578-3 stub step: signature-only scaffold for the Task 4 IMPLEMENT step; \
-              unreferenced until reject_unsupported_hint_kinds's call site is removed"
-)]
-async fn resolve_asset_field_l2(_client: &JiraClient, _value: &str) -> Result<FieldValueSpec> {
-    todo!("S-578-3 IMPLEMENT step (AC-006): :asset L2 workspace-id resolution")
+/// Propagates `get_or_fetch_workspace_id`'s cold-cache failure taxonomy
+/// (BC-3.4.030, VP-578-022, AC-007): 403/404 → "Assets is not available…";
+/// 200 + zero entries → "No Assets workspace found…"; 401/5xx/network →
+/// standard `JrError` mappings.
+async fn resolve_asset_field_l2(client: &JiraClient, value: &str) -> Result<FieldValueSpec> {
+    let resolved_value = match value.split_once(':') {
+        Some((workspace_id, object_id)) => {
+            // Explicit WORKSPACE:OBJECTID — compose directly, no cache lookup.
+            format!("{workspace_id}:{object_id}")
+        }
+        None => {
+            // Bare <objectId> — resolve workspace id via cache/API first.
+            let workspace_id =
+                crate::api::assets::workspace::get_or_fetch_workspace_id(client).await?;
+            format!("{workspace_id}:{value}")
+        }
+    };
+    Ok(FieldValueSpec {
+        kind: Some(FieldValueKind::Asset),
+        value: resolved_value,
+    })
 }
 
 /// Resolve a request type name to its ID for the JSM create path.

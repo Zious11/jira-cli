@@ -565,41 +565,6 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, FieldVa
     Ok(map)
 }
 
-/// Interim guard (S-578-1): rejects any `--field NAME:kind=VALUE` hinted pair
-/// on a call site that does not yet interpret `kind`.
-///
-/// `parse_field_kv` (above) correctly parses the `:kind` hint tag
-/// (BC-3.4.026), but real dispatch on `kind` is deferred call-site by
-/// call-site: `issue edit` (S-578-2), JSM `issue create` (S-578-3), and the
-/// platform `issue create` path (S-578-4). Until a call site implements
-/// dispatch, silently treating a hinted pair as bare would drop the user's
-/// `:kind` intent without any signal — a silent value-drop on a
-/// state-changing command, which this project's conventions forbid. This
-/// guard makes that gap loud instead: any pair with `kind: Some(_)` is
-/// rejected with exit 64 rather than proceeding as if it were `kind: None`.
-///
-/// Call this immediately after [`parse_field_kv`], before any HTTP call or
-/// mutation. Remove the call site's invocation of this guard (not this
-/// function itself, until the last caller is migrated) once that call site
-/// implements real `:kind` dispatch.
-///
-/// # Errors
-///
-/// Returns `JrError::UserError` (exit 64) if any [`FieldValueSpec::kind`] in
-/// `fields` is `Some(_)`.
-pub(crate) fn reject_unsupported_hint_kinds(
-    fields: &HashMap<String, FieldValueSpec>,
-) -> Result<(), JrError> {
-    if fields.values().any(|spec| spec.kind.is_some()) {
-        return Err(JrError::UserError(
-            "field-value kind hints (:option/:id/:name/:asset) are not yet supported on \
-             this command — use the bare NAME=VALUE form."
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
 /// S-578-1 tests for the `--field NAME:kind=VALUE` hint-tag parser
 /// (BC-3.4.026 parser contract, BC-3.4.031 malformed-hint catalog).
 ///
