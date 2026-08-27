@@ -16,19 +16,27 @@
 //!   array composition + cold-cache workspace-discovery error taxonomy.
 //! BC-3.4.031: malformed-hint edge cases (regression pass at this call site).
 //!
-//! RED GATE (S-578-2): every NEW behavioral test below MUST fail today. All
-//! hinted `--field NAME:kind=VALUE` dispatch currently panics with `todo!()`
-//! inside `field_resolve.rs`'s four composer stubs — but that panic is
-//! UNREACHABLE via any CLI call site today, because `edit.rs` still calls the
-//! S-578-1 interim guard `reject_unsupported_hint_kinds` immediately after
-//! `parse_field_kv`, which exits 64 on any `spec.kind.is_some()` pair BEFORE
-//! `resolve_edit_fields` (and therefore the hinted-bypass branch / composer
-//! stubs) is ever reached. Every test below that supplies a hinted `--field`
-//! therefore currently observes exit 64 with the INTERIM GUARD's generic
-//! message ("field-value kind hints (...) are not yet supported on this
-//! command — use the bare NAME=VALUE form.") instead of the real, per-kind
-//! behavior asserted here — an ASSERTION failure, never a panic or build
-//! error. This file does not modify, weaken, or bypass that guard.
+//! MERGED / GREEN STATE (S-578-2): all `--field NAME:kind=VALUE` dispatch is
+//! now fully implemented. `field_resolve.rs`'s four composers (`:option`,
+//! `:id`, `:name`, `:asset`) build real ADF/JSON payloads instead of
+//! panicking, and `edit.rs` dispatches hinted `--field` pairs directly
+//! through `resolve_edit_fields` — the S-578-1 interim guard
+//! (`reject_unsupported_hint_kinds`) has been removed from the call site, so
+//! every test below exercises the real, per-kind composer behavior end to
+//! end rather than any placeholder rejection.
+//!
+//! Historical (RED gate, now closed): earlier revisions of this file, staged
+//! ahead of the S-578-2 implementation landing, described every hinted test
+//! below as deterministically red — blocked by the (now-removed) interim
+//! guard exiting 64 with its generic "not yet supported" message before the
+//! composers were ever reached. That framing is retained here only as
+//! historical context; it no longer describes current behavior.
+//!
+//! The proptests in this file that assert on the ABSENCE of the interim
+//! guard's generic message remain meaningful post-merge: they confirm dispatch
+//! reached the real per-kind composer path rather than short-circuiting on
+//! the old guard, which is still a valid regression signal even though the
+//! guard itself is gone.
 //!
 //! THREE test functions in this file are expected to PASS immediately (not
 //! forced red — see the comment on each):
