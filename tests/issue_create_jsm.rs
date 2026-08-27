@@ -1191,13 +1191,12 @@ async fn test_jsm_create_field_kind_hint_dispatches_real_id_shape_s578_3() {
     );
 }
 
-/// S-578-1 regression pin (paired with the interim-guard test above): a BARE
+/// S-578-1 regression pin (paired with the test above, which now dispatches
+/// through real `:kind` handling with the interim guard removed): a BARE
 /// `--field NAME=VALUE` pair (`kind: None`) must keep working exactly as
-/// before the interim guard lands — the guard must reject ONLY `kind: Some(_)`
-/// pairs, never fire on the unhinted form. This test PASSES today (it is a
-/// restatement of the existing last-wins coverage above, scoped narrowly to
-/// the guard-non-interference property) and must continue to pass after the
-/// guard is implemented.
+/// before — hinted (`kind: Some(_)`) and unhinted pairs must never interfere
+/// with each other. This test is a restatement of the existing last-wins
+/// coverage above, scoped narrowly to that non-interference property.
 #[tokio::test]
 async fn test_jsm_create_field_bare_pair_unaffected_by_kind_hint_guard_s578_1() {
     let server = MockServer::start().await;
@@ -5360,21 +5359,17 @@ fn assert_code_mark_exclusivity_local(adf: &serde_json::Value) {
 // S-578-3: JSM `issue create --field` hint-kind uniformity
 // (BC-3.8.008 "Hint-kind uniformity" amendment, VP-578-015/016/022)
 //
-// RED GATE NOTE: the S-578-1 interim `reject_unsupported_hint_kinds` guard
-// (called from `jsm_create.rs`, immediately after `parse_field_kv` and
-// BEFORE `JsmRequestBuilder::build()` ever runs) still rejects EVERY
-// `--field NAME:kind=VALUE` hinted pair with exit 64 today — this story's
-// Red Gate does not touch that guard. Every test below that exercises a
-// HINTED pair (`:id`/`:name`/`:asset`, and `:option` on this path since it
-// too carries `kind: Some(_)`) is expected to FAIL TODAY on an assertion
-// (wrong exit code and/or wrong stderr message vs. the eventual dispatched
-// behavior) — never on a `todo!()` panic, since `compose_id_wire`/
-// `compose_name_wire`/`compose_asset_wire` (src/api/jsm/requests.rs) and
-// `resolve_asset_field_l2` (src/cli/issue/jsm_create.rs) are all
-// unreachable behind the guard. A handful of tests below (missing '=',
-// unknown `:kind` tag, and bare-field regression pins) exercise behavior
-// that is ALREADY correct today — those are noted PRE-SATISFIED GREEN
-// inline and serve as regression pins, not Red Gate failures.
+// Historical (RED gate, now closed): the S-578-1 interim
+// `reject_unsupported_hint_kinds` guard that used to reject every `--field
+// NAME:kind=VALUE` hinted pair with exit 64 has been removed — both the
+// guard call site and its underlying helper are gone from `jsm_create.rs`.
+// `JsmRequestBuilder::build()`'s kind-aware dispatch (`compose_id_wire`/
+// `compose_name_wire`/`compose_asset_wire` in `src/api/jsm/requests.rs`) and
+// `resolve_asset_field_l2` (`src/cli/issue/jsm_create.rs`) are real,
+// implemented logic, not `todo!()` stubs. Every test below — HINTED
+// (`:id`/`:name`/`:asset`/`:option`) and bare alike — now exercises that
+// real dispatch end-to-end and is expected to PASS (GREEN), pinning the
+// merged behavior rather than describing a pending Red Gate.
 //
 // VP-578-016 PARITY-PENDING NOTE: the `:id`/`:name`/`:asset`
 // `requestFieldValues` wire shapes asserted below are implemented BY
@@ -5480,10 +5475,6 @@ async fn test_bc_3_8_008_extra_fields_type_is_field_value_spec_map() {
 /// kind-aware match to `compose_id_wire`, producing `{"id": "10042"}` on
 /// `requestFieldValues` (by analogy to the platform-path shape,
 /// `field_resolve.rs::compose_id_hint` — VP-578-016 parity-PENDING).
-///
-/// RED today: `compose_id_wire` is a `todo!()` stub, unreachable behind the
-/// S-578-1 interim guard — `--field customfield_30000:id=10042` exits 64
-/// with the guard's generic message today, not exit 0 with this wire shape.
 #[tokio::test]
 async fn test_bc_3_8_008_build_kind_aware_dispatch_id() {
     let server = MockServer::start().await;
@@ -5530,8 +5521,8 @@ async fn test_bc_3_8_008_build_kind_aware_dispatch_id() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "AC-002: ':id' hint must dispatch through build() and exit 0 once \
-         implemented; RED today via the S-578-1 interim guard. got exit {:?}. \
+        "AC-002: ':id' hint must dispatch through build() and exit 0. \
+         got exit {:?}. \
          stderr: {stderr}",
         output.status.code()
     );
@@ -5556,9 +5547,6 @@ async fn test_bc_3_8_008_build_kind_aware_dispatch_id() {
 /// `compose_name_wire`, producing `{"name": "High"}` on `requestFieldValues`
 /// (by analogy to `field_resolve.rs::compose_name_hint` — VP-578-016
 /// parity-PENDING).
-///
-/// RED today: `compose_name_wire` is a `todo!()` stub, unreachable behind
-/// the S-578-1 interim guard.
 #[tokio::test]
 async fn test_bc_3_8_008_build_kind_aware_dispatch_name() {
     let server = MockServer::start().await;
@@ -5605,8 +5593,8 @@ async fn test_bc_3_8_008_build_kind_aware_dispatch_name() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "AC-002: ':name' hint must dispatch through build() and exit 0 once \
-         implemented; RED today via the S-578-1 interim guard. got exit {:?}. \
+        "AC-002: ':name' hint must dispatch through build() and exit 0. \
+         got exit {:?}. \
          stderr: {stderr}",
         output.status.code()
     );
@@ -5634,14 +5622,6 @@ async fn test_bc_3_8_008_build_kind_aware_dispatch_name() {
 /// logic per the rustdoc in `src/api/jsm/requests.rs`, not a stub). Bare and
 /// `:option`-hinted pairs on DIFFERENT field names must therefore produce
 /// byte-identical (plain string) wire values.
-///
-/// RED today for the `:option`-hinted half: even though `None |
-/// Some(Option)` share one match arm and neither is a `todo!()` stub, the
-/// WHOLE command still exits 64 today because `reject_unsupported_hint_kinds`
-/// rejects the entire `--field` map when ANY entry carries `kind: Some(_)`
-/// (including `Option`) — the guard runs before `build()` is ever called,
-/// so this arm is unreachable on the JSM path today regardless of its own
-/// non-stub status.
 #[tokio::test]
 async fn test_bc_3_8_008_build_kind_aware_dispatch_option_bare_parity() {
     let server = MockServer::start().await;
@@ -5690,9 +5670,8 @@ async fn test_bc_3_8_008_build_kind_aware_dispatch_option_bare_parity() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "AC-002 VP-578-015: bare/:option parity must exit 0 once implemented; \
-         RED today via the S-578-1 interim guard (fires because 'hinted_field' \
-         carries kind: Some(Option)). got exit {:?}. stderr: {stderr}",
+        "AC-002 VP-578-015: bare/:option parity must exit 0. \
+         got exit {:?}. stderr: {stderr}",
         output.status.code()
     );
 
@@ -5737,8 +5716,6 @@ async fn test_bc_3_8_008_build_kind_aware_dispatch_option_bare_parity() {
 /// BOTH `None` and `Some(Option)`, with no object-wrap branch anywhere.
 /// This test follows the landed source code (source of truth) rather than
 /// the apparently-erroneous story example.
-///
-/// RED today: blocked by the S-578-1 interim guard (kind: Some(Option)).
 #[tokio::test]
 async fn test_ec_3_8_008_1_cascading_greater_than_treated_as_opaque_literal_on_jsm() {
     let server = MockServer::start().await;
@@ -5785,8 +5762,7 @@ async fn test_ec_3_8_008_1_cascading_greater_than_treated_as_opaque_literal_on_j
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "EC-3.8.008-1: expected exit 0 once implemented; RED today via the \
-         S-578-1 interim guard. got exit {:?}. stderr: {stderr}",
+        "EC-3.8.008-1: expected exit 0. got exit {:?}. stderr: {stderr}",
         output.status.code()
     );
 
@@ -5969,15 +5945,9 @@ async fn test_ec_3_8_008_3_malformed_hint_exits_64_zero_post_on_jsm_path() {
 /// performs PURE array-wrapping of the already-qualified value:
 /// `[{"workspaceId":"WS-9","id":"WS-9:777","objectId":"777"}]` (by analogy
 /// to `field_resolve.rs::compose_asset_hint`'s platform-path shape —
-/// VP-578-016 parity-PENDING).
-///
-/// RED today: `resolve_asset_field_l2` (jsm_create.rs) and
-/// `compose_asset_wire` (requests.rs) are both `todo!()` stubs, unreachable
-/// behind the S-578-1 interim guard — the workspace-discovery GET mock
-/// below must receive ZERO hits both today (blocked before ever reaching
-/// asset resolution) AND once implemented (explicit form skips the cache
-/// lookup entirely per AC-006) — but the command as a whole exits 64 today
-/// instead of 0.
+/// VP-578-016 parity-PENDING). The workspace-discovery GET mock below must
+/// receive ZERO hits — the explicit form skips the cache lookup entirely
+/// per AC-006.
 #[tokio::test]
 async fn test_bc_3_8_008_asset_explicit_workspace_l2_composes_no_cache_lookup() {
     let server = MockServer::start().await;
@@ -6035,8 +6005,7 @@ async fn test_bc_3_8_008_asset_explicit_workspace_l2_composes_no_cache_lookup() 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "AC-006: expected exit 0 once implemented; RED today via the S-578-1 \
-         interim guard. got exit {:?}. stderr: {stderr}",
+        "AC-006: expected exit 0. got exit {:?}. stderr: {stderr}",
         output.status.code()
     );
 
@@ -6069,12 +6038,8 @@ async fn test_bc_3_8_008_asset_explicit_workspace_l2_composes_no_cache_lookup() 
 /// site to call `get_or_fetch_workspace_id` FIRST (AT MOST ONCE per
 /// invocation, mirroring the platform-path invariant) before the array can
 /// be composed — `build()` never sees a bare `:asset` value, only the
-/// L2-resolved, fully-composed result.
-///
-/// RED today: blocked by the S-578-1 interim guard before any asset
-/// resolution is attempted — the workspace-discovery mock receives ZERO
-/// hits today (should be exactly 1 once implemented) and the command exits
-/// 64 instead of 0.
+/// L2-resolved, fully-composed result. The workspace-discovery mock must
+/// receive exactly 1 hit.
 #[tokio::test]
 async fn test_bc_3_8_008_asset_bare_form_l2_resolves_workspace_before_build() {
     let server = MockServer::start().await;
@@ -6130,8 +6095,7 @@ async fn test_bc_3_8_008_asset_bare_form_l2_resolves_workspace_before_build() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "AC-006: expected exit 0 once implemented; RED today via the S-578-1 \
-         interim guard. got exit {:?}. stderr: {stderr}",
+        "AC-006: expected exit 0. got exit {:?}. stderr: {stderr}",
         output.status.code()
     );
 
@@ -6176,13 +6140,11 @@ async fn test_bc_3_8_008_asset_bare_form_l2_resolves_workspace_before_build() {
 // being rejected pre-flight, exactly mirroring the platform path's four
 // `compose_asset_hint` checks.
 //
-// RED today, by design: every test below is expected to FAIL — the command
-// exits 0 (not 64), and the workspace-discovery GET and/or the JSM POST fire
-// when they must not, because `resolve_asset_field_l2` does no validation.
-// Once `resolve_asset_field_l2` is amended to mirror `compose_asset_hint`'s
-// four checks (empty value, empty workspace segment, extra colon, non-numeric
-// objectId) BEFORE either the L2 workspace fetch or `build()`, these tests
-// turn green.
+// `resolve_asset_field_l2` mirrors `compose_asset_hint`'s four checks (empty
+// value, empty workspace segment, extra colon, non-numeric/empty objectId)
+// BEFORE either the L2 workspace fetch or `build()` — every test below pins
+// that pre-flight rejection: exit 64, zero workspace-discovery GET hits, and
+// zero JSM POST hits.
 
 /// EC-2a (via BC-3.8.008's shared malformed-hint catalog): `--field
 /// cf:asset=` (empty value) must exit 64 with the exact "asset reference
@@ -6246,8 +6208,7 @@ async fn test_ec_3_8_008_asset_empty_value_exits_64_zero_post() {
     assert_eq!(
         output.status.code(),
         Some(64),
-        "ADV-S578-3-P1-002 EC-2a: expected exit 64 for empty :asset value \
-         (RED today — resolve_asset_field_l2 does no validation); \
+        "ADV-S578-3-P1-002 EC-2a: expected exit 64 for empty :asset value; \
          got exit {:?}. stderr: {stderr}",
         output.status.code()
     );
@@ -6325,8 +6286,7 @@ async fn test_ec_3_8_008_asset_empty_workspace_segment_exits_64_zero_post() {
         output.status.code(),
         Some(64),
         "ADV-S578-3-P1-002 EC-2c/EC-2b: expected exit 64 for empty workspace \
-         segment (RED today — resolve_asset_field_l2 does no validation); \
-         got exit {:?}. stderr: {stderr}",
+         segment; got exit {:?}. stderr: {stderr}",
         output.status.code()
     );
     assert!(
@@ -6401,8 +6361,7 @@ async fn test_ec_3_8_008_asset_extra_colon_exits_64_zero_post() {
         output.status.code(),
         Some(64),
         "ADV-S578-3-P1-002 EC-2d: expected exit 64 for extra ':' in :asset \
-         value (RED today — resolve_asset_field_l2 does no validation); \
-         got exit {:?}. stderr: {stderr}",
+         value; got exit {:?}. stderr: {stderr}",
         output.status.code()
     );
     assert!(
@@ -6480,8 +6439,7 @@ async fn test_ec_3_8_008_asset_non_numeric_objectid_exits_64_zero_post() {
             output.status.code(),
             Some(64),
             "ADV-S578-3-P1-002 EC-3: expected exit 64 for non-numeric \
-             objectId (RED today — resolve_asset_field_l2 does no \
-             validation); value={value:?}; got exit {:?}. stderr: {stderr}",
+             objectId; value={value:?}; got exit {:?}. stderr: {stderr}",
             output.status.code()
         );
         assert!(
@@ -6492,6 +6450,89 @@ async fn test_ec_3_8_008_asset_non_numeric_objectid_exits_64_zero_post() {
     }
 }
 
+/// EC-2b (adversarial Pass-2 finding P2-001, MEDIUM — mutation-survivability):
+/// `--field cf:asset=ws:` (colon present, objectId segment EMPTY, distinct
+/// from `WS:abc`'s non-empty-but-non-numeric case above) must exit 64 with
+/// the SAME "objectId must be numeric" message `compose_asset_hint` uses on
+/// the platform path — BEFORE any workspace-discovery GET or JSM POST. This
+/// pins the load-bearing `object_id.is_empty()` half of
+/// `resolve_asset_field_l2`'s combined `object_id.is_empty() ||
+/// !object_id.chars().all(|c| c.is_ascii_digit())` check (`jsm_create.rs`) —
+/// without a test exercising an explicit-workspace value whose objectId
+/// segment is empty (as opposed to merely non-numeric), a mutant dropping
+/// the `is_empty()` conjunct would let `ws:` fall through to
+/// `format!("{workspace_id}:{object_id}")` and POST a malformed
+/// `{"objectId":""}` array on `requestFieldValues`, undetected.
+#[tokio::test]
+async fn test_ec_3_8_008_asset_empty_objectid_with_colon_exits_64_zero_post() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_type_list(&server).await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 25, "isLastPage": true,
+            "values": [{"workspaceId": "should-not-be-fetched"}]
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "customfield_54005:asset=ws:",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "P2-001: expected exit 64 for 'ws:' (empty objectId segment with \
+         colon present); got exit {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("objectId must be numeric"),
+        "P2-001: message must match compose_asset_hint's platform-path \
+         wording verbatim (the object_id.is_empty() conjunct must fire, not \
+         fall through to a malformed POST); stderr={stderr}"
+    );
+}
+
 // ─── AC-007 (BC-3.4.030 taxonomy, VP-578-022): JSM-path independent assertion ─
 
 /// AC-007 (VP-578-022 — 1 of 3 shared call sites; this is `jsm_create.rs`'s
@@ -6500,13 +6541,6 @@ async fn test_ec_3_8_008_asset_non_numeric_objectid_exits_64_zero_post() {
 /// /rest/servicedeskapi/assets/workspace` -> exit 64, "Assets is not
 /// available on this Jira site..." (the SAME `get_or_fetch_workspace_id`
 /// error mapping every call site shares — `src/api/assets/workspace.rs`).
-///
-/// RED today: the S-578-1 interim guard intercepts the hinted `:asset` pair
-/// BEFORE `jsm_create.rs`'s (not-yet-wired) L2 workspace resolution ever
-/// runs, so the workspace-discovery mock below receives ZERO hits and the
-/// command exits 64 with the GUARD's generic "not yet supported" message —
-/// not this taxonomy row's specific message (the exit CODE coincidentally
-/// matches 64 either way; the stderr MESSAGE does not).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_030_jsm_path_asset_cold_cache_403_404_assets_unavailable() {
     for status in [403u16, 404u16] {
@@ -6568,8 +6602,8 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_403_404_assets_unavailable() 
                 "Assets is not available on this Jira site. Assets requires \
                  Jira Service Management Premium or Enterprise."
             ),
-            "AC-007 status={status}: RED today via the S-578-1 interim guard's \
-             generic message, not this taxonomy row's specific message; stderr={stderr}"
+            "AC-007 status={status}: message must match this taxonomy row's \
+             specific wording; stderr={stderr}"
         );
     }
 }
@@ -6577,9 +6611,6 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_403_404_assets_unavailable() 
 /// AC-007: `GET /rest/servicedeskapi/assets/workspace` returning 200 with
 /// zero entries -> exit 64, "No Assets workspace found on this Jira
 /// site...".
-///
-/// RED today: same mechanism as the 403/404 test above — the interim guard
-/// fires before the workspace-discovery mock is ever hit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_030_jsm_path_asset_cold_cache_empty_workspace() {
     let server = MockServer::start().await;
@@ -6640,18 +6671,14 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_empty_workspace() {
             "No Assets workspace found on this Jira site. Assets requires \
              Jira Service Management Premium or Enterprise."
         ),
-        "AC-007 empty-workspace: RED today via the S-578-1 interim guard's \
-         generic message; stderr={stderr}"
+        "AC-007 empty-workspace: message must match this taxonomy row's \
+         specific wording; stderr={stderr}"
     );
 }
 
 /// AC-007: `GET /rest/servicedeskapi/assets/workspace` returning 401 must
 /// use the STANDARD `JrError::NotAuthenticated` mapping (exit 2) — not a
 /// bespoke Assets-specific mapping.
-///
-/// RED today: the interim guard produces exit 64 today, which mismatches
-/// the expected exit 2 outright (a clean exit-code RED, no message
-/// ambiguity).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_030_jsm_path_asset_cold_cache_401_standard_auth_mapping() {
     let server = MockServer::start().await;
@@ -6707,7 +6734,7 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_401_standard_auth_mapping() {
         output.status.code(),
         Some(2),
         "AC-007 401: 401 must use the standard NotAuthenticated mapping \
-         (exit 2); RED today (interim guard produces exit 64); stderr={stderr}"
+         (exit 2); stderr={stderr}"
     );
     assert!(stderr.contains("Not authenticated"), "stderr={stderr}");
 }
@@ -6716,8 +6743,8 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_401_standard_auth_mapping() {
 /// network-unreachable base URL, both use the STANDARD `ApiError`/
 /// `NetworkError` mapping (exit 1).
 ///
-/// Sub-case (a) 5xx: RED today — the interim guard produces exit 64, which
-/// mismatches the expected exit 1.
+/// Sub-case (a) 5xx: the workspace-discovery GET returns 500 and the
+/// command must exit 1 via the standard `ApiError` mapping.
 ///
 /// Sub-case (b) network error: uses a connect-refused base URL
 /// (`http://127.0.0.1:1`, matching the established convention in
@@ -6788,15 +6815,14 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_5xx_network_standard_mapping(
             output.status.code(),
             Some(1),
             "AC-007 5xx: 5xx must use the standard ApiError mapping (exit 1); \
-             RED today (interim guard produces exit 64); stderr={stderr}"
+             stderr={stderr}"
         );
         assert!(stderr.contains("API error (500)"), "stderr={stderr}");
     }
 
-    // (b) network error — connect-refused. PRE-SATISFIED GREEN (see doc
-    // comment above): failure occurs at the FIRST HTTP call, before any
-    // field-hint dispatch is reached, regardless of this story's
-    // implementation status.
+    // (b) network error — connect-refused (see doc comment above): failure
+    // occurs at the FIRST HTTP call, before any field-hint dispatch is
+    // reached.
     {
         let cache_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
@@ -6957,8 +6983,6 @@ async fn test_vp_578_015_bare_field_byte_identical_pre_post_amendment() {
 /// JSM instance — do NOT read this test passing as a settled guarantee of
 /// Atlassian's actual `requestFieldValues` schema for these three hint
 /// kinds.
-///
-/// RED today: all three hints are blocked by the S-578-1 interim guard.
 #[tokio::test]
 async fn test_vp_578_016_id_name_asset_jsm_wire_shapes_by_analogy_flagged_unverified() {
     let server = MockServer::start().await;
@@ -7009,8 +7033,8 @@ async fn test_vp_578_016_id_name_asset_jsm_wire_shapes_by_analogy_flagged_unveri
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "AC-009/VP-578-016: expected exit 0 once implemented (by-analogy shapes, \
-         parity-PENDING); RED today via the S-578-1 interim guard. got exit {:?}. \
+        "AC-009/VP-578-016: expected exit 0 (by-analogy shapes, \
+         parity-PENDING). got exit {:?}. \
          stderr: {stderr}",
         output.status.code()
     );
