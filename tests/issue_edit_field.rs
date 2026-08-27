@@ -3980,7 +3980,7 @@ async fn test_bc_3_4_016_option_idless_numeric_value_falls_through_to_label_matc
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_edit_field_kind_hint_exits_64_pending_dispatch_s578_1() {
+async fn test_edit_field_id_hint_dispatches_verbatim_object_s578_2() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();

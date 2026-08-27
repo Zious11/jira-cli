@@ -2188,3 +2188,637 @@ async fn test_changed_fields_echo_per_hint_kind() {
         );
     }
 }
+
+// ===========================================================================
+// Adversarial fix-burst (adv-p1) — S-578-2
+//
+// GROUP A: AC-019 / EC-3.4.027-1 entry-point `:option` type gate. This gate
+// is NOT implemented today — `compose_option_hint` (field_resolve.rs) never
+// inspects `meta_field.schema.field_type` at all; it goes straight to
+// `allowedValues`. These three tests are the Red Gate for that gap and MUST
+// fail against the current implementation (on ASSERTIONS, not a build error
+// or panic).
+//
+// GROUP B: coverage backfill for already-implemented behavior (P1-002
+// cascading error branches, P1-004 multi-:asset single-GET, P1-007
+// second-`>` cascading). These should PASS immediately — a red result here
+// is a real defect in `compose_option_hint`/`compose_asset_hint`, not a
+// missing gate, and must be reported rather than papered over.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// GROUP A — AC-019 (BC-3.4.027 EC-3.4.027-1, Invariant 7)
+// ---------------------------------------------------------------------------
+
+/// EC-3.4.027-1 sub-case (a): `schema.type == "array"` (a real Jira
+/// multi-select shape carrying `allowedValues`) under `:option` MUST reuse
+/// EC-3.4.015-5's exact "unsupported type" message/exit behavior — the SAME
+/// code path BC-3.4.015 Step 4 already uses for this schema.type, not a
+/// re-derived one. Load-bearing: the literal `schema.type` string ("array").
+///
+/// RED today: `compose_option_hint` never inspects `schema.type` — it
+/// proceeds straight to `allowedValues` matching, so `High` resolves
+/// successfully against the mounted `allowedValues` and the edit SUCCEEDS
+/// (wrongly) instead of exiting 64 with the reused EC-3.4.015-5 message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_027_ec1_array_type_reuses_ec_3_4_015_5_message() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // A real Jira "array" (multi-select) shape: schema.type == "array" but
+    // still carrying allowedValues — exactly the shape EC-3.4.027-1
+    // sub-case (a) targets (distinguishing it from EC-3.4.016's "no
+    // configured option values" case, which has an EMPTY/absent
+    // allowedValues).
+    mount_editmeta_one(
+        &server,
+        "TEST-1",
+        "customfield_40001",
+        field_descriptor(
+            "Multi Select",
+            "array",
+            Some(serde_json::json!([{"id": "1", "value": "High"}])),
+        ),
+    )
+    .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_40001:option=High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-019 (a): :option on an array-typed field must exit 64 via the \
+         entry-point gate, reusing EC-3.4.015-5's behavior; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("array"),
+        "AC-019 (a): load-bearing literal schema.type string 'array' \
+         missing (must reuse EC-3.4.015-5's exact message); stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("not supported by"),
+        "AC-019 (a): must reuse EC-3.4.015-5's exact 'not supported by' \
+         wording, not a re-derived message; stderr={stderr}"
+    );
+
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        !requests
+            .iter()
+            .any(|r| r.method == wiremock::http::Method::PUT),
+        "AC-019 (a): no PUT may be issued once the entry-point gate fires; \
+         requests={requests:?}"
+    );
+}
+
+/// EC-3.4.027-1 sub-case (b): `schema.type` is a bare-form-SUPPORTED scalar
+/// type (`string`/`number`/`date`/`datetime`/`user`) under `:option` must
+/// exit 64 with a DISTINCT message from EC-3.4.015-5's "unsupported type"
+/// wording — the field itself IS settable, just not via `:option`.
+/// Load-bearing substrings: "is not an option field" + the resolved
+/// `schema.type` string.
+///
+/// RED today: the entry-point gate does not exist, so `compose_option_hint`
+/// falls through to its `allowedValues.is_empty()` check (a `string`-typed
+/// field has no `allowedValues`) and emits BC-3.4.016's PRE-EXISTING "no
+/// configured option values" message instead — same exit code (64) but the
+/// WRONG message, which is exactly the conflation AC-019's "Non-goal"
+/// paragraph forbids.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_027_ec1_scalar_type_distinct_is_not_an_option_field_message() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_editmeta_one(
+        &server,
+        "TEST-1",
+        "customfield_40002",
+        field_descriptor("Plain Text Field", "string", None),
+    )
+    .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_40002:option=SomeValue",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-019 (b): :option on a string-typed field must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("is not an option field"),
+        "AC-019 (b): load-bearing substring 'is not an option field' \
+         missing; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("string"),
+        "AC-019 (b): the resolved schema.type string ('string') must be \
+         named in the message; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("no configured option values"),
+        "AC-019 (b): must NOT reuse BC-3.4.016's 'no configured option \
+         values' message (that is a DIFFERENT case — EC-3.4.016's own, \
+         unaffected by this gate); stderr={stderr}"
+    );
+}
+
+/// The entry-point gate MUST run BEFORE any `allowedValues`/`children`
+/// inspection — i.e. a non-option field with EMPTY/absent `allowedValues`
+/// still gets THIS gate's "is not an option field" message, never
+/// BC-3.4.016's "no configured option values" message (which presupposes
+/// the field already passed the type gate and is scoped to
+/// option/option-with-child fields only, per AC-019's "Non-goal"
+/// paragraph).
+///
+/// RED today: identical failure mode to sub-case (b) above — proves the
+/// ORDERING claim, not just the message-content claim, using a distinct
+/// scalar type ("number") so this test is not a verbatim duplicate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_027_ec1_gate_runs_before_allowed_values_children_inspection() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // `allowedValues: null` — a non-option field's editmeta never carries
+    // allowedValues at all. If the gate did NOT run first, the composer
+    // would fall through straight to the `allowed.is_empty()` check and
+    // emit the WRONG ("no configured option values") message.
+    mount_editmeta_one(
+        &server,
+        "TEST-1",
+        "customfield_40003",
+        field_descriptor("Story Points", "number", None),
+    )
+    .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_40003:option=5",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(64), "stderr={stderr}");
+    assert!(
+        stderr.contains("is not an option field"),
+        "AC-019 ordering: the entry-point gate must fire BEFORE the \
+         allowedValues-empty check; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("number"),
+        "AC-019 ordering: resolved schema.type ('number') must be named; \
+         stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("no configured option values"),
+        "AC-019 ordering: must not fall through to the allowedValues-empty \
+         message; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GROUP B — P1-002 coverage backfill: cascading error branches
+// (EC-3.4.027-2/3/6). Already-implemented behavior; should PASS.
+// ---------------------------------------------------------------------------
+
+/// Two parents, each with their own children — used to prove that an error
+/// message enumerates the CORRECT candidate set (e.g. one parent's children,
+/// never the sibling parent's) rather than merely being non-empty.
+fn cascading_field_with_two_parents() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "id": "1", "value": "Parent",
+            "children": [
+                {"id": "2", "value": "ChildA"},
+                {"id": "3", "value": "ChildB"}
+            ]
+        },
+        {
+            "id": "4", "value": "OtherParent",
+            "children": [{"id": "5", "value": "OtherChild"}]
+        }
+    ])
+}
+
+/// EC-3.4.027-6 (empty parent, `>Child`): same exit-64 shape as
+/// EC-3.4.027-2 (unresolvable parent) — an empty parent segment can never
+/// match a real `allowedValues[].value` entry. This check MUST run before
+/// the D4 `children.is_empty()` collision path (AC-004) — it fires on the
+/// parent segment alone, before any parent-entry lookup happens.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_027_ec6_empty_parent_exits_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_editmeta_one(
+        &server,
+        "TEST-1",
+        "customfield_50001",
+        field_descriptor(
+            "Cascade",
+            "option-with-child",
+            Some(cascading_field_with_two_parents()),
+        ),
+    )
+    .await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_50001:option=>Child",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(64), "stderr={stderr}");
+    assert!(
+        stderr.contains("Option value ''"),
+        "EC-3.4.027-6 (empty parent): must report the empty value; \
+         stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Parent") && stderr.contains("OtherParent"),
+        "EC-3.4.027-6 (empty parent): must list the top-level allowed \
+         PARENT values; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("under parent"),
+        "EC-3.4.027-6 (empty parent) must use the empty-PARENT shape, not \
+         the empty-CHILD 'under parent' shape; stderr={stderr}"
+    );
+}
+
+/// EC-3.4.027-6 (empty child, `Parent>`): same exit-64 shape as
+/// EC-3.4.027-3 (resolvable parent, unresolvable child) — checked AFTER
+/// parent resolution succeeds but BEFORE the D4 `children.is_empty()`
+/// collision check (AC-004's own precondition is a NON-empty child
+/// segment), per BC-3.4.027's documented ordering.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_027_ec6_empty_child_exits_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_editmeta_one(
+        &server,
+        "TEST-1",
+        "customfield_50002",
+        field_descriptor(
+            "Cascade",
+            "option-with-child",
+            Some(cascading_field_with_two_parents()),
+        ),
+    )
+    .await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_50002:option=Parent>",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(64), "stderr={stderr}");
+    assert!(
+        stderr.contains("Option value ''"),
+        "EC-3.4.027-6 (empty child): must report the empty value; \
+         stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("under parent") && stderr.contains("Parent"),
+        "EC-3.4.027-6 (empty child): must name the resolved PARENT; \
+         stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("ChildA") && stderr.contains("ChildB"),
+        "EC-3.4.027-6 (empty child): must list that parent's allowed CHILD \
+         values; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("OtherChild"),
+        "EC-3.4.027-6 (empty child): must not leak the OTHER parent's \
+         children; stderr={stderr}"
+    );
+}
+
+/// EC-3.4.027-2: unresolvable parent segment → exit 64 listing allowed
+/// parent values.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_027_ec2_unresolvable_parent_lists_allowed_values() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_editmeta_one(
+        &server,
+        "TEST-1",
+        "customfield_50003",
+        field_descriptor(
+            "Cascade",
+            "option-with-child",
+            Some(cascading_field_with_two_parents()),
+        ),
+    )
+    .await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_50003:option=NoSuchParent>X",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(64), "stderr={stderr}");
+    assert!(
+        stderr.contains("NoSuchParent"),
+        "EC-3.4.027-2: must echo the unresolvable parent value; \
+         stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Parent") && stderr.contains("OtherParent"),
+        "EC-3.4.027-2: must list the allowed top-level PARENT values; \
+         stderr={stderr}"
+    );
+}
+
+/// EC-3.4.027-3: resolvable parent, unresolvable child segment → exit 64
+/// listing THAT PARENT's allowed child values (never the sibling parent's).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_027_ec3_resolvable_parent_unresolvable_child_lists_child_values() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_editmeta_one(
+        &server,
+        "TEST-1",
+        "customfield_50004",
+        field_descriptor(
+            "Cascade",
+            "option-with-child",
+            Some(cascading_field_with_two_parents()),
+        ),
+    )
+    .await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_50004:option=Parent>NoSuchChild",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(64), "stderr={stderr}");
+    assert!(
+        stderr.contains("NoSuchChild"),
+        "EC-3.4.027-3: must echo the unresolvable child value; \
+         stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("ChildA") && stderr.contains("ChildB"),
+        "EC-3.4.027-3: must list the RESOLVED parent's allowed child \
+         values; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("OtherChild"),
+        "EC-3.4.027-3: must not leak the OTHER parent's children; \
+         stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GROUP B — P1-004 coverage backfill: `:asset` workspace-id resolution is
+// called AT MOST ONCE per invocation regardless of how many `:asset` hints
+// are present (AC-008), on a COLD cache. Already-implemented behavior (via
+// the disk-cache write-then-read round trip inside
+// `get_or_fetch_workspace_id`); should PASS. If it fails, that is a real
+// defect (per the adversary's cache-write-failure caveat) — do NOT loosen
+// this assertion to force green; report the finding instead.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_030_two_bare_asset_hints_single_workspace_get() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // COLD cache: no workspace.json written ahead of time. Two DISTINCT
+    // customfield_NNNNN literals so both bypass list_fields (Step 1) and
+    // both reach the `:asset` composer within the SAME `resolve_edit_fields`
+    // invocation.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_60001": {
+                    "name": "Asset A",
+                    "schema": { "type": "any", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                },
+                "customfield_60002": {
+                    "name": "Asset B",
+                    "schema": { "type": "any", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    mount_workspace_ok(&server, "ws-cold").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_60001:asset=111",
+            "--field",
+            "customfield_60002:asset=222",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "P1-004: two bare :asset hints on a cold cache must both resolve; \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    let requests = server.received_requests().await.unwrap();
+    let workspace_gets: Vec<_> = requests
+        .iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::GET
+                && r.url.path() == "/rest/servicedeskapi/assets/workspace"
+        })
+        .collect();
+    assert_eq!(
+        workspace_gets.len(),
+        1,
+        "P1-004 (AC-008): get_or_fetch_workspace_id must be called AT MOST \
+         ONCE per invocation regardless of how many :asset hints are \
+         present — got {} workspace-discovery GET(s); requests={requests:?}",
+        workspace_gets.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GROUP B — P1-007 coverage backfill: a second `>` in a cascading VALUE —
+// everything after the FIRST `>` (via `str::split_once('>')`) is the
+// verbatim child, including any further `>` characters. Already-implemented
+// behavior; should PASS.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_027_cascading_second_greater_than_is_verbatim_child() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_editmeta_one(
+        &server,
+        "TEST-1",
+        "customfield_70001",
+        field_descriptor(
+            "Cascade",
+            "option-with-child",
+            Some(serde_json::json!([
+                {
+                    "id": "1", "value": "Parent",
+                    "children": [{"id": "2", "value": "Child>Trailing"}]
+                }
+            ])),
+        ),
+    )
+    .await;
+    mount_put_204_with_body(
+        &server,
+        "TEST-1",
+        serde_json::json!({
+            "fields": {
+                "customfield_70001": {"value": "Parent", "child": {"value": "Child>Trailing"}}
+            }
+        }),
+        1,
+    )
+    .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_70001:option=Parent>Child>Trailing",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "P1-007: split_once('>') must produce parent='Parent', \
+         child='Child>Trailing' (everything after the FIRST '>'); \
+         stderr={stderr} stdout={stdout}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        parsed["changed_fields"]["customfield_70001"].as_str(),
+        Some("Parent > Child>Trailing"),
+        "P1-007: changed_fields echo must be '<parent> > <child>' with the \
+         verbatim second '>' preserved in the child; stdout={stdout}"
+    );
+}
