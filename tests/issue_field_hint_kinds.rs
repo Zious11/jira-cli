@@ -1133,13 +1133,26 @@ proptest! {
 
     /// AC-009 (VP-578-012): no panic over arbitrary UTF-8 input across ALL
     /// malformed `:asset` shapes, including the `WORKSPACE:OBJECTID`
-    /// first-colon split's own no-panic corpus. As with
-    /// `prop_cascading_split_no_panic`, the "guard message absent" assertion
-    /// is what deterministically fails RED today (every case is currently
-    /// intercepted by the interim guard); the panic-freedom and
-    /// malformed-JSON checks are forward-looking.
+    /// first-colon split's own no-panic corpus, PLUS the PUT-body-is-valid-
+    /// JSON assertion below actually gets exercised.
+    ///
+    /// The `val` strategy is a `prop_oneof!` mix: mostly arbitrary UTF-8 (the
+    /// malformed-shape corpus, which never reaches HTTP), but ~29% of cases
+    /// are guaranteed all-ASCII-digit strings (`[0-9]{1,10}`) — a valid bare
+    /// objectId per `compose_asset_hint`'s parsing rules. Without this
+    /// guaranteed-numeric lane, an unbounded `[^\x00]{0,24}` strategy almost
+    /// never independently samples a purely-digit string, so the PUT-body
+    /// JSON-validity check below would be vacuously true on effectively
+    /// every run (the `if let Some(reqs) = ...` / `.filter(PUT)` loop body
+    /// never executes) — a dead assertion that always "passes" without ever
+    /// checking anything (PR #741 review, S-578-2 fix-burst).
     #[test]
-    fn prop_asset_composer_no_malformed_json_ever(val in "[^\\x00]{0,24}") {
+    fn prop_asset_composer_no_malformed_json_ever(
+        val in prop_oneof![
+            5 => "[^\\x00]{0,24}",
+            2 => "[0-9]{1,10}",
+        ]
+    ) {
         let (rt, server, cache_dir, config_dir) = hint_dispatch_fixture();
         let field_arg = format!("customfield_30001:asset={val}");
         let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
@@ -1163,16 +1176,19 @@ proptest! {
         );
         prop_assert!(
             !stderr.contains(INTERIM_GUARD_MSG),
-            "RED: hinted :asset dispatch is still intercepted by the interim \
-             guard for input {:?}; stderr={}",
+            "regression guard: hinted :asset dispatch must never be \
+             intercepted by the retired interim guard for input {:?}; \
+             stderr={}",
             val,
             stderr
         );
 
-        // Forward-looking: whenever a PUT actually reaches the mock server
-        // (only possible once real dispatch lands), its body must be valid
-        // JSON — never malformed. Vacuously true today (zero PUTs recorded,
-        // since the guard blocks before any HTTP).
+        // Whenever a PUT reaches the mock server, its body must be valid
+        // JSON — never malformed. The `[0-9]{1,10}` lane of the `val`
+        // strategy above guarantees this loop body actually executes on a
+        // meaningful fraction of cases (a bare numeric objectId resolves
+        // and PUTs); the arbitrary-UTF-8 lane mostly exits before any HTTP
+        // call and leaves this loop legitimately empty for those cases.
         let requests = rt.block_on(async { server.received_requests().await });
         if let Some(reqs) = requests {
             for req in reqs.iter().filter(|r| r.method.as_str() == "PUT") {
@@ -1848,6 +1864,15 @@ async fn test_ec6_ec7_ec8_ec9_regression_at_edit_call_site() {
             field_descriptor("Str Field", "string", None),
         )
         .await;
+        // `.expect(1)` makes this a genuine wire-body assertion, not just a
+        // "some PUT happened" check: `body_partial_json` is a wiremock
+        // REQUEST MATCHER — this mock (and hence its 400 response) only
+        // fires when the PUT body actually contains
+        // `{"fields":{"customfield_10001":{"id":""}}}`. If the composer
+        // sent a different shape, wiremock would 404 the request as
+        // unmatched, this mock's count would stay at 0, and `MockServer`'s
+        // Drop-time expectation check would panic — the SAME idiom
+        // `mount_put_204_with_body` already uses elsewhere in this file.
         Mock::given(method("PUT"))
             .and(path("/rest/api/3/issue/TEST-1"))
             .and(body_partial_json(
@@ -1856,6 +1881,7 @@ async fn test_ec6_ec7_ec8_ec9_regression_at_edit_call_site() {
             .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
                 "errorMessages": ["id is required"], "errors": {}
             })))
+            .expect(1)
             .mount(&server)
             .await;
 
@@ -1891,6 +1917,11 @@ async fn test_ec6_ec7_ec8_ec9_regression_at_edit_call_site() {
             field_descriptor("Str Field", "string", None),
         )
         .await;
+        // See EC-8's comment above: `.expect(1)` on this `body_partial_json`
+        // mock turns "a PUT happened" into "the PUT body was exactly
+        // `{"fields":{"customfield_10001":{"name":""}}}`" — a mismatched
+        // body would leave this mock unmatched (0 calls) and fail at
+        // `MockServer` drop.
         Mock::given(method("PUT"))
             .and(path("/rest/api/3/issue/TEST-1"))
             .and(body_partial_json(
@@ -1899,6 +1930,7 @@ async fn test_ec6_ec7_ec8_ec9_regression_at_edit_call_site() {
             .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
                 "errorMessages": ["name is required"], "errors": {}
             })))
+            .expect(1)
             .mount(&server)
             .await;
 
