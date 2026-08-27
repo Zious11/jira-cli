@@ -808,9 +808,28 @@ fn compose_option_hint(
             let parent_match = find_option_match(parent_raw, human_name, allowed)?;
             let parent_av = parent_match.matched;
 
-            // EC-3.4.027-6 (empty child, `Parent>`): same shape as
-            // EC-3.4.027-3 (resolvable parent, unresolvable child) — an empty
-            // child segment can never legitimately match a real child label,
+            // EC-3.4.027-6 (empty child, `Parent>`): BC-3.4.027's "empty
+            // child segment falls through to the SAME unresolvable-child
+            // exit-64 shape as EC-3.4.027-3 ... consistent with EC-3.4.027-3's
+            // existing precedent rather than introducing a distinct
+            // empty-segment error message" — the message text below is
+            // therefore byte-shape-identical to `find_option_match`'s own
+            // "not found" error (below: `"Option value '{value}' not found
+            // for field '{human_name}'. Allowed values: {…}."`), NOT a
+            // bespoke variant naming the parent or relabeling "Allowed
+            // values" to "Allowed child values" (PR #741 review, S-578-2
+            // fix-burst — an earlier revision of this branch did both and
+            // was a real spec deviation, corrected here).
+            //
+            // This can't simply be `find_option_match(child_raw, human_name,
+            // &parent_av.children)` — `find_option_match`'s substring-match
+            // stage treats an empty needle as contained in every candidate
+            // (`"anything".contains("")` is `true` in Rust), so an empty
+            // child would hit its "ambiguous" branch (when the parent has
+            // ≥2 children) instead of "not found". This early return
+            // reproduces `find_option_match`'s not-found TEXT SHAPE by hand
+            // while sidestepping that substring-match trap — an empty
+            // segment can never legitimately match a real child label,
             // regardless of whether the field is genuinely cascading. This
             // check MUST precede the D4 structural check below: D4 fires only
             // for a NON-EMPTY child segment (its own precondition).
@@ -824,10 +843,8 @@ fn compose_option_hint(
                         })
                     })
                     .collect();
-                let parent_label = parent_av.value.as_deref().unwrap_or(parent_raw);
                 return Err(JrError::UserError(format!(
-                    "Option value '' not found for field '{human_name}' under parent \
-                     '{parent_label}'. Allowed child values: {}.",
+                    "Option value '' not found for field '{human_name}'. Allowed values: {}.",
                     child_labels.join(", ")
                 ))
                 .into());

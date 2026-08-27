@@ -2493,8 +2493,14 @@ async fn test_bc_3_4_027_ec6_empty_parent_exits_64() {
     );
     assert!(
         !stderr.contains("under parent"),
-        "EC-3.4.027-6 (empty parent) must use the empty-PARENT shape, not \
-         the empty-CHILD 'under parent' shape; stderr={stderr}"
+        "EC-3.4.027-6 (empty parent) must use the plain 'not found ... \
+         Allowed values' shape — same as EC-3.4.027-2/3's own \
+         `find_option_match`-produced messages, neither of which ever \
+         names the parent inline via an 'under parent NAME' clause (PR #741 \
+         review: the empty-CHILD case previously had a bespoke 'under \
+         parent' variant that has since been corrected to match this same \
+         shape — see `test_bc_3_4_027_ec6_empty_child_exits_64`); \
+         stderr={stderr}"
     );
 }
 
@@ -2502,7 +2508,15 @@ async fn test_bc_3_4_027_ec6_empty_parent_exits_64() {
 /// EC-3.4.027-3 (resolvable parent, unresolvable child) — checked AFTER
 /// parent resolution succeeds but BEFORE the D4 `children.is_empty()`
 /// collision check (AC-004's own precondition is a NON-empty child
-/// segment), per BC-3.4.027's documented ordering.
+/// segment), per BC-3.4.027's documented ordering. Per BC-3.4.027 (bc-3-
+/// issue-write.md EC-3.4.027-6): "falls through to the SAME ... shape as
+/// EC-3.4.027-2/3 ... rather than introducing a distinct empty-segment
+/// error message" — this test therefore asserts the message is
+/// byte-shape-identical to `find_option_match`'s own "not found" error
+/// (`"Option value '{value}' not found for field '{human_name}'. Allowed
+/// values: {…}."`), NOT a bespoke "under parent NAME" / "Allowed child
+/// values" variant (PR #741 review, S-578-2 fix-burst — corrected from an
+/// earlier revision that introduced exactly that distinct shape).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_027_ec6_empty_child_exits_64() {
     let server = MockServer::start().await;
@@ -2547,14 +2561,25 @@ async fn test_bc_3_4_027_ec6_empty_child_exits_64() {
          stderr={stderr}"
     );
     assert!(
-        stderr.contains("under parent") && stderr.contains("Parent"),
-        "EC-3.4.027-6 (empty child): must name the resolved PARENT; \
-         stderr={stderr}"
+        stderr.contains("not found for field") && stderr.contains("Allowed values:"),
+        "EC-3.4.027-6 (empty child): must reuse EC-3.4.027-3's exact \
+         `find_option_match`-shaped 'not found ... Allowed values' wording \
+         — not a distinct empty-segment message; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("under parent") && !stderr.contains("Allowed child values"),
+        "EC-3.4.027-6 (empty child): must NOT introduce a distinct \
+         empty-segment shape (an 'under parent NAME' clause or an 'Allowed \
+         child values' relabel) per BC-3.4.027's explicit anti-drift \
+         instruction; stderr={stderr}"
     );
     assert!(
         stderr.contains("ChildA") && stderr.contains("ChildB"),
-        "EC-3.4.027-6 (empty child): must list that parent's allowed CHILD \
-         values; stderr={stderr}"
+        "EC-3.4.027-6 (empty child): must list THAT PARENT's ('Parent', the \
+         one resolved from the 'Parent>' segment) allowed CHILD values — \
+         the correct-scoping proof stands in for literally naming the \
+         parent, since EC-3.4.027-3's own shape never does either; \
+         stderr={stderr}"
     );
     assert!(
         !stderr.contains("OtherChild"),
