@@ -5404,7 +5404,7 @@ fn assert_code_mark_exclusivity_local(adf: &serde_json::Value) {
 /// unwrap). This test is a regression pin locking in the already-landed
 /// type change, not a new Red Gate failure.
 #[tokio::test]
-async fn test_bc_3_8_008_extra_fields_type_is_field_value_spec_map() {
+async fn test_bc_3_8_008_bare_field_flows_through_spec_typed_extra_fields() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -6564,6 +6564,7 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_403_404_assets_unavailable() 
         Mock::given(method("POST"))
             .and(path("/rest/servicedeskapi/request"))
             .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+            .expect(0)
             .mount(&server)
             .await;
 
@@ -6633,6 +6634,7 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_empty_workspace() {
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request"))
         .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -6702,6 +6704,7 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_401_standard_auth_mapping() {
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request"))
         .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -6783,6 +6786,7 @@ async fn test_bc_3_4_030_jsm_path_asset_cold_cache_5xx_network_standard_mapping(
         Mock::given(method("POST"))
             .and(path("/rest/servicedeskapi/request"))
             .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+            .expect(0)
             .mount(&server)
             .await;
 
@@ -6941,29 +6945,24 @@ async fn test_vp_578_015_bare_field_byte_identical_pre_post_amendment() {
         .get("requestFieldValues")
         .expect("AC-008: requestFieldValues must be present");
 
+    // COMPLETE-MAP equality (VP-578-015 review fix B2): assert the entire
+    // requestFieldValues object against the full expected wire shape in one
+    // shot, so an added/removed/renamed key OR a wrong value on any existing
+    // key (including the exact `labels` contents, not just its length) fails
+    // this test. This makes the "BYTE-IDENTICAL" claim in this test's name
+    // real rather than a per-key spot-check that an added key could slip
+    // past silently.
     assert_eq!(
-        rfv.get("customfield_70000"),
-        Some(&json!("BareUnhintedValue")),
-        "AC-008 VP-578-015: bare --field must remain a plain string, byte-identical \
-         to pre-amendment behavior; got rfv: {rfv}"
-    );
-    // Untouched BC-3.8.005..007 keys, sharing the same rfv map, must be unaffected.
-    assert_eq!(
-        rfv.get("summary").and_then(Value::as_str),
-        Some("test"),
-        "AC-008: untouched 'summary' key must be unaffected; got rfv: {rfv}"
-    );
-    assert_eq!(
-        rfv.get("priority")
-            .and_then(|p| p.get("name"))
-            .and_then(Value::as_str),
-        Some("High"),
-        "AC-008: untouched 'priority' key must be unaffected; got rfv: {rfv}"
-    );
-    assert_eq!(
-        rfv.get("labels").and_then(Value::as_array).map(Vec::len),
-        Some(1),
-        "AC-008: untouched 'labels' key must be unaffected; got rfv: {rfv}"
+        rfv,
+        &json!({
+            "summary": "test",
+            "priority": {"name": "High"},
+            "labels": ["alpha"],
+            "customfield_70000": "BareUnhintedValue"
+        }),
+        "AC-008 VP-578-015: bare --field must produce a BYTE-IDENTICAL \
+         requestFieldValues map to pre-amendment behavior — no added, \
+         removed, or changed keys; got rfv: {rfv}"
     );
 }
 
