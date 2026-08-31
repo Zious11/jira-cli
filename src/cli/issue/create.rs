@@ -12,6 +12,7 @@ use crate::error::JrError;
 use crate::output;
 use crate::partial_match::MatchResult;
 
+use super::field_resolve;
 use super::format;
 use super::helpers;
 use super::jsm_create::{JsmCreateArgs, handle_jsm_create};
@@ -98,40 +99,74 @@ pub(super) async fn handle_create(
         .await;
     }
 
-    // Pre-flight guard (DEC-188, BC-3.8.012, BC-3.8.013): --field and
-    // --on-behalf-of are self-declared JSM-only flags. On the platform path
-    // (--request-type absent — this arm only runs when that fork above was
-    // NOT taken), supplying either flag is a categorical user error, not an
-    // ambiguous choice. Exit 64 BEFORE project-key resolution, BEFORE any
-    // interactive prompt, BEFORE the blocking --description-stdin read, and
-    // BEFORE any HTTP call. Combined check fires first so both flags produce
-    // ONE error, not two. Presence-only (`!field_pairs.is_empty()` /
-    // `on_behalf_of.is_some()`) — malformed/empty values still trip the guard,
-    // and repeated --field occurrences still yield exactly one error.
+    // Pre-flight guard (BC-3.8.013, UNCHANGED mechanism — DEC-310 reversal,
+    // S-578-4): --on-behalf-of remains a self-declared JSM-only flag; on the
+    // platform path (--request-type absent — this arm only runs when the
+    // JSM dispatch fork above was NOT taken), supplying it alone is still a
+    // categorical user error. Exit 64 BEFORE project-key resolution, BEFORE
+    // any interactive prompt, BEFORE the blocking --description-stdin read,
+    // and BEFORE any HTTP call.
+    //
+    // DEC-188's combined check (`--field` + `--on-behalf-of` → ONE error)
+    // and its `--field`-alone check are REMOVED (DEC-310, BC-3.8.012
+    // reversal, F3/F4 removal obligations) — `--field` no longer exits 64
+    // pre-flight; it now resolves via createmeta (step 4b below). Per AC-003,
+    // this standalone guard now fires even when `--field` is ALSO present,
+    // since the combined check that used to pre-empt it is gone
+    // (Architecture Compliance Rule 5: this guard's MECHANISM and verbatim
+    // error string are untouched — only its trigger scope widens).
     //
     // MUST NOT be implemented via `#[arg(requires = "request_type")]` — that
-    // yields clap exit 2, not the exit-64 JrError::UserError BC-3.8.012/013
-    // require.
-    if !field_pairs.is_empty() && on_behalf_of.is_some() {
-        return Err(JrError::UserError(
-            "--field and --on-behalf-of are only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to use these flags, or drop them to create a standard platform issue."
-                .into(),
-        )
-        .into());
-    }
-    if !field_pairs.is_empty() {
-        return Err(JrError::UserError(
-            "--field is only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to submit a JSM request with custom fields, or drop --field to create a standard platform issue."
-                .into(),
-        )
-        .into());
-    }
+    // yields clap exit 2, not the exit-64 JrError::UserError BC-3.8.013
+    // requires.
     if on_behalf_of.is_some() {
         return Err(JrError::UserError(
             "--on-behalf-of is only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to raise a request on behalf of another user, or drop --on-behalf-of to create a standard platform issue."
                 .into(),
         )
         .into());
+    }
+
+    // Step 2a (NEW, S-578-4): parse --field NAME[:kind]=VALUE hints (BC-3.3.010
+    // Preconditions, SSOT "Platform-Path Guard Ordering" block, step 2a).
+    // Malformed hint exits 64 HERE — before step 2b's collision guard and
+    // before project/type resolution, interactive prompts, or any HTTP call.
+    // `parse_field_kv` is the SAME pure parser BC-3.4.026 already validates
+    // (S-578-1) and `edit.rs`/`jsm_create.rs` already call — reused verbatim,
+    // no per-call-site parsing divergence.
+    let field_spec_map = parse_field_kv(&field_pairs)?;
+
+    // Step 2b (NEW, S-578-4): D2 create-path collision guard (BC-3.3.010
+    // Invariant 5, BC-3.3.011 taxonomy row 1, ADR-0019 §"D2 correction").
+    // Ten-member governed set (`field_resolve::CREATE_D2_GOVERNED_KEYS`),
+    // DISTINCT from edit-path Gate B's five-member set (Architecture
+    // Compliance Rule 2 — `detect_flag_field_overlap` is a shared MECHANISM,
+    // never a shared governed-key SET). Zero HTTP; runs BEFORE project/type
+    // resolution and BEFORE any interactive prompt.
+    if !field_spec_map.is_empty() {
+        field_resolve::detect_flag_field_overlap(
+            &field_spec_map,
+            &[
+                ("summary", summary.is_some()),
+                ("description", description.is_some() || description_stdin),
+                ("issuetype", issue_type.is_some()),
+                ("priority", priority.is_some()),
+                ("components", !components.is_empty()),
+                ("labels", !labels.is_empty()),
+                ("parent", parent.is_some()),
+                ("assignee", to.is_some() || account_id.is_some()),
+                // --points / --team are the two "resolved-id" governed keys
+                // (AC-011) — asserted SEPARATELY per the story's documented
+                // algorithm (bypass-form-only equality for --points;
+                // config-only field-id lookup for --team, never an HTTP call
+                // to service this guard). That special-casing lives inside
+                // `detect_flag_field_overlap`'s own (currently `todo!()`)
+                // implementation, not as a simple presence flag here.
+                ("points", points.is_some()),
+                ("team", team.is_some()),
+            ],
+            field_resolve::CREATE_D2_GOVERNED_KEYS,
+        )?;
     }
 
     // Resolve project key
@@ -268,6 +303,28 @@ pub(super) async fn handle_create(
                 .await?;
         fields["assignee"] = json!({"accountId": acct_id});
         create_echo.insert("assignee".into(), display_name);
+    }
+
+    // Step 4b (NEW, S-578-4): --field createmeta field resolution
+    // (BC-3.3.010 Steps 1–6, Invariant 1). Runs AFTER project/type resolution
+    // and BEFORE the POST. Reuses `get_createmeta_fields` (S-580-1) and
+    // `get_issue_types_for_project` (S-331) verbatim (Architecture
+    // Compliance Rule 1) — both calls live inside the (currently `todo!()`)
+    // `FieldMetaSource::Create` branch of `resolve_edit_fields`.
+    if !field_spec_map.is_empty() {
+        field_resolve::resolve_edit_fields(
+            client,
+            &config.active_profile_name,
+            field_resolve::FieldMetaSource::Create {
+                project_key: &project_key,
+                issue_type_name: &issue_type_name,
+            },
+            &field_spec_map,
+            &mut fields,
+            &mut create_echo,
+            &mut BTreeMap::new(),
+        )
+        .await?;
     }
 
     let response = client.create_issue(fields).await?;

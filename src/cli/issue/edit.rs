@@ -17,6 +17,7 @@ use crate::output;
 use crate::partial_match::MatchResult;
 
 use super::create::parse_field_kv;
+use super::field_resolve::FieldMetaSource;
 use super::format;
 use super::helpers;
 use super::json_output;
@@ -554,7 +555,7 @@ pub(super) async fn handle_edit(
             helpers::resolve_edit_fields(
                 client,
                 &config.active_profile_name,
-                dr_key,
+                FieldMetaSource::Edit { key: dr_key },
                 &field_pairs,
                 &mut dr_fields,
                 &mut dr_changed,
@@ -1047,7 +1048,7 @@ pub(super) async fn handle_edit(
         helpers::resolve_edit_fields(
             client,
             &config.active_profile_name,
-            key,
+            FieldMetaSource::Edit { key },
             &field_pairs,
             &mut fields,
             &mut changed_fields,

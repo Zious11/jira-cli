@@ -132,18 +132,122 @@ fn strip_integer_decimal_suffix(s: &str) -> Option<&str> {
     Some(int_part)
 }
 
-/// Resolve and apply `--field NAME=VALUE` pairs for `issue edit` (single-key path).
+/// Source of field metadata for [`resolve_edit_fields`]'s Phase 2/3 (S-578-4).
 ///
-/// Implements BC-3.4.015 Steps 1–6 and BC-3.4.016 option-value resolution.
-/// Called from `handle_edit` in BOTH the `if dry_run { ... }` block and the
-/// live path — see BC-3.4.015 invariant 10 and prd-delta-396.md §9.
+/// This function was originally scoped to `issue edit`'s editmeta-only
+/// resolution (BC-3.4.015/016). S-578-4 extends it with a second,
+/// createmeta-sourced variant so `issue create`'s platform path (BC-3.3.010)
+/// can reuse the SAME hinted-bypass dispatch algorithm S-578-2 built,
+/// substituting `createmeta` for `editmeta` because the issue does not exist
+/// yet at create time — one shared dispatch function, not two independently
+/// implemented ones (see `.factory/stories/S-578-4-platform-create-field-support.md`
+/// §"Architecture Compliance Rules" rule 1).
+///
+/// `Edit` preserves the PRE-S-578-4 behavior byte-for-byte — both `edit.rs`
+/// call sites wrap their issue key in this variant instead of passing a bare
+/// `&str`, with no other change to their surrounding code.
+///
+/// `Create`'s resolution logic (BC-3.3.010 Steps 3–6) is a NEW code path,
+/// not yet implemented at stub stage — see the `todo!()` in
+/// [`resolve_edit_fields`]'s `Create` match arm below.
+pub(crate) enum FieldMetaSource<'a> {
+    /// `issue edit` (BC-3.4.015/016 et al) — `GET /issue/{key}/editmeta`.
+    Edit { key: &'a str },
+    /// `issue create` platform path (BC-3.3.010) — resolves `issue_type_name`
+    /// to an id via `get_issue_types_for_project` (S-331), then calls
+    /// `get_createmeta_fields` (S-580-1). Both are REUSED VERBATIM inside the
+    /// eventual implementation of this branch — never re-implemented, even a
+    /// "simplified" create-path-specific fetcher (Architecture Compliance
+    /// Rule 1).
+    Create {
+        project_key: &'a str,
+        issue_type_name: &'a str,
+    },
+}
+
+/// The ten-member governed-key set for `issue create`'s D2 collision guard
+/// (BC-3.3.010 Invariant 5, BC-3.3.011 taxonomy row, ADR-0019 §"D2
+/// correction"). Passed to [`detect_flag_field_overlap`] by `create.rs`'s
+/// step 2b call site.
+///
+/// DISTINCT from `issue edit`'s Gate B five-member set (BC-3.4.017,
+/// `edit.rs`, inline — NOT extracted into a shared constant by this story;
+/// `edit.rs` is out of S-578-4's scope). `detect_flag_field_overlap` is a
+/// shared MECHANISM, never a claim that the two governed-key sets are
+/// identical (Architecture Compliance Rule 2) — `labels` in particular is
+/// governed here but deliberately absent from Gate B's set (BUG-LABEL-400's
+/// edit-path endpoint fork has no analog on create; Architecture Compliance
+/// Rule 3).
+///
+/// `points`/`team` are the two "resolved-id" members (AC-011) — asserted
+/// SEPARATELY per the story's documented algorithm (bypass-form-only
+/// equality for `--points`; config-only field-id lookup for `--team`, never
+/// an HTTP call to service this guard) inside the (currently `todo!()`)
+/// implementation of `detect_flag_field_overlap` itself.
+pub(crate) const CREATE_D2_GOVERNED_KEYS: &[&str] = &[
+    "summary",
+    "description",
+    "issuetype",
+    "priority",
+    "components",
+    "labels",
+    "parent",
+    "assignee",
+    "points",
+    "team",
+];
+
+/// Detects a dedicated-flag × `--field` wire-key collision (D2/D2-correction,
+/// BC-3.3.010 Invariant 5, BC-3.3.011 taxonomy row, VP-578-021).
+///
+/// Called BEFORE resolution, BEFORE project/type resolution, with ZERO HTTP
+/// (structural check only, over already-parsed CLI input). `dedicated_flags`
+/// is a `(governed_key, is_present)` list describing which of the caller's
+/// dedicated flags (`--summary`, `--priority`, etc.) were supplied on this
+/// invocation; `governed_keys` is the caller's own governed-key set
+/// ([`CREATE_D2_GOVERNED_KEYS`] for `create.rs`'s step 2b call site — NEVER
+/// shared with `edit.rs`'s own five-member Gate B set, per Architecture
+/// Compliance Rule 2).
+///
+/// Returns `Ok(())` when no dedicated flag whose governed key is ALSO a key
+/// in `field_pairs` was supplied; `Err(JrError::UserError)` (exit 64) on the
+/// first collision found, naming both the flag and the colliding `--field`
+/// key (BC-3.3.011 taxonomy row 1, evaluated FIRST — before every other
+/// error row, AC-012).
+///
+/// # Errors
+/// Returns `JrError::UserError` on a collision — see above.
+pub(crate) fn detect_flag_field_overlap(
+    field_pairs: &HashMap<String, FieldValueSpec>,
+    dedicated_flags: &[(&str, bool)],
+    governed_keys: &[&str],
+) -> Result<()> {
+    // BC-3.3.010 Invariant 5 / BC-3.3.011 taxonomy row 1 (S-578-4, NOT YET
+    // IMPLEMENTED at stub stage): case-insensitively intersect `field_pairs`'
+    // keys against `governed_keys`, then check each PRESENT dedicated flag
+    // against that intersection. See AC-011 for the exact 10-member matrix
+    // (including the --points/--team resolved-id special-casing) and the
+    // documented non-firing residual (a human display-name spelling like
+    // `--field "Story Points"=8` does NOT trip this guard).
+    let _ = (field_pairs, dedicated_flags, governed_keys);
+    todo!("S-578-4: D2 create-path collision guard (BC-3.3.010 Invariant 5, VP-578-021)")
+}
+
+/// Resolve and apply `--field NAME=VALUE` pairs for `issue edit` (single-key path)
+/// and, as of S-578-4, `issue create`'s platform path (BC-3.3.010).
+///
+/// Implements BC-3.4.015 Steps 1–6 and BC-3.4.016 option-value resolution for
+/// the `Edit` source. Called from `handle_edit` in BOTH the `if dry_run { ... }`
+/// block and the live path — see BC-3.4.015 invariant 10 and prd-delta-396.md §9.
 ///
 /// # Parameters
 /// - `client`: the authenticated Jira API client.
 /// - `profile`: active profile name (CLAUDE.md cache-boundary rule — every
 ///   cache reader/writer takes `profile: &str`; cross-profile field-ID leakage
 ///   is a correctness bug because sandbox/prod custom-field IDs can differ).
-/// - `key`: the issue key being edited (used for `get_editmeta` call).
+/// - `source`: [`FieldMetaSource::Edit`] (issue key, editmeta) or
+///   [`FieldMetaSource::Create`] (project key + issue type name, createmeta —
+///   S-578-4, NOT YET IMPLEMENTED at stub stage).
 /// - `field_pairs`: `NAME → FieldValueSpec` map produced by `parse_field_kv`
 ///   (last-wins semantics; duplicates collapsed at parse time per
 ///   EC-3.4.017-10). `FieldValueSpec.kind` drives the S-578-2 hinted-bypass
@@ -195,7 +299,7 @@ fn strip_integer_decimal_suffix(s: &str) -> Option<&str> {
 pub(crate) async fn resolve_edit_fields(
     client: &JiraClient,
     profile: &str,
-    key: &str,
+    source: FieldMetaSource<'_>,
     field_pairs: &HashMap<String, FieldValueSpec>,
     fields: &mut serde_json::Value,
     changed_fields: &mut BTreeMap<String, String>,
@@ -373,6 +477,52 @@ pub(crate) async fn resolve_edit_fields(
         }
     }
 
+    // --- Phase 2/3: fetch field metadata + per-pair validation/type dispatch
+    // (Steps 3–6), branching on `source` (S-578-4). ---
+    match source {
+        FieldMetaSource::Edit { key } => {
+            resolve_against_editmeta(client, key, resolved, fields, changed_fields, planned_preview)
+                .await
+        }
+        FieldMetaSource::Create {
+            project_key,
+            issue_type_name,
+        } => {
+            // BC-3.3.010 Steps 3–6 (S-578-4, NOT YET IMPLEMENTED at stub
+            // stage): resolve `issue_type_name` to an id via
+            // `get_issue_types_for_project` (S-331, case-insensitive,
+            // unknown name → exit 64 listing valid types — AC-007), then
+            // call `get_createmeta_fields` (S-580-1) for that project +
+            // issue type id, then run the SAME per-pair type dispatch
+            // (hinted-bypass + bare-form, AC-008) the `Edit` arm above runs,
+            // substituting `CreateMetaField` for `EditMetaField` (Step 3
+            // source substitution, AC-006). `fields`/`changed_fields`/
+            // `planned_preview` are merged into exactly as the `Edit` arm
+            // does (Step 5/6) — signature and merge contract unchanged, only
+            // the metadata SOURCE differs.
+            todo!(
+                "S-578-4: createmeta-sourced --field resolution not yet implemented \
+                 (project={project_key}, issue_type={issue_type_name}, \
+                 {} resolved field pair(s) pending)",
+                resolved.len()
+            )
+        }
+    }
+}
+
+/// The `Edit`-source Phase 2/3 body (BC-3.4.015 Steps 3–6, BC-3.4.016 option
+/// resolution) — extracted verbatim (S-578-4, pure code motion, no behavior
+/// change) from [`resolve_edit_fields`] so the function can dispatch on
+/// [`FieldMetaSource`] without duplicating this already-tested body inline
+/// in a match arm.
+async fn resolve_against_editmeta(
+    client: &JiraClient,
+    key: &str,
+    resolved: Vec<(String, String, FieldValueSpec)>,
+    fields: &mut serde_json::Value,
+    changed_fields: &mut BTreeMap<String, String>,
+    planned_preview: &mut BTreeMap<String, serde_json::Value>,
+) -> Result<()> {
     // --- Phase 2: Fetch editmeta once (Step 3). ---
     // Only reached when all field names were resolved successfully (Phase 1 has no errors).
     let editmeta = client.get_editmeta(key).await?;
