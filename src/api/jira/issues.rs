@@ -33,14 +33,16 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
     "issuelinks",
 ];
 
-/// Hard cap on the number of pages [`JiraClient::get_createmeta_fields`] will
-/// fetch (S-580-1, SEC-001, CWE-400/770 — "no hard iteration cap").
+/// Hard cap on the number of pages [`JiraClient::get_createmeta_fields`] and
+/// [`JiraClient::get_issue_types_for_project`] (FIX-F5-001, mirroring the
+/// original S-580-1 guard onto its sibling) will fetch (S-580-1, SEC-001,
+/// CWE-400/770 — "no hard iteration cap").
 ///
 /// At `page_size = 200` this comfortably exceeds any realistic Jira
-/// project's create-screen field count (`500 * 200 = 100,000` fields), so it
-/// never fires in real usage or in the existing test suite — it exists
-/// purely as a fail-loud backstop against an unbounded loop, the same
-/// TRUNCATE-vs-cap tradeoff class as
+/// project's create-screen field count (`500 * 200 = 100,000` fields) or
+/// issue-type count, so it never fires in real usage or in the existing
+/// test suite — it exists purely as a fail-loud backstop against an
+/// unbounded loop, the same TRUNCATE-vs-cap tradeoff class as
 /// [`crate::cli::field::MAX_FIELD_OPTION_DEPTH`], except here the response
 /// is a loud `Err` rather than a silent truncation, since a runaway
 /// pagination loop (unlike option-tree depth) has no sensible "leaf" to
@@ -1040,14 +1042,26 @@ impl JiraClient {
     /// Resolve the available issue types for a project via the createmeta issuetypes endpoint.
     ///
     /// Calls `GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes` and paginates by
-    /// offset until `startAt + page_len >= total` (or an empty page), returning all
-    /// `IssueTypeEntry` values (id + name).
+    /// offset, returning all `IssueTypeEntry` values (id + name).
     ///
     /// `PageOfCreateMetaIssueTypes` uses OFFSET pagination (`startAt`/`maxResults`/`total`).
     /// There is NO `isLast` field — that belongs to the generic `PageBean<T>` family, not
     /// the specialized `PageOf...` types. Verified against the Atlassian OpenAPI-derived
     /// `jira.js` client (issue #331; see
     /// `.factory/research/issue-331-createmeta-response-schema.md`).
+    ///
+    /// Termination heuristic and hard page bound are IDENTICAL to this
+    /// function's twin, [`get_createmeta_fields`] (FIX-F5-001, mirroring
+    /// S-580-1/C-LOW-2): when `total` is present (`> 0`) the loop stops once
+    /// `start_at + page_len >= total` (or an empty page); when `total` is
+    /// absent/zero (`CreatemetaIssueTypesResponse.total` is
+    /// `#[serde(default)]`, so a MISSING `total` deserializes to 0 —
+    /// indistinguishable from a genuinely empty result set), the loop
+    /// instead stops only once a page comes back short of `page_size` (or
+    /// empty) — a missing `total` on a FULL page must not silently truncate
+    /// to page 1. [`MAX_CREATEMETA_PAGES`] bounds the loop as a fail-loud
+    /// backstop against an unbounded loop (CWE-400/770), checked at the top
+    /// of every pass independent of the termination heuristic above.
     ///
     /// # Usage
     /// - No cache — one or more HTTP calls per `--type` bulk invocation.
@@ -1059,13 +1073,26 @@ impl JiraClient {
         &self,
         project_key: &str,
     ) -> Result<Vec<IssueTypeEntry>> {
+        use crate::error::JrError;
+
         // Reuse IssueTypeMetadata from projects.rs is not possible here — that struct
         // lacks an `id` field (it has name/description/subtask only). We define a
         // separate IssueTypeEntry with id + name for createmeta resolution.
         let page_size: u32 = 200;
         let mut all: Vec<IssueTypeEntry> = Vec::new();
         let mut start_at: u32 = 0;
+        let mut pages_fetched: u32 = 0;
         loop {
+            if pages_fetched >= MAX_CREATEMETA_PAGES {
+                return Err(anyhow::anyhow!(JrError::Internal(format!(
+                    "Internal error: createmeta issue-type pagination for project \
+                     '{project_key}' exceeded {MAX_CREATEMETA_PAGES} pages without \
+                     completing — aborting to avoid an unbounded loop. This should \
+                     not happen against a well-behaved Jira instance; if it does, please \
+                     report it as a bug."
+                ))));
+            }
+            pages_fetched += 1;
             let response: CreatemetaIssueTypesResponse = self
                 .get(&format!(
                     "/rest/api/3/issue/createmeta/{}/issuetypes?startAt={}&maxResults={}",
@@ -1077,9 +1104,22 @@ impl JiraClient {
             let total = response.total;
             let page_len = response.issue_types.len() as u32;
             all.extend(response.issue_types);
-            // Offset termination: stop on empty page or once we've consumed `total`.
-            // (`PageOfCreateMetaIssueTypes` has no `isLast`; total drives the loop.)
-            if page_len == 0 || start_at + page_len >= total {
+            // `total` is `#[serde(default)]`, so a MISSING `total` in the wire
+            // response deserializes to 0 — indistinguishable from a genuinely
+            // empty result set at the type level. When `total` is present
+            // (`> 0`), trust it: a page can legitimately be shorter than
+            // `page_size` while more pages remain. When `total` is
+            // absent/zero, fall back to the full-page heuristic: only stop
+            // once a page comes back short of `page_size` (or empty) — a
+            // MISSING `total` on a FULL page must not silently truncate to
+            // page 1 (FIX-F5-001, mirrors `get_createmeta_fields`'s
+            // identical C-LOW-2 guard above).
+            let done = if total > 0 {
+                page_len == 0 || start_at + page_len >= total
+            } else {
+                page_len == 0 || page_len < page_size
+            };
+            if done {
                 break;
             }
             start_at += page_len;

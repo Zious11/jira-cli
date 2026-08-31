@@ -863,6 +863,93 @@ async fn test_vp_578_020b_type_on_issuetypes_page_2_resolves() {
     );
 }
 
+/// FIX-F5-001 regression: `get_issue_types_for_project`'s termination check
+/// (`start_at + page_len >= total`) does not account for `total` being
+/// `#[serde(default)]` — a server response that OMITS `total` deserializes
+/// it to 0. When page 1 is FULL (`page_len == page_size == 200`), the naive
+/// check evaluates `0 + 200 >= 0` and stops after page 1, silently dropping
+/// any issue type that lives on page 2+. This mirrors the exact defect
+/// `get_createmeta_fields` was hardened against (S-580-1, C-LOW-2) via its
+/// total-absent full-page heuristic (`page_len < page_size`); this test
+/// pins the sibling function to the SAME heuristic.
+///
+/// MUST FAIL before the fix (page 2's "Bug" type is never fetched, so
+/// `--type Bug` resolves to "issue type not found", exit 64) and MUST PASS
+/// after the fix.
+#[tokio::test]
+async fn test_vp_578_020b_type_on_issuetypes_page_2_resolves_when_total_absent() {
+    let h = Harness::new().await;
+
+    let page1_types: Vec<Value> = (0..200)
+        .map(|i| json!({"id": format!("1{i:04}"), "name": format!("Type{i}")}))
+        .collect();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/PROJ/issuetypes"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issueTypes": page1_types,
+            "startAt": 0,
+            "maxResults": 200
+            // `total` deliberately OMITTED — this is the wire condition
+            // under test (`#[serde(default)]` → 0 at the type level).
+        })))
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/PROJ/issuetypes"))
+        .and(query_param("startAt", "200"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issueTypes": [{"id": "10001", "name": "Bug"}],
+            "startAt": 200,
+            "maxResults": 200
+            // `total` deliberately OMITTED on page 2 as well.
+        })))
+        .mount(&h.server)
+        .await;
+
+    mount_createmeta_fields_single_page(
+        &h.server,
+        "PROJ",
+        "10001",
+        vec![createmeta_string_field("customfield_10077", "A Field")],
+    )
+    .await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "customfield_10077", "name": "A Field"})],
+    )
+    .await;
+    mount_create_post(&h.server, "PROJ-123").await;
+
+    let output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Bug",
+            "--summary",
+            "test",
+            "--field",
+            "A Field=some-value",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "FIX-F5-001: an issue type on page 2 must still resolve when `total` \
+         is absent from the response and page 1 is full (page_len == page_size); \
+         got {:?}. stderr={stderr}",
+        output.status.code()
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AC-008: type dispatch / option-value resolution shared with BC-3.4.015
 // Step 4 / BC-3.4.016 Step 4a; hint kinds available on platform create.
