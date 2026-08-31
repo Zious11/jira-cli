@@ -654,7 +654,9 @@ async fn test_bc_3_3_010_source_substitution_createmeta_not_editmeta() {
     mount_create_post(&h.server, "PROJ-123").await;
     // VP-578-001: editmeta must NEVER be called on the create path.
     Mock::given(method("GET"))
-        .and(wiremock::matchers::path_regex(r"^/rest/api/3/issue/.+/editmeta$"))
+        .and(wiremock::matchers::path_regex(
+            r"^/rest/api/3/issue/.+/editmeta$",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"fields": {}})))
         .expect(0)
         .mount(&h.server)
@@ -1368,7 +1370,14 @@ async fn test_vp_578_021_create_path_collision_labels_parent_assignee() {
         write_minimal_config(config_dir.path(), &server.uri());
 
         let mut args = vec![
-            "issue", "create", "--project", "PROJ", "--summary", "test", "--type", "Task",
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--summary",
+            "test",
+            "--type",
+            "Task",
         ]
         .into_iter()
         .map(String::from)
@@ -1592,8 +1601,19 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--priority", "X", "--field", "priority=Y", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--priority",
+                "X",
+                "--field",
+                "priority=Y",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1611,8 +1631,17 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Nonexistent Field=x", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Nonexistent Field=x",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1641,8 +1670,17 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Custom=x", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Custom=x",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1665,8 +1703,17 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "A Field=x", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "A Field=x",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1700,8 +1747,17 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Points=abc", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Points=abc",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1734,8 +1790,17 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Unsupported=x", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Unsupported=x",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1772,8 +1837,17 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Client=Nonexistent", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Client=Nonexistent",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1813,17 +1887,23 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Client=Client", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Client=Client",
+                "--no-input",
             ])
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(64), "row8: stderr={stderr}");
-        assert!(
-            stderr.contains("ambiguous"),
-            "row8: stderr={stderr}"
-        );
+        assert!(stderr.contains("ambiguous"), "row8: stderr={stderr}");
         assert!(!stderr.contains("Created issue"), "row8: stderr={stderr}");
     }
 
@@ -1851,8 +1931,17 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Client=No Id Option", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Client=No Id Option",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1880,8 +1969,17 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Some Field=x", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Some Field=x",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1926,8 +2024,17 @@ async fn test_bc_3_4_014_field_echo_bare_and_hinted_per_kind() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Client=Client A", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Client=Client A",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -1966,8 +2073,17 @@ async fn test_bc_3_4_014_field_echo_bare_and_hinted_per_kind() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Client:id=1", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Client:id=1",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -2002,8 +2118,17 @@ async fn test_bc_3_4_014_field_echo_bare_and_hinted_per_kind() {
         let output = h
             .cmd()
             .args([
-                "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-                "--field", "Free Text:name=Verbatim Value", "--no-input",
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "test",
+                "--field",
+                "Free Text:name=Verbatim Value",
+                "--no-input",
             ])
             .output()
             .unwrap();
@@ -2057,8 +2182,19 @@ async fn test_bc_3_4_014_json_mode_unchanged_no_changed_fields_key() {
     let output = h
         .cmd()
         .args([
-            "issue", "create", "--project", "PROJ", "--type", "Task", "--summary", "test",
-            "--field", "A Field=x", "--no-input", "--output", "json",
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "A Field=x",
+            "--no-input",
+            "--output",
+            "json",
         ])
         .output()
         .unwrap();
