@@ -2574,3 +2574,86 @@ async fn test_ac12_help_text_substring_count_is_1_on_behalf_of_only() {
          on the --field line; normalized={normalized}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Adversary Pass 2 LOW: create-vs-edit behavioral asymmetry — two distinct
+// `--field` NAME keys resolving to the SAME field_id must not falsely report
+// "not on the Create screen" for the second occurrence.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// AC-008 (BC-3.3.010/BC-3.3.011): `resolve_against_createmeta` must mirror
+/// `resolve_against_editmeta`'s NON-consuming `editmeta.fields.get(&field_id)`
+/// lookup rather than `meta_by_id.remove(&field_id)`. `parse_field_kv`'s
+/// last-wins collapse only dedupes identical NAME keys — `customfield_10050=a`
+/// and `"Display Name"=b` (where "Display Name" resolves via `list_fields` to
+/// the SAME `customfield_10050`) survive Phase 1 as two DISTINCT map keys that
+/// both resolve to `customfield_10050` in Phase 2. With a consuming
+/// `.remove()`, the first pair's lookup succeeds and deletes the createmeta
+/// entry; the second pair's lookup then spuriously fails with "is not on the
+/// Create screen" even though the field IS present. The edit path's `.get()`
+/// arm does not have this defect (both lookups succeed; last write wins on
+/// the wire) — this test drives the same reachable input through the create
+/// path and asserts it behaves identically: exit 0, the POST fires, and no
+/// false "not on the Create screen" error.
+#[tokio::test]
+async fn test_bc_3_3_010_two_names_same_field_id_resolve_like_edit_no_false_screen_error() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "PROJ", &[("10000", "Task")]).await;
+    mount_createmeta_fields_single_page(
+        &h.server,
+        "PROJ",
+        "10000",
+        vec![createmeta_string_field("customfield_10050", "Display Name")],
+    )
+    .await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "customfield_10050", "name": "Display Name"})],
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": "10001",
+            "key": "PROJ-123",
+            "self": format!("{}/rest/api/3/issue/10001", h.server.uri()),
+        })))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "customfield_10050=a",
+            "--field",
+            "Display Name=b",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "adversary Pass 2 LOW: two --field pairs resolving to the same \
+         field_id must succeed like the edit path does, not falsely report \
+         the field missing from the Create screen; got {:?}. stderr={stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("is not on the Create screen"),
+        "adversary Pass 2 LOW: false 'not on the Create screen' error must \
+         not appear when the field IS present in createmeta; stderr={stderr}"
+    );
+}

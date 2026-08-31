@@ -50,7 +50,7 @@ pub struct EditMetaField {
 /// `field_type` is the primary dispatch key in `resolve_edit_fields` Step 4.
 /// Supported v1 values: `"string"`, `"number"`, `"option"`, `"date"`,
 /// `"datetime"`, `"user"`. `"array"` and `"any"` → exit 64 with hint.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EditMetaFieldSchema {
     /// CRITICAL rename: Jira API key is `"type"` — a Rust keyword.
     #[serde(rename = "type")]
@@ -75,7 +75,7 @@ pub struct EditMetaFieldSchema {
 /// A `None` id causes the entry to be excluded from the numeric id-bypass
 /// predicate and triggers exit 64 if the entry is matched at the wire-emission
 /// site (EC-3.4.016-8). See issue #589 and BC-3.4.015/BC-3.4.016.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AllowedValue {
     pub id: Option<String>,
     /// Human-readable option label; used for case-insensitive matching.

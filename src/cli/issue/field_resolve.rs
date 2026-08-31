@@ -616,17 +616,23 @@ async fn resolve_against_createmeta(
     let createmeta_fields = client
         .get_createmeta_fields(project_key, &issue_type_id)
         .await?;
-    let mut meta_by_id: HashMap<String, crate::api::jira::issues::CreateMetaField> =
-        createmeta_fields
-            .into_iter()
-            .map(|f| (f.field_id.clone(), f))
-            .collect();
+    let meta_by_id: HashMap<String, crate::api::jira::issues::CreateMetaField> = createmeta_fields
+        .into_iter()
+        .map(|f| (f.field_id.clone(), f))
+        .collect();
 
     for (field_id, human_name, spec) in resolved {
         // Step 3: validate field is on the resolved issue type's Create
         // screen (createmeta field list) — "Create screen" substituted for
-        // "Edit screen" throughout (BC-3.3.011).
-        let meta_field = meta_by_id.remove(&field_id).ok_or_else(|| {
+        // "Edit screen" throughout (BC-3.3.011). Uses the non-consuming
+        // `.get()` (mirroring the Edit arm's `editmeta.fields.get(&field_id)`
+        // below, AC-008) rather than `.remove()` — two distinct `--field`
+        // pairs can resolve to the SAME field_id (e.g. a `customfield_NNNNN`
+        // bypass pair alongside a display-name pair for the same field), and
+        // `.remove()` made the second such pair falsely report "not on the
+        // Create screen" even though the field IS present (adversary Pass 2
+        // LOW finding).
+        let meta_field = meta_by_id.get(&field_id).ok_or_else(|| {
             JrError::UserError(format!(
                 "Field '{human_name}' ({field_id}) is not on the Create screen for project \
                  '{project_key}' issue type '{issue_type_name}'. A project admin must add it \
@@ -641,12 +647,12 @@ async fn resolve_against_createmeta(
         // has no operations concept, and every createmeta field is
         // assumed settable (see this function's own doc comment).
         let adapted = crate::types::jira::EditMetaField {
-            name: meta_field.name,
-            schema: meta_field.schema,
-            allowed_values: meta_field.allowed_values,
+            name: meta_field.name.clone(),
+            schema: meta_field.schema.clone(),
+            allowed_values: meta_field.allowed_values.clone(),
             operations: vec!["set".to_string()],
             required: false,
-            auto_complete_url: meta_field.auto_complete_url,
+            auto_complete_url: meta_field.auto_complete_url.clone(),
         };
 
         dispatch_field_value(
