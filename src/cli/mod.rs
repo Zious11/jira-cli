@@ -445,10 +445,11 @@ pub enum IssueCommand {
         /// The project must be a Jira Service Management project.
         #[arg(long = "request-type")]
         request_type: Option<String>,
-        /// Set a custom request field as NAME=VALUE (repeatable; JSM only;
-        /// requires --request-type).
+        /// Set a custom field as NAME=VALUE, or NAME:kind=VALUE (repeatable).
         /// The first '=' splits; subsequent '=' characters are part of the value.
-        /// Duplicate keys use the last value provided.
+        /// Duplicate keys use the last value provided. On the platform (non-JSM)
+        /// path, resolves against the project's Create screen (createmeta); with
+        /// --request-type set, resolves against the JSM request type's fields.
         #[arg(long = "field", action = clap::ArgAction::Append)]
         field: Vec<String>,
         /// Create the request on behalf of this accountId (JSM only; requires
