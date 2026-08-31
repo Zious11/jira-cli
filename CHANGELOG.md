@@ -27,6 +27,27 @@ All notable changes to jr will be documented here.
   as it did before this story (name `"Region: EMEA"`, `kind: None`), because
   none of the four valid kind tags contain whitespace.
 
+### Changed
+
+- **`jr issue create --field NAME=VALUE` (platform, non-JSM path) no longer
+  exits 64 pre-flight — it now resolves via the project's Create screen
+  (`createmeta`)** (S-578-4, BC-3.3.010/BC-3.3.011, DEC-310 — registered
+  2026-08-26, reverses DEC-188 from S-639-1). Previously, supplying `--field`
+  without `--request-type` exited 64 with "`--field` is only valid with
+  `--request-type`". That guard is removed: `--field` now resolves each pair
+  against the target project/issue-type's Create screen using the SAME
+  resolution machinery as `issue edit --field` (customfield_NNNNN bypass,
+  cache-first field-name resolution, hint-kind dispatch), merging the result
+  into the create POST body. `--on-behalf-of` is UNCHANGED — it still exits 64
+  without `--request-type` (BC-3.8.013). A new ten-member dedicated-flag ×
+  `--field` collision guard (D2) rejects a `--field` pair that targets the
+  same wire key as a dedicated flag (e.g. `--priority X --field
+  priority=Y`) before any HTTP call. This is purely permission-widening — no
+  previously-working invocation is broken; an invocation that used to exit 64
+  now either succeeds or fails later with a more specific resolution error.
+  See CLAUDE.md's `jr issue create --field`/`--on-behalf-of` gotcha entry
+  (updated by this story) and `docs/adr/0014-jsm-request-type-dispatch.md`.
+
 ## [0.7.0-dev.2] - 2026-08-25
 
 ### Added

@@ -3,6 +3,23 @@
 ## Status
 Accepted
 
+> **DEC-310 amendment (2026-08-26, S-578-4, issue #578):** every "DEC-188
+> amendment" callout below describes a pre-flight exit-64 guard that
+> originally covered BOTH `--field` and `--on-behalf-of` without
+> `--request-type`. S-578-4 REVERSES that guard's `--field` half: `--field`
+> no longer exits 64 pre-flight on the platform path — it now resolves via
+> the target project/issue-type's `createmeta` (BC-3.3.010/BC-3.3.011),
+> merging the result into the platform POST body, the same as `issue edit
+> --field`. `--on-behalf-of`'s half of the guard is UNCHANGED (BC-3.8.013)
+> — it still exits 64 pre-flight without `--request-type`, unconditionally,
+> even when `--field` is also present (the combined-check that used to
+> pre-empt it is gone, so it now fires standalone in that case too). Read
+> every "DEC-188 amendment" note below as scoped to `--on-behalf-of` only;
+> `docs/specs/issue-create-preflight-guards.md` and the DEC-188-era
+> combined-error text it describes are historical for `--field`. See
+> `.factory/specs/prd/bc-3-issue-write.md` BC-3.3.010/011/BC-3.8.012/013 for
+> the current, authoritative contract.
+
 ## Context
 
 `jr issue create` was originally written to target a single API endpoint:
@@ -194,4 +211,10 @@ C.1–C.4 in `api/jsm/requests.rs`).
 - ADR-0015 — Proactive resolution enforcement on done-category transitions (parallel JSM context)
 - `docs/specs/issue-create-preflight-guards.md` — DEC-188 pre-flight exit-64 guards for
   `--field`/`--on-behalf-of` without `--request-type` (S-639-1; amends the "byte-for-byte
-  unchanged" claims in this ADR, does not supersede the dispatch architecture itself)
+  unchanged" claims in this ADR, does not supersede the dispatch architecture itself);
+  historical for `--field` as of S-578-4 (DEC-310) — see the amendment note at the top of
+  this ADR
+- S-578-4 (issue #578, DEC-310) — reverses DEC-188's `--field`-alone and combined pre-flight
+  guards; `--field` on the platform path now resolves via `createmeta`
+  (BC-3.3.010/BC-3.3.011) instead of exiting 64. `--on-behalf-of`'s guard (BC-3.8.013) is
+  unchanged in mechanism
