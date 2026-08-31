@@ -48,6 +48,16 @@ All notable changes to jr will be documented here.
   See CLAUDE.md's `jr issue create --field`/`--on-behalf-of` gotcha entry
   (updated by this story) and `docs/adr/0014-jsm-request-type-dispatch.md`.
 
+- **CI: mutation-test scope gap closed for `field.rs` + `field_resolve.rs`
+  (FIX-F6-MUTANTS-SCOPE):** `src/cli/field.rs` (~91 mutants — `jr field options
+  <field>`'s M1/M2/M3 context-mechanism resolution) and
+  `src/cli/issue/field_resolve.rs` (~45 mutants — the shared `--field`
+  resolution/dispatch hub for `issue edit --field` and `issue create --field`)
+  are now in `examine_globs` (18 → 20 entries). Both files were omitted since
+  creation, meaning the required `mutants` CI gate generated zero mutants for
+  either file across every field-dx PR to date (S-580-1, #578 parts 1-5). See
+  `docs/specs/cargo-mutants-policy.md`.
+
 ## [0.7.0-dev.2] - 2026-08-25
 
 ### Added

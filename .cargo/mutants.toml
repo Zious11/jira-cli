@@ -55,6 +55,23 @@ examine_globs = [
     # branch-dense regions of main.rs (init_tracing, stdin-TTY flip) become mutation
     # targets too as an accepted, tracked risk. (added S-MUTANTS-SCOPE-1)
     "src/main.rs",
+    # HIGH-value: `jr field options <field>` (S-580-1) — `handle`'s M1/M2/M3
+    # context-mechanism resolution (`resolve_field_context`, `resolve_m2_project`), the
+    # normalized `FieldOption` model builders (`normalize_from_allowed_values`,
+    # `normalize_from_valid_values`), and the `--value` filter (`filter_options`).
+    # Previously absent from examine_globs — same class of gap as MAINT-MUTANTS-GLOBS-01's
+    # sibling-candidates review, but this one was an outright omission, not a deferral.
+    # ~91 mutants. (added FIX-F6-MUTANTS-SCOPE)
+    "src/cli/field.rs",
+    # HIGH-value: `resolve_edit_fields`/`dispatch_field_value` — the shared `--field`
+    # resolution/dispatch hub for BOTH `issue edit --field` and `issue create --field`
+    # (S-578-2/S-578-4); `detect_flag_field_overlap` (D2 collision guard);
+    # `resolve_against_createmeta`/`resolve_against_editmeta`; the
+    # `compose_{option,id,name,asset}_hint` wire-value composers. Previously absent from
+    # examine_globs despite backing two command families — P22-001/DEC-149/S-MUTANTS-SCOPE-1
+    # drift class ("new CLI handler file → add to mutants.toml at creation") that slipped
+    # through across all field-dx PRs. ~45 mutants. (added FIX-F6-MUTANTS-SCOPE)
+    "src/cli/issue/field_resolve.rs",
 ]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI

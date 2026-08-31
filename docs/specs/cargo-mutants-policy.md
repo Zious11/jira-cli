@@ -36,6 +36,8 @@ high line coverage but untested assertion strength at the time of the F6 review.
 - `src/api/jsm/servicedesks.rs` — `get_or_fetch_project_meta`, `resolve_service_desk_id`, `require_service_desk` (TTL logic, project_id string-equality match, service-desk-id resolution chain) (backfilled S-MUTANTS-SCOPE-1; originally added S-576-5)
 - `src/cli/queue.rs` — `handle`, `handle_list`, `handle_view`, `resolve_queue_by_name`, `extra_fields_allow_list`, `is_customfield_token`, `reorder_by_queue_position`, `collapse_and_truncate` (F6-hardened 200-char truncation boundary, PR #700; partial-match queue-name resolution) (added S-MUTANTS-SCOPE-1)
 - `src/main.rs` — `init_tracing`, `run`, `run_until_shutdown` (previously-zero-coverage `tokio::select!` ctrl_c/SIGINT fork, now covered by VP-MUTANTS-SCOPE-1-001/002; `InvalidSubcommand` intercept) (added S-MUTANTS-SCOPE-1)
+- `src/cli/field.rs` — `handle` (`jr field options <field>` entry point, S-580-1), `resolve_field_context`/`resolve_m2_project` (M1/M2/M3 field-context-mechanism resolution), `normalize_from_allowed_values`/`normalize_from_valid_values` (the normalized `FieldOption` model), `filter_options` (`--value` filter), `render_option_rows`, `resolve_field_id`; ~91 mutants — previously omitted from the examine_globs scope (added FIX-F6-MUTANTS-SCOPE)
+- `src/cli/issue/field_resolve.rs` — `resolve_edit_fields`/`dispatch_field_value` (shared `--field` resolution/dispatch hub for both `issue edit --field` and `issue create --field`, S-578-2/S-578-4), `detect_flag_field_overlap` (D2 collision guard), `resolve_against_createmeta`/`resolve_against_editmeta`, `compose_option_hint`/`compose_id_hint`/`compose_name_hint`/`compose_asset_hint` (wire-value composers); ~45 mutants — previously omitted from the examine_globs scope despite backing two command families (P22-001/DEC-149/S-MUTANTS-SCOPE-1 drift class) (added FIX-F6-MUTANTS-SCOPE)
 
 Configured in `.cargo/mutants.toml::examine_globs`. The CI job relies on this
 configuration alone (no `--file` CLI flags) for scope enforcement; `--in-diff` further
@@ -44,7 +46,7 @@ narrows to lines changed in the PR diff.
 Note: cargo-mutants v27+ reads its config from `.cargo/mutants.toml` (not `.mutants.toml`
 at repo root). This is the canonical config location for this project.
 
-Current `examine_globs` count: 18 entries (verify against `.cargo/mutants.toml` before citing
+Current `examine_globs` count: 20 entries (verify against `.cargo/mutants.toml` before citing
 this number elsewhere — it has drifted before and will drift again as scope changes).
 
 ### Sibling Candidates Considered and Deferred (MAINT-MUTANTS-GLOBS-01)
@@ -785,6 +787,7 @@ Path B is deferred until Path A's 240-minute budget proves insufficient in pract
 
 | Date | Cycle | Change |
 |------|-------|--------|
+| 2026-08-31 | FIX-F6-MUTANTS-SCOPE | Scope-gap fix: added `src/cli/field.rs` (~91 mutants, S-580-1's `jr field options <field>` M1/M2/M3 resolution) and `src/cli/issue/field_resolve.rs` (~45 mutants, shared `--field` resolution/dispatch hub for `issue edit --field` and `issue create --field`) to `examine_globs` (18 → 20 entries). Both files had been omitted since creation across all field-dx PRs (S-580-1, #578 parts 1-5) — same P22-001/DEC-149/S-MUTANTS-SCOPE-1 drift class ("new CLI handler file → add to mutants.toml at creation"), meaning the required CI `mutants` gate generated zero mutants for either file across every field-dx PR to date. |
 | 2026-08-21 | S-575-1 | Added new "Exclusions" section (distinct from `#[mutants::skip]` Whitelist Convention) and a single `exclude_re` entry in `.cargo/mutants.toml` for `src/api/jira/issues.rs:374:16: delete ! in JiraClient::search_issues_with_fields` — an infinite-loop mutant uncatchable-as-anything-but-TIMEOUT under the whole-binary test-harness execution model. Termination correctness remains verified by existing multi-page pagination tests. |
 | 2026-08-14 | S-MUTANTS-SCOPE-1 | Scope widening + drift backfill: added `src/cli/queue.rs` and `src/main.rs` to `examine_globs` (16 → 18 entries). Backfilled §Scope bullets for 5 previously-undocumented `examine_globs` members: `src/cli/issue/interactions.rs`, `src/cli/issue/attachments.rs`, `src/api/jira/attachments.rs`, `src/api/jsm/attachments.rs`, `src/api/jsm/servicedesks.rs`. Closes drift item MUTANTS-SCOPE-GAP-QUEUE-MAIN. |
 | 2026-07-02 | DEC-149 / S-MUTANTS-EXAMINE-GLOBS-1 | Scope widening: added `src/cli/issue/edit.rs` (~99 mutants) and `src/cli/issue/jsm_create.rs` (~9 mutants) to `examine_globs`. Root cause: ADR-0012 Seam A (PR #556) and Seam B (PR #558) relocated `handle_edit`, `handle_edit_bulk_labels`, `handle_edit_bulk_fields` → `edit.rs` and `handle_jsm_create` → `jsm_create.rs` from `create.rs`, but `examine_globs` was not updated. Total scope: 594 → ~702 mutants (+18%). Corrected `create.rs` entry to reflect remaining functions (`parse_field_kv`, thin dispatcher) only. |
