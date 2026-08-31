@@ -2567,14 +2567,19 @@ async fn mount_platform_create_stubs(server: &wiremock::MockServer) {
 
 // ─── AC-1: --field on platform path exits 64 pre-flight (BC-3.8.012) ─────────
 
-/// AC-1 (BC-3.8.012, [mode: human]): `jr issue create --field NAME=VALUE`
-/// WITHOUT `--request-type` exits 64 BEFORE any HTTP, with the verbatim
-/// BC-3.8.012 single-flag error on stderr. INVERTED from the S-383 exit-0
-/// warn-and-proceed contract (DEC-188). Renamed from
-/// `test_platform_create_field_flag_emits_warning_without_request_type`.
-///
-/// Pairing: symmetric twin of AC-10 ([mode: --output json]) for the same
-/// invocation class.
+/// AC-1 (S-578-4 INVERSION, BC-3.3.010/011, VP-578-017, [mode: human]):
+/// `jr issue create --field NAME=VALUE` WITHOUT `--request-type` no longer
+/// exits 64 pre-flight (DEC-188 reversed by DEC-310) — it resolves via
+/// createmeta instead. This fixture's `GET /rest/api/3/field` mock returns
+/// an EMPTY field list, so field "a" fails Phase-1 name resolution with the
+/// NEW BC-3.3.011 taxonomy-row-2 "zero matches" error — exit 64 STILL, but
+/// for a completely different reason and with a different message; the old
+/// DEC-188 verbatim string is DEAD. SUPERSEDES the DEC-188-era test
+/// `test_platform_create_field_flag_emits_warning_without_request_type`
+/// (originally inverted to `..._exits_64_without_request_type` under
+/// S-639-1; this S-578-4 pass inverts it a second time, per BC-3.8.012's own
+/// "F3/F4 removal obligations" — the fresh createmeta-resolution AC-002
+/// success-path test lives separately in `tests/issue_create_field.rs`).
 #[tokio::test]
 async fn test_platform_create_field_flag_exits_64_without_request_type() {
     let server = MockServer::start().await;
@@ -2624,38 +2629,36 @@ async fn test_platform_create_field_flag_exits_64_without_request_type() {
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.8.012 / AC-1: expected exit 64; got {:?}. stderr: {stderr}",
+        "S-578-4 / AC-1 (inverted): expected exit 64 (now a createmeta \
+         zero-matches resolution failure, NOT the removed pre-flight guard); \
+         got {:?}. stderr: {stderr}",
         output.status.code()
     );
     assert!(
         stderr.contains("Error: "),
-        "BC-3.8.012 / AC-1: human-mode 'Error: ' prefix must appear; got: {stderr}"
+        "S-578-4 / AC-1: human-mode 'Error: ' prefix must appear; got: {stderr}"
     );
     assert!(
-        stderr.contains("--field is only valid with"),
-        "BC-3.8.012 / AC-1: prefix pin must appear on stderr; got: {stderr}"
+        stderr.contains("not found") && stderr.contains("Zero matches for 'a'"),
+        "S-578-4 / AC-1: field 'a' must fail BC-3.3.011 taxonomy row 2 \
+         (zero matches in list_fields()); got: {stderr}"
     );
     assert!(
-        stderr.contains(
-            "--field is only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to submit a JSM request with custom fields, or drop --field to create a standard platform issue."
-        ),
-        "BC-3.8.012 / AC-1: FULL-STRING verbatim single-flag error must appear on stderr; got: {stderr}"
+        !stderr.contains("--field is only valid with"),
+        "S-578-4 / AC-1: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty(),
-        "BC-3.8.012 / AC-1: stdout must be empty (HYGIENE); got: {stdout}"
+        "S-578-4 / AC-1: stdout must be empty (HYGIENE); got: {stdout}"
     );
     assert!(
         !stderr.contains("Created issue"),
-        "BC-3.8.012 / AC-1: DISCRIMINATING — no success path must have executed; got: {stderr}"
+        "S-578-4 / AC-1: DISCRIMINATING — no success path must have executed; got: {stderr}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012 / AC-1: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
+        "S-578-4 / AC-1: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
     );
-    // The .expect(0) on the JSM mock is enforced on server drop. The
-    // NORMATIVE zero-HTTP proof (received_requests().is_empty()) is covered
-    // by AC-8, which uses an isolated MockServer specifically for that check.
 }
 
 // ─── AC-2: --on-behalf-of on platform path exits 64 pre-flight (BC-3.8.013) ──
@@ -2784,41 +2787,48 @@ async fn test_platform_create_both_inverse_flags_exit_64_combined_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
+    // S-578-4 INVERSION (BC-3.8.013 "Combined pre-flight error [REWRITTEN]",
+    // VP-578-018): BC-3.8.012's combined check is REMOVED — the STANDALONE
+    // `--on-behalf-of`-only guard (step 2, unconditional, unchanged
+    // mechanism) now fires on its own, unconditionally, whenever
+    // `--on-behalf-of` is present, regardless of `--field`. `--field` no
+    // longer contributes to any pre-flight error on the platform path.
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.8.012 / AC-3: expected exit 64; got {:?}. stderr: {stderr}",
+        "S-578-4 / AC-3 (inverted): expected exit 64 via BC-3.8.013's \
+         STANDALONE guard; got {:?}. stderr: {stderr}",
         output.status.code()
     );
     assert!(
-        stderr.contains("--field and --on-behalf-of are only valid with"),
-        "BC-3.8.012 / AC-3: combined-error prefix pin must appear on stderr; got: {stderr}"
+        stderr.contains("--on-behalf-of is only valid with"),
+        "S-578-4 / AC-3: BC-3.8.013 standalone prefix pin must appear on stderr; got: {stderr}"
     );
     assert!(
         stderr.contains(
-            "--field and --on-behalf-of are only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to use these flags, or drop them to create a standard platform issue."
+            "--on-behalf-of is only valid with --request-type (JSM service-desk requests). Add --request-type <NAME> to raise a request on behalf of another user, or drop --on-behalf-of to create a standard platform issue."
         ),
-        "BC-3.8.012 / AC-3: FULL-STRING verbatim combined error must appear on stderr; got: {stderr}"
+        "S-578-4 / AC-3: FULL-STRING verbatim standalone error must appear on stderr; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty(),
-        "BC-3.8.012 / AC-3: stdout must be empty (HYGIENE); got: {stdout}"
+        "S-578-4 / AC-3: stdout must be empty (HYGIENE); got: {stdout}"
     );
     assert!(
         !stderr.contains("Created issue"),
-        "BC-3.8.012 / AC-3: DISCRIMINATING — no success path must have executed; got: {stderr}"
+        "S-578-4 / AC-3: DISCRIMINATING — no success path must have executed; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field and --on-behalf-of are only valid with"),
+        "S-578-4 / AC-3: the now-removed combined-error string must NEVER appear; got: {stderr}"
     );
     assert!(
         !stderr.contains("--field is only valid with"),
-        "BC-3.8.012 / AC-3: FALSIFIABLE-COARSE — single-flag guard must NOT fire instead of combined; got: {stderr}"
-    );
-    assert!(
-        !stderr.contains("--on-behalf-of is only valid with"),
-        "BC-3.8.013 / AC-3: FALSIFIABLE-COARSE — single-flag guard must NOT fire instead of combined; got: {stderr}"
+        "S-578-4 / AC-3: --field must not itself contribute any pre-flight error; got: {stderr}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012+013 / AC-3: REGRESSION PIN — old S-383 warn strings must not appear; got: {stderr}"
+        "S-578-4 / AC-3: REGRESSION PIN — old S-383 warn strings must not appear; got: {stderr}"
     );
 }
 
@@ -2935,7 +2945,9 @@ async fn test_platform_create_field_idempotent_one_error_per_logical_flag() {
         .output()
         .unwrap();
 
-    // Invocation (ii): exactly TWO --field occurrences.
+    // Invocation (ii): TWO --field occurrences TARGETING THE SAME NAME "a"
+    // (S-578-4 INVERSION note below explains why this differs from the
+    // pre-inversion two-DIFFERENT-keys form).
     let server_ii = MockServer::start().await;
     let cache_dir_ii = tempfile::tempdir().unwrap();
     let config_dir_ii = tempfile::tempdir().unwrap();
@@ -2962,7 +2974,7 @@ async fn test_platform_create_field_idempotent_one_error_per_logical_flag() {
             "--field",
             "a=b",
             "--field",
-            "c=d",
+            "a=c",
             "--no-input",
         ])
         .output()
@@ -2971,37 +2983,59 @@ async fn test_platform_create_field_idempotent_one_error_per_logical_flag() {
     let stderr_i = String::from_utf8_lossy(&output_i.stderr).to_string();
     let stderr_ii = String::from_utf8_lossy(&output_ii.stderr).to_string();
 
+    // S-578-4 INVERSION (BC-3.3.010/011, VP-578-017): the DEC-188 presence-only
+    // `!field_pairs.is_empty()` guard this AC originally exercised is REMOVED.
+    // Both invocations here fail via the NEW BC-3.3.011 taxonomy row 2 (zero
+    // matches for field 'a' against the empty mounted field list) instead.
+    // The (ii) invocation deliberately repeats the SAME NAME "a" (not a
+    // second, distinct key "c") — `parse_field_kv`'s own last-wins semantics
+    // (BC-3.4.026, unchanged) collapse it to ONE map entry before resolution
+    // ever runs, so both invocations produce byte-identical error text
+    // referencing field 'a'. Two DIFFERENT keys would no longer guarantee
+    // byte-identical stderr post-reversal (Phase-1 field resolution iterates
+    // an unordered `HashMap`, so which of two distinct failing keys is
+    // reported first is not deterministic) — this AC's idempotency claim is
+    // now scoped to "repeated occurrences of the SAME name", not "any two
+    // distinct --field keys", a narrower but still faithful reading of
+    // BC-3.4.026's per-NAME last-wins collapse.
     for (label, output, stderr) in [
         ("AC-5(i, n=1)", &output_i, &stderr_i),
-        ("AC-5(ii, n=2)", &output_ii, &stderr_ii),
+        ("AC-5(ii, n=2 same key)", &output_ii, &stderr_ii),
     ] {
         assert_eq!(
             output.status.code(),
             Some(64),
-            "BC-3.8.012 / {label}: expected exit 64; got {:?}. stderr: {stderr}",
+            "S-578-4 / {label}: expected exit 64 (zero-matches resolution \
+             failure); got {:?}. stderr: {stderr}",
             output.status.code()
         );
         assert!(
-            stderr.contains("--field is only valid with"),
-            "BC-3.8.012 / {label}: anchor — single-flag error must appear; got: {stderr}"
+            stderr.contains("not found") && stderr.contains("Zero matches for 'a'"),
+            "S-578-4 / {label}: anchor — field 'a' zero-matches error must appear; got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("--field is only valid with"),
+            "S-578-4 / {label}: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
         );
         assert!(
             !stderr.contains("is ignored on the platform create path"),
-            "BC-3.8.012 / {label}: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
+            "S-578-4 / {label}: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
         );
         assert!(
             !stderr.contains("Created issue"),
-            "BC-3.8.012 / {label}: DISCRIMINATING — no success path must have executed; got: {stderr}"
+            "S-578-4 / {label}: DISCRIMINATING — no success path must have executed; got: {stderr}"
         );
     }
 
-    // Byte-identity: ONE error regardless of --field count (idempotent per-flag,
-    // not per-value). The anchor assertions above guarantee this isn't merely
+    // Byte-identity: ONE error regardless of how many times the SAME --field
+    // NAME is repeated (parse_field_kv's last-wins collapse, unaffected by
+    // this story). The anchor assertions above guarantee this isn't merely
     // two identical "Created issue" success paths.
     assert_eq!(
         stderr_i, stderr_ii,
-        "BC-3.8.012 / AC-5: stderr must be byte-identical for n=1 and n=2 --field occurrences \
-         (idempotent, presence-only guard); i={stderr_i} ii={stderr_ii}"
+        "S-578-4 / AC-5: stderr must be byte-identical for n=1 and n=2 \
+         same-key --field occurrences (parse_field_kv last-wins collapse); \
+         i={stderr_i} ii={stderr_ii}"
     );
 }
 
@@ -3081,13 +3115,14 @@ async fn test_jsm_create_with_field_and_request_type_does_not_fire_bc_3_8_012() 
 
 // ─── AC-7: Malformed --field on platform path exits 64 (EC-3.8.012-3) ────────
 
-/// AC-7 (BC-3.8.012 EC-3.8.012-3 — malformed --field edge case,
+/// AC-7 (S-578-4 INVERSION, BC-3.4.026 parser contract / `parse_field_kv`,
 /// [mode: --output json]): `--field bareflagnoequals` (no `=`) WITHOUT
-/// `--request-type` exits 64 with the BC-3.8.012 single-flag error. The
-/// guard fires on `!field_pairs.is_empty()` BEFORE value parsing — malformed
-/// format does not affect guard activation. INVERTED from the S-383 exit-0
-/// warn-and-proceed contract (DEC-188). Renamed from
-/// `test_platform_create_malformed_field_one_warning_no_exit_64`.
+/// `--request-type` still exits 64 — but now via `parse_field_kv`'s own
+/// missing-`=` rejection (step 2a, the SAME pure parser precedent this
+/// story's SSOT "Platform-Path Guard Ordering" block documents), NOT the
+/// removed DEC-188 presence-only guard. The message shape is entirely
+/// different: `parse_field_kv` fails BEFORE the D2 collision guard (step 2b)
+/// and BEFORE any resolution or project/type lookup ever runs.
 #[tokio::test]
 async fn test_platform_create_malformed_field_without_request_type_exits_64() {
     let server = MockServer::start().await;
@@ -3130,7 +3165,7 @@ async fn test_platform_create_malformed_field_without_request_type_exits_64() {
         .output()
         .unwrap();
 
-    common::assertions::assert_json_error_envelope(&output, 64, "BC-3.8.012 / AC-7");
+    common::assertions::assert_json_error_envelope(&output, 64, "S-578-4 / AC-7 (inverted)");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -3138,64 +3173,79 @@ async fn test_platform_create_malformed_field_without_request_type_exits_64() {
     assert!(
         parsed["error"]
             .as_str()
-            .is_some_and(|s| s.contains("--field is only valid with")),
-        "BC-3.8.012 / AC-7: error field must contain the single-flag prefix pin; got: {parsed}"
+            .is_some_and(|s| s.contains("not a valid NAME=VALUE pair") && s.contains("missing '='")),
+        "S-578-4 / AC-7: error field must contain parse_field_kv's missing-'=' \
+         message (step 2a), NOT the removed DEC-188 guard string; got: {parsed}"
+    );
+    assert!(
+        !parsed["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--field is only valid with"),
+        "S-578-4 / AC-7: the DEAD DEC-188 verbatim string must NEVER appear; got: {parsed}"
     );
     assert!(
         stdout.trim().is_empty(),
-        "BC-3.8.012 / AC-7: DISCRIMINATING — stdout must be empty; got: {stdout}"
+        "S-578-4 / AC-7: DISCRIMINATING — stdout must be empty; got: {stdout}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012 / AC-7: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
+        "S-578-4 / AC-7: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
     );
 }
 
 // ─── AC-8 (NEW): --field / --on-behalf-of + helper flags → zero HTTP ─────────
 
-/// AC-8 (BC-3.8.012 + BC-3.8.013 zero-HTTP guarantee, [mode: human]): Even
-/// when `--team`/`--to` (or `--field`/`--on-behalf-of`'s sibling) would
-/// normally trigger pre-POST helper HTTP (team resolution, assignee
-/// resolution), the pre-flight guard suppresses ALL of it — zero HTTP of any
-/// kind. Two sub-invocations, each against its own dedicated isolated
-/// `MockServer` (no `mount_platform_create_stubs` — wiremock 0.6 FIFO:
-/// free-fire mocks registered first would defeat the `expect(0)` mocks here).
+/// AC-8 (S-578-4 INVERSION on invocation (i) only; invocation (ii) is
+/// UNAFFECTED — BC-3.8.013's guard is unchanged, [mode: human]):
+///
+/// Invocation (i) originally proved `--field` alone suppressed ALL helper
+/// HTTP (team/assignee resolution) via the now-removed DEC-188 zero-HTTP
+/// pre-flight guard. Post-reversal, a well-formed, non-colliding `--field`
+/// no longer blocks ANYTHING pre-flight — `--team`/`--to` helper resolution
+/// now proceeds normally and DOES reach the network. This sub-invocation is
+/// INVERTED to prove exactly that: the previously-forbidden endpoints are
+/// no longer zero-HTTP (`received_requests()` must be NON-empty), and the
+/// dead DEC-188 string never appears. Invocation (ii) (`--on-behalf-of` +
+/// helpers) is UNTOUCHED below — BC-3.8.013's guard still suppresses all
+/// HTTP unconditionally.
 #[tokio::test]
 async fn test_platform_create_field_with_helpers_exits_64_zero_http() {
-    // Sub-invocation (i): --field + --team + --to.
+    // Sub-invocation (i): --field + --team + --to (INVERTED — see doc comment).
     {
         let server = MockServer::start().await;
         let cache_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         write_minimal_config(config_dir.path(), &server.uri());
 
+        // These endpoints are no longer forbidden post-reversal — registered
+        // WITHOUT `.expect(0)` (which would panic-at-drop the instant the
+        // now-expected call arrives) so team/assignee resolution can proceed
+        // as far as it does; a 500 response is sufficient to prove the call
+        // reached the network without needing the full pipeline to succeed.
         for (m, p) in [
             ("GET", "/rest/api/3/myself"),
             ("POST", "/gateway/api/graphql"),
         ] {
             Mock::given(method(m))
                 .and(path(p))
-                .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
-                .expect(0)
+                .respond_with(ResponseTemplate::new(500).set_body_string("simulated failure"))
                 .mount(&server)
                 .await;
         }
         Mock::given(method("GET"))
             .and(path_regex("/gateway/api/public/teams/v1/org/.*/teams"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
-            .expect(0)
+            .respond_with(ResponseTemplate::new(500).set_body_string("simulated failure"))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
             .and(path("/rest/api/3/field"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
-            .expect(0)
+            .respond_with(ResponseTemplate::new(500).set_body_string("simulated failure"))
             .mount(&server)
             .await;
         Mock::given(method("POST"))
             .and(path("/rest/api/3/issue"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
-            .expect(0)
+            .respond_with(ResponseTemplate::new(500).set_body_string("simulated failure"))
             .mount(&server)
             .await;
 
@@ -3228,29 +3278,21 @@ async fn test_platform_create_field_with_helpers_exits_64_zero_http() {
             .unwrap();
 
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(
-            output.status.code(),
-            Some(64),
-            "BC-3.8.012 / AC-8(i): expected exit 64; got {:?}. stderr: {stderr}",
-            output.status.code()
-        );
         assert!(
-            stderr.contains("--field is only valid with"),
-            "BC-3.8.012 / AC-8(i): prefix pin must appear; got: {stderr}"
+            !stderr.contains("--field is only valid with"),
+            "S-578-4 / AC-8(i) inverted: the DEAD DEC-188 verbatim string must \
+             NEVER appear; got: {stderr}"
         );
         assert!(
             !stderr.contains("is ignored on the platform create path"),
-            "BC-3.8.012 / AC-8(i): REGRESSION PIN; got: {stderr}"
+            "S-578-4 / AC-8(i) inverted: REGRESSION PIN; got: {stderr}"
         );
         assert!(
-            !stderr.contains("Created issue"),
-            "BC-3.8.012 / AC-8(i): HYGIENE — structurally unreachable on an isolated server; got: {stderr}"
+            !server.received_requests().await.unwrap().is_empty(),
+            "S-578-4 / AC-8(i) inverted: the OLD zero-HTTP guarantee for \
+             `--field` alone is GONE — team/assignee helper resolution must \
+             now reach the network (at least one request expected)"
         );
-        assert!(
-            server.received_requests().await.unwrap().is_empty(),
-            "BC-3.8.012 / AC-8(i): NORMATIVE zero-HTTP proof — no request of any kind must reach the server"
-        );
-        // All five .expect(0) mocks are additionally enforced on server drop.
     }
 
     // Sub-invocation (ii): --on-behalf-of + --team + --to (BC-3.8.013 mirror).
@@ -3346,10 +3388,14 @@ async fn test_platform_create_field_with_helpers_exits_64_zero_http() {
 
 // ─── AC-9 (NEW): --field without --project exits 64, not a project error ────
 
-/// AC-9 (BC-3.8.012 EC-3.8.012-4, [mode: human]): `--field a=b` WITHOUT
-/// `--project` and WITHOUT `--request-type` exits 64 with the BC-3.8.012
-/// error — NOT the "Project key is required" error. Proves the guard fires
-/// at step 2, BEFORE project-key resolution at step 3.
+/// AC-9 (S-578-4 INVERSION, BC-3.3.010 EC-3.3.010-3, [mode: human]):
+/// `--field a=b` WITHOUT `--project` and WITHOUT `--request-type` now exits
+/// 64 with the PRE-EXISTING "Project key is required" error — the removed
+/// DEC-188 guard no longer intercepts first. `--field` resolution never
+/// runs without a resolved project+type (BC-3.3.010 EC-3.3.010-3): the D2
+/// collision guard (step 2b, no dedicated flags here, so no collision) runs
+/// and passes, then project-key resolution (step 3) fails BEFORE step 4b's
+/// createmeta resolution is ever reached.
 #[tokio::test]
 async fn test_platform_create_field_without_project_exits_64_not_project_error() {
     let cwd_dir = tempfile::tempdir().unwrap();
@@ -3378,36 +3424,39 @@ async fn test_platform_create_field_without_project_exits_64_not_project_error()
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.8.012 / AC-9: expected exit 64; got {:?}. stderr: {stderr}",
+        "S-578-4 / AC-9 (inverted): expected exit 64 (project-key resolution \
+         failure, NOT the removed pre-flight guard); got {:?}. stderr: {stderr}",
         output.status.code()
     );
     assert!(
-        stderr.contains("--field is only valid with"),
-        "BC-3.8.012 / AC-9: positive guard assertion; got: {stderr}"
+        stderr.contains("Project key is required"),
+        "S-578-4 / AC-9: DISCRIMINATING (inverted) — the PRE-EXISTING project \
+         resolution error must now fire; got: {stderr}"
     );
     assert!(
-        !stderr.contains("Project key"),
-        "BC-3.8.012 / AC-9: DISCRIMINATING — guard must fire BEFORE project-key resolution; got: {stderr}"
+        !stderr.contains("--field is only valid with"),
+        "S-578-4 / AC-9: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty(),
-        "BC-3.8.012 / AC-9: stdout must be empty (HYGIENE); got: {stdout}"
+        "S-578-4 / AC-9: stdout must be empty (HYGIENE); got: {stdout}"
     );
     assert!(
         !stderr.contains("Created issue"),
-        "BC-3.8.012 / AC-9: HYGIENE — structurally unreachable without a project; got: {stderr}"
+        "S-578-4 / AC-9: HYGIENE — structurally unreachable without a project; got: {stderr}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012 / AC-9: REGRESSION PIN; got: {stderr}"
+        "S-578-4 / AC-9: REGRESSION PIN; got: {stderr}"
     );
 }
 
 // ─── AC-10 (NEW): --field --output json error-envelope shape ────────────────
 
-/// AC-10 (BC-3.8.012 `--output json` envelope shape, [mode: --output json]):
-/// Pairing/symmetric twin of AC-1 ([mode: human]) for the same invocation
-/// class.
+/// AC-10 (S-578-4 INVERSION, BC-3.3.011 `--output json` envelope shape,
+/// [mode: --output json]): Pairing/symmetric twin of AC-1 ([mode: human])
+/// for the same invocation class — same createmeta zero-matches failure,
+/// JSON-envelope-shaped.
 #[tokio::test]
 async fn test_platform_create_field_without_request_type_json_error_shape() {
     let cwd_dir = tempfile::tempdir().unwrap();
@@ -3445,7 +3494,7 @@ async fn test_platform_create_field_without_request_type_json_error_shape() {
         .output()
         .unwrap();
 
-    common::assertions::assert_json_error_envelope(&output, 64, "BC-3.8.012 / AC-10");
+    common::assertions::assert_json_error_envelope(&output, 64, "S-578-4 / AC-10 (inverted)");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -3453,31 +3502,42 @@ async fn test_platform_create_field_without_request_type_json_error_shape() {
     assert_eq!(
         parsed["code"].as_i64(),
         Some(64),
-        "BC-3.8.012 / AC-10: code field must be 64; got: {parsed}"
+        "S-578-4 / AC-10: code field must be 64; got: {parsed}"
     );
     assert!(
         parsed["error"]
             .as_str()
-            .is_some_and(|s| s.contains("--field is only valid with")),
-        "BC-3.8.012 / AC-10: error field must contain the single-flag prefix pin; got: {parsed}"
+            .is_some_and(|s| s.contains("not found") && s.contains("Zero matches for 'a'")),
+        "S-578-4 / AC-10: error field must contain the BC-3.3.011 zero-matches \
+         message, NOT the removed DEC-188 guard string; got: {parsed}"
+    );
+    assert!(
+        !parsed["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--field is only valid with"),
+        "S-578-4 / AC-10: the DEAD DEC-188 verbatim string must NEVER appear; got: {parsed}"
     );
     assert!(
         stdout.trim().is_empty(),
-        "BC-3.8.012 / AC-10: DISCRIMINATING — stdout must be empty; got: {stdout}"
+        "S-578-4 / AC-10: DISCRIMINATING — stdout must be empty; got: {stdout}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012 / AC-10: REGRESSION PIN; got: {stderr}"
+        "S-578-4 / AC-10: REGRESSION PIN; got: {stderr}"
     );
 }
 
 // ─── AC-11 (NEW): --field in TTY/interactive mode exits 64 before prompt ────
 
-/// AC-11 (BC-3.8.012 mode-agnosticism, [mode: human/TTY]): `--field a=b`
-/// WITHOUT `--project`, WITHOUT `--request-type`, and WITHOUT `--no-input`
-/// exits 64 BEFORE any interactive prompt fires, even with
-/// `JR_STDIN_IS_TTY=1` (debug seam suppressing the auto-`--no-input` flip on
-/// non-TTY stdin).
+/// AC-11 (S-578-4 INVERSION, BC-3.3.010 mode-agnosticism, [mode: human/TTY]):
+/// `--field a=b` WITHOUT `--project`, WITHOUT `--request-type`, and WITHOUT
+/// `--no-input` now exits 64 via the PRE-EXISTING "Project key is required"
+/// error — the removed DEC-188 guard no longer intercepts first. The D2
+/// collision guard (no dedicated flags here, so no collision) passes, and
+/// project-key resolution attempts an interactive prompt (still with
+/// `JR_STDIN_IS_TTY=1`, the debug seam suppressing the auto-`--no-input`
+/// flip on non-TTY stdin).
 ///
 /// Non-goal: dialoguer 0.12 `interact_text()` short-circuits on non-TTY
 /// stderr under `assert_cmd`; the true PTY-interactive branch is untestable
@@ -3513,41 +3573,43 @@ async fn test_platform_create_field_interactive_tty_exits_64_before_prompt() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(
-        stderr.contains("--field is only valid with"),
-        "BC-3.8.012 / AC-11: positive guard assertion; got: {stderr}"
+        stderr.contains("Project key is required"),
+        "S-578-4 / AC-11: DISCRIMINATING (inverted) — the PRE-EXISTING project \
+         resolution error must now fire; got: {stderr}"
     );
     assert!(
-        !stderr.contains("Project key"),
-        "BC-3.8.012 / AC-11: DISCRIMINATING — guard must fire BEFORE project-key resolution; got: {stderr}"
+        !stderr.contains("--field is only valid with"),
+        "S-578-4 / AC-11: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         !stderr.contains("Created issue"),
-        "BC-3.8.012 / AC-11: HYGIENE — structurally unreachable without a project; got: {stderr}"
+        "S-578-4 / AC-11: HYGIENE — structurally unreachable without a project; got: {stderr}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012 / AC-11: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
+        "S-578-4 / AC-11: REGRESSION PIN — old S-383 warn string must not appear; got: {stderr}"
     );
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.8.012 / AC-11: HYGIENE (guard-absent also exits 64 on the eventual project error; \
-         items 1+2 above are what discriminate); got {:?}. stderr: {stderr}",
+        "S-578-4 / AC-11: expected exit 64 (project-key resolution failure); \
+         got {:?}. stderr: {stderr}",
         output.status.code()
     );
     assert!(
         stdout.trim().is_empty(),
-        "BC-3.8.012 / AC-11: output-channel hygiene; got: {stdout}"
+        "S-578-4 / AC-11: output-channel hygiene; got: {stdout}"
     );
 }
 
 // ─── AC-12 (NEW): --help pins "requires --request-type" on BOTH flags ───────
 
-/// AC-12 (BC-3.8.012 delivery item (d) — help text first-line update,
-/// [mode: human help]): `jr issue create --help` must contain
-/// "requires --request-type" for BOTH the `--field` and `--on-behalf-of`
-/// entries. A single `stdout.contains(…)` would pass with only one flag
-/// updated — the `.count() == 2` form is required to pin BOTH.
+/// AC-12 (S-578-4 INVERSION, BC-3.8.012 F3/F4 removal obligations —
+/// "AC-12 obligation", [mode: human help]): post-DEC-310-reversal, `--field`'s
+/// help line NO LONGER carries "requires --request-type" at all (the clause's
+/// removal IS the reversal itself) — only `--on-behalf-of`'s help line keeps
+/// it. The count assertion changes from `== 2` to `== 1`, scoped to the
+/// `--on-behalf-of` help line only.
 #[tokio::test]
 async fn test_platform_create_help_flags_requires_request_type_in_help() {
     let output = Command::cargo_bin("jr")
@@ -3563,19 +3625,21 @@ async fn test_platform_create_help_flags_requires_request_type_in_help() {
 
     assert_eq!(
         normalized.matches("requires --request-type").count(),
-        2,
-        "BC-3.8.012 / AC-12: 'requires --request-type' must appear exactly twice \
-         (once for --field, once for --on-behalf-of) in whitespace-normalized help; \
+        1,
+        "S-578-4 / AC-12 (inverted): 'requires --request-type' must appear \
+         EXACTLY ONCE post-reversal — scoped to the --on-behalf-of help line \
+         only; --field's help line no longer carries the clause at all; \
          got normalized help: {normalized}"
     );
 }
 
 // ─── AC-13 (NEW): empty --on-behalf-of + --field → combined, not two singles ─
 
-/// AC-13 (BC-3.8.012 EC-3.8.012-1 — combined-check ordering with empty
-/// `--on-behalf-of`, [mode: human]): `--on-behalf-of "" --field a=b` WITHOUT
-/// `--request-type` fires the COMBINED error, not two independent single-flag
-/// errors — `""` is still `Some("")`, i.e. `is_some()` is true. Dedicated
+/// AC-13 (S-578-4 INVERSION, BC-3.8.013 EC-3.8.013-1 — the combined check no
+/// longer exists, [mode: human]): `--on-behalf-of "" --field a=b` WITHOUT
+/// `--request-type` now fires ONLY BC-3.8.013's STANDALONE guard — `""` is
+/// still `Some("")`, i.e. `is_some()` is true, and this guard is
+/// UNCONDITIONAL (step 2, unaffected by `--field`'s presence). Dedicated
 /// isolated `MockServer` (not `mount_platform_create_stubs`) so the
 /// zero-HTTP proof is DISCRIMINATING against the would-otherwise-succeed
 /// guard-absent path.
@@ -3632,32 +3696,33 @@ async fn test_platform_create_combined_empty_on_behalf_with_field_exits_64_combi
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
-        stderr.contains("--field and --on-behalf-of are only valid with"),
-        "BC-3.8.012 / AC-13: combined error must be present; got: {stderr}"
+        stderr.contains("--on-behalf-of is only valid with"),
+        "S-578-4 / AC-13 (inverted): the STANDALONE BC-3.8.013 error must \
+         be present; got: {stderr}"
     );
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.8.012 / AC-13: expected exit 64; got {:?}. stderr: {stderr}",
+        "S-578-4 / AC-13: expected exit 64; got {:?}. stderr: {stderr}",
         output.status.code()
     );
     assert!(
-        !stderr.contains("--field is only valid with"),
-        "BC-3.8.012 / AC-13: FALSIFIABLE-COARSE — single-flag guard must NOT fire instead of combined; got: {stderr}"
+        !stderr.contains("--field and --on-behalf-of are only valid with"),
+        "S-578-4 / AC-13: the now-removed combined-error string must NEVER appear; got: {stderr}"
     );
     assert!(
-        !stderr.contains("--on-behalf-of is only valid with"),
-        "BC-3.8.013 / AC-13: FALSIFIABLE-COARSE — single-flag guard must NOT fire instead of combined; got: {stderr}"
+        !stderr.contains("--field is only valid with"),
+        "S-578-4 / AC-13: --field must not itself contribute any pre-flight error; got: {stderr}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012+013 / AC-13: REGRESSION PIN — DISCRIMINATING (this invocation previously \
+        "S-578-4 / AC-13: REGRESSION PIN — DISCRIMINATING (this invocation previously \
          emitted BOTH old S-383 warn strings); got: {stderr}"
     );
     assert!(
         server.received_requests().await.unwrap().is_empty(),
-        "BC-3.8.012 / AC-13: NORMATIVE zero-HTTP proof — would-otherwise-succeed, so a \
-         guard-absent implementation would have reached HTTP"
+        "S-578-4 / AC-13: NORMATIVE zero-HTTP proof — BC-3.8.013's standalone \
+         guard remains unconditional and fires before any HTTP"
     );
 }
 
@@ -3811,12 +3876,17 @@ async fn test_platform_create_on_behalf_empty_string_exits_64_013_error() {
 
 // ─── AC-17 (NEW): --markdown + --field exits 64 (BC-3.8.012), not markdown err ─
 
-/// AC-17 (BC-3.8.012 EC-3.8.012-5 — guard fires before `--markdown`→ADF
-/// conversion, [mode: human]): `--markdown --field description=x` WITHOUT
-/// `--request-type` exits 64 with the BC-3.8.012 error, NOT the JSM-path
-/// `--markdown` conflict error (that string lives only inside
-/// `handle_jsm_create`, structurally unreachable without `--request-type`
-/// routing).
+/// AC-17 (S-578-4 INVERSION, EC-3.8.012-5 now stale post-reversal —
+/// AC-018's regression-check counterpart in `tests/issue_create_field.rs`
+/// covers the WOULD-otherwise-succeed variant of this invocation; [mode:
+/// human]): `--markdown --field description=x` WITHOUT `--request-type` no
+/// longer fires the removed DEC-188 guard. This fixture has no `--project`,
+/// so the PRE-EXISTING "Project key is required" error fires instead
+/// (`description` collides with NO dedicated flag here — `--description`/
+/// `--description-stdin` are absent — so the D2 collision guard passes
+/// cleanly). Still NOT the JSM-path `--markdown` conflict error (that string
+/// lives only inside `handle_jsm_create`, structurally unreachable without
+/// `--request-type` routing).
 #[tokio::test]
 async fn test_platform_create_markdown_with_field_exits_64_bc_3_8_012_not_markdown_error() {
     let cwd_dir = tempfile::tempdir().unwrap();
@@ -3850,36 +3920,42 @@ async fn test_platform_create_markdown_with_field_exits_64_bc_3_8_012_not_markdo
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.8.012 / AC-17: expected exit 64; got {:?}. stderr: {stderr}",
+        "S-578-4 / AC-17 (inverted): expected exit 64 (project-key resolution \
+         failure, NOT the removed pre-flight guard); got {:?}. stderr: {stderr}",
         output.status.code()
     );
     assert!(
-        stderr.contains("--field is only valid with"),
-        "BC-3.8.012 / AC-17: positive guard assertion; got: {stderr}"
+        stderr.contains("Project key is required"),
+        "S-578-4 / AC-17: DISCRIMINATING (inverted) — the PRE-EXISTING project \
+         resolution error must now fire; got: {stderr}"
     );
     assert!(
-        !stderr.contains("Project key"),
-        "BC-3.8.012 / AC-17: DISCRIMINATING — guard must fire BEFORE project-key resolution; got: {stderr}"
+        !stderr.contains("--field is only valid with"),
+        "S-578-4 / AC-17: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         !stderr.contains("cannot be combined with `--markdown`"),
-        "BC-3.8.012 / AC-17: HYGIENE — the JSM-path --markdown conflict string is structurally \
+        "S-578-4 / AC-17: HYGIENE — the JSM-path --markdown conflict string is structurally \
          unreachable without --request-type routing; got: {stderr}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012 / AC-17: REGRESSION PIN; got: {stderr}"
+        "S-578-4 / AC-17: REGRESSION PIN; got: {stderr}"
     );
 }
 
 // ─── AC-18 (NEW): --description-stdin + --field exits 64, stdin not consumed ─
 
-/// AC-18 (BC-3.8.012 EC-3.8.012-7 — guard fires before the
-/// `--description-stdin` blocking read, [mode: human]): `--field a=b
-/// --description-stdin` WITHOUT `--request-type` exits 64 before the blocking
-/// stdin read at step 4a. Stdin is piped (non-TTY) with some content; if the
-/// guard did NOT fire first, the read would consume it and the
-/// would-otherwise-succeed platform POST would proceed.
+/// AC-18 (S-578-4 INVERSION, EC-3.8.012-7 now stale post-reversal,
+/// BC-3.3.011 taxonomy row 2, [mode: human]): `--field a=b
+/// --description-stdin` WITHOUT `--request-type` no longer exits 64 via any
+/// pre-flight guard — the removed DEC-188 guard no longer intercepts.
+/// `description_stdin` is a governed D2 key, but the `--field` here targets
+/// wire key "a" (not "description"), so the D2 collision guard passes
+/// cleanly; the blocking stdin read at step 4a now DOES run (unlike the
+/// pre-reversal contract, where the guard fired before it). Resolution then
+/// fails at step 4b: field "a" is absent from the mounted (empty)
+/// `list_fields()` response — BC-3.3.011 taxonomy row 2 (zero matches).
 #[tokio::test]
 async fn test_platform_create_description_stdin_with_field_exits_64_stdin_not_consumed() {
     let server = MockServer::start().await;
@@ -3921,36 +3997,47 @@ async fn test_platform_create_description_stdin_with_field_exits_64_stdin_not_co
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.8.012 / AC-18: expected exit 64; got {:?}. stderr: {stderr}",
+        "S-578-4 / AC-18 (inverted): expected exit 64 (zero-matches resolution \
+         failure for field 'a', NOT the removed pre-flight guard); got {:?}. \
+         stderr: {stderr}",
         output.status.code()
     );
     assert!(
-        stderr.contains("--field is only valid with"),
-        "BC-3.8.012 / AC-18: positive guard assertion; got: {stderr}"
+        stderr.contains("not found") && stderr.contains("Zero matches for 'a'"),
+        "S-578-4 / AC-18: field 'a' must fail BC-3.3.011 taxonomy row 2 \
+         (zero matches in list_fields()) — the stdin read at step 4a runs \
+         normally now that the pre-flight guard is gone; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field is only valid with"),
+        "S-578-4 / AC-18: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty(),
-        "BC-3.8.012 / AC-18: stdout must be empty (HYGIENE); got: {stdout}"
+        "S-578-4 / AC-18: stdout must be empty (HYGIENE); got: {stdout}"
     );
     assert!(
         !stderr.contains("Created issue"),
-        "BC-3.8.012 / AC-18: DISCRIMINATING — would-otherwise-succeed, so a guard-absent \
-         implementation would have reached the success path; got: {stderr}"
+        "S-578-4 / AC-18: DISCRIMINATING — no success path must have executed; got: {stderr}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012 / AC-18: REGRESSION PIN; got: {stderr}"
+        "S-578-4 / AC-18: REGRESSION PIN; got: {stderr}"
     );
 }
 
 // ─── AC-19 (NEW): --field a= (empty value) still fires BC-3.8.012 ───────────
 
-/// AC-19 (BC-3.8.012 EC-3.8.012-9 — key-present empty-value still triggers
-/// guard, [mode: human]): `--field a=` (key present, empty value after `=`)
-/// WITHOUT `--request-type` exits 64. The guard fires on
-/// `!field_pairs.is_empty()` (presence-only) — value contents are never
-/// inspected at guard stage. Distinct from EC-3.8.012-3's malformed-no-equals
-/// class (AC-7).
+/// AC-19 (S-578-4 INVERSION, EC-3.8.012-9 fully superseded, BC-3.3.011
+/// taxonomy row 2, [mode: human]): `--field a=` (key present, empty value
+/// after `=`) WITHOUT `--request-type` still exits 64 — but the removed
+/// DEC-188 presence-only guard is GONE; `parse_field_kv` accepts an empty
+/// VALUE (BC-3.8.008's pre-existing "empty value allowed" contract,
+/// unaffected by this story), so resolution proceeds to the SAME
+/// zero-matches failure as AC-1/AC-10/AC-18 (field "a" absent from the
+/// mounted empty `list_fields()` response) — the VALUE's emptiness is never
+/// inspected at ANY stage, matching the original AC-19 intent under a
+/// different mechanism.
 #[tokio::test]
 async fn test_platform_create_field_empty_value_exits_64_bc_3_8_012() {
     let server = MockServer::start().await;
@@ -3990,24 +4077,30 @@ async fn test_platform_create_field_empty_value_exits_64_bc_3_8_012() {
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.8.012 / AC-19: expected exit 64; got {:?}. stderr: {stderr}",
+        "S-578-4 / AC-19 (inverted): expected exit 64 (zero-matches resolution \
+         failure, NOT the removed pre-flight guard); got {:?}. stderr: {stderr}",
         output.status.code()
     );
     assert!(
-        stderr.contains("--field is only valid with"),
-        "BC-3.8.012 / AC-19: positive guard assertion; got: {stderr}"
+        stderr.contains("not found") && stderr.contains("Zero matches for 'a'"),
+        "S-578-4 / AC-19: field 'a' must fail BC-3.3.011 taxonomy row 2 \
+         (zero matches) — the empty VALUE is never inspected; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--field is only valid with"),
+        "S-578-4 / AC-19: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty(),
-        "BC-3.8.012 / AC-19: stdout must be empty (HYGIENE); got: {stdout}"
+        "S-578-4 / AC-19: stdout must be empty (HYGIENE); got: {stdout}"
     );
     assert!(
         !stderr.contains("Created issue"),
-        "BC-3.8.012 / AC-19: DISCRIMINATING — no success path must have executed; got: {stderr}"
+        "S-578-4 / AC-19: DISCRIMINATING — no success path must have executed; got: {stderr}"
     );
     assert!(
         !stderr.contains("is ignored on the platform create path"),
-        "BC-3.8.012 / AC-19: REGRESSION PIN — DISCRIMINATING (this invocation previously \
+        "S-578-4 / AC-19: REGRESSION PIN — DISCRIMINATING (this invocation previously \
          triggered the old S-383 warn string); got: {stderr}"
     );
 }
