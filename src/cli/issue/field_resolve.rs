@@ -147,16 +147,16 @@ fn strip_integer_decimal_suffix(s: &str) -> Option<&str> {
 /// call sites wrap their issue key in this variant instead of passing a bare
 /// `&str`, with no other change to their surrounding code.
 ///
-/// `Create`'s resolution logic (BC-3.3.010 Steps 3–6) is a NEW code path,
-/// not yet implemented at stub stage — see the `todo!()` in
-/// [`resolve_edit_fields`]'s `Create` match arm below.
+/// `Create`'s resolution logic (BC-3.3.010 Steps 3–6) is implemented by
+/// `resolve_against_createmeta`, dispatched from [`resolve_edit_fields`]'s
+/// `Create` match arm below.
 pub(crate) enum FieldMetaSource<'a> {
     /// `issue edit` (BC-3.4.015/016 et al) — `GET /issue/{key}/editmeta`.
     Edit { key: &'a str },
     /// `issue create` platform path (BC-3.3.010) — resolves `issue_type_name`
     /// to an id via `get_issue_types_for_project` (S-331), then calls
-    /// `get_createmeta_fields` (S-580-1). Both are REUSED VERBATIM inside the
-    /// eventual implementation of this branch — never re-implemented, even a
+    /// `get_createmeta_fields` (S-580-1). Both are REUSED VERBATIM by
+    /// `resolve_against_createmeta` — never re-implemented, even a
     /// "simplified" create-path-specific fetcher (Architecture Compliance
     /// Rule 1).
     Create {
@@ -182,8 +182,8 @@ pub(crate) enum FieldMetaSource<'a> {
 /// `points`/`team` are the two "resolved-id" members (AC-011) — asserted
 /// SEPARATELY per the story's documented algorithm (bypass-form-only
 /// equality for `--points`; config-only field-id lookup for `--team`, never
-/// an HTTP call to service this guard) inside the (currently `todo!()`)
-/// implementation of `detect_flag_field_overlap` itself.
+/// an HTTP call to service this guard) via `detect_flag_field_overlap`'s
+/// `resolved_id_flags` parameter, not this static-key set.
 pub(crate) const CREATE_D2_GOVERNED_KEYS: &[&str] = &[
     "summary",
     "description",
@@ -217,20 +217,82 @@ pub(crate) const CREATE_D2_GOVERNED_KEYS: &[&str] = &[
 ///
 /// # Errors
 /// Returns `JrError::UserError` on a collision — see above.
+///
+/// # Parameters
+/// - `field_pairs`: the parsed `--field` map (`parse_field_kv` output).
+/// - `dedicated_flags`: `(governed_key, is_present)` pairs for STATIC
+///   wire-key collisions — the governed key is compared case-insensitively
+///   against `field_pairs`' keys directly (e.g. `"summary"` vs a `--field
+///   summary=...` pair).
+/// - `governed_keys`: the caller's governed-key set (only entries also
+///   present here participate in the `dedicated_flags` check).
+/// - `resolved_id_flags`: `(label, Some(resolved_field_id))` pairs for
+///   RESOLVED-ID collisions (`--points`/`--team`) — bypass-form-only
+///   equality against `field_pairs`' keys. `None` means either the
+///   dedicated flag was absent on this invocation or its backing field id
+///   is not configured; either way it never trips the guard (the
+///   documented non-firing residual for a human display-name spelling on
+///   the `--field` side is a natural consequence of this bypass-only
+///   equality, since a display name never equals a `customfield_NNNNN`
+///   literal).
 pub(crate) fn detect_flag_field_overlap(
     field_pairs: &HashMap<String, FieldValueSpec>,
     dedicated_flags: &[(&str, bool)],
     governed_keys: &[&str],
+    resolved_id_flags: &[(&str, Option<&str>)],
 ) -> Result<()> {
-    // BC-3.3.010 Invariant 5 / BC-3.3.011 taxonomy row 1 (S-578-4, NOT YET
-    // IMPLEMENTED at stub stage): case-insensitively intersect `field_pairs`'
-    // keys against `governed_keys`, then check each PRESENT dedicated flag
-    // against that intersection. See AC-011 for the exact 10-member matrix
-    // (including the --points/--team resolved-id special-casing) and the
-    // documented non-firing residual (a human display-name spelling like
-    // `--field "Story Points"=8` does NOT trip this guard).
-    let _ = (field_pairs, dedicated_flags, governed_keys);
-    todo!("S-578-4: D2 create-path collision guard (BC-3.3.010 Invariant 5, VP-578-021)")
+    let field_keys_lower: std::collections::HashSet<String> =
+        field_pairs.keys().map(|k| k.to_lowercase()).collect();
+
+    // Static key collisions (the 8 governed keys asserted via presence
+    // flags: summary/description/issuetype/priority/components/labels/
+    // parent/assignee).
+    for (key, present) in dedicated_flags {
+        if !*present {
+            continue;
+        }
+        if !governed_keys.iter().any(|g| g.eq_ignore_ascii_case(key)) {
+            continue;
+        }
+        if field_keys_lower.contains(&key.to_lowercase()) {
+            return Err(collision_error(key));
+        }
+    }
+
+    // Resolved-id key collisions (points/team) — bypass-form-only equality,
+    // never a display-name lookup (would require HTTP, violating the
+    // zero-HTTP boundary this guard runs within).
+    for (label, resolved_id) in resolved_id_flags {
+        if let Some(id) = resolved_id {
+            if field_keys_lower.contains(&id.to_lowercase()) {
+                return Err(collision_error(label));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Builds the D2/Gate-B-shaped collision error naming both the colliding
+/// `--field` key and its dedicated-flag counterpart.
+fn collision_error(key: &str) -> anyhow::Error {
+    let flag_hint = match key {
+        "summary" => "--summary",
+        "description" => "--description/--description-stdin",
+        "issuetype" => "--type",
+        "priority" => "--priority",
+        "components" => "--component",
+        "labels" => "--label",
+        "parent" => "--parent",
+        "assignee" => "--to/--account-id",
+        "points" => "--points",
+        "team" => "--team",
+        _ => "a dedicated flag",
+    };
+    JrError::UserError(format!(
+        "{key} is set by both {flag_hint} and --field; use only one."
+    ))
+    .into()
 }
 
 /// Resolve and apply `--field NAME=VALUE` pairs for `issue edit` (single-key path)
@@ -481,33 +543,126 @@ pub(crate) async fn resolve_edit_fields(
     // (Steps 3–6), branching on `source` (S-578-4). ---
     match source {
         FieldMetaSource::Edit { key } => {
-            resolve_against_editmeta(client, key, resolved, fields, changed_fields, planned_preview)
-                .await
+            resolve_against_editmeta(
+                client,
+                key,
+                resolved,
+                fields,
+                changed_fields,
+                planned_preview,
+            )
+            .await
         }
         FieldMetaSource::Create {
             project_key,
             issue_type_name,
         } => {
-            // BC-3.3.010 Steps 3–6 (S-578-4, NOT YET IMPLEMENTED at stub
-            // stage): resolve `issue_type_name` to an id via
-            // `get_issue_types_for_project` (S-331, case-insensitive,
-            // unknown name → exit 64 listing valid types — AC-007), then
-            // call `get_createmeta_fields` (S-580-1) for that project +
-            // issue type id, then run the SAME per-pair type dispatch
-            // (hinted-bypass + bare-form, AC-008) the `Edit` arm above runs,
-            // substituting `CreateMetaField` for `EditMetaField` (Step 3
-            // source substitution, AC-006). `fields`/`changed_fields`/
-            // `planned_preview` are merged into exactly as the `Edit` arm
-            // does (Step 5/6) — signature and merge contract unchanged, only
-            // the metadata SOURCE differs.
-            todo!(
-                "S-578-4: createmeta-sourced --field resolution not yet implemented \
-                 (project={project_key}, issue_type={issue_type_name}, \
-                 {} resolved field pair(s) pending)",
-                resolved.len()
+            resolve_against_createmeta(
+                client,
+                project_key,
+                issue_type_name,
+                resolved,
+                fields,
+                changed_fields,
+                planned_preview,
             )
+            .await
         }
     }
+}
+
+/// The `Create`-source Phase 2/3 body (BC-3.3.010 Steps 3–6, S-578-4).
+///
+/// Resolves `issue_type_name` to an id via `get_issue_types_for_project`
+/// (S-331, REUSED VERBATIM, case-insensitive; unknown name → exit 64 listing
+/// valid types — AC-007), then calls `get_createmeta_fields` (S-580-1,
+/// REUSED VERBATIM) for that project + issue type id, then runs the SAME
+/// per-pair type dispatch (hinted-bypass + bare-form, AC-008) as the `Edit`
+/// arm via the shared [`dispatch_field_value`] helper — no second,
+/// independently-implemented dispatch (Architecture Compliance Rule 1).
+///
+/// **No `operations`/`"set"` check** — createmeta has no `operations` array
+/// (BC-3.3.010 "No operations/set check on create"); any field returned in
+/// createmeta's field list for the resolved issue type is assumed settable.
+async fn resolve_against_createmeta(
+    client: &JiraClient,
+    project_key: &str,
+    issue_type_name: &str,
+    resolved: Vec<(String, String, FieldValueSpec)>,
+    fields: &mut serde_json::Value,
+    changed_fields: &mut BTreeMap<String, String>,
+    planned_preview: &mut BTreeMap<String, serde_json::Value>,
+) -> Result<()> {
+    // Step 3 (issue-type name → id, S-331 reuse, AC-007): case-insensitive,
+    // offset-paginated internally inside get_issue_types_for_project.
+    let issue_types = client.get_issue_types_for_project(project_key).await?;
+    let issue_type_id = issue_types
+        .iter()
+        .find(|it| it.name.eq_ignore_ascii_case(issue_type_name))
+        .map(|it| it.id.clone())
+        .ok_or_else(|| {
+            let mut valid: Vec<&str> = issue_types.iter().map(|it| it.name.as_str()).collect();
+            valid.sort_unstable();
+            JrError::UserError(format!(
+                "Issue type '{issue_type_name}' not found in project '{project_key}'. \
+                 Valid issue types: {}.",
+                valid.join(", ")
+            ))
+        })?;
+
+    // Step 3 (field enumeration, S-580-1 reuse, AC-006/VP-578-001):
+    // GET /rest/api/3/issue/createmeta/{project}/issuetypes/{issueTypeId},
+    // offset-paginated internally — NEVER GET /issue/{key}/editmeta.
+    let createmeta_fields = client
+        .get_createmeta_fields(project_key, &issue_type_id)
+        .await?;
+    let mut meta_by_id: HashMap<String, crate::api::jira::issues::CreateMetaField> =
+        createmeta_fields
+            .into_iter()
+            .map(|f| (f.field_id.clone(), f))
+            .collect();
+
+    for (field_id, human_name, spec) in resolved {
+        // Step 3: validate field is on the resolved issue type's Create
+        // screen (createmeta field list) — "Create screen" substituted for
+        // "Edit screen" throughout (BC-3.3.011).
+        let meta_field = meta_by_id.remove(&field_id).ok_or_else(|| {
+            JrError::UserError(format!(
+                "Field '{human_name}' ({field_id}) is not on the Create screen for project \
+                 '{project_key}' issue type '{issue_type_name}'. A project admin must add it \
+                 to the Create screen before it can be set via `jr issue create --field`. \
+                 Check the screen configuration in Jira project settings."
+            ))
+        })?;
+
+        // Adapt CreateMetaField -> EditMetaField shape so the shared
+        // dispatch (identical to the Edit arm, AC-008) can be reused
+        // verbatim. `operations` is synthesized as `["set"]` — createmeta
+        // has no operations concept, and every createmeta field is
+        // assumed settable (see this function's own doc comment).
+        let adapted = crate::types::jira::EditMetaField {
+            name: meta_field.name,
+            schema: meta_field.schema,
+            allowed_values: meta_field.allowed_values,
+            operations: vec!["set".to_string()],
+            required: false,
+            auto_complete_url: meta_field.auto_complete_url,
+        };
+
+        dispatch_field_value(
+            client,
+            &field_id,
+            human_name,
+            spec,
+            &adapted,
+            fields,
+            changed_fields,
+            planned_preview,
+        )
+        .await?;
+    }
+
+    Ok(())
 }
 
 /// The `Edit`-source Phase 2/3 body (BC-3.4.015 Steps 3–6, BC-3.4.016 option
@@ -529,8 +684,6 @@ async fn resolve_against_editmeta(
 
     // --- Phase 3: Per-pair editmeta validation + type dispatch (Steps 3b–6). ---
     for (field_id, human_name, spec) in resolved {
-        let value = spec.value.clone();
-
         // Step 3: validate field is in editmeta (present on the Edit screen).
         let meta_field = editmeta.fields.get(&field_id).ok_or_else(|| {
             JrError::UserError(format!(
@@ -551,82 +704,102 @@ async fn resolve_against_editmeta(
             .into());
         }
 
-        // S-578-2 (AC-001): hinted-bypass dispatch runs BEFORE the existing
-        // `schema.type` match below when `spec.kind` is present — the bare-form
-        // dispatch (Step 4 and its `field_type` match, BC-3.4.015/016) stays
-        // UNCHANGED and PERMANENT for `kind: None`, per Architecture Compliance
-        // Rule 1.
-        if let Some(kind) = spec.kind {
-            let (wire_value, display_value): (serde_json::Value, String) = match kind {
-                FieldValueKind::Option => compose_option_hint(&value, &human_name, meta_field)?,
-                FieldValueKind::Id => compose_id_hint(&value),
-                FieldValueKind::Name => compose_name_hint(&value),
-                FieldValueKind::Asset => compose_asset_hint(client, &value).await?,
-            };
-            // AC-012: for a hinted field the dry-run preview IS the composed
-            // wire shape itself (documented exception to the general rule).
-            planned_preview.insert(human_name.clone(), wire_value.clone());
-            fields[&field_id] = wire_value;
-            changed_fields.insert(human_name, display_value);
-            continue;
+        dispatch_field_value(
+            client,
+            &field_id,
+            human_name,
+            spec,
+            meta_field,
+            fields,
+            changed_fields,
+            planned_preview,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Shared per-pair Step 4-6 dispatch (hinted-bypass + bare-form type
+/// dispatch, BC-3.4.015 Step 4 / BC-3.4.016 Step 4a) — extracted (S-578-4,
+/// pure code motion, no behavior change for the `Edit` call site) so
+/// [`resolve_against_editmeta`] and [`resolve_against_createmeta`] share ONE
+/// dispatch implementation instead of two independently-maintained copies
+/// (Architecture Compliance Rule 1, AC-008).
+///
+/// Callers are responsible for their own Step 3/3b screen-membership and
+/// (editmeta-only) operations checks BEFORE calling this — this function
+/// only ever sees a `meta_field` already confirmed present/settable.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_field_value(
+    client: &JiraClient,
+    field_id: &str,
+    human_name: String,
+    spec: FieldValueSpec,
+    meta_field: &crate::types::jira::EditMetaField,
+    fields: &mut serde_json::Value,
+    changed_fields: &mut BTreeMap<String, String>,
+    planned_preview: &mut BTreeMap<String, serde_json::Value>,
+) -> Result<()> {
+    let value = spec.value.clone();
+
+    // S-578-2 (AC-001): hinted-bypass dispatch runs BEFORE the existing
+    // `schema.type` match below when `spec.kind` is present — the bare-form
+    // dispatch (Step 4 and its `field_type` match, BC-3.4.015/016) stays
+    // UNCHANGED and PERMANENT for `kind: None`, per Architecture Compliance
+    // Rule 1.
+    if let Some(kind) = spec.kind {
+        let (wire_value, display_value): (serde_json::Value, String) = match kind {
+            FieldValueKind::Option => compose_option_hint(&value, &human_name, meta_field)?,
+            FieldValueKind::Id => compose_id_hint(&value),
+            FieldValueKind::Name => compose_name_hint(&value),
+            FieldValueKind::Asset => compose_asset_hint(client, &value).await?,
+        };
+        // AC-012: for a hinted field the dry-run preview IS the composed
+        // wire shape itself (documented exception to the general rule).
+        planned_preview.insert(human_name.clone(), wire_value.clone());
+        fields[field_id] = wire_value;
+        changed_fields.insert(human_name, display_value);
+        return Ok(());
+    }
+
+    // Step 4: type dispatch.
+    let field_type = meta_field.schema.field_type.as_str();
+    let wire_value: serde_json::Value;
+    let display_value: String;
+
+    match field_type {
+        "string" | "text" => {
+            wire_value = serde_json::Value::String(value.clone());
+            display_value = value.clone();
         }
-
-        // Step 4: type dispatch.
-        let field_type = meta_field.schema.field_type.as_str();
-        let wire_value: serde_json::Value;
-        let display_value: String;
-
-        match field_type {
-            "string" | "text" => {
-                wire_value = serde_json::Value::String(value.clone());
-                display_value = value.clone();
-            }
-            "number" => {
-                // Stage 1: exact i64 parse first (no f64 precision loss).
-                // S-421: this short-circuits the f64 round-trip for all i64-representable
-                // inputs, eliminating both the boundary-saturation bug and the precision
-                // loss for integers above 2^53 (e.g., "9007199254740993" was off-by-one
-                // pre-fix when parsed through f64 first).
-                if let Ok(n) = value.parse::<i64>() {
+        "number" => {
+            // Stage 1: exact i64 parse first (no f64 precision loss).
+            // S-421: this short-circuits the f64 round-trip for all i64-representable
+            // inputs, eliminating both the boundary-saturation bug and the precision
+            // loss for integers above 2^53 (e.g., "9007199254740993" was off-by-one
+            // pre-fix when parsed through f64 first).
+            if let Ok(n) = value.parse::<i64>() {
+                wire_value = serde_json::Value::Number(serde_json::Number::from(n));
+            } else if let Some(stripped) = strip_integer_decimal_suffix(&value) {
+                // Stage 1.5 (S-421 followup, post-Copilot review):
+                // Integer with trailing-zero decimal like "5.0" or "9223372036854775807.0".
+                // Strip the ".0+" suffix and retry i64 parse. This preserves exact i64
+                // semantics for decimal-form integer inputs that would otherwise lose
+                // precision via the f64 round-trip in Stage 2.
+                //
+                // Background: all four boundary strings — "9223372036854775807",
+                // "9223372036854775808", "9223372036854775807.0", "9223372036854775808.0"
+                // — parse to the same f64 value (2^63 = 9223372036854775808.0) because
+                // i64::MAX is not exactly representable in f64. Without Stage 1.5, the
+                // strict `<` predicate in Stage 2 would reject this f64 and emit it as
+                // f64 wire form — correct for the overflow case but a regression for
+                // "9223372036854775807.0" (the decimal form of i64::MAX, which IS valid).
+                if let Ok(n) = stripped.parse::<i64>() {
                     wire_value = serde_json::Value::Number(serde_json::Number::from(n));
-                } else if let Some(stripped) = strip_integer_decimal_suffix(&value) {
-                    // Stage 1.5 (S-421 followup, post-Copilot review):
-                    // Integer with trailing-zero decimal like "5.0" or "9223372036854775807.0".
-                    // Strip the ".0+" suffix and retry i64 parse. This preserves exact i64
-                    // semantics for decimal-form integer inputs that would otherwise lose
-                    // precision via the f64 round-trip in Stage 2.
-                    //
-                    // Background: all four boundary strings — "9223372036854775807",
-                    // "9223372036854775808", "9223372036854775807.0", "9223372036854775808.0"
-                    // — parse to the same f64 value (2^63 = 9223372036854775808.0) because
-                    // i64::MAX is not exactly representable in f64. Without Stage 1.5, the
-                    // strict `<` predicate in Stage 2 would reject this f64 and emit it as
-                    // f64 wire form — correct for the overflow case but a regression for
-                    // "9223372036854775807.0" (the decimal form of i64::MAX, which IS valid).
-                    if let Ok(n) = stripped.parse::<i64>() {
-                        wire_value = serde_json::Value::Number(serde_json::Number::from(n));
-                    } else {
-                        // Stripped integer still doesn't fit in i64 (e.g., "9223372036854775808.0"
-                        // strips to "9223372036854775808" which overflows). Fall through to Stage 2.
-                        let parsed: f64 = value.parse().map_err(|_| {
-                            JrError::UserError(format!(
-                                "Cannot parse '{value}' as a number for field '{human_name}'. \
-                                 Provide a valid numeric value (integer, decimal, or scientific \
-                                 notation like 1e10)."
-                            ))
-                        })?;
-                        if !parsed.is_finite() {
-                            return Err(JrError::UserError(format!(
-                                "Value '{value}' for field '{human_name}' is not a finite number \
-                                 (NaN or Inf are not accepted). Provide a valid numeric value."
-                            ))
-                            .into());
-                        }
-                        wire_value = parsed_number_to_wire_value(parsed);
-                    }
                 } else {
-                    // Stage 2: f64 fallback for decimals, scientific notation, and
-                    // integers outside the i64 range.
+                    // Stripped integer still doesn't fit in i64 (e.g., "9223372036854775808.0"
+                    // strips to "9223372036854775808" which overflows). Fall through to Stage 2.
                     let parsed: f64 = value.parse().map_err(|_| {
                         JrError::UserError(format!(
                             "Cannot parse '{value}' as a number for field '{human_name}'. \
@@ -641,59 +814,77 @@ async fn resolve_against_editmeta(
                         ))
                         .into());
                     }
-                    // Emit integer wire form for whole numbers in range, f64 otherwise.
-                    // Helper extracted in S-409; bounds tightened to strict inequalities in S-421.
                     wire_value = parsed_number_to_wire_value(parsed);
                 }
-                display_value = value.clone();
-            }
-            "date" | "datetime" => {
-                // Pass-through: no client-side validation; server validates.
-                wire_value = serde_json::Value::String(value.clone());
-                display_value = value.clone();
-            }
-            "user" => {
-                // Wire: {"accountId": VALUE}; display: raw accountId.
-                wire_value = serde_json::json!({"accountId": value});
-                display_value = value.clone();
-            }
-            "option" => {
-                // Step 4a: option resolution (BC-3.4.016). Extracted into the
-                // shared `resolve_option_value` helper (S-578-2) so the
-                // `:option` hinted-bypass composer's non-cascading path
-                // (`compose_option_hint`) can reuse the IDENTICAL algorithm —
-                // AC-002 requires byte-for-byte identical wire output between
-                // the bare form and `:option` for the same NAME/VALUE. This is
-                // a pure code-motion refactor: the bare-form dispatch's
-                // observable behavior is unchanged (Architecture Compliance
-                // Rule 1), verified by the full pre-existing regression suite.
-                let allowed = meta_field.allowed_values.as_deref().unwrap_or(&[]);
-                if allowed.is_empty() {
+            } else {
+                // Stage 2: f64 fallback for decimals, scientific notation, and
+                // integers outside the i64 range.
+                let parsed: f64 = value.parse().map_err(|_| {
+                    JrError::UserError(format!(
+                        "Cannot parse '{value}' as a number for field '{human_name}'. \
+                         Provide a valid numeric value (integer, decimal, or scientific \
+                         notation like 1e10)."
+                    ))
+                })?;
+                if !parsed.is_finite() {
                     return Err(JrError::UserError(format!(
-                        "Field '{human_name}' has no configured option values. \
-                         An admin must populate the option list before values can be set."
+                        "Value '{value}' for field '{human_name}' is not a finite number \
+                         (NaN or Inf are not accepted). Provide a valid numeric value."
                     ))
                     .into());
                 }
-                let (wv, dv) = resolve_option_value(&value, &human_name, allowed)?;
-                wire_value = wv;
-                display_value = dv;
+                // Emit integer wire form for whole numbers in range, f64 otherwise.
+                // Helper extracted in S-409; bounds tightened to strict inequalities in S-421.
+                wire_value = parsed_number_to_wire_value(parsed);
             }
-            other => {
-                return Err(unsupported_field_type_error(other, &human_name).into());
-            }
+            display_value = value.clone();
         }
-
-        // Step 5: merge (field_id, wire_value) into the shared fields JSON object.
-        // AC-012: the bare-form dry-run preview stays the SIMPLIFIED display
-        // string (general rule, unchanged) — only a hinted field's preview
-        // (above) is the real wire shape.
-        planned_preview.insert(human_name.clone(), serde_json::json!(display_value.clone()));
-        fields[&field_id] = wire_value;
-
-        // Step 6: insert (human_name, display_value) into changed_fields.
-        changed_fields.insert(human_name, display_value);
+        "date" | "datetime" => {
+            // Pass-through: no client-side validation; server validates.
+            wire_value = serde_json::Value::String(value.clone());
+            display_value = value.clone();
+        }
+        "user" => {
+            // Wire: {"accountId": VALUE}; display: raw accountId.
+            wire_value = serde_json::json!({"accountId": value});
+            display_value = value.clone();
+        }
+        "option" => {
+            // Step 4a: option resolution (BC-3.4.016). Extracted into the
+            // shared `resolve_option_value` helper (S-578-2) so the
+            // `:option` hinted-bypass composer's non-cascading path
+            // (`compose_option_hint`) can reuse the IDENTICAL algorithm —
+            // AC-002 requires byte-for-byte identical wire output between
+            // the bare form and `:option` for the same NAME/VALUE. This is
+            // a pure code-motion refactor: the bare-form dispatch's
+            // observable behavior is unchanged (Architecture Compliance
+            // Rule 1), verified by the full pre-existing regression suite.
+            let allowed = meta_field.allowed_values.as_deref().unwrap_or(&[]);
+            if allowed.is_empty() {
+                return Err(JrError::UserError(format!(
+                    "Field '{human_name}' has no configured option values. \
+                     An admin must populate the option list before values can be set."
+                ))
+                .into());
+            }
+            let (wv, dv) = resolve_option_value(&value, &human_name, allowed)?;
+            wire_value = wv;
+            display_value = dv;
+        }
+        other => {
+            return Err(unsupported_field_type_error(other, &human_name).into());
+        }
     }
+
+    // Step 5: merge (field_id, wire_value) into the shared fields JSON object.
+    // AC-012: the bare-form dry-run preview stays the SIMPLIFIED display
+    // string (general rule, unchanged) — only a hinted field's preview
+    // (above) is the real wire shape.
+    planned_preview.insert(human_name.clone(), serde_json::json!(display_value.clone()));
+    fields[field_id] = wire_value;
+
+    // Step 6: insert (human_name, display_value) into changed_fields.
+    changed_fields.insert(human_name, display_value);
 
     Ok(())
 }

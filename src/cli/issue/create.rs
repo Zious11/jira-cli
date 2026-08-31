@@ -144,6 +144,25 @@ pub(super) async fn handle_create(
     // never a shared governed-key SET). Zero HTTP; runs BEFORE project/type
     // resolution and BEFORE any interactive prompt.
     if !field_spec_map.is_empty() {
+        // --points / --team are the two "resolved-id" governed keys
+        // (AC-011) — asserted SEPARATELY via RESOLVED-ID equality
+        // (bypass-form-only). `story_points_field_id` is read directly from
+        // config (never via `helpers::resolve_story_points_field_id`, which
+        // errors when unconfigured — the guard must be a silent no-op, not
+        // an error, when the field isn't configured at all). `team_field_id`
+        // is likewise config-only; `client.find_team_field_id()` (HTTP) is
+        // NEVER invoked to service this guard.
+        let points_resolved_id: Option<String> = if points.is_some() {
+            config.active_profile().story_points_field_id.clone()
+        } else {
+            None
+        };
+        let team_resolved_id: Option<String> = if team.is_some() {
+            config.active_profile().team_field_id.clone()
+        } else {
+            None
+        };
+
         field_resolve::detect_flag_field_overlap(
             &field_spec_map,
             &[
@@ -155,17 +174,12 @@ pub(super) async fn handle_create(
                 ("labels", !labels.is_empty()),
                 ("parent", parent.is_some()),
                 ("assignee", to.is_some() || account_id.is_some()),
-                // --points / --team are the two "resolved-id" governed keys
-                // (AC-011) — asserted SEPARATELY per the story's documented
-                // algorithm (bypass-form-only equality for --points;
-                // config-only field-id lookup for --team, never an HTTP call
-                // to service this guard). That special-casing lives inside
-                // `detect_flag_field_overlap`'s own (currently `todo!()`)
-                // implementation, not as a simple presence flag here.
-                ("points", points.is_some()),
-                ("team", team.is_some()),
             ],
             field_resolve::CREATE_D2_GOVERNED_KEYS,
+            &[
+                ("points", points_resolved_id.as_deref()),
+                ("team", team_resolved_id.as_deref()),
+            ],
         )?;
     }
 
@@ -305,12 +319,12 @@ pub(super) async fn handle_create(
         create_echo.insert("assignee".into(), display_name);
     }
 
-    // Step 4b (NEW, S-578-4): --field createmeta field resolution
+    // Step 4b (S-578-4): --field createmeta field resolution
     // (BC-3.3.010 Steps 1–6, Invariant 1). Runs AFTER project/type resolution
     // and BEFORE the POST. Reuses `get_createmeta_fields` (S-580-1) and
     // `get_issue_types_for_project` (S-331) verbatim (Architecture
-    // Compliance Rule 1) — both calls live inside the (currently `todo!()`)
-    // `FieldMetaSource::Create` branch of `resolve_edit_fields`.
+    // Compliance Rule 1) — both calls live inside the `FieldMetaSource::Create`
+    // branch of `resolve_edit_fields` (`resolve_against_createmeta`).
     if !field_spec_map.is_empty() {
         field_resolve::resolve_edit_fields(
             client,
