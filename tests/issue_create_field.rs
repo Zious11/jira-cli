@@ -2032,6 +2032,11 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "row10: stderr={stderr}");
+        assert!(
+            stderr.contains("API error (500)"),
+            "row10: load-bearing substring for the propagated list_fields()/createmeta \
+             5xx must appear (AC-012); stderr={stderr}"
+        );
         assert!(!stderr.contains("Created issue"), "row10: stderr={stderr}");
     }
 }

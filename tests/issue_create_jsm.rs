@@ -2734,16 +2734,19 @@ async fn test_platform_create_on_behalf_of_flag_exits_64_without_request_type() 
     );
 }
 
-// ─── AC-3: Both --field + --on-behalf-of exit 64 with ONE combined error ─────
+// ─── AC-3: --on-behalf-of + --field → standalone guard fires alone ───────────
 
-/// AC-3 (BC-3.8.012 combined postcondition, [mode: human]): When both
+/// AC-3 (BC-3.8.013 standalone postcondition, [mode: human]): When both
 /// `--field NAME=VALUE` and `--on-behalf-of <ID>` are supplied WITHOUT
-/// `--request-type`, exactly ONE combined `JrError::UserError` fires
-/// (exit 64) — NOT two independent single-flag errors. INVERTED from the
-/// S-383 exit-0 warn-and-proceed contract (DEC-188). Renamed from
-/// `test_platform_create_both_inverse_flags_emit_independent_warnings`.
+/// `--request-type`, BC-3.8.013's STANDALONE `--on-behalf-of` guard fires
+/// alone (exit 64) — the combined-error contract from S-639-1/DEC-188
+/// (BC-3.8.012) is REMOVED by S-578-4/DEC-310; `--field` no longer
+/// contributes to any pre-flight error on the platform path. Renamed from
+/// `test_platform_create_both_inverse_flags_exit_64_combined_error`
+/// (originally `..._emit_independent_warnings` under the dead S-383
+/// exit-0 warn-and-proceed contract).
 #[tokio::test]
-async fn test_platform_create_both_inverse_flags_exit_64_combined_error() {
+async fn test_platform_create_both_inverse_flags_exit_64_standalone_on_behalf_guard() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -2901,15 +2904,20 @@ async fn test_platform_create_without_inverse_flags_emits_no_errors() {
     );
 }
 
-// ─── AC-5: Multiple --field occurrences → exactly ONE idempotent error ────────
+// ─── AC-5: Multiple --field occurrences of one name → one resolution error ───
 
-/// AC-5 (BC-3.8.012 idempotency postcondition, [mode: human]): `--field a=b`
-/// (ONE occurrence) and `--field a=b --field c=d` (TWO occurrences) WITHOUT
-/// `--request-type` both exit 64 with the SAME single-flag error — the guard
-/// fires on `!field_pairs.is_empty()` (presence-only), so `--field` is one
-/// logical flag regardless of how many NAME=VALUE pairs are supplied.
-/// INVERTED from the S-383 exit-0 warn-and-proceed contract (DEC-188).
-/// Renamed from `test_platform_create_field_idempotent_one_warning_per_logical_flag`.
+/// AC-5 (S-578-4 INVERSION, BC-3.3.010/011, VP-578-017, [mode: human]):
+/// `--field a=b` (ONE occurrence) and `--field a=b --field a=c` (TWO
+/// occurrences of the SAME name) WITHOUT `--request-type` both exit 64 with
+/// the SAME BC-3.3.011 taxonomy-row-2 "zero matches for 'a'" resolution
+/// error. The DEC-188 presence-only `!field_pairs.is_empty()` guard this AC
+/// originally exercised is REMOVED; the byte-identical result across both
+/// invocations now falls out of `parse_field_kv`'s pre-existing last-wins
+/// semantics (BC-3.4.026, unchanged), which collapse repeated occurrences of
+/// one name into a single map entry before resolution ever runs — not from a
+/// dedicated idempotency guard. The old DEC-188 verbatim string is DEAD.
+/// Renamed from `test_platform_create_field_idempotent_one_warning_per_logical_flag`
+/// (originally re-inverted to the current name under S-639-1).
 ///
 /// Two-invocation comparison test — deliberately separate from AC-1.
 #[tokio::test]
@@ -3194,7 +3202,7 @@ async fn test_platform_create_malformed_field_without_request_type_exits_64() {
     );
 }
 
-// ─── AC-8 (NEW): --field / --on-behalf-of + helper flags → zero HTTP ─────────
+// ─── AC-8 (NEW): --field allows helper HTTP; --on-behalf-of stays zero-HTTP ──
 
 /// AC-8 (S-578-4 INVERSION on invocation (i) only; invocation (ii) is
 /// UNAFFECTED — BC-3.8.013's guard is unchanged, [mode: human]):
@@ -3208,9 +3216,12 @@ async fn test_platform_create_malformed_field_without_request_type_exits_64() {
 /// no longer zero-HTTP (`received_requests()` must be NON-empty), and the
 /// dead DEC-188 string never appears. Invocation (ii) (`--on-behalf-of` +
 /// helpers) is UNTOUCHED below — BC-3.8.013's guard still suppresses all
-/// HTTP unconditionally.
+/// HTTP unconditionally, exiting 64. The function name reflects only
+/// invocation (ii)'s outcome (exit 64, zero HTTP) — invocation (i) exits 0
+/// with non-empty HTTP, the deliberate opposite, as this doc comment
+/// explains.
 #[tokio::test]
-async fn test_platform_create_field_with_helpers_exits_64_zero_http() {
+async fn test_platform_create_field_allows_network_on_behalf_of_stays_exit_64_zero_http() {
     // Sub-invocation (i): --field + --team + --to (INVERTED — see doc comment).
     {
         let server = MockServer::start().await;
@@ -3633,7 +3644,7 @@ async fn test_platform_create_help_flags_requires_request_type_in_help() {
     );
 }
 
-// ─── AC-13 (NEW): empty --on-behalf-of + --field → combined, not two singles ─
+// ─── AC-13 (NEW): empty --on-behalf-of + --field → standalone guard alone ────
 
 /// AC-13 (S-578-4 INVERSION, BC-3.8.013 EC-3.8.013-1 — the combined check no
 /// longer exists, [mode: human]): `--on-behalf-of "" --field a=b` WITHOUT
@@ -3642,9 +3653,10 @@ async fn test_platform_create_help_flags_requires_request_type_in_help() {
 /// UNCONDITIONAL (step 2, unaffected by `--field`'s presence). Dedicated
 /// isolated `MockServer` (not `mount_platform_create_stubs`) so the
 /// zero-HTTP proof is DISCRIMINATING against the would-otherwise-succeed
-/// guard-absent path.
+/// guard-absent path. Renamed from
+/// `test_platform_create_combined_empty_on_behalf_with_field_exits_64_combined_error`.
 #[tokio::test]
-async fn test_platform_create_combined_empty_on_behalf_with_field_exits_64_combined_error() {
+async fn test_platform_create_combined_empty_on_behalf_with_field_exits_64_standalone_guard() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -3944,7 +3956,7 @@ async fn test_platform_create_markdown_with_field_exits_64_bc_3_8_012_not_markdo
     );
 }
 
-// ─── AC-18 (NEW): --description-stdin + --field exits 64, stdin not consumed ─
+// ─── AC-18 (NEW): --description-stdin + --field exits 64, stdin IS consumed ──
 
 /// AC-18 (S-578-4 INVERSION, EC-3.8.012-7 now stale post-reversal,
 /// BC-3.3.011 taxonomy row 2, [mode: human]): `--field a=b
@@ -3953,11 +3965,15 @@ async fn test_platform_create_markdown_with_field_exits_64_bc_3_8_012_not_markdo
 /// `description_stdin` is a governed D2 key, but the `--field` here targets
 /// wire key "a" (not "description"), so the D2 collision guard passes
 /// cleanly; the blocking stdin read at step 4a now DOES run (unlike the
-/// pre-reversal contract, where the guard fired before it). Resolution then
-/// fails at step 4b: field "a" is absent from the mounted (empty)
-/// `list_fields()` response — BC-3.3.011 taxonomy row 2 (zero matches).
+/// pre-reversal contract, where the guard fired before it and stdin was
+/// never consumed). Resolution then fails at step 4b: field "a" is absent
+/// from the mounted (empty) `list_fields()` response — BC-3.3.011 taxonomy
+/// row 2 (zero matches). Renamed from
+/// `test_platform_create_description_stdin_with_field_exits_64_stdin_not_consumed`
+/// — the pre-reversal name asserted the OPPOSITE of what this body now
+/// verifies (stdin consumption, not its absence).
 #[tokio::test]
-async fn test_platform_create_description_stdin_with_field_exits_64_stdin_not_consumed() {
+async fn test_platform_create_description_stdin_with_field_exits_64_stdin_consumed() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
