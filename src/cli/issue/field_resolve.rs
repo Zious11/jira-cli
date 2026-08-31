@@ -235,6 +235,18 @@ pub(crate) const CREATE_D2_GOVERNED_KEYS: &[&str] = &[
 ///   the `--field` side is a natural consequence of this bypass-only
 ///   equality, since a display name never equals a `customfield_NNNNN`
 ///   literal).
+///
+/// Non-firing residual generalizes to every static governed key too (AC-011
+/// documents it only for `--points`/`--team`, but the same mechanism applies
+/// across the board): `dedicated_flags` compares governed WIRE keys
+/// (`"summary"`, `"priority"`, etc.) against `field_pairs`' keys directly, with
+/// no name resolution — so `--field summ=Y` alongside `--summary X` does NOT
+/// collide with the static check, and both writes reach step 4b, where the
+/// wire key resolved from `"summ"` (a substring match against the field list)
+/// last-write-wins against `--summary`'s write. This is BY DESIGN: catching a
+/// display-name or substring spelling here would require running field-name
+/// resolution before this guard, which would violate the zero-HTTP boundary
+/// this function is defined to run within.
 pub(crate) fn detect_flag_field_overlap(
     field_pairs: &HashMap<String, FieldValueSpec>,
     dedicated_flags: &[(&str, bool)],
@@ -309,7 +321,10 @@ fn collision_error(key: &str) -> anyhow::Error {
 ///   is a correctness bug because sandbox/prod custom-field IDs can differ).
 /// - `source`: [`FieldMetaSource::Edit`] (issue key, editmeta) or
 ///   [`FieldMetaSource::Create`] (project key + issue type name, createmeta —
-///   S-578-4, NOT YET IMPLEMENTED at stub stage).
+///   S-578-4). The `Create` arm resolves via `resolve_against_createmeta`:
+///   `get_issue_types_for_project` (name → issue type id) followed by
+///   `get_createmeta_fields`, both feeding the shared `dispatch_field_value`
+///   dispatch (the same per-pair type-dispatch algorithm the `Edit` arm uses).
 /// - `field_pairs`: `NAME → FieldValueSpec` map produced by `parse_field_kv`
 ///   (last-wins semantics; duplicates collapsed at parse time per
 ///   EC-3.4.017-10). `FieldValueSpec.kind` drives the S-578-2 hinted-bypass
