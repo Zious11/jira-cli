@@ -655,9 +655,11 @@ async fn resolve_against_createmeta(
             human_name,
             spec,
             &adapted,
-            fields,
-            changed_fields,
-            planned_preview,
+            &mut FieldResolutionOutputs {
+                fields,
+                changed_fields,
+                planned_preview,
+            },
         )
         .await?;
     }
@@ -710,14 +712,29 @@ async fn resolve_against_editmeta(
             human_name,
             spec,
             meta_field,
-            fields,
-            changed_fields,
-            planned_preview,
+            &mut FieldResolutionOutputs {
+                fields,
+                changed_fields,
+                planned_preview,
+            },
         )
         .await?;
     }
 
     Ok(())
+}
+
+/// Output/accumulator bundle for [`dispatch_field_value`].
+///
+/// Reduces argument count on `dispatch_field_value` to satisfy
+/// `clippy::too_many_arguments` (CLAUDE.md policy: refactor rather than
+/// `#[allow]`) by bundling the three `&mut` output sinks each call site
+/// already threads through together. Pure signature refactor (S-578-4) —
+/// no behavior change at either call site.
+struct FieldResolutionOutputs<'a> {
+    fields: &'a mut serde_json::Value,
+    changed_fields: &'a mut BTreeMap<String, String>,
+    planned_preview: &'a mut BTreeMap<String, serde_json::Value>,
 }
 
 /// Shared per-pair Step 4-6 dispatch (hinted-bypass + bare-form type
@@ -730,16 +747,13 @@ async fn resolve_against_editmeta(
 /// Callers are responsible for their own Step 3/3b screen-membership and
 /// (editmeta-only) operations checks BEFORE calling this — this function
 /// only ever sees a `meta_field` already confirmed present/settable.
-#[allow(clippy::too_many_arguments)]
 async fn dispatch_field_value(
     client: &JiraClient,
     field_id: &str,
     human_name: String,
     spec: FieldValueSpec,
     meta_field: &crate::types::jira::EditMetaField,
-    fields: &mut serde_json::Value,
-    changed_fields: &mut BTreeMap<String, String>,
-    planned_preview: &mut BTreeMap<String, serde_json::Value>,
+    outputs: &mut FieldResolutionOutputs<'_>,
 ) -> Result<()> {
     let value = spec.value.clone();
 
@@ -757,9 +771,11 @@ async fn dispatch_field_value(
         };
         // AC-012: for a hinted field the dry-run preview IS the composed
         // wire shape itself (documented exception to the general rule).
-        planned_preview.insert(human_name.clone(), wire_value.clone());
-        fields[field_id] = wire_value;
-        changed_fields.insert(human_name, display_value);
+        outputs
+            .planned_preview
+            .insert(human_name.clone(), wire_value.clone());
+        outputs.fields[field_id] = wire_value;
+        outputs.changed_fields.insert(human_name, display_value);
         return Ok(());
     }
 
@@ -880,11 +896,13 @@ async fn dispatch_field_value(
     // AC-012: the bare-form dry-run preview stays the SIMPLIFIED display
     // string (general rule, unchanged) — only a hinted field's preview
     // (above) is the real wire shape.
-    planned_preview.insert(human_name.clone(), serde_json::json!(display_value.clone()));
-    fields[field_id] = wire_value;
+    outputs
+        .planned_preview
+        .insert(human_name.clone(), serde_json::json!(display_value.clone()));
+    outputs.fields[field_id] = wire_value;
 
     // Step 6: insert (human_name, display_value) into changed_fields.
-    changed_fields.insert(human_name, display_value);
+    outputs.changed_fields.insert(human_name, display_value);
 
     Ok(())
 }
