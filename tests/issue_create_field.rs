@@ -22,7 +22,7 @@ mod common;
 
 use assert_cmd::Command;
 use serde_json::{Value, json};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ─── Shared test scaffolding ────────────────────────────────────────────────
@@ -242,6 +242,20 @@ fn createmeta_any_field(field_id: &str, name: &str) -> Value {
         "fieldId": field_id,
         "name": name,
         "schema": {"type": "any", "custom": null, "system": null},
+        "allowedValues": null
+    })
+}
+
+/// A `doc`-typed createmeta field descriptor — the REAL Jira Cloud schema
+/// type for the built-in `description` field (ADF document, not a plain
+/// string). `dispatch_field_value`'s bare-form type dispatch has no `"doc"`
+/// arm, so this fixture correctly routes to the `unsupported_field_type_error`
+/// branch (AC-018 realism fix, adversary Pass 5 LOW).
+fn createmeta_doc_field(field_id: &str, name: &str) -> Value {
+    json!({
+        "fieldId": field_id,
+        "name": name,
+        "schema": {"type": "doc", "custom": null, "system": null},
         "allowedValues": null
     })
 }
@@ -1633,6 +1647,15 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(64), "row1: stderr={stderr}");
+        // AC-012/BC-3.3.011 mandates the row's load-bearing substring, not
+        // just exit code + absence-of-success (adversary Pass 4 NITPICK).
+        // Exact wording from `field_resolve.rs::collision_error`:
+        // "{key} is set by both {flag_hint} and --field; use only one."
+        assert!(
+            stderr.contains("is set by both --priority and --field")
+                && stderr.contains("use only one"),
+            "row1: collision error's load-bearing substrings must appear; stderr={stderr}"
+        );
         assert!(!stderr.contains("Created issue"), "row1: stderr={stderr}");
     }
 
@@ -1700,6 +1723,16 @@ async fn test_bc_3_3_011_error_taxonomy_all_10_rows() {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(64), "row3: stderr={stderr}");
+        // AC-012/BC-3.3.011 mandates the row's load-bearing substring
+        // (adversary Pass 4 NITPICK). Exact wording from
+        // `field_resolve.rs::resolve_edit_fields`'s `search_field` closure:
+        // "Field name '{name}' is ambiguous — matches: {candidates}. …"
+        assert!(
+            stderr.contains("is ambiguous")
+                && stderr.contains("Custom Alpha")
+                && stderr.contains("Custom Beta"),
+            "row3: ambiguous-candidates listing substring must appear; stderr={stderr}"
+        );
         assert!(!stderr.contains("Created issue"), "row3: stderr={stderr}");
     }
 
@@ -2285,6 +2318,274 @@ async fn test_bc_3_4_014_field_echo_cascading_option() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Adversary Pass 4 MEDIUM: create-path POST-body wire-shape assertions.
+// `mount_create_post` (used throughout this file) is a free-fire 201 mock —
+// it accepts ANY body, so a wrong wire shape on the create-path merge would
+// go uncaught by every test above. These tests use a dedicated
+// `body_partial_json`-gated mock with `.expect(1)`, mirroring the exact
+// idiom `tests/issue_field_hint_kinds.rs` uses for its editmeta wire-shape
+// pins (e.g. its `:id`/`:name` EC-8/EC-9 mocks): the mock's 201 response
+// only fires when the POST body genuinely contains the expected
+// `{"fields": {...}}` shape. A mismatched body leaves the mock unmatched
+// (wiremock 404s the request) and `MockServer`'s Drop-time expectation
+// check panics.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `:id` hint composes `{"fields":{"customfield_XXXXX":{"id":"<value>"}}}` —
+/// `compose_id_hint` sends VALUE verbatim, no `allowedValues` lookup.
+#[tokio::test]
+async fn test_bc_3_3_010_create_post_body_wire_shape_id() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "PROJ", &[("10000", "Task")]).await;
+    mount_createmeta_fields_single_page(
+        &h.server,
+        "PROJ",
+        "10000",
+        vec![createmeta_string_field("customfield_10084", "Client")],
+    )
+    .await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "customfield_10084", "name": "Client"})],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .and(body_partial_json(
+            json!({"fields": {"customfield_10084": {"id": "1"}}}),
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": "10001",
+            "key": "PROJ-123",
+            "self": format!("{}/rest/api/3/issue/10001", h.server.uri()),
+        })))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "Client:id=1",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "wire-shape :id: expected exit 0 (POST body must match); stderr={stderr}"
+    );
+}
+
+/// Bare/`:option` form composes `{"fields":{"customfield_XXXXX":{"id":"<resolved-option-id>"}}}`
+/// — `resolve_option_value` matches VALUE against `allowedValues` and sends
+/// the matched entry's `id`, never the label itself.
+#[tokio::test]
+async fn test_bc_3_3_010_create_post_body_wire_shape_option() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "PROJ", &[("10000", "Task")]).await;
+    mount_createmeta_fields_single_page(
+        &h.server,
+        "PROJ",
+        "10000",
+        vec![createmeta_option_field(
+            "customfield_10084",
+            "Client",
+            vec![json!({"id": "1", "value": "Client A"})],
+        )],
+    )
+    .await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "customfield_10084", "name": "Client"})],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .and(body_partial_json(
+            json!({"fields": {"customfield_10084": {"id": "1"}}}),
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": "10001",
+            "key": "PROJ-123",
+            "self": format!("{}/rest/api/3/issue/10001", h.server.uri()),
+        })))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "Client=Client A",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "wire-shape bare/:option: expected exit 0 (POST body must match); stderr={stderr}"
+    );
+}
+
+/// `:name` hint composes `{"fields":{"customfield_XXXXX":{"name":"<value>"}}}`
+/// — `compose_name_hint` sends VALUE verbatim, no lookup.
+#[tokio::test]
+async fn test_bc_3_3_010_create_post_body_wire_shape_name() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "PROJ", &[("10000", "Task")]).await;
+    mount_createmeta_fields_single_page(
+        &h.server,
+        "PROJ",
+        "10000",
+        vec![createmeta_string_field("customfield_10099", "Free Text")],
+    )
+    .await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "customfield_10099", "name": "Free Text"})],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .and(body_partial_json(
+            json!({"fields": {"customfield_10099": {"name": "Verbatim Value"}}}),
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": "10001",
+            "key": "PROJ-123",
+            "self": format!("{}/rest/api/3/issue/10001", h.server.uri()),
+        })))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "Free Text:name=Verbatim Value",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "wire-shape :name: expected exit 0 (POST body must match); stderr={stderr}"
+    );
+}
+
+/// `:asset` hint composes the CMDB object-reference array shape
+/// `{"fields":{"customfield_XXXXX":[{"workspaceId":"<ws>","id":"<ws>:<obj>","objectId":"<obj>"}]}}`
+/// — matches `compose_asset_hint`'s exact output shape (`src/cli/issue/field_resolve.rs`).
+/// Bare `:asset=OBJECTID` form with a cold workspace-id cache (mirrors
+/// `test_bc_3_4_014_field_echo_asset_composite` above): the returned
+/// workspace id ("ws-999") is deliberately distinct from the input objectId
+/// ("789") so a passing assertion proves genuine composition, not an echo.
+#[tokio::test]
+async fn test_bc_3_3_010_create_post_body_wire_shape_asset() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "PROJ", &[("10000", "Task")]).await;
+    mount_createmeta_fields_single_page(
+        &h.server,
+        "PROJ",
+        "10000",
+        vec![createmeta_any_field("customfield_60010", "Asset Field")],
+    )
+    .await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "customfield_60010", "name": "Asset Field"})],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 25, "isLastPage": true,
+            "values": [{ "workspaceId": "ws-999" }]
+        })))
+        .mount(&h.server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .and(body_partial_json(json!({
+            "fields": {
+                "customfield_60010": [
+                    {"workspaceId": "ws-999", "id": "ws-999:789", "objectId": "789"}
+                ]
+            }
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": "10001",
+            "key": "PROJ-123",
+            "self": format!("{}/rest/api/3/issue/10001", h.server.uri()),
+        })))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "Asset Field:asset=789",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "wire-shape :asset: expected exit 0 (POST body must match); stderr={stderr}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // AC-014: JSON mode is UNCHANGED — no `changed_fields` key added.
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2423,9 +2724,33 @@ async fn test_bc_3_3_010_field_resolution_ordering_after_project_type_before_pos
 
 /// AC-018 / EC-3.8.012-5 (now stale post-reversal): `--markdown --field
 /// description=x` WITHOUT `--request-type` no longer fires BC-3.8.012's
-/// removed guard; it resolves via createmeta like any other `--field`.
-/// `handle_create` has no `--markdown`-requires-`--description` guard of
-/// its own (that guard exists only in `jsm_create.rs`/`edit.rs`).
+/// removed guard.
+///
+/// Adversarial review Pass 5 LOW fixture-realism fix: the original version of
+/// this test mounted a `string`-typed `description` createmeta fixture, which
+/// is unrealistic — a real Jira Cloud `description` field's schema type is
+/// `"doc"` (an ADF document), not `"string"`. `dispatch_field_value`'s
+/// bare-form type dispatch (`src/cli/issue/field_resolve.rs`) has no `"doc"`
+/// arm, so a genuinely realistic invocation correctly falls through to the
+/// `unsupported_field_type_error` branch (exit 64, "which is not supported by
+/// `--field`") rather than succeeding. This test's PRIMARY, load-bearing
+/// assertion is unchanged from the original intent: stderr does NOT contain
+/// the removed DEC-188 guard string (`"--field is only valid with"`) — proof
+/// that resolution genuinely ran (createmeta was fetched, the field was
+/// located, dispatch was attempted) rather than the invocation being rejected
+/// pre-flight by the old, now-reversed guard. The exit code and error message
+/// simply reflect what an honest `"doc"`-typed fixture actually produces.
+///
+/// IMPORTANT — do not read this test as proving `--markdown` applies to a
+/// `--field` value: it does not. `--field` VALUEs are never passed through
+/// `markdown_to_adf` at any point in `resolve_against_createmeta` /
+/// `dispatch_field_value` — only the dedicated `--description` /
+/// `--description-stdin` flag's text goes through `adf::markdown_to_adf`
+/// (`create.rs`, gated on `desc_text`, entirely independent of `--field`).
+/// `--field description=**bold**` here sends the literal string `**bold**`
+/// unmodified into whichever type arm `description`'s schema type dispatches
+/// to; in this realistic fixture that arm is the unsupported-type error, so
+/// the literal value is never even sent to Jira.
 #[tokio::test]
 async fn test_ec_3_8_012_5_markdown_field_description_no_longer_guarded() {
     let h = Harness::new().await;
@@ -2434,7 +2759,7 @@ async fn test_ec_3_8_012_5_markdown_field_description_no_longer_guarded() {
         &h.server,
         "PROJ",
         "10000",
-        vec![createmeta_string_field("description", "Description")],
+        vec![createmeta_doc_field("description", "Description")],
     )
     .await;
     mount_list_fields(
@@ -2442,7 +2767,6 @@ async fn test_ec_3_8_012_5_markdown_field_description_no_longer_guarded() {
         vec![json!({"id": "description", "name": "Description"})],
     )
     .await;
-    mount_create_post(&h.server, "PROJ-123").await;
 
     let output = h
         .cmd()
@@ -2464,12 +2788,20 @@ async fn test_ec_3_8_012_5_markdown_field_description_no_longer_guarded() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "AC-018 (realistic fixture): a 'doc'-typed description field has no \
+         supported bare-form type arm — expect exit 64 via \
+         unsupported_field_type_error, proving resolution ran past the \
+         removed guard rather than being rejected pre-flight by it; \
+         stderr={stderr}"
+    );
     assert!(
-        output.status.success(),
-        "AC-018: --markdown --field description=x must resolve successfully \
-         via createmeta (exit 0), not fall through to any guard; got {:?}. \
-         stderr={stderr}",
-        output.status.code()
+        stderr.contains("which is not supported by `--field`"),
+        "AC-018: must fail via the unsupported-field-type arm specifically \
+         (proof that createmeta resolution genuinely engaged), not some \
+         unrelated error; stderr={stderr}"
     );
     assert!(
         !stderr.contains("--field is only valid with"),
