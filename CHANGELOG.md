@@ -27,8 +27,30 @@ All notable changes to jr will be documented here.
   as it did before this story (name `"Region: EMEA"`, `kind: None`), because
   none of the four valid kind tags contain whitespace.
 
+### Added
+
+- **`jr field options <field>`** (S-580-1, #578, #740): new command that lists a
+  field's allowed options. Resolves field context via M1/M2/M3 mechanism
+  resolution — `createmeta`, `editmeta`, or JSM requesttype-fields, depending
+  on where the field is discovered — and normalizes the result into a single
+  option model. Supports `--value <substring>` filtering and both table and
+  `--output json` rendering.
+
 ### Changed
 
+- **`issue edit --field NAME:kind=VALUE` now dispatches real resolution for
+  the `:option`/`:id`/`:name`/`:asset` kind hints** (S-578-2,
+  BC-3.4.015/016/021/027-031, #578, #741). S-578-1 shipped the hint-syntax
+  *parser* only, guarded behind an interim exit-64 "not yet supported" error;
+  that guard is now removed. `:option` resolves a non-cascading option
+  selection; `:id`/`:name`/`:asset` resolve cascading, `>`-split composers
+  (including workspace-scoped CMDB `:asset` references). `--dry-run` renders
+  a preview of the resolved value alongside the other planned changes.
+- **JSM `issue create --field` now dispatches the same kind-hint resolution
+  as `issue edit --field`** (S-578-3, BC-3.8.008, #578, #742): `:option`,
+  `:id`, `:name`, and `:asset` (including `:asset`'s workspace-scoped CMDB
+  L2 resolution) are now honored on the JSM request-creation path, closing
+  the dispatch gap S-578-1's interim guard left on this command.
 - **`jr issue create --field NAME=VALUE` (platform, non-JSM path) no longer
   exits 64 pre-flight — it now resolves via the project's Create screen
   (`createmeta`)** (S-578-4, BC-3.3.010/BC-3.3.011, DEC-310 — registered

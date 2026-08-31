@@ -7,6 +7,23 @@
 **Related ADR:** [ADR-0014](../adr/0014-jsm-request-type-dispatch.md) (JSM dispatch fork — architecture
 unchanged; only its "byte-for-byte unchanged" claims are amended by this story)
 
+> **⚠️ PARTIALLY SUPERSEDED — DEC-310 (S-578-4, #578, registered 2026-08-26) REVERSED the
+> `--field`-alone half of this guard.** `jr issue create --field NAME=VALUE` on the platform
+> (non-JSM) path **no longer exits 64 pre-flight**. It now resolves each `--field` pair against
+> the target project/issue-type's Create screen (`createmeta`, BC-3.3.010/BC-3.3.011) using the
+> same resolution machinery as `issue edit --field`, instead of being rejected outright. The
+> `--on-behalf-of` guard (BC-3.8.013) below is **UNCHANGED** — it still exits 64 pre-flight
+> without `--request-type`, exactly as this document describes. The combined-guard row in the
+> behavior table below ("Both present, `--request-type` absent") is also superseded: only
+> `--on-behalf-of` now triggers the exit-64 path in that case; `--field` no longer contributes to
+> it. Everything else in this document (guard placement/ordering, the `--on-behalf-of` single-flag
+> error string, the "why not `#[arg(requires = ...)]`" rationale, zero-HTTP-guarantee mechanics)
+> remains historically accurate for `--on-behalf-of` and for understanding the DEC-188 baseline
+> DEC-310 reversed. See CLAUDE.md's `jr issue create --field NAME[:kind]=VALUE` gotcha entry for
+> the current DEC-310 behavior, and `docs/adr/0014-jsm-request-type-dispatch.md` for the amended
+> ADR-0014 notes. Treat the `--field` content in this file as **historical**, describing the
+> now-superseded DEC-188 guard shape — not current behavior.
+
 ## Problem
 
 `--field NAME=VALUE` and `--on-behalf-of <accountId>` are self-declared JSM-only flags on
@@ -34,11 +51,18 @@ group; the two categories are deliberately different.
 `jr issue create` now performs a pre-flight guard on the platform path (i.e. after the JSM
 dispatch fork has determined `--request-type` was NOT supplied):
 
+> **DEC-310 SUPERSEDES the `--field` row below.** As of S-578-4 (#578, DEC-310), `--field`
+> present + `--request-type` absent no longer exits 64 — it resolves via `createmeta`
+> (BC-3.3.010/BC-3.3.011). The `--on-behalf-of` row and the "Neither present" row are still
+> current. The "Both present" row is superseded too: only `--on-behalf-of` triggers exit 64 in
+> that case now, and it is BC-3.8.013's single-flag error, not the combined error described
+> below. See the top-of-file note for the full picture.
+
 | Invocation | Behavior |
 |---|---|
-| `--field` present, `--request-type` absent | Exit 64, BC-3.8.012 single-flag error |
-| `--on-behalf-of` present, `--request-type` absent | Exit 64, BC-3.8.013 single-flag error |
-| Both present, `--request-type` absent | Exit 64, ONE combined error (not two) |
+| `--field` present, `--request-type` absent | **[SUPERSEDED by DEC-310]** Historical DEC-188 behavior: exit 64, BC-3.8.012 single-flag error. Current: resolves via `createmeta`, no guard fires. |
+| `--on-behalf-of` present, `--request-type` absent | Exit 64, BC-3.8.013 single-flag error (unchanged) |
+| Both present, `--request-type` absent | **[SUPERSEDED by DEC-310]** Historical DEC-188 behavior: exit 64, ONE combined error. Current: only `--on-behalf-of` fires, as BC-3.8.013's single-flag error. |
 | Either/both present, `--request-type` present | No guard fires — routes to the JSM path (ADR-0014) |
 | Neither present | No guard fires — platform path proceeds unaffected |
 
