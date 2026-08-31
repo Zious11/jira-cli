@@ -205,6 +205,20 @@ fn createmeta_option_field(field_id: &str, name: &str, allowed: Vec<Value>) -> V
     })
 }
 
+/// A well-formed `option-with-child` (cascading select) createmeta field
+/// descriptor — mirrors `tests/issue_field_hint_kinds.rs`'s cascading
+/// fixture shape (parent `allowedValues` entries carrying a `children`
+/// array) so `field_resolve::compose_option_hint`'s cascading `>`-split path
+/// (BC-3.4.027) is exercised on the create path (AC-013).
+fn createmeta_cascading_option_field(field_id: &str, name: &str, allowed: Vec<Value>) -> Value {
+    json!({
+        "fieldId": field_id,
+        "name": name,
+        "schema": {"type": "option-with-child", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:cascadingselect", "system": null},
+        "allowedValues": allowed
+    })
+}
+
 fn createmeta_string_field(field_id: &str, name: &str) -> Value {
     json!({
         "fieldId": field_id,
@@ -2144,6 +2158,132 @@ async fn test_bc_3_4_014_field_echo_bare_and_hinted_per_kind() {
     }
 }
 
+/// AC-013 (BC-3.4.014 amended `--field` bullet, adversarial review Pass 1
+/// LOW finding): `:asset` echoes the composite `"<workspaceId>:<objectId>"`
+/// string in the platform create path's success echo. Uses the BARE
+/// `:asset=OBJECTID` form with a COLD workspace-id cache — the returned
+/// workspace id ("ws-999") is deliberately distinct from the input objectId
+/// ("789") so a passing assertion proves genuine `<workspaceId>:<objectId>`
+/// composition rather than an echo of the raw `--field` input.
+#[tokio::test]
+async fn test_bc_3_4_014_field_echo_asset_composite() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "PROJ", &[("10000", "Task")]).await;
+    mount_createmeta_fields_single_page(
+        &h.server,
+        "PROJ",
+        "10000",
+        vec![createmeta_any_field("customfield_60010", "Asset Field")],
+    )
+    .await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "customfield_60010", "name": "Asset Field"})],
+    )
+    .await;
+    // Cold-cache workspace discovery (mirrors mount_workspace_ok in
+    // tests/issue_field_hint_kinds.rs) — no pre-populated workspace.json.
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 25, "isLastPage": true,
+            "values": [{ "workspaceId": "ws-999" }]
+        })))
+        .mount(&h.server)
+        .await;
+    mount_create_post(&h.server, "PROJ-123").await;
+
+    let output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "Asset Field:asset=789",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-013: :asset echo case must succeed (exit 0); stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Asset Field \u{2192} ws-999:789"),
+        "AC-013: :asset hint must echo the composite '<workspaceId>:<objectId>' \
+         string in the success echo; stderr={stderr}"
+    );
+}
+
+/// AC-013 (BC-3.4.014 amended `--field` bullet, adversarial review Pass 1
+/// LOW finding): a cascading `:option` value (`Parent>Child`) echoes
+/// `"<parent> > <child>"` in the platform create path's success echo,
+/// mirroring `tests/issue_field_hint_kinds.rs`'s
+/// `test_changed_fields_echo_per_hint_kind` cascading case for the edit
+/// path.
+#[tokio::test]
+async fn test_bc_3_4_014_field_echo_cascading_option() {
+    let h = Harness::new().await;
+    mount_issue_types(&h.server, "PROJ", &[("10000", "Task")]).await;
+    mount_createmeta_fields_single_page(
+        &h.server,
+        "PROJ",
+        "10000",
+        vec![createmeta_cascading_option_field(
+            "customfield_20002",
+            "Cascade Field",
+            vec![json!({
+                "id": "1", "value": "Parent",
+                "children": [{"id": "2", "value": "Child"}]
+            })],
+        )],
+    )
+    .await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "customfield_20002", "name": "Cascade Field"})],
+    )
+    .await;
+    mount_create_post(&h.server, "PROJ-123").await;
+
+    let output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "Cascade Field:option=Parent>Child",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-013: cascading :option echo case must succeed (exit 0); stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Cascade Field \u{2192} Parent > Child"),
+        "AC-013: cascading :option must echo '<parent> > <child>' in the \
+         success echo; stderr={stderr}"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AC-014: JSON mode is UNCHANGED — no `changed_fields` key added.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2339,5 +2479,98 @@ async fn test_ec_3_8_012_5_markdown_field_description_no_longer_guarded() {
         !stderr.contains("cannot be combined with `--markdown`"),
         "AC-018: handle_create has no --markdown-requires-description guard \
          of its own (that guard is JSM/edit-only); stderr={stderr}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AC-016: `--help` text — DEC-310 reversal is complete. `--field`'s help
+// line no longer carries "requires --request-type"; the clause survives
+// exactly once, scoped to `--on-behalf-of`'s line. (Adversarial review
+// Pass 1 LOW finding — these two exact-named tests were mandated by AC-016
+// but absent from this file; `tests/issue_create_jsm.rs`'s
+// `test_platform_create_help_flags_requires_request_type_in_help` already
+// covers the bare count and is unchanged/untouched by this addition.)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// AC-016: the `--field` flag's own `--help` line/block no longer contains
+/// the (now-reversed) "requires --request-type" clause. Isolates the
+/// `--field` help block specifically — from its own flag marker up to the
+/// next flag's marker (`--on-behalf-of`, its immediate successor in
+/// declaration order, `src/cli/mod.rs`) — rather than checking the whole
+/// `--help` output, so this positively pins WHICH line is clean, distinct
+/// from the whole-output count check in the sibling test below.
+#[tokio::test]
+async fn test_bc_3_8_012_field_help_text_no_longer_requires_request_type() {
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .args(["issue", "create", "--help"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Normalization is MANDATORY — clap 4 next-line layout may wrap long doc
+    // strings, causing a flag's help text to straddle a newline (same
+    // technique as tests/issue_create_jsm.rs's
+    // test_platform_create_help_flags_requires_request_type_in_help).
+    let normalized = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    let field_start = normalized
+        .find("--field <FIELD>")
+        .expect("--field <FIELD> must appear in `jr issue create --help` output");
+    let on_behalf_start = normalized
+        .find("--on-behalf-of <ON_BEHALF_OF>")
+        .expect("--on-behalf-of <ON_BEHALF_OF> must appear in `jr issue create --help` output");
+    assert!(
+        field_start < on_behalf_start,
+        "expected --field's help block to precede --on-behalf-of's in \
+         declaration order; normalized={normalized}"
+    );
+    let field_block = &normalized[field_start..on_behalf_start];
+
+    assert!(
+        !field_block.contains("requires --request-type"),
+        "AC-016 / BC-3.8.012 (DEC-310 reversal): the --field help line must \
+         no longer carry the 'requires --request-type' clause; \
+         field_block={field_block}"
+    );
+}
+
+/// AC-016 (mirrors `tests/issue_create_jsm.rs`'s
+/// `test_platform_create_help_flags_requires_request_type_in_help`, added
+/// here IN THIS FILE per the story's explicit test-name mandate): the full
+/// `jr issue create --help` output contains "requires --request-type"
+/// EXACTLY ONCE post-DEC-310-reversal, and that single occurrence lies
+/// within the `--on-behalf-of` help block (i.e. AFTER `--on-behalf-of`'s own
+/// flag marker) — not on `--field`'s line.
+#[tokio::test]
+async fn test_ac12_help_text_substring_count_is_1_on_behalf_of_only() {
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .args(["issue", "create", "--help"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let normalized = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    assert_eq!(
+        normalized.matches("requires --request-type").count(),
+        1,
+        "AC-016: 'requires --request-type' must appear EXACTLY ONCE in the \
+         full --help output post-DEC-310-reversal; normalized={normalized}"
+    );
+
+    let on_behalf_start = normalized
+        .find("--on-behalf-of <ON_BEHALF_OF>")
+        .expect("--on-behalf-of <ON_BEHALF_OF> must appear in `jr issue create --help` output");
+    let requires_idx = normalized
+        .find("requires --request-type")
+        .expect("presence already asserted above");
+
+    assert!(
+        requires_idx > on_behalf_start,
+        "AC-016: the sole 'requires --request-type' occurrence must fall \
+         within the --on-behalf-of help block (after its flag marker), not \
+         on the --field line; normalized={normalized}"
     );
 }
