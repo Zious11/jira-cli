@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.7.0-dev.3] - 2026-09-01
+
 ### Breaking Changes
 
 - **`--field` now parses opt-in `NAME:kind=VALUE` hint syntax** (S-578-1,
