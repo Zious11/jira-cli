@@ -2103,12 +2103,15 @@ mod proptests_env_tag {
         }
 
         /// Property 2: for ANY string `s` (including empty and strings with
-        /// control/unicode characters), constructing `env: Some(s.clone())`
-        /// and round-tripping through serialize -> deserialize returns
-        /// `Some(s)` unchanged. Covers BC-6.1.015 EC-4 (storage stays
-        /// verbatim, no validation/mutation at the storage layer).
+        /// control/unicode characters — the `(?s)` flag makes `.` match
+        /// every character, including `\n`, so this genuinely covers
+        /// newlines and not just other control bytes), constructing
+        /// `env: Some(s.clone())` and round-tripping through serialize ->
+        /// deserialize returns `Some(s)` unchanged. Covers BC-6.1.015 EC-4
+        /// (storage stays verbatim, no validation/mutation at the storage
+        /// layer).
         #[test]
-        fn prop_profile_config_env_some_round_trips(s in ".*") {
+        fn prop_profile_config_env_some_round_trips(s in "(?s).*") {
             let p = ProfileConfig {
                 env: Some(s.clone()),
                 ..ProfileConfig::default()

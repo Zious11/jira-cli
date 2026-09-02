@@ -11,8 +11,7 @@ use crate::error::JrError;
 /// `cli::auth::list::render_env_column`'s doc comment for the full
 /// contract. Shares the sanitizer with that call site (`output::
 /// sanitize_env_display`) per the "one shared sanitizer, two call sites"
-/// architecture rule; this wrapper's None/blank/sanitized dispatch is
-/// deliberately NOT pre-implemented here.
+/// architecture rule.
 pub(crate) fn render_env_line(env: Option<&str>) -> String {
     match env {
         None => "-".to_string(),

@@ -311,7 +311,8 @@ mod tests {
     /// sanitizer rather than shared code (pre-PR review finding).
     #[test]
     fn test_sanitize_env_display_strips_unicode_bidi_override() {
-        let hostile = "pre\u{202a}\u{202b}\u{202c}\u{202d}\u{202e}mid\u{2066}\u{2067}\u{2068}\u{2069}post";
+        let hostile =
+            "pre\u{202a}\u{202b}\u{202c}\u{202d}\u{202e}mid\u{2066}\u{2067}\u{2068}\u{2069}post";
         let got = sanitize_env_display(hostile);
         assert_eq!(got, "premidpost");
         assert!(
