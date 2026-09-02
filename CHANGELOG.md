@@ -6,19 +6,23 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
-- **API-token credentials (`email` / `api-token`) are now stored per-profile
-  in the OS keychain, under namespaced `<profile>:email` /
-  `<profile>:api-token` keys** (S-cycle3-percred-storage, BC-1.4.031). This
-  mirrors the existing per-profile OAuth token layout
-  (`<profile>:oauth-access-token` / `<profile>:oauth-refresh-token`) rather
-  than the old shared flat `email` / `api-token` keys. This change is
-  infrastructure for the cycle-003 per-profile auth restructure — it lands
-  the new storage/read paths (`store_api_token` / `load_api_token`) without
-  yet changing user-visible behavior; there is no legacy-key fallback for
-  any profile, including `"default"`. The user-visible breaking consequence
-  (credential-absence guidance when a profile has no per-profile
-  credentials) lands with the follow-on
-  S-cycle3-credential-absence-guard story.
+- **BREAKING — Action required on upgrade: API-token credentials
+  (`email` / `api-token`) are now stored per-profile in the OS keychain,
+  under namespaced `<profile>:email` / `<profile>:api-token` keys**
+  (S-cycle3-percred-storage, BC-1.4.031). This mirrors the existing
+  per-profile OAuth token layout (`<profile>:oauth-access-token` /
+  `<profile>:oauth-refresh-token`) rather than the old shared flat
+  `email` / `api-token` keys. **Every profile that previously authenticated
+  with an API token — including every single-profile `"default"` user, the
+  majority auth path — must re-run `jr auth login [--profile <NAME>]` once**
+  after upgrading: existing credentials under the old flat `email`/
+  `api-token` keys are not migrated or read (there is no legacy-key
+  fallback for any profile, including `"default"`). Until you re-login, the
+  next command using that profile's API-token auth will fail with
+  `No stored API token for profile "<name>" — run "jr auth login --profile
+  <name>"`. The detect-and-instruct guidance that surfaces this more
+  proactively lands with the follow-on S-cycle3-credential-absence-guard
+  story.
 
 - **`jr auth list` (table mode) now renders a 5-column table — `NAME`, `URL`,
   `ENV`, `AUTH`, `STATUS` — adding a new `ENV` column between `URL` and
