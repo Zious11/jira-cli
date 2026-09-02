@@ -25,10 +25,9 @@ pub(crate) fn resolve_logout_target(
 /// `logout` remains OAuth-specific by design — this story does NOT extend
 /// it to clear the target profile's API-token credentials (that is
 /// `jr auth remove`'s job; see [`super::remove::handle_remove`]). What
-/// changes: when the target profile's `auth_method` is `"api_token"` (or,
-/// by the intrinsic-mechanism read, any profile with no OAuth pair to
-/// clear), `logout` no longer silently no-ops — it prints an
-/// INFORMATIONAL, non-error stderr notice and exits 0:
+/// changes: when the target profile's `auth_method` is `"api_token"`,
+/// `logout` no longer silently no-ops — it prints an INFORMATIONAL,
+/// non-error stderr notice and exits 0:
 ///
 /// `"This profile uses API-token auth — nothing to log out; use \`jr auth
 /// remove <profile>\` to delete stored credentials."` (profile name
