@@ -38,6 +38,19 @@ fn oauth_refresh_key(profile: &str) -> String {
     format!("{profile}:oauth-refresh-token")
 }
 
+/// Namespaced keychain key for a profile's API-token email
+/// (`<profile>:email`, S-cycle3-percred-storage / BC-1.4.031). Mirrors
+/// [`oauth_access_key`]'s shape exactly.
+fn api_token_email_key(profile: &str) -> String {
+    format!("{profile}:email")
+}
+/// Namespaced keychain key for a profile's API token
+/// (`<profile>:api-token`, S-cycle3-percred-storage / BC-1.4.031). Mirrors
+/// [`oauth_refresh_key`]'s shape exactly.
+fn api_token_key(profile: &str) -> String {
+    format!("{profile}:api-token")
+}
+
 /// Default OAuth 2.0 scopes used when `oauth_scopes` is not set in
 /// config.toml. Covers every API surface `jr` exercises today:
 /// - `read:jira-work` / `write:jira-work` / `read:jira-user` — Jira issues,
@@ -208,16 +221,35 @@ fn entry(key: &str) -> Result<Entry> {
     Entry::new(&service_name(), key).context("Failed to access keychain")
 }
 
-/// Store an API token and associated email in the system keychain.
-pub fn store_api_token(email: &str, token: &str) -> Result<()> {
+/// Store an API token and associated email in the system keychain under the
+/// pre-multi-profile FLAT keys (`email` / `api-token`, shared across every
+/// profile on the host).
+///
+/// Renamed from the original unqualified `store_api_token` by
+/// S-cycle3-percred-storage (BC-1.4.031) to make room for the new
+/// profile-namespaced `store_api_token(profile, email, token)` below.
+/// New writes should always go through the namespaced function — this one
+/// is retained, unused as a credential source going forward, purely so
+/// `S-cycle3-credential-absence-guard`'s legacy-pair existence check has
+/// something to call.
+pub fn store_legacy_flat_api_token(email: &str, token: &str) -> Result<()> {
     entry(KEY_EMAIL)?.set_password(email)?;
     entry(KEY_API_TOKEN)?.set_password(token)?;
     Ok(())
 }
 
-/// Load the stored API token and email from the system keychain.
-/// Returns `(email, token)`.
-pub fn load_api_token() -> Result<(String, String)> {
+/// Load the stored API token and email from the system keychain's
+/// pre-multi-profile FLAT keys (`email` / `api-token`, shared across every
+/// profile on the host). Returns `(email, token)`.
+///
+/// Renamed from the original unqualified, no-arg `load_api_token` by
+/// S-cycle3-percred-storage (BC-1.4.031) to make room for the new
+/// profile-namespaced `load_api_token(profile)` below. New reads should
+/// always go through the namespaced function — this one is retained,
+/// unused as a credential source going forward, purely so
+/// `S-cycle3-credential-absence-guard`'s legacy-pair existence check has
+/// something to call.
+pub fn load_legacy_flat_api_token() -> Result<(String, String)> {
     let email = entry(KEY_EMAIL)?
         .get_password()
         .context("No stored email — run \"jr auth login\"")?;
@@ -308,6 +340,72 @@ pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
             ))
         }
     }
+}
+
+/// Store an API-token credential pair (email + token) scoped to a profile.
+///
+/// (S-cycle3-percred-storage, BC-1.4.031 postcondition 1.) Tokens are
+/// written to the namespaced keys `<profile>:email` and `<profile>:api-token`
+/// so multiple Jira sites/accounts can coexist in a single keychain — the
+/// same rationale as [`store_oauth_tokens`]'s `<profile>:oauth-*` pair.
+///
+/// Unlike [`store_oauth_tokens`], this function has NO legacy-fallback
+/// migration branch for any profile, including `"default"` (BC-1.4.031
+/// Invariant 2) — every write is a plain, unconditional two-key overwrite
+/// (BC-1.4.033 postcondition 3, forward reference), so a later `auth login`
+/// cleanly repairs a partial-write state with no bespoke recovery logic
+/// here.
+///
+/// TODO(S-cycle3-percred-storage / BC-1.4.031): implement — write `email`
+/// under [`api_token_email_key`] and `token` under [`api_token_key`] via
+/// `entry(..)?.set_password(..)`, mirroring [`store_oauth_tokens`] byte-for-
+/// byte in shape.
+pub fn store_api_token(profile: &str, email: &str, token: &str) -> Result<()> {
+    let _ = (
+        api_token_email_key(profile),
+        api_token_key(profile),
+        email,
+        token,
+    );
+    todo!(
+        "S-cycle3-percred-storage / BC-1.4.031: write <profile>:email and \
+         <profile>:api-token via entry(..).set_password(..), mirroring \
+         store_oauth_tokens's unconditional two-key write (no legacy-fallback \
+         branch — that belongs to S-cycle3-credential-absence-guard)"
+    )
+}
+
+/// Load an API-token credential pair (email + token) scoped to a profile.
+/// Returns `(email, token)`.
+///
+/// (S-cycle3-percred-storage, BC-1.4.031 postcondition 2.) Reads only the
+/// namespaced keys `<profile>:email` / `<profile>:api-token` — no
+/// shared/flat fallback for a profile whose namespaced keys already exist.
+///
+/// Unlike [`load_oauth_tokens`], this function has NO `"default"`-only
+/// legacy-migration special case (BC-1.4.031 Invariant 2): the
+/// detect-and-instruct legacy-pair existence check and final "no stored
+/// credential" wording belong to the follow-on story
+/// `S-cycle3-credential-absence-guard` (BC-1.4.032). This function's
+/// eventual implementation should return a plain, actionable "no stored
+/// credential for profile {profile}" error when both namespaced keys are
+/// absent (EC-1.4.031-1) and must use [`read_keyring_optional`]'s
+/// `NoEntry`-vs-other-`Err` distinction so a genuine keychain backend error
+/// (EC-1.4.031-2) is never coerced into that message.
+///
+/// TODO(S-cycle3-percred-storage / BC-1.4.031): implement — read
+/// [`api_token_email_key`] / [`api_token_key`] via [`read_keyring_optional`],
+/// mirroring [`load_oauth_tokens`]'s `(Some, Some)` / `(None, None)` /
+/// partial-state match shape, minus the `"default"` legacy-fallback arms.
+pub fn load_api_token(profile: &str) -> Result<(String, String)> {
+    let _ = (api_token_email_key(profile), api_token_key(profile));
+    todo!(
+        "S-cycle3-percred-storage / BC-1.4.031: read <profile>:email and \
+         <profile>:api-token via read_keyring_optional, distinguishing \
+         NoEntry (absent-credential error, EC-1.4.031-1) from a real backend \
+         error (EC-1.4.031-2) — no legacy-fallback branch for any profile, \
+         including \"default\" (that belongs to S-cycle3-credential-absence-guard)"
+    )
 }
 
 /// Read an optional keychain entry, distinguishing "not present" (`NoEntry`)

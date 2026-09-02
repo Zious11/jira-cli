@@ -136,11 +136,12 @@ pub async fn status(profile_arg: Option<&str>) -> Result<()> {
         .unwrap_or("(not configured)");
     println!("Auth method: {method}");
 
-    // Credential probe: API-token creds are shared (one per host); OAuth
-    // tokens are per-profile and namespaced by the profile name.
+    // Credential probe: both API-token and OAuth creds are namespaced by
+    // profile as of S-cycle3-percred-storage (BC-1.4.031) — mirrors
+    // `load_oauth_tokens`'s per-profile lookup.
     let creds_ok = match method {
         "oauth" => auth::load_oauth_tokens(&target).is_ok(),
-        _ => auth::load_api_token().is_ok(),
+        _ => auth::load_api_token(&target).is_ok(),
     };
     if creds_ok {
         println!("Credentials: stored in keychain");

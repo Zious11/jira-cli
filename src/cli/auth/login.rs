@@ -41,9 +41,11 @@ pub(crate) fn resolve_oauth_scopes(profile: &crate::config::ProfileConfig) -> Re
 /// Resolve email and API token (flag → env → prompt), then store in keychain.
 ///
 /// `profile` names which entry under `[profiles]` should record the
-/// `auth_method = "api_token"` after a successful login. The keychain entry
-/// for API token + email is shared across profiles today (one-pair-per-host
-/// keyring layout); the profile name only affects config persistence.
+/// `auth_method = "api_token"` after a successful login. As of
+/// S-cycle3-percred-storage (BC-1.4.031), the keychain entry for API token +
+/// email is namespaced per profile (`<profile>:email` / `<profile>:api-token`
+/// via [`auth::store_api_token`]) — symmetric with the existing per-profile
+/// OAuth token namespacing, not shared/flat across profiles.
 pub async fn login_token(
     profile: &str,
     email: Option<String>,
@@ -69,7 +71,7 @@ pub async fn login_token(
         None,
     )?;
 
-    auth::store_api_token(&email, &token)?;
+    auth::store_api_token(profile, &email, &token)?;
 
     // Persist the profile's auth_method so subsequent runs know which flow
     // to use. URL is set by `prepare_login_target` before this point, so

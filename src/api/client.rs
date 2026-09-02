@@ -128,8 +128,9 @@ impl JiraClient {
                 Ok(format!("Bearer {access}"))
             }
             _ => {
-                // api_token (default)
-                let (email, token) = crate::api::auth::load_api_token()?;
+                // api_token (default) — namespaced per-profile read
+                // (S-cycle3-percred-storage, BC-1.4.031 postcondition 3).
+                let (email, token) = crate::api::auth::load_api_token(profile_name)?;
                 let encoded =
                     base64::engine::general_purpose::STANDARD.encode(format!("{email}:{token}"));
                 Ok(format!("Basic {encoded}"))
