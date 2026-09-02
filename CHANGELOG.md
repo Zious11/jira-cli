@@ -25,6 +25,11 @@ All notable changes to jr will be documented here.
   sanitizer via `render_env_line`. Migration: any script scraping the table
   by column index must account for the new `ENV` column; `--output json`
   consumers are unaffected beyond the new non-null `env` values.
+  **How to set it:** `env` is hand-edit-only in this release — add
+  `env = "sandbox"` under the relevant `[profiles.<name>]` block in
+  `~/.config/jr/config.toml` (see the README's config example). There is no
+  `--env` flag or `jr init`/`jr auth login` prompt yet; that is tracked as a
+  follow-up.
 
 ## [0.7.0-dev.3] - 2026-09-01
 

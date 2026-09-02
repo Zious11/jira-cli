@@ -72,6 +72,11 @@ examine_globs = [
     # drift class ("new CLI handler file → add to mutants.toml at creation") that slipped
     # through across all field-dx PRs. ~45 mutants. (added FIX-F6-MUTANTS-SCOPE)
     "src/cli/issue/field_resolve.rs",
+    # S-cycle3-env-tag — `sanitize_env_display`/`strip_control_and_ansi`:
+    # security-relevant display-sanitization (terminal-escape injection), same
+    # class as attachments.rs::display_sanitize_filename. Whole-file scope brings
+    # render_table/render_json in too — accepted, tracked, same as main.rs/queue.rs.
+    "src/output.rs",
 ]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI

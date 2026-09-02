@@ -80,6 +80,8 @@ pub struct ProfileConfig {
     pub oauth_scopes: Option<String>,
     pub team_field_id: Option<String>,
     pub story_points_field_id: Option<String>,
+    pub project: Option<String>,
+    pub env: Option<String>,   // free-form label, e.g. "prod"/"sandbox" (S-cycle3-env-tag)
 }
 ```
 

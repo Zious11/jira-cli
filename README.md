@@ -340,6 +340,10 @@ url = "https://yourorg-sandbox.atlassian.net"
 auth_method = "api_token"
 # Sandbox sites usually mirror production custom-field IDs, but `jr` stores
 # them per profile so divergence doesn't silently corrupt cached lookups.
+# Optional free-form label shown in the ENV column of `jr auth list` and the
+# Env: line of `jr auth status` (S-cycle3-env-tag). Hand-edited only — no CLI
+# flag or `jr init` prompt sets it yet.
+env = "sandbox"
 
 [defaults]
 output = "table"

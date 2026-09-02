@@ -38,6 +38,7 @@ high line coverage but untested assertion strength at the time of the F6 review.
 - `src/main.rs` — `init_tracing`, `run`, `run_until_shutdown` (previously-zero-coverage `tokio::select!` ctrl_c/SIGINT fork, now covered by VP-MUTANTS-SCOPE-1-001/002; `InvalidSubcommand` intercept) (added S-MUTANTS-SCOPE-1)
 - `src/cli/field.rs` — `handle` (`jr field options <field>` entry point, S-580-1), `resolve_field_context`/`resolve_m2_project` (M1/M2/M3 field-context-mechanism resolution), `normalize_from_allowed_values`/`normalize_from_valid_values` (the normalized `FieldOption` model), `filter_options` (`--value` filter), `render_option_rows`, `resolve_field_id`; ~91 mutants — previously omitted from the examine_globs scope (added FIX-F6-MUTANTS-SCOPE)
 - `src/cli/issue/field_resolve.rs` — `resolve_edit_fields`/`dispatch_field_value` (shared `--field` resolution/dispatch hub for both `issue edit --field` and `issue create --field`, S-578-2/S-578-4), `detect_flag_field_overlap` (D2 collision guard), `resolve_against_createmeta`/`resolve_against_editmeta`, `compose_option_hint`/`compose_id_hint`/`compose_name_hint`/`compose_asset_hint` (wire-value composers); ~45 mutants — previously omitted from the examine_globs scope despite backing two command families (P22-001/DEC-149/S-MUTANTS-SCOPE-1 drift class) (added FIX-F6-MUTANTS-SCOPE)
+- `src/output.rs` — `sanitize_env_display`/`strip_control_and_ansi` (security-relevant display-sanitization for `ProfileConfig.env`, terminal-escape/control-char injection; same class as the CWE-116 display-safety sanitizer in `attachments.rs`), plus `render_table`/`render_json` in the same file (whole-file scope, no sub-file targeting — same tradeoff as `main.rs`/`queue.rs`) (added S-cycle3-env-tag, per pr-reviewer BLOCKING-1 on PR #752)
 
 Configured in `.cargo/mutants.toml::examine_globs`. The CI job relies on this
 configuration alone (no `--file` CLI flags) for scope enforcement; `--in-diff` further
@@ -46,7 +47,7 @@ narrows to lines changed in the PR diff.
 Note: cargo-mutants v27+ reads its config from `.cargo/mutants.toml` (not `.mutants.toml`
 at repo root). This is the canonical config location for this project.
 
-Current `examine_globs` count: 20 entries (verify against `.cargo/mutants.toml` before citing
+Current `examine_globs` count: 21 entries (verify against `.cargo/mutants.toml` before citing
 this number elsewhere — it has drifted before and will drift again as scope changes).
 
 ### Sibling Candidates Considered and Deferred (MAINT-MUTANTS-GLOBS-01)
