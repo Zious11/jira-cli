@@ -386,12 +386,9 @@ pub fn store_api_token(profile: &str, email: &str, token: &str) -> Result<()> {
 /// STUB (Red Gate step 1, S-cycle3-credential-absence-guard): body is
 /// `todo!()` pending implementation.
 fn legacy_flat_pair_exists() -> Result<bool> {
-    todo!(
-        "BC-1.4.032 Postcondition 1: existence-only legacy-pair check \
-         via read_keyring_optional(KEY_EMAIL) / read_keyring_optional(KEY_API_TOKEN); \
-         return their presence as a bool, never their values; propagate a genuine \
-         backend Err via `?` rather than collapsing it to absent"
-    )
+    let email_present = read_keyring_optional(KEY_EMAIL)?.is_some();
+    let token_present = read_keyring_optional(KEY_API_TOKEN)?.is_some();
+    Ok(email_present && token_present)
 }
 
 /// Load an API-token credential pair (email + token) scoped to a profile.
@@ -459,22 +456,25 @@ pub fn load_api_token(profile: &str) -> Result<(String, String)> {
             // credential value. `?` propagates a genuine backend error
             // exactly as it would for the namespaced-key reads above.
             let _legacy_pair_present = legacy_flat_pair_exists()?;
-            // Target behavior (see doc comment above): return the
-            // finalized BC-1.4.032 Postcondition 2 actionable error via
-            // `crate::error::JrError::UserError(...).into()` (exit code
-            // 64) — byte-identical regardless of `_legacy_pair_present`.
-            todo!("BC-1.4.032 no-copy detect-and-instruct branch: see doc comment above")
+            // BC-1.4.032 Postcondition 2: byte-identical regardless of
+            // `_legacy_pair_present` — the legacy pair is never read as a
+            // credential, only checked for existence above (Postcondition 1).
+            Err(crate::error::JrError::UserError(format!(
+                "No credentials stored for profile '{profile}'. This version of jr \
+                 requires per-profile credentials — run `jr auth login {profile}` to set them up."
+            ))
+            .into())
         }
         _ => {
             // BC-1.4.033 (S-cycle3-credential-absence-guard): namespaced-pair
             // partial-write branch — runs before any legacy-pair check
             // (EC-1.4.033-1). Remediation message must NOT name
             // `jr auth logout` (SR-009).
-            //
-            // Target behavior (see doc comment above): return the
-            // finalized BC-1.4.033 Postcondition 2 actionable error via
-            // `crate::error::JrError::UserError(...).into()` (exit code 64).
-            todo!("BC-1.4.033 namespaced-pair partial-write branch: see doc comment above")
+            Err(crate::error::JrError::UserError(format!(
+                "Incomplete credentials stored for profile '{profile}' — run \
+                 `jr auth login {profile}` to fix this."
+            ))
+            .into())
         }
     }
 }
