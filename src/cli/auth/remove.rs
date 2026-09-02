@@ -80,6 +80,13 @@ pub(crate) fn handle_remove_in_memory(
 /// deliberately reverses this priority: a partial failure must now leave
 /// the profile config entry intact and RE-REMOVABLE, rather than un-listed
 /// with orphaned credentials.
+///
+/// **Residual (SEC-2):** if `config.save_global()` fails AFTER
+/// `clear_profile_creds` has already succeeded (step 2/3), the profile's
+/// credentials are gone but `[profiles.<name>]` remains in `config.toml` —
+/// this self-heals via the credential-absence-guard's exit-64 on the
+/// profile's next use (S-cycle3-credential-absence-guard, BC-1.4.032/033),
+/// rather than leaving it silently broken.
 pub async fn handle_remove(
     target: &str,
     no_input: bool,
