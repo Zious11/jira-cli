@@ -394,7 +394,7 @@ pub fn load_api_token(profile: &str) -> Result<(String, String)> {
         // legacy-pair check belongs to S-cycle3-credential-absence-guard.
         _ => Err(anyhow::anyhow!(
             "No stored API token for profile {profile:?} — \
-             run \"jr auth login --profile {profile}\""
+             run \"jr auth login --profile {profile:?}\""
         )),
     }
 }
@@ -574,6 +574,12 @@ pub fn clear_all_credentials(profiles: &[&str]) -> Result<()> {
     for profile in profiles {
         keys.push(oauth_access_key(profile));
         keys.push(oauth_refresh_key(profile));
+        // S-cycle3-percred-storage: the API-token pair moved to namespaced
+        // keys (<profile>:email / <profile>:api-token), so the flat
+        // KEY_EMAIL/KEY_API_TOKEN deletes above no longer reach the
+        // credential `auth refresh` is rotating.
+        keys.push(api_token_email_key(profile));
+        keys.push(api_token_key(profile));
     }
     for key in keys {
         match entry(&key) {

@@ -96,12 +96,15 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
     // Clear-only-what-this-flow-refreshes:
     //
     // - OAuth refresh rotates the per-profile <profile>:oauth-*-token
-    //   entries; the shared keys (email, api-token, oauth_client_id,
-    //   oauth_client_secret) belong to other profiles too and must not
-    //   be wiped.
-    // - API-token refresh re-prompts the email + api-token, and the
-    //   shared api-token IS the credential being refreshed — so the
-    //   #207-style "wipe-then-relogin" path is correct here.
+    //   entries; the shared keys (oauth_client_id, oauth_client_secret)
+    //   belong to other profiles too and must not be wiped.
+    // - API-token refresh re-prompts the email + api-token, which as of
+    //   S-cycle3-percred-storage (BC-1.4.031) live under the namespaced
+    //   <profile>:email / <profile>:api-token keys, not the old flat
+    //   email/api-token keys. `clear_all_credentials` deletes those
+    //   namespaced keys per profile (alongside the flat keys, kept for
+    //   pre-migration installs), so the #207-style "wipe-then-relogin"
+    //   path is correct again here.
     match flow {
         AuthFlow::OAuth => auth::clear_profile_creds(&target).context(
             "failed to clear stored OAuth tokens before refresh — keychain may still hold stale entries",
