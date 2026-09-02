@@ -6,27 +6,44 @@ All notable changes to jr will be documented here.
 
 ### Added
 
-- **(In progress, stub scaffolding only — not yet functional) `jr auth
-  login`/`jr auth refresh` gain a new, explicit `--api-token` flag**
-  (S-cycle3-oauth-default-creation, BC-1.2.050, DEC-323), symmetric with the
-  existing `--oauth` flag and mutually exclusive with it. On `login`,
-  `--api-token` will select the `api_token` mechanism directly, skipping
-  the upcoming interactive OAuth-default picker (BC-1.1.013). On `refresh`
-  it is accepted for symmetry but has no effect on mechanism selection
+- **`jr auth login` defaults to an OAuth-first interactive picker, mirroring
+  `jr init`** (S-cycle3-oauth-default-creation, BC-1.1.013, DEC-313). Bare
+  `jr auth login` on an interactive TTY now presents `["OAuth 2.0
+  (recommended)", "API Token"]` with OAuth as the default selection —
+  identical items and default index to `jr init`'s existing picker.
+  Non-interactive invocations (`--no-input`, or stdin not a TTY) skip the
+  picker entirely and always default to `api_token` (BC-1.1.014); presence
+  of `JR_EMAIL`/`JR_API_TOKEN` env vars alone does NOT suppress the picker
+  on an otherwise-interactive session. A mechanism-switching re-declaration
+  (picker or non-interactive) clears the outgoing mechanism's stored
+  credentials before/alongside writing the new ones.
+- **New, symmetric `--api-token` flag on `jr auth login`/`jr auth refresh`**
+  (S-cycle3-oauth-default-creation, BC-1.2.050, DEC-323), mutually exclusive
+  with `--oauth`. On `login`, `--api-token` selects the `api_token`
+  mechanism directly, skipping the interactive picker. On `refresh` it is
+  accepted for symmetry but has no effect on mechanism selection
   (BC-1.2.051) — `refresh` always follows the profile's own stored
-  `auth_method`. The flag currently parses and threads through, but the
-  picker, the non-interactive default, and the airtight non-interactive
-  OAuth guard (BC-1.1.013/BC-1.1.014/BC-1.1.016) are not yet wired up.
+  `auth_method` — and prints an informational stderr notice (human-mode
+  only) explaining that it's inert there.
+- **Airtight non-interactive OAuth guard** (S-cycle3-oauth-default-creation,
+  BC-1.1.016). An explicit `--oauth` under any non-interactive trigger, or
+  a non-interactive `jr auth refresh` against a profile whose stored
+  `auth_method` is already `oauth`, now exits 64 immediately — before any
+  config load, credential resolution, network call, or browser launch —
+  with `OAuth requires an interactive terminal; use --api-token for
+  non-interactive auth.` This closes a class of CI/automation hangs where a
+  non-interactive invocation could previously reach the OAuth flow and
+  block waiting on a browser redirect that could never complete.
 
 ### Deprecated
 
-- **(In progress, stub scaffolding only — not yet functional) `--oauth` on
-  `jr auth login`/`jr auth refresh` is being deprecated in favor of letting
-  the upcoming interactive picker default to OAuth, or passing the new
-  `--api-token` flag explicitly** (S-cycle3-oauth-default-creation,
-  BC-1.2.049, DEC-323). `--oauth` continues to work exactly as before; the
-  stderr-only, human-mode-only deprecation notice this BC requires is not
-  yet emitted — that lands with this story's implementation.
+- **`--oauth` on `jr auth login`/`jr auth refresh` is deprecated** in favor
+  of letting the interactive picker default to OAuth, or passing the new
+  `--api-token` flag explicitly (S-cycle3-oauth-default-creation,
+  BC-1.2.049, DEC-323). `--oauth` continues to work exactly as before and
+  now prints a stderr-only, human-mode-only deprecation notice on every
+  functional (non-guard-rejected) use; the notice never appears under
+  `--output json`.
 
 ### Internal
 
