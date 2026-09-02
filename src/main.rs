@@ -251,6 +251,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     profile,
                     url,
                     oauth,
+                    api_token,
                     email,
                     token,
                     client_id,
@@ -262,6 +263,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                         profile: effective_profile,
                         url,
                         oauth,
+                        api_token,
                         email,
                         token,
                         client_id,
@@ -279,6 +281,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 cli::AuthCommand::Refresh {
                     profile,
                     oauth,
+                    api_token,
                     email,
                     token,
                     client_id,
@@ -288,6 +291,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     cli::auth::refresh_credentials(cli::auth::RefreshArgs {
                         profile: effective_profile.as_deref(),
                         oauth,
+                        api_token,
                         email,
                         token,
                         client_id,

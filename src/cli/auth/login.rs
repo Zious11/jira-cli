@@ -235,6 +235,11 @@ pub struct LoginArgs {
     pub profile: Option<String>,
     pub url: Option<String>,
     pub oauth: bool,
+    /// BC-1.2.050: select `api_token` directly, skipping the BC-1.1.013
+    /// interactive OAuth-default picker. Mutually exclusive with `oauth`
+    /// (enforced by clap `conflicts_with` at the CLI layer — see
+    /// `AuthCommand::Login` in `src/cli/mod.rs`).
+    pub api_token: bool,
     pub email: Option<String>,
     pub token: Option<String>,
     pub client_id: Option<String>,
@@ -389,4 +394,62 @@ pub(crate) fn prepare_login_target(
     }
 
     Ok((global, target))
+}
+
+/// BC-1.1.013: creation-time OAuth-default picker for `jr auth login`'s bare
+/// interactive path. Per SR-012's mechanism-selection precedence
+/// (BC-1.1.013 Invariant 2), this is tier 3 — reached only when neither an
+/// explicit `--oauth`/`--api-token` flag (tier 1, BC-1.2.049/BC-1.2.050) nor
+/// a non-interactive trigger (tier 2, BC-1.1.014) applies.
+///
+/// Must mirror `jr init`'s picker (`src/cli/init.rs::handle`, read-only
+/// reference for this story) byte-for-byte: same items (`"OAuth 2.0
+/// (recommended)"`, `"API Token"`), same `dialoguer::Select` with
+/// `.default(0)`. Returns `true` when OAuth is selected, `false` for API
+/// token — matching `LoginArgs::oauth`'s shape so a caller can reuse the
+/// existing `if oauth { login_oauth(..) } else { login_token(..) }`
+/// dispatch unchanged.
+pub fn prompt_auth_method_picker() -> Result<bool> {
+    todo!(
+        "BC-1.1.013: interactive OAuth-default picker mirroring jr init's \
+         dialoguer::Select (items [\"OAuth 2.0 (recommended)\", \"API Token\"], \
+         .default(0)); Ok(true) for OAuth, Ok(false) for API token"
+    )
+}
+
+/// BC-1.1.013 EC-1.1.013-2 / BC-1.1.014 EC-1.1.014-4 (M-1): clear the
+/// OUTGOING mechanism's per-profile credentials when an `auth login`
+/// invocation (interactive re-declaration OR non-interactive mechanism
+/// switch) is about to persist `new_method` onto `profile` and that differs
+/// from the profile's CURRENT `auth_method` — before or alongside writing
+/// the new mechanism's credentials.
+///
+/// A SAME-mechanism re-declaration, or a first-time declaration
+/// (`current_auth_method` is `None`), is a caller-side no-op — the existing
+/// `store_api_token`/`store_oauth_tokens` write already overwrites in
+/// place, so callers must not invoke this function in that case.
+///
+/// MUST reuse [`crate::api::auth::clear_profile_creds`]'s existing per-kind
+/// branches (OAuth-pair AND API-token-pair deletion, ADR-0020 §Decision 7 /
+/// BC-1.2.014) — the O-1/SR-011 requirement is explicit that per-kind
+/// clearing must not be re-implemented inline here.
+///
+/// `emit_switch_notice` gates BC-1.1.014 EC-1.1.014-4's SHOULD-level
+/// informational stderr line for a NON-interactive mechanism switch (e.g.
+/// `"Profile '<profile>' auth method changed from 'oauth' to
+/// 'api_token'."`). The interactive re-declaration path (BC-1.1.013
+/// EC-1.1.013-2) should pass `false` — the picker interaction itself
+/// already makes the switch visible to the user.
+pub fn clear_outgoing_mechanism_on_switch(
+    profile: &crate::profile::Profile,
+    current_auth_method: Option<&str>,
+    new_method: &str,
+    emit_switch_notice: bool,
+) -> Result<()> {
+    let _ = (profile, current_auth_method, new_method, emit_switch_notice);
+    todo!(
+        "BC-1.1.013 EC-1.1.013-2 / BC-1.1.014 EC-1.1.014-4: mechanism-switch \
+         credential clear via clear_profile_creds, plus the SHOULD-level \
+         non-interactive switch notice"
+    )
 }

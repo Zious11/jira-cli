@@ -4,6 +4,30 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **(In progress, stub scaffolding only — not yet functional) `jr auth
+  login`/`jr auth refresh` gain a new, explicit `--api-token` flag**
+  (S-cycle3-oauth-default-creation, BC-1.2.050, DEC-323), symmetric with the
+  existing `--oauth` flag and mutually exclusive with it. On `login`,
+  `--api-token` will select the `api_token` mechanism directly, skipping
+  the upcoming interactive OAuth-default picker (BC-1.1.013). On `refresh`
+  it is accepted for symmetry but has no effect on mechanism selection
+  (BC-1.2.051) — `refresh` always follows the profile's own stored
+  `auth_method`. The flag currently parses and threads through, but the
+  picker, the non-interactive default, and the airtight non-interactive
+  OAuth guard (BC-1.1.013/BC-1.1.014/BC-1.1.016) are not yet wired up.
+
+### Deprecated
+
+- **(In progress, stub scaffolding only — not yet functional) `--oauth` on
+  `jr auth login`/`jr auth refresh` is being deprecated in favor of letting
+  the upcoming interactive picker default to OAuth, or passing the new
+  `--api-token` flag explicitly** (S-cycle3-oauth-default-creation,
+  BC-1.2.049, DEC-323). `--oauth` continues to work exactly as before; the
+  stderr-only, human-mode-only deprecation notice this BC requires is not
+  yet emitted — that lands with this story's implementation.
+
 ### Internal
 
 - **Un-deferred ADR-0011 (Status: Deferred → Accepted, DEC-317) and completed the

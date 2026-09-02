@@ -13,7 +13,10 @@ pub(crate) use keychain::{resolve_credential, resolve_oauth_app_credentials};
 pub use list::handle_list;
 #[cfg(test)]
 pub(crate) use list::{render_env_column, render_list_json, render_list_table};
-pub use login::{LoginArgs, handle_login, login_oauth, login_token};
+pub use login::{
+    LoginArgs, clear_outgoing_mechanism_on_switch, handle_login, login_oauth, login_token,
+    prompt_auth_method_picker,
+};
 #[cfg(test)]
 pub(crate) use login::{prepare_login_target, resolve_oauth_scopes};
 pub use logout::handle_logout;
@@ -34,6 +37,8 @@ pub use switch::handle_switch;
 #[cfg(test)]
 pub(crate) use switch::handle_switch_in_memory;
 
+use anyhow::Result;
+
 #[cfg(test)]
 use crate::api::auth;
 #[cfg(test)]
@@ -42,6 +47,65 @@ use crate::api::auth_embedded::OAuthAppSource;
 use crate::config::Config;
 #[cfg(test)]
 use crate::error::JrError;
+
+/// BC-1.1.016 Postcondition 2: fixed stderr string for the airtight
+/// non-interactive OAuth guard — a literal constant, no value
+/// interpolation. Cited verbatim by both `handle_login` and
+/// `refresh_credentials`.
+pub const NONINTERACTIVE_OAUTH_GUARD_MESSAGE: &str =
+    "OAuth requires an interactive terminal; use --api-token for non-interactive auth.";
+
+/// BC-1.1.016: precondition check for the airtight non-interactive OAuth
+/// guard, shared by `handle_login` (Precondition 2a: explicit `--oauth`)
+/// and `refresh_credentials` (Preconditions 2a/2b folded together, since
+/// [`chosen_flow_for_profile`] already resolves the implicit
+/// oauth-method-profile `refresh` case into `AuthFlow::OAuth`).
+///
+/// `no_input`: the caller's already-resolved non-interactive trigger state
+/// (`--no-input` set, OR stdin is not a TTY).
+/// `oauth_selected`: whether OAuth is the mechanism this invocation would
+/// otherwise select — `handle_login` passes `args.oauth`; `refresh_credentials`
+/// passes `flow == AuthFlow::OAuth`.
+///
+/// MUST be called as a PRECONDITION — before any network call, callback-
+/// listener bind, or browser-open attempt — in both callers (Postcondition
+/// 3). Never a timeout on, or best-effort cancellation of, an already-started
+/// flow. Returns `Err(JrError::UserError(NONINTERACTIVE_OAUTH_GUARD_MESSAGE))`
+/// (exit 64) when `no_input && oauth_selected`; `Ok(())` otherwise.
+pub fn check_noninteractive_oauth_guard(no_input: bool, oauth_selected: bool) -> Result<()> {
+    let _ = (no_input, oauth_selected);
+    todo!(
+        "BC-1.1.016: airtight non-interactive OAuth guard — exit 64 with \
+         NONINTERACTIVE_OAUTH_GUARD_MESSAGE when no_input && oauth_selected, \
+         evaluated before any network/listener/browser code in the caller"
+    )
+}
+
+/// BC-1.2.049 Postcondition 2: emit `--oauth`'s deprecation notice —
+/// stderr-only, human-output-mode-only. Gated on OUTPUT FORMAT, not
+/// TTY-ness (EC-1.2.049-1: never emitted under `--output json`, regardless
+/// of interactivity).
+pub fn emit_oauth_deprecation_notice(output: crate::cli::OutputFormat) {
+    let _ = output;
+    todo!(
+        "BC-1.2.049: stderr-only, human-output-mode-only --oauth deprecation \
+         notice pointing at --api-token / the creation-time picker"
+    )
+}
+
+/// BC-1.2.050 Postcondition 3 (O-2/CV-2): emit `--api-token`'s
+/// inert-on-`refresh` notice. Same output-channel rules as
+/// [`emit_oauth_deprecation_notice`] (stderr-only, human-output-mode-only),
+/// worded for inertness rather than deprecation — `--api-token` itself is
+/// not deprecated, only its effect on `refresh` specifically is a no-op.
+pub fn emit_api_token_inert_on_refresh_notice(output: crate::cli::OutputFormat) {
+    let _ = output;
+    todo!(
+        "BC-1.2.050: stderr-only, human-output-mode-only notice that \
+         --api-token has no effect on 'auth refresh' — the profile's own \
+         stored mechanism is always used"
+    )
+}
 
 /// Build the verb-aligned `--output json` success payload for the four auth
 /// subcommands that mutate profile state (login, switch, logout, remove).

@@ -45,6 +45,14 @@ pub(crate) fn refresh_success_payload(flow: AuthFlow) -> serde_json::Value {
 pub struct RefreshArgs<'a> {
     pub profile: Option<&'a str>,
     pub oauth: bool,
+    /// BC-1.2.050 Postcondition 3 (O-2/CV-2): syntactically accepted for
+    /// symmetry with `LoginArgs::api_token`, but INERT on `auth refresh` —
+    /// `refresh` always follows the target profile's own stored
+    /// `auth_method` (BC-1.2.051). Presence emits the inert-with-notice
+    /// stderr line (`emit_api_token_inert_on_refresh_notice`), stderr-only
+    /// and human-mode-only, mirroring `oauth`'s BC-1.2.049 deprecation
+    /// notice's output-channel rules.
+    pub api_token: bool,
     pub email: Option<String>,
     pub token: Option<String>,
     pub client_id: Option<String>,

@@ -222,8 +222,18 @@ pub enum AuthCommand {
         /// Scope list is Atlassian's recommended classic set by default;
         /// override via `[profiles.<name>].oauth_scopes` in config.toml — see
         /// Configuration below.
-        #[arg(long)]
+        ///
+        /// DEPRECATED (BC-1.2.049): retained as an accepted alias — a
+        /// deprecation notice is printed to stderr in human-output mode.
+        /// Prefer letting the interactive picker default to OAuth, or pass
+        /// `--api-token` explicitly for the other mechanism.
+        #[arg(long, conflicts_with = "api_token")]
         oauth: bool,
+        /// Select the API-token mechanism directly, skipping the
+        /// interactive OAuth-default picker (BC-1.2.050). Mutually
+        /// exclusive with `--oauth`.
+        #[arg(long, conflicts_with = "oauth")]
+        api_token: bool,
         /// Jira email (API token flow). Prefer $JR_EMAIL over this flag.
         #[arg(long)]
         email: Option<String>,
@@ -262,9 +272,21 @@ pub enum AuthCommand {
         /// Profile to refresh credentials for. Defaults to active profile.
         #[arg(long)]
         profile: Option<String>,
-        /// Use OAuth 2.0 instead of API token (matches `jr auth login --oauth`)
-        #[arg(long)]
+        /// Use OAuth 2.0 instead of API token (matches `jr auth login --oauth`).
+        ///
+        /// DEPRECATED (BC-1.2.049): retained as an accepted alias, but has no
+        /// effect on `auth refresh`'s mechanism selection (BC-1.2.051) — the
+        /// profile's own stored `auth_method` is always used. A deprecation
+        /// notice is printed to stderr in human-output mode.
+        #[arg(long, conflicts_with = "api_token")]
         oauth: bool,
+        /// Syntactically accepted for symmetry with `auth login`
+        /// (BC-1.2.050); has no effect on `auth refresh`'s mechanism
+        /// selection — the profile's own stored `auth_method` is always
+        /// used. An informational stderr notice is printed in human-output
+        /// mode. Mutually exclusive with `--oauth`.
+        #[arg(long, conflicts_with = "oauth")]
+        api_token: bool,
         /// Jira email (API token flow). Prefer $JR_EMAIL over this flag.
         #[arg(long)]
         email: Option<String>,
