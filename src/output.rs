@@ -54,6 +54,32 @@ pub fn print_error(msg: &str) {
     eprintln!("{}: {}", "Error".red().bold(), msg);
 }
 
+/// Shared control-char/ANSI-escape strip + length-cap transform for
+/// displaying a profile's free-form `env` tag on a human-readable channel
+/// (table cell or `auth status` text line) — implements BC-1.6.046
+/// EC-1.6.046-2 / BC-1.6.047 EC-1.6.047-3.
+///
+/// Strips ASCII control characters (`0x00`-`0x1F`, `0x7F`) and ANSI
+/// CSI/OSC escape sequences outright (not replaced with a placeholder —
+/// distinct in behavior from `cli::issue::attachments::display_sanitize_filename`,
+/// which substitutes `?`; see S-cycle3-env-tag's "Current State" note on why
+/// that function is not reused here), and caps the result to a fixed
+/// maximum display length with a truncation marker when capped.
+///
+/// **JSON output MUST NEVER call this function** — `auth list --output json`
+/// echoes `env` verbatim/lossless (BC-1.6.047 Postcondition 1/2a,
+/// Invariant 3; mirrors issue #398's `issue edit` description-echo
+/// asymmetry). Ordinary strings with no control chars/ANSI escapes and
+/// under the length cap pass through unchanged.
+pub(crate) fn sanitize_env_display(_value: &str) -> String {
+    todo!(
+        "BC-1.6.046 EC-1.6.046-2 / BC-1.6.047 EC-1.6.047-3: strip ASCII \
+         control chars (0x00-0x1F, 0x7F) + ANSI CSI/OSC escape sequences; \
+         cap to a fixed max display length with a truncation marker when \
+         capped"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

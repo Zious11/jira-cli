@@ -4,6 +4,27 @@ use crate::api::auth;
 use crate::api::auth_embedded::OAuthAppSource;
 use crate::error::JrError;
 
+/// Render a profile's `env` tag for `auth status`'s text `env` line
+/// (BC-1.6.047 Postcondition 2b, EC-1.6.047-3): identical control-char/
+/// ANSI-strip + length-cap transform and `-`/blank placeholder convention
+/// as `auth list`'s `ENV` table column (BC-1.6.046 EC-1.6.046-1) — see
+/// `cli::auth::list::render_env_column`'s doc comment for the full
+/// contract. Shares the sanitizer with that call site (`output::
+/// sanitize_env_display`) per the "one shared sanitizer, two call sites"
+/// architecture rule; this wrapper's None/blank/sanitized dispatch is
+/// deliberately NOT pre-implemented here.
+fn render_env_line(env: Option<&str>) -> String {
+    if let Some(s) = env {
+        let _ = crate::output::sanitize_env_display(s);
+    }
+    todo!(
+        "BC-1.6.047 EC-1.6.047-3: None -> \"-\"; Some(s) -> \
+         output::sanitize_env_display(s) (Some(\"\") renders as a blank \
+         segment, never the \"-\" placeholder) — same convention as \
+         BC-1.6.046 EC-1.6.046-1"
+    )
+}
+
 /// Inspect — without consuming or modifying — which source would supply
 /// OAuth app credentials on the next `refresh_oauth_token` call. Mirrors
 /// the resolver order in `api/auth.rs::resolve_refresh_app_credentials`.
@@ -111,6 +132,10 @@ pub async fn status(profile_arg: Option<&str>) -> Result<()> {
         .unwrap_or("(not configured)");
     println!("Profile:     {target}");
     println!("Instance:    {url}");
+    println!(
+        "Env:         {}",
+        render_env_line(profile.and_then(|p| p.env.as_deref()))
+    );
 
     let method = profile
         .and_then(|p| p.auth_method.as_deref())

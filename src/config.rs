@@ -24,6 +24,14 @@ pub struct ProfileConfig {
     pub story_points_field_id: Option<String>,
     /// Default project key for this profile. Overridden by --project flag and .jr.toml.
     pub project: Option<String>,
+    /// Free-form environment label for this profile (e.g. "prod", "sandbox",
+    /// "uat") — illustrative only, no validation/allowlist (BC-6.1.015).
+    /// Additive, tolerant-reader: absent in a pre-existing `config.toml`
+    /// deserializes to `None`, matching the sibling `Option<String>` fields
+    /// on this struct (no `#[serde(default)]` needed — same pattern).
+    /// Storage stays verbatim; display-layer sanitization lives in
+    /// `output::sanitize_env_display` (BC-6.1.015 EC-4).
+    pub env: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -187,6 +195,7 @@ pub fn migrate_legacy_global(mut global: GlobalConfig) -> GlobalConfig {
         oauth_scopes: global.instance.oauth_scopes.clone(),
         team_field_id: global.fields.team_field_id.clone(),
         story_points_field_id: global.fields.story_points_field_id.clone(),
+        env: None,
         project: None,
     };
     global.profiles.insert("default".to_string(), profile);
