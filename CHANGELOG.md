@@ -75,11 +75,11 @@ All notable changes to jr will be documented here.
   after upgrading: existing credentials under the old flat `email`/
   `api-token` keys are not migrated or read (there is no legacy-key
   fallback for any profile, including `"default"`). Until you re-login, the
-  next command using that profile's API-token auth will fail with
-  `No stored API token for profile "<name>" — run "jr auth login --profile
-  <name>"`. The detect-and-instruct guidance that surfaces this more
-  proactively lands with the follow-on S-cycle3-credential-absence-guard
-  story.
+  next command using that profile's API-token auth will fail with the
+  detect-and-instruct error described in the entry above
+  (S-cycle3-credential-absence-guard, BC-1.4.032):
+  `No credentials stored for profile '<name>'. This version of jr requires
+  per-profile credentials — run \`jr auth login <name>\` to set them up.`
 
 - **`jr auth list` (table mode) now renders a 5-column table — `NAME`, `URL`,
   `ENV`, `AUTH`, `STATUS` — adding a new `ENV` column between `URL` and
