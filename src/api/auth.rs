@@ -394,7 +394,7 @@ pub fn load_api_token(profile: &str) -> Result<(String, String)> {
         // legacy-pair check belongs to S-cycle3-credential-absence-guard.
         _ => Err(anyhow::anyhow!(
             "No stored API token for profile {profile:?} — \
-             run \"jr auth login --profile {profile:?}\""
+             run \"jr auth login --profile {profile}\""
         )),
     }
 }
