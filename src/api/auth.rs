@@ -1347,6 +1347,7 @@ fn extract_query_param(request: &str, param: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::JrError;
 
     /// `FixedPort` and `DynamicPort` produce different host forms:
     /// `FixedPort` (embedded app) uses `127.0.0.1` to force IPv4 and match
@@ -2425,5 +2426,558 @@ mod tests {
             simulated_err.contains("jr auth logout"),
             "partial-state error must include recovery instruction: {simulated_err}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // S-cycle3-credential-absence-guard (BC-1.4.032/BC-1.4.033/BC-1.4.034,
+    // DEC-326 no-copy detect-and-instruct redesign). Red Gate step 2 of 2 —
+    // these tests target `load_api_token`'s both-absent and namespaced-partial
+    // branches, both currently `todo!()` (see `legacy_flat_pair_exists` and
+    // `load_api_token` stubs above), plus the `legacy_flat_pair_exists`
+    // existence-only helper itself.
+    // -------------------------------------------------------------------------
+
+    /// BC-1.4.032 Postcondition 2's exact actionable error text for a given
+    /// profile name — single source of truth for every test below that
+    /// asserts byte-identical error text across differing legacy-pair
+    /// states (Postcondition 2's "identical regardless of legacy pair"
+    /// guarantee) or across differing profile names (Postcondition 4's
+    /// "no profile is special-cased" guarantee).
+    fn expected_bc_1_4_032_absent_message(profile: &str) -> String {
+        format!(
+            "No credentials stored for profile '{profile}'. This version of jr \
+             requires per-profile credentials — run `jr auth login {profile}` to set them up."
+        )
+    }
+
+    /// BC-1.4.033 Postcondition 2's exact actionable error text for a given
+    /// profile name.
+    fn expected_bc_1_4_033_partial_message(profile: &str) -> String {
+        format!(
+            "Incomplete credentials stored for profile '{profile}' — run \
+             `jr auth login {profile}` to fix this."
+        )
+    }
+
+    /// Downcasts an `anyhow::Error` produced by `load_api_token`'s
+    /// absent/partial branches to `JrError`, asserts it is a `UserError`
+    /// with exit code 64 (the shared exit-64 contract BC-1.4.032
+    /// Postcondition 2 and BC-1.4.033 Postcondition 2 both mandate), and
+    /// returns the formatted display message for further assertion.
+    fn assert_user_error_exit_64(err: &anyhow::Error) -> String {
+        let je = err
+            .downcast_ref::<JrError>()
+            .unwrap_or_else(|| panic!("expected a JrError, got: {err:#}"));
+        assert!(
+            matches!(je, JrError::UserError(_)),
+            "expected JrError::UserError, got {je:?}"
+        );
+        assert_eq!(
+            je.exit_code(),
+            64,
+            "BC-1.4.032/BC-1.4.033 both mandate exit code 64"
+        );
+        format!("{err:#}")
+    }
+
+    /// Asserts `entry(key).get_password()` is exactly `Err(NoEntry)` — i.e.
+    /// the key was never written. Used throughout this section to prove the
+    /// DEC-326 no-copy invariant: a failed `load_api_token` call must never
+    /// leave a `<profile>:email`/`<profile>:api-token` entry behind.
+    fn assert_keychain_entry_absent(key: &str) {
+        assert!(
+            matches!(
+                entry(key).unwrap().get_password(),
+                Err(keyring::Error::NoEntry)
+            ),
+            "expected keychain entry {key:?} to be absent (never written) — no-copy invariant (DEC-326)"
+        );
+    }
+
+    fn cleanup_legacy_flat_pair() {
+        if let Ok(e) = entry(KEY_EMAIL) {
+            let _ = e.delete_credential();
+        }
+        if let Ok(e) = entry(KEY_API_TOKEN) {
+            let _ = e.delete_credential();
+        }
+    }
+
+    /// AC-002 (BC-1.4.032 postcondition 2): both namespaced keys absent, no
+    /// legacy pair either → actionable exit-64 error.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_032_absent_namespaced_keys_no_legacy_pair_returns_actionable_exit64() {
+        with_test_keyring(|| {
+            let err = load_api_token("default").expect_err("absent state must error");
+            let msg = assert_user_error_exit_64(&err);
+            assert_eq!(msg, expected_bc_1_4_032_absent_message("default"));
+        });
+    }
+
+    /// AC-001 / EC-1.4.032-1 (BC-1.4.032 postcondition 2): both namespaced
+    /// keys absent, legacy flat pair PRESENT → the IDENTICAL actionable
+    /// exit-64 error as the no-legacy-pair case above (byte-for-byte equal
+    /// message — legacy-pair presence changes nothing observable).
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_032_absent_namespaced_keys_legacy_pair_present_returns_identical_actionable_exit64()
+     {
+        with_test_keyring(|| {
+            store_legacy_flat_api_token("legacy@example.com", "legacy-token-xyz").unwrap();
+
+            let err = load_api_token("default")
+                .expect_err("absent state with legacy pair must still error");
+            let msg = assert_user_error_exit_64(&err);
+            assert_eq!(msg, expected_bc_1_4_032_absent_message("default"));
+
+            cleanup_legacy_flat_pair();
+        });
+    }
+
+    /// **CRITICAL — DEC-326 no-copy invariant (AC-003, VP-AUTHDX-005(a)/(b)).**
+    /// Seeds ONLY the legacy flat `email`/`api-token` pair (no per-profile
+    /// pair at all). After the resulting exit-64 `Err`:
+    /// (a) the legacy flat pair STILL EXISTS, byte-for-byte unchanged — it
+    ///     was never deleted;
+    /// (b) NO `default:email`/`default:api-token` entry was ever created —
+    ///     it was never copied.
+    /// This is the core guarantee the F2-gate human decision (DEC-326)
+    /// exists to enforce: a shared, environment-unbound Basic-auth pair must
+    /// never be silently handed to a freshly-tagged profile.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_032_no_copy_invariant_legacy_pair_untouched_and_no_percred_written() {
+        with_test_keyring(|| {
+            let seeded_email = "legacy-untouched@example.com";
+            let seeded_token = "legacy-untouched-token-123";
+            store_legacy_flat_api_token(seeded_email, seeded_token).unwrap();
+
+            let err = load_api_token("default").expect_err("absent namespaced state must error");
+            assert_user_error_exit_64(&err);
+
+            // (a) legacy pair STILL EXISTS, byte-for-byte unchanged — never deleted.
+            let (legacy_email, legacy_token) = load_legacy_flat_api_token()
+                .expect("legacy pair must still be readable — it must never be deleted");
+            assert_eq!(legacy_email, seeded_email, "legacy email must be unchanged");
+            assert_eq!(legacy_token, seeded_token, "legacy token must be unchanged");
+
+            // (b) NO per-profile entry was ever created — never copied.
+            assert_keychain_entry_absent(&api_token_email_key("default"));
+            assert_keychain_entry_absent(&api_token_key("default"));
+
+            cleanup_legacy_flat_pair();
+        });
+    }
+
+    /// EC-1.4.032-3 / Postcondition 4: `"default"` and a non-default profile
+    /// (`"sandbox"`) in the identical absent-namespaced-keys +
+    /// legacy-pair-present state must get byte-identical error text — no
+    /// `if profile == "default"` branch anywhere, and neither profile
+    /// inherits the legacy pair.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_032_default_profile_not_special_cased_identical_to_other_profiles() {
+        with_test_keyring(|| {
+            store_legacy_flat_api_token("shared-legacy@example.com", "shared-legacy-token")
+                .unwrap();
+
+            let default_err = load_api_token("default").expect_err("default must error");
+            let default_msg = assert_user_error_exit_64(&default_err);
+
+            let sandbox_err =
+                load_api_token("sandbox").expect_err("sandbox must error identically");
+            let sandbox_msg = assert_user_error_exit_64(&sandbox_err);
+
+            assert_eq!(default_msg, expected_bc_1_4_032_absent_message("default"));
+            assert_eq!(sandbox_msg, expected_bc_1_4_032_absent_message("sandbox"));
+
+            assert_keychain_entry_absent(&api_token_email_key("default"));
+            assert_keychain_entry_absent(&api_token_key("default"));
+            assert_keychain_entry_absent(&api_token_email_key("sandbox"));
+            assert_keychain_entry_absent(&api_token_key("sandbox"));
+
+            cleanup_legacy_flat_pair();
+        });
+    }
+
+    /// VP-AUTHDX-005(c) direct case: because this branch is read-only with
+    /// no mutating side effect, repeated `load_api_token` calls in the same
+    /// keychain state return the byte-identical `Err` — there is no
+    /// "first-call-migrates, subsequent-call-short-circuits" shape (contrast
+    /// `load_oauth_tokens`'s copy-then-short-circuit migration, which this
+    /// BC deliberately does not reuse).
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_032_repeated_calls_return_same_err_no_first_call_side_effect() {
+        with_test_keyring(|| {
+            let err1 = load_api_token("sandbox").expect_err("first call must error");
+            let msg1 = assert_user_error_exit_64(&err1);
+
+            let err2 = load_api_token("sandbox").expect_err("second call must error identically");
+            let msg2 = assert_user_error_exit_64(&err2);
+
+            assert_eq!(
+                msg1, msg2,
+                "no first-call-migrates shape — every call in the same state is identical"
+            );
+            assert_eq!(msg1, expected_bc_1_4_032_absent_message("sandbox"));
+        });
+    }
+
+    /// AC-007 (BC-1.4.033 postconditions 1-2), variant 1: `<profile>:email`
+    /// present, `<profile>:api-token` absent → actionable exit-64
+    /// "Incomplete credentials" error, never a silently-incomplete `Ok`.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_033_namespaced_partial_email_present_returns_incomplete_credentials_error() {
+        with_test_keyring(|| {
+            entry(&api_token_email_key("sandbox"))
+                .unwrap()
+                .set_password("partial@example.com")
+                .unwrap();
+            // api-token half intentionally left absent.
+
+            let err = load_api_token("sandbox").expect_err("partial namespaced state must error");
+            let msg = assert_user_error_exit_64(&err);
+            assert_eq!(msg, expected_bc_1_4_033_partial_message("sandbox"));
+
+            cleanup_api_token_profile("sandbox");
+        });
+    }
+
+    /// AC-007 (BC-1.4.033 postconditions 1-2), variant 2 (reverse of the
+    /// above): `<profile>:api-token` present, `<profile>:email` absent →
+    /// the identical "Incomplete credentials" error shape.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_033_namespaced_partial_token_present_returns_incomplete_credentials_error() {
+        with_test_keyring(|| {
+            entry(&api_token_key("sandbox"))
+                .unwrap()
+                .set_password("partial-token-only")
+                .unwrap();
+            // email half intentionally left absent.
+
+            let err = load_api_token("sandbox").expect_err("partial namespaced state must error");
+            let msg = assert_user_error_exit_64(&err);
+            assert_eq!(msg, expected_bc_1_4_033_partial_message("sandbox"));
+
+            cleanup_api_token_profile("sandbox");
+        });
+    }
+
+    /// AC-008 / EC-1.4.033-1: `default:email` present, `default:api-token`
+    /// absent, AND a complete legacy flat pair also exists → the namespaced
+    /// partial-write error still fires (namespaced check runs BEFORE any
+    /// legacy-pair consideration) — never falls through to BC-1.4.032's
+    /// both-absent error. The legacy pair remains untouched throughout,
+    /// same no-copy discipline as BC-1.4.032.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_033_partial_precedence_over_legacy_pair_present() {
+        with_test_keyring(|| {
+            entry(&api_token_email_key("default"))
+                .unwrap()
+                .set_password("default@example.com")
+                .unwrap();
+            store_legacy_flat_api_token("legacy@example.com", "legacy-token").unwrap();
+
+            let err =
+                load_api_token("default").expect_err("namespaced-partial must take precedence");
+            let msg = assert_user_error_exit_64(&err);
+            assert_eq!(
+                msg,
+                expected_bc_1_4_033_partial_message("default"),
+                "namespaced-partial error must fire, not the BC-1.4.032 both-absent error"
+            );
+            assert!(
+                !msg.contains("No credentials stored"),
+                "must not fall through to the both-absent branch: {msg}"
+            );
+
+            let (legacy_email, legacy_token) = load_legacy_flat_api_token().unwrap();
+            assert_eq!(legacy_email, "legacy@example.com");
+            assert_eq!(legacy_token, "legacy-token");
+
+            cleanup_api_token_profile("default");
+            cleanup_legacy_flat_pair();
+        });
+    }
+
+    /// AC-010 / SR-009 (BC-1.4.033 invariant 2): the partial-write
+    /// remediation message must never name `jr auth logout` (a no-op for
+    /// api-token profiles, BC-1.2.013 amended) — only `jr auth login
+    /// <profile>` is a valid remediation for this branch.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_033_remediation_message_never_mentions_auth_logout() {
+        with_test_keyring(|| {
+            entry(&api_token_email_key("sandbox"))
+                .unwrap()
+                .set_password("only-email@example.com")
+                .unwrap();
+
+            let err = load_api_token("sandbox").expect_err("partial state must error");
+            let msg = format!("{err:#}");
+            assert!(
+                !msg.contains("jr auth logout"),
+                "SR-009: remediation message must never name `jr auth logout` \
+                 (no-op for api-token profiles): {msg}"
+            );
+            assert!(
+                msg.contains("jr auth login"),
+                "remediation message must name `jr auth login` as the primary fix: {msg}"
+            );
+
+            cleanup_api_token_profile("sandbox");
+        });
+    }
+
+    /// AC-006 / VP-AUTHDX-007 (MANDATORY, SR-014) — keyring-gated end-to-end
+    /// detect-and-instruct SCENARIO against the REAL OS keychain backend.
+    /// Pre-seeds legacy flat keys (simulating a pre-cycle-003 install), runs
+    /// the "first post-upgrade `jr` invocation" against `"default"`,
+    /// confirms the exit-64 actionable error, confirms the legacy pair is
+    /// byte-for-byte unchanged afterward, confirms no namespaced pair was
+    /// ever written — then repeats identically for a `"sandbox"` profile,
+    /// proving the failure-and-untouched behavior is not differentiated by
+    /// profile. This is the only VP in the BC-1.4.032/033 cluster proving
+    /// the no-copy logic against a REAL, non-mockable OS keychain backend
+    /// (macOS Keychain / Windows Credential Manager / Linux Secret Service)
+    /// rather than the in-process double the unit tests above implicitly
+    /// rely on via `with_test_keyring`'s isolated service-name namespace.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_vp_authdx_007_keyring_gated_end_to_end_detect_and_instruct_scenario() {
+        with_test_keyring(|| {
+            let seeded_email = "pre-cycle-003@example.com";
+            let seeded_token = "pre-cycle-003-token-abc123";
+            store_legacy_flat_api_token(seeded_email, seeded_token).unwrap();
+
+            for profile in ["default", "sandbox"] {
+                let err = load_api_token(profile)
+                    .expect_err("first post-upgrade invocation must fail with an actionable error");
+                let msg = assert_user_error_exit_64(&err);
+                assert_eq!(msg, expected_bc_1_4_032_absent_message(profile));
+
+                assert_keychain_entry_absent(&api_token_email_key(profile));
+                assert_keychain_entry_absent(&api_token_key(profile));
+            }
+
+            // Legacy pair confirmed byte-for-byte unchanged in the real
+            // keychain after both failed calls.
+            let (legacy_email, legacy_token) = load_legacy_flat_api_token()
+                .expect("legacy pair must still be readable in the real keychain");
+            assert_eq!(legacy_email, seeded_email);
+            assert_eq!(legacy_token, seeded_token);
+
+            cleanup_legacy_flat_pair();
+        });
+    }
+
+    /// BC-1.4.034 postconditions 2/4 / EC-1.4.032-4: after the actionable
+    /// error fires once, running the remediation (`jr auth login
+    /// <profile>`, simulated here via `store_api_token`) exactly once
+    /// permanently resolves the failure for that profile — no second
+    /// re-login is ever required — and the legacy pair (if any) remains
+    /// untouched, inert, throughout and after remediation.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_034_single_relogin_permanently_resolves_the_breaking_change() {
+        with_test_keyring(|| {
+            store_legacy_flat_api_token("legacy@example.com", "legacy-token").unwrap();
+
+            // First post-upgrade call fails.
+            let err1 = load_api_token("default").expect_err("first call must error");
+            assert_user_error_exit_64(&err1);
+
+            // Remediation: `jr auth login default` writes the namespaced pair
+            // (BC-1.4.034 postcondition 2 — no flags beyond a normal login).
+            store_api_token("default", "new@example.com", "new-token").unwrap();
+
+            // Permanently resolved — repeated calls all succeed identically
+            // (postcondition 2: "no second re-login is ever required").
+            for _ in 0..2 {
+                let (e, t) = load_api_token("default").unwrap();
+                assert_eq!(e, "new@example.com");
+                assert_eq!(t, "new-token");
+            }
+
+            // Legacy pair untouched throughout remediation (postcondition 4).
+            let (legacy_email, legacy_token) = load_legacy_flat_api_token().unwrap();
+            assert_eq!(legacy_email, "legacy@example.com");
+            assert_eq!(legacy_token, "legacy-token");
+
+            cleanup_api_token_profile("default");
+            cleanup_legacy_flat_pair();
+        });
+    }
+
+    /// VP-AUTHDX-005/006/008 property tests. Like `percred_proptests` above,
+    /// these require the REAL keychain backend (the `keyring` crate's `mock`
+    /// backend has no identity-based persistence across separate
+    /// `Entry::new()` calls, so it can't stand in for a real
+    /// store/seed-then-load round trip) — every case runs through
+    /// `with_test_keyring`, so it no-ops (trivially passes) unless
+    /// `JR_RUN_KEYRING_TESTS=1` is set, and is `#[ignore]`d for the same
+    /// belt-and-suspenders reason as the rest of this module's gated tests.
+    mod absence_guard_proptests {
+        use super::{
+            JrError, KEY_API_TOKEN, KEY_EMAIL, api_token_email_key, api_token_key,
+            cleanup_api_token_profile, entry, expected_bc_1_4_032_absent_message,
+            expected_bc_1_4_033_partial_message, load_api_token, load_legacy_flat_api_token,
+            store_legacy_flat_api_token, with_test_keyring,
+        };
+        use proptest::prelude::*;
+
+        fn profile_strategy() -> impl Strategy<Value = String> {
+            "[a-z][a-z0-9]{2,9}"
+        }
+
+        fn email_strategy() -> impl Strategy<Value = String> {
+            "[a-z]{1,10}@[a-z]{1,10}\\.[a-z]{2,4}"
+        }
+
+        fn token_strategy() -> impl Strategy<Value = String> {
+            "[A-Za-z0-9]{8,32}"
+        }
+
+        fn cleanup_legacy_flat_pair() {
+            if let Ok(e) = entry(KEY_EMAIL) {
+                let _ = e.delete_credential();
+            }
+            if let Ok(e) = entry(KEY_API_TOKEN) {
+                let _ = e.delete_credential();
+            }
+        }
+
+        /// Calls `load_api_token(profile)`, asserts it is an exit-64
+        /// `JrError::UserError`, asserts the no-copy invariant (neither
+        /// namespaced key was written by the call), and returns the
+        /// formatted message.
+        fn assert_absent_err_and_no_write(profile: &str) -> String {
+            let err = load_api_token(profile).expect_err("absent-namespaced state must error");
+            let je = err
+                .downcast_ref::<JrError>()
+                .unwrap_or_else(|| panic!("expected a JrError, got: {err:#}"));
+            assert!(matches!(je, JrError::UserError(_)));
+            assert_eq!(je.exit_code(), 64);
+            assert!(matches!(
+                entry(&api_token_email_key(profile)).unwrap().get_password(),
+                Err(keyring::Error::NoEntry)
+            ));
+            assert!(matches!(
+                entry(&api_token_key(profile)).unwrap().get_password(),
+                Err(keyring::Error::NoEntry)
+            ));
+            format!("{err:#}")
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig { cases: 12, .. ProptestConfig::default() })]
+
+            /// VP-AUTHDX-005: for any legacy `(email, token)` pair — OR none
+            /// at all (`has_legacy = false`) — against `"default"`
+            /// specifically: (a) `Err` with the actionable message
+            /// regardless of legacy-pair presence, and `default:email`/
+            /// `default:api-token` never written by the call; (b) the
+            /// legacy pair's bytes (if seeded) are unchanged before/after;
+            /// (c) a second call in the same state returns the identical
+            /// `Err` (no first-call-migrates shape).
+            #[test]
+            #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+            fn prop_vp_authdx_005_detect_and_instruct_correctness(
+                has_legacy in any::<bool>(),
+                email in email_strategy(),
+                token in token_strategy(),
+            ) {
+                with_test_keyring(|| {
+                    if has_legacy {
+                        store_legacy_flat_api_token(&email, &token).unwrap();
+                    }
+
+                    // (a) + no-write invariant, first call.
+                    let msg1 = assert_absent_err_and_no_write("default");
+                    assert_eq!(msg1, expected_bc_1_4_032_absent_message("default"));
+
+                    // (b) legacy pair bytes unchanged, if seeded.
+                    if has_legacy {
+                        let (le, lt) = load_legacy_flat_api_token().unwrap();
+                        assert_eq!(le, email);
+                        assert_eq!(lt, token);
+                    }
+
+                    // (c) stability: repeated call, same state, same Err.
+                    let msg2 = assert_absent_err_and_no_write("default");
+                    assert_eq!(msg1, msg2);
+
+                    if has_legacy {
+                        cleanup_legacy_flat_pair();
+                    }
+                });
+            }
+
+            /// VP-AUTHDX-006: for ANY profile name — INCLUDING `"default"`
+            /// itself, which the generator never excludes — even when a
+            /// complete legacy flat pair exists, `load_api_token(profile)`
+            /// surfaces the identical actionable error with no
+            /// `"default"`-only branch, and the legacy pair is left
+            /// byte-for-byte unchanged.
+            #[test]
+            #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+            fn prop_vp_authdx_006_no_profile_is_special_cased(
+                profile in prop_oneof![Just("default".to_string()), profile_strategy()],
+                email in email_strategy(),
+                token in token_strategy(),
+            ) {
+                with_test_keyring(|| {
+                    store_legacy_flat_api_token(&email, &token).unwrap();
+
+                    let msg = assert_absent_err_and_no_write(&profile);
+                    assert_eq!(msg, expected_bc_1_4_032_absent_message(&profile));
+
+                    let (le, lt) = load_legacy_flat_api_token().unwrap();
+                    assert_eq!(le, email);
+                    assert_eq!(lt, token);
+
+                    cleanup_legacy_flat_pair();
+                });
+            }
+
+            /// VP-AUTHDX-008: for either namespaced partial-state
+            /// combination — `email` present/`api-token` absent, or the
+            /// reverse — `load_api_token` ALWAYS returns `Err` with the
+            /// actionable "Incomplete credentials" message, never a panic
+            /// and never a silently-incomplete `Ok`.
+            #[test]
+            #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+            fn prop_vp_authdx_008_namespaced_partial_state_safety(
+                profile in profile_strategy(),
+                email_first in any::<bool>(),
+                email in email_strategy(),
+                token in token_strategy(),
+            ) {
+                with_test_keyring(|| {
+                    if email_first {
+                        entry(&api_token_email_key(&profile)).unwrap().set_password(&email).unwrap();
+                    } else {
+                        entry(&api_token_key(&profile)).unwrap().set_password(&token).unwrap();
+                    }
+
+                    let err =
+                        load_api_token(&profile).expect_err("partial state must error, never Ok");
+                    let je = err
+                        .downcast_ref::<JrError>()
+                        .unwrap_or_else(|| panic!("expected a JrError, got: {err:#}"));
+                    assert!(matches!(je, JrError::UserError(_)));
+                    assert_eq!(je.exit_code(), 64);
+                    let msg = format!("{err:#}");
+                    assert_eq!(msg, expected_bc_1_4_033_partial_message(&profile));
+
+                    cleanup_api_token_profile(&profile);
+                });
+            }
+        }
     }
 }
