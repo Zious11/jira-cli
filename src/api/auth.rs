@@ -568,10 +568,42 @@ pub fn try_load_oauth_app_credentials() -> Result<Option<(String, String)>> {
     }
 }
 
+/// Clear ONLY a single profile's OAuth-pair credentials
+/// (`<profile>:oauth-access-token` / `<profile>:oauth-refresh-token`, plus
+/// the legacy flat OAuth pair for `"default"`) — never the namespaced
+/// API-token pair.
+///
+/// This is [`clear_profile_creds`]'s pre-S-cycle3-remove-logout-semantics
+/// behavior, kept as its own function so [`crate::cli::auth::logout::handle_logout`]
+/// can remain OAuth-specific by design (BC-1.2.013, DEC-322): `logout` must
+/// NEVER clear a profile's API-token pair — not even when the target
+/// profile's own `auth_method` happens to be `"oauth"` and it also carries
+/// a leftover API-token pair from a prior mechanism switch. Clearing BOTH
+/// credential kinds is [`clear_profile_creds`]'s job, reserved for `auth
+/// remove` (BC-1.2.014).
+///
+/// `keyring::Error::NoEntry` on any step is success; any other keychain
+/// error propagates immediately via `?` (same tightening as
+/// [`clear_profile_creds`], applied consistently across both functions).
+pub fn clear_profile_oauth_pair(profile: &str) -> Result<()> {
+    delete_credential_tolerating_no_entry(&oauth_access_key(profile))?;
+    delete_credential_tolerating_no_entry(&oauth_refresh_key(profile))?;
+    if profile == "default" {
+        delete_credential_tolerating_no_entry(KEY_OAUTH_ACCESS_LEGACY)?;
+        delete_credential_tolerating_no_entry(KEY_OAUTH_REFRESH_LEGACY)?;
+    }
+    Ok(())
+}
+
 /// Clear a single profile's stored credentials from the system keychain —
 /// BOTH the OAuth-pair AND the namespaced API-token-pair (other profiles +
 /// shared keys such as `oauth_client_id`/`oauth_client_secret` are
 /// untouched).
+///
+/// Reserved for `auth remove` ([`crate::cli::auth::remove::handle_remove`]),
+/// which deletes a profile's credentials wholesale before removing its
+/// config entry. `auth logout` uses [`clear_profile_oauth_pair`] instead —
+/// see that function's doc comment for why the two must not be conflated.
 ///
 /// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.014, DEC-322).**
 /// Previously this function cleared ONLY the OAuth pair
@@ -614,14 +646,39 @@ pub fn try_load_oauth_app_credentials() -> Result<Option<(String, String)>> {
 /// pair (that is `S-cycle3-credential-absence-guard`'s no-touch invariant,
 /// BC-1.4.032).
 pub fn clear_profile_creds(profile: &str) -> Result<()> {
-    todo!(
-        "S-cycle3-remove-logout-semantics (BC-1.2.014): add the namespaced \
-         API-token-pair deletion branch (api_token_email_key/api_token_key) \
-         alongside the existing OAuth-pair branch, and tighten error \
-         handling so a genuine (non-NoEntry) keychain error on either \
-         credential kind propagates immediately instead of being \
-         aggregated-and-swallowed. profile={profile}"
-    )
+    delete_credential_tolerating_no_entry(&oauth_access_key(profile))?;
+    delete_credential_tolerating_no_entry(&oauth_refresh_key(profile))?;
+    delete_credential_tolerating_no_entry(&api_token_email_key(profile))?;
+    delete_credential_tolerating_no_entry(&api_token_key(profile))?;
+    // For the "default" profile, also clear the legacy flat OAuth keys
+    // that load_oauth_tokens("default") would otherwise lazy-migrate
+    // back into existence on the next read — defeating logout.
+    if profile == "default" {
+        delete_credential_tolerating_no_entry(KEY_OAUTH_ACCESS_LEGACY)?;
+        delete_credential_tolerating_no_entry(KEY_OAUTH_REFRESH_LEGACY)?;
+    }
+    Ok(())
+}
+
+/// Delete a single keychain entry, treating `keyring::Error::NoEntry` as
+/// success (the entry was already absent — the expected steady state after
+/// a prior clear, or for a credential kind that was never stored). Any
+/// other error — including a failure constructing the [`Entry`] itself —
+/// propagates immediately via `?`/the `Err` arm below.
+///
+/// This is the shared building block for [`clear_profile_creds`]'s and
+/// [`clear_all_credentials`]'s BC-1.2.014-amended (I-4/SR-008) tightening:
+/// a genuine keychain backend error must abort the calling function
+/// immediately rather than being aggregated into a combined `Err` at the
+/// end of a loop, so callers ([`crate::cli::auth::remove::handle_remove`])
+/// can stop before running later steps (cache clear, config-entry removal).
+fn delete_credential_tolerating_no_entry(key: &str) -> Result<()> {
+    match entry(key)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(anyhow::anyhow!(
+            "failed to clear keychain entry {key}: {err}"
+        )),
+    }
 }
 
 /// Remove shared credentials and OAuth tokens for every listed profile from
@@ -652,14 +709,36 @@ pub fn clear_profile_creds(profile: &str) -> Result<()> {
 /// above is pre-existing, out of this story's scope, and must not be
 /// touched.
 pub fn clear_all_credentials(profiles: &[&str]) -> Result<()> {
-    todo!(
-        "S-cycle3-remove-logout-semantics (BC-1.2.014): tighten error \
-         handling so a genuine (non-NoEntry) keychain error on any \
-         per-profile credential-delete step (OAuth pair or namespaced \
-         API-token pair) propagates immediately instead of being \
-         aggregated-and-swallowed; do NOT add a new unconditional \
-         legacy-flat-key clear. profiles={profiles:?}"
-    )
+    let mut keys: Vec<String> = vec![
+        KEY_EMAIL.to_string(),
+        KEY_API_TOKEN.to_string(),
+        "oauth_client_id".to_string(),
+        "oauth_client_secret".to_string(),
+    ];
+    // Legacy flat OAuth keys belong to the "default" profile's
+    // lazy-migration path. Only delete them when the caller is
+    // explicitly clearing "default" — otherwise `jr auth refresh
+    // --profile sandbox` (api_token flow) on a not-yet-migrated
+    // legacy install would unconditionally wipe the default
+    // profile's intact-but-unmigrated OAuth tokens.
+    if profiles.contains(&"default") {
+        keys.push(KEY_OAUTH_ACCESS_LEGACY.to_string());
+        keys.push(KEY_OAUTH_REFRESH_LEGACY.to_string());
+    }
+    for profile in profiles {
+        keys.push(oauth_access_key(profile));
+        keys.push(oauth_refresh_key(profile));
+        // S-cycle3-percred-storage: the API-token pair moved to namespaced
+        // keys (<profile>:email / <profile>:api-token), so the flat
+        // KEY_EMAIL/KEY_API_TOKEN deletes above no longer reach the
+        // credential `auth refresh` is rotating.
+        keys.push(api_token_email_key(profile));
+        keys.push(api_token_key(profile));
+    }
+    for key in keys {
+        delete_credential_tolerating_no_entry(&key)?;
+    }
+    Ok(())
 }
 
 /// Result of a successful OAuth login containing site information.
