@@ -361,6 +361,39 @@ pub fn store_api_token(profile: &str, email: &str, token: &str) -> Result<()> {
     Ok(())
 }
 
+/// Existence-only check for whether the legacy shared flat `email`/
+/// `api-token` pair (`KEY_EMAIL`/`KEY_API_TOKEN`) is present in the
+/// keychain.
+///
+/// (S-cycle3-credential-absence-guard, BC-1.4.032 Postcondition 1.) This
+/// helper exists ONLY so [`load_api_token`]'s both-namespaced-keys-absent
+/// branch can keep its code path's shape symmetric with
+/// [`load_oauth_tokens`]'s legacy-detection step — the check does NOT
+/// change which error the caller ultimately sees (BC-1.4.032 Postcondition
+/// 2: byte-identical error whether the legacy pair is present or absent),
+/// and it must never surface the pair's VALUES as a credential. The
+/// discipline here is behavioral, not mechanical: [`read_keyring_optional`]
+/// returns the same `Option<String>` whether used as a presence flag or a
+/// credential — callers of this helper must only ever inspect the returned
+/// `bool`, never resurrect a value from it.
+///
+/// A genuine keychain backend error (as opposed to a plain absent key)
+/// propagates via `?`, exactly like every other [`read_keyring_optional`]
+/// call site in this module (BC-1.4.032 Invariant 4 / BC-1.4.031
+/// EC-1.4.031-2) — it must never be coerced into
+/// [`load_api_token`]'s "no stored credential" message.
+///
+/// STUB (Red Gate step 1, S-cycle3-credential-absence-guard): body is
+/// `todo!()` pending implementation.
+fn legacy_flat_pair_exists() -> Result<bool> {
+    todo!(
+        "BC-1.4.032 Postcondition 1: existence-only legacy-pair check \
+         via read_keyring_optional(KEY_EMAIL) / read_keyring_optional(KEY_API_TOKEN); \
+         return their presence as a bool, never their values; propagate a genuine \
+         backend Err via `?` rather than collapsing it to absent"
+    )
+}
+
 /// Load an API-token credential pair (email + token) scoped to a profile.
 /// Returns `(email, token)`.
 ///
@@ -368,34 +401,81 @@ pub fn store_api_token(profile: &str, email: &str, token: &str) -> Result<()> {
 /// namespaced keys `<profile>:email` / `<profile>:api-token` — no
 /// shared/flat fallback for a profile whose namespaced keys already exist.
 ///
+/// **No-copy detect-and-instruct (S-cycle3-credential-absence-guard,
+/// BC-1.4.032, REDESIGNED — HUMAN DECISION, DEC-326).** When BOTH
+/// namespaced keys are absent, this function NEVER reads, copies, or
+/// deletes the legacy shared flat `email`/`api-token` pair as a
+/// credential — for `"default"` or any other profile; there is no
+/// `if profile == "default"` branch anywhere in this function
+/// (BC-1.4.032 Postcondition 4). It performs an EXISTENCE-ONLY check of the
+/// legacy pair via [`legacy_flat_pair_exists`] purely to keep this code
+/// path's shape symmetric with [`load_oauth_tokens`]'s migration-detection
+/// step — the check does NOT change the error returned; legacy pair
+/// present or absent, the error text is byte-identical (BC-1.4.032
+/// Postcondition 2). This is a one-time, permanent breaking-change contract
+/// for every pre-cycle-003 api-token profile (BC-1.4.034): the remediation
+/// is `jr auth login <profile>`, run once.
+///
+/// **Namespaced-pair partial-write (BC-1.4.033, REDESIGNED — namespaced-pair
+/// case only; the legacy-partial branch is dissolved, since BC-1.4.032's
+/// no-copy redesign removes the copy-then-delete sequence a partial legacy
+/// pair used to interrupt).** When EXACTLY ONE of the two namespaced keys
+/// is present, this is a distinct `Err` from the both-absent case above —
+/// regardless of legacy-pair state, which never gates this branch. The
+/// namespaced-partial check runs BEFORE any legacy-pair consideration
+/// (EC-1.4.033-1 ordering — this match's arm order encodes that). The
+/// remediation message intentionally never names `jr auth logout` (SR-009)
+/// — that command is a no-op for api-token profiles (BC-1.2.013, amended);
+/// only `jr auth login <profile>` (repair) or `jr auth remove <profile>`
+/// (abandon) are valid remediations.
+///
 /// Unlike [`load_oauth_tokens`], this function has NO `"default"`-only
-/// legacy-migration special case (BC-1.4.031 Invariant 2): the
-/// detect-and-instruct legacy-pair existence check and richer "no stored
-/// credential" wording belong to the follow-on story
-/// `S-cycle3-credential-absence-guard` (BC-1.4.032). This function returns a
-/// plain, generic, actionable "no stored API token for profile {profile}"
-/// error when either namespaced key is absent (EC-1.4.031-1), using
-/// [`read_keyring_optional`]'s `NoEntry`-vs-other-`Err` distinction so a
-/// genuine keychain backend error (EC-1.4.031-2) propagates via `?` before
-/// ever reaching that generic message.
+/// legacy-migration special case (BC-1.4.031 Invariant 2, reaffirmed by
+/// BC-1.4.032 Postcondition 4).
+///
+/// STUB (Red Gate step 1, S-cycle3-credential-absence-guard): the
+/// both-absent and namespaced-partial branches below are `todo!()` pending
+/// BC-1.4.032/BC-1.4.033 implementation. The both-present success branch is
+/// unchanged, pre-existing behavior from S-cycle3-percred-storage and is
+/// out of this story's scope.
 pub fn load_api_token(profile: &str) -> Result<(String, String)> {
     // `?` here propagates a genuine backend error (EC-1.4.031-2) as-is —
     // read_keyring_optional only collapses `keyring::Error::NoEntry` to
     // `Ok(None)`; anything else (e.g. an `Invalid` service name) surfaces
-    // here distinct from the generic absent-credential message below.
+    // here distinct from either absence branch below.
     let email = read_keyring_optional(&api_token_email_key(profile))?;
     let token = read_keyring_optional(&api_token_key(profile))?;
 
     match (email, token) {
         (Some(e), Some(t)) => Ok((e, t)),
-        // Either or both namespaced entries are absent (EC-1.4.031-1).
-        // Unlike `load_oauth_tokens`, there is no "default"-only legacy
-        // fallback here (BC-1.4.031 Invariant 2) — the detect-and-instruct
-        // legacy-pair check belongs to S-cycle3-credential-absence-guard.
-        _ => Err(anyhow::anyhow!(
-            "No stored API token for profile {profile:?} — \
-             run \"jr auth login --profile {profile}\""
-        )),
+        (None, None) => {
+            // BC-1.4.032 (S-cycle3-credential-absence-guard): no-copy
+            // detect-and-instruct branch. Never special-cased on `profile`
+            // — "default" and every other profile name must go through
+            // this identical branch (Postcondition 4).
+            //
+            // Existence-only symmetry check (Postcondition 1) — its bool
+            // result must never be used as, or trigger reading, a
+            // credential value. `?` propagates a genuine backend error
+            // exactly as it would for the namespaced-key reads above.
+            let _legacy_pair_present = legacy_flat_pair_exists()?;
+            // Target behavior (see doc comment above): return the
+            // finalized BC-1.4.032 Postcondition 2 actionable error via
+            // `crate::error::JrError::UserError(...).into()` (exit code
+            // 64) — byte-identical regardless of `_legacy_pair_present`.
+            todo!("BC-1.4.032 no-copy detect-and-instruct branch: see doc comment above")
+        }
+        _ => {
+            // BC-1.4.033 (S-cycle3-credential-absence-guard): namespaced-pair
+            // partial-write branch — runs before any legacy-pair check
+            // (EC-1.4.033-1). Remediation message must NOT name
+            // `jr auth logout` (SR-009).
+            //
+            // Target behavior (see doc comment above): return the
+            // finalized BC-1.4.033 Postcondition 2 actionable error via
+            // `crate::error::JrError::UserError(...).into()` (exit code 64).
+            todo!("BC-1.4.033 namespaced-pair partial-write branch: see doc comment above")
+        }
     }
 }
 
