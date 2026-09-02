@@ -472,6 +472,7 @@ fn three_profile_fixture() -> GlobalConfig {
             url: Some("https://acme-sandbox.atlassian.net".into()),
             auth_method: Some("oauth".into()),
             cloud_id: Some("xyz-789".into()),
+            env: Some("prod".into()),
             ..ProfileConfig::default()
         },
     );
@@ -480,6 +481,7 @@ fn three_profile_fixture() -> GlobalConfig {
         ProfileConfig {
             url: Some("https://acme-staging.atlassian.net".into()),
             auth_method: Some("api_token".into()),
+            env: Some("".into()),
             ..ProfileConfig::default()
         },
     );
@@ -514,18 +516,16 @@ fn list_json_shape() {
 
 // ── S-cycle3-env-tag: BC-6.1.015 / BC-1.6.046 / BC-1.6.047 — ENV tag ──
 //
-// Red Gate note: `list_table_snapshot` (above) is deliberately left
-// pointing at the existing 4-column snapshot fixture rather than being
-// regenerated here — `render_list_table` now calls `render_env_column`
-// per row, which currently `todo!()`s unconditionally, so that existing
-// test already fails (panics) under the new stub. Per the story's
-// explicit alternative ("assertion tests over snapshot for the Red
-// Gate"), the ENV column's behavior is pinned below via direct,
-// independent assertion tests instead of a hand-regenerated snapshot;
-// the snapshot itself should be regenerated with `cargo insta review`
-// once `render_env_column`/`sanitize_env_display` are implemented
-// (Green step), extending the 3-profile fixture with an env-tagged row
-// per the story's File Structure Requirements.
+// Post-Green note: `render_env_column`/`sanitize_env_display` are now
+// implemented, and `three_profile_fixture` (above) has been extended so
+// `sandbox` carries `env: Some("prod")` (an ordinary value) and `staging`
+// carries `env: Some("")` (the blank-cell case, distinct from `default`'s
+// `env: None` `-` placeholder) — `list_table_snapshot`'s pinned insta
+// snapshot was regenerated against this 5-column fixture via
+// `cargo insta test --accept` and inspected to confirm the ENV column
+// renders the real value, a blank cell, and the `-` placeholder correctly.
+// The ENV column's behavior is additionally pinned below via direct,
+// independent assertion tests (not just the snapshot).
 
 /// BC-1.6.046 EC-1.6.046-1 / AC-005: `None` renders the "-" placeholder.
 #[test]
