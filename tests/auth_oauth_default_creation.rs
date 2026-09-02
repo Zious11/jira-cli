@@ -78,7 +78,7 @@ use jr::cli::OutputFormat;
 use jr::cli::auth::{
     LoginArgs, NONINTERACTIVE_OAUTH_GUARD_MESSAGE, RefreshArgs, check_noninteractive_oauth_guard,
     clear_outgoing_mechanism_on_switch, emit_api_token_inert_on_refresh_notice,
-    emit_oauth_deprecation_notice, handle_login, refresh_credentials,
+    emit_oauth_deprecation_notice, handle_login, prompt_auth_method_picker, refresh_credentials,
 };
 use jr::error::JrError;
 use jr::profile::Profile;
@@ -303,6 +303,169 @@ proptest::proptest! {
         // Size Deviations / Gotchas entries flag this line as MUST-NOT-CHANGE.
         let resolved = profile.auth_method.as_deref().unwrap_or("api_token");
         proptest::prop_assert_eq!(resolved, "api_token");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tier 1d (MED-1, pre-PR review, CWE-400): `prompt_auth_method_picker`'s
+// independent, `no_input`-blind terminal check. Pure, zero I/O, always safe
+// to run — proves the interactive picker is unreachable-by-construction
+// when stdin is not a real TTY, regardless of `no_input`.
+// ---------------------------------------------------------------------------
+
+/// MED-1: `cargo test`'s own stdin is not a real interactive terminal (it is
+/// either piped or, in this sandboxed/CI environment, fully detached), and
+/// this test does not set `JR_STDIN_IS_TTY=1` — so `prompt_auth_method_picker`
+/// must take its non-TTY early-return path and return the token-first
+/// default (`Ok(false)`) WITHOUT ever calling `dialoguer::Select::interact()`.
+/// Before the fix, this call would hang (or error unpredictably against a
+/// closed/empty stdin) instead of returning promptly — this test would never
+/// complete under the pre-fix code, which is itself the regression this test
+/// guards against.
+#[test]
+fn test_med1_picker_defaults_to_token_first_when_stdin_not_a_tty() {
+    // Defense-in-depth: make sure a leaked JR_STDIN_IS_TTY=1 from another
+    // (improperly isolated) test can't force this one green for the wrong
+    // reason. Safe to touch unconditionally — this test does not run
+    // concurrently with anything that depends on this var (nothing else in
+    // this file calls `prompt_auth_method_picker` directly), and it only
+    // ever removes, never sets, a value.
+    unsafe {
+        std::env::remove_var("JR_STDIN_IS_TTY");
+    }
+
+    let result = prompt_auth_method_picker();
+    assert!(
+        !result.expect("non-TTY path must return Ok, never propagate a prompt error"),
+        "MED-1 (CWE-400): prompt_auth_method_picker must default to the \
+         API-token selection (false) when stdin is not a real TTY, \
+         independent of any caller's no_input value — never call \
+         Select::interact() without a real interactive terminal"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Tier 1e (MED-2, pre-PR review): VP-AUTHDX-001 — BC-1.1.014 tier-2
+// non-interactive default (`oauth: false, api_token: false, no_input:
+// true`). Proves this resolves to the API-TOKEN path (`login_token`, NOT
+// `login_oauth`) across arbitrary credential-completeness, and never reaches
+// OAuth app-credential resolution, an OAuth callback-listener bind, or a
+// browser-open attempt.
+//
+// Deliberately NOT gated behind JR_RUN_KEYRING_TESTS: every generated case
+// leaves at least one of email/token absent, so `login_token`'s
+// `resolve_credential` call fails BEFORE `handle_login` ever reaches
+// `auth::store_api_token` — the property is proven from the SHAPE of the
+// resulting error, not from a persisted credential. Each case also targets a
+// brand-new profile name that has never been declared before, so
+// `clear_outgoing_mechanism_on_switch` takes its `current_auth_method ==
+// None` early return and never calls `auth::clear_profile_creds` either.
+// `JR_CONFIG_DIR`/`JR_CACHE_DIR` are still scoped to a fresh per-case temp
+// dir (filesystem-only isolation — no OS keyring is ever touched by any
+// path this test exercises).
+//
+// The story's own `{--no-input, non-TTY}` wording collapses to a single
+// `no_input: bool` by the time `handle_login` is invoked directly — both
+// `--no-input` and non-TTY auto-detection are resolved to this same flag by
+// `src/main.rs` before dispatch (see `main.rs`'s auto-`--no-input` flip) —
+// so `no_input: true` here exercises both triggers identically; the
+// credential-completeness axis is what this proptest actually varies.
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(20))]
+
+    #[test]
+    fn test_vp_authdx_001_noninteractive_default_reaches_token_path_not_oauth(
+        variant in 0u8..3,
+        cred_value in "[a-zA-Z0-9._@-]{1,20}",
+    ) {
+        // `prop_assert!`/`prop_assert_eq!` early-return `Err(TestCaseError)`
+        // from their IMMEDIATELY enclosing function — they must run at this
+        // outer (proptest-macro-wrapped) scope, not inside the `async` block
+        // below, or the block's inferred return type stops matching `rt
+        // .block_on`'s call site. So the async block only computes and
+        // returns the plain error-message `String`; every `prop_assert*!`
+        // call happens after it, out here.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let msg = rt.block_on(async {
+            let _guard = env_lock().lock().await;
+            let tmp = tempfile::TempDir::new().unwrap();
+            let cfg_dir = tmp.path().join("jr");
+            let cache_dir = tmp.path().join("cache");
+            unsafe {
+                scrub_jr_env();
+                std::env::set_var("JR_CONFIG_DIR", &cfg_dir);
+                std::env::set_var("JR_CACHE_DIR", &cache_dir);
+            }
+
+            // Fresh, never-before-declared profile name per case — keeps
+            // `current_auth_method` at `None` so the outgoing-credential
+            // clear path (the one real keychain-touching branch inside
+            // `handle_login` outside of `login_token`/`login_oauth`
+            // themselves) is provably not taken.
+            let profile_name = unique_service("vpauthdx001");
+
+            // At least one of email/token is always absent, so
+            // `resolve_credential` fails before `auth::store_api_token` is
+            // ever called — this is what keeps the whole case keychain-free.
+            let (email, token) = match variant {
+                0 => (None, None),
+                1 => (Some(cred_value.clone()), None),
+                _ => (None, Some(cred_value.clone())),
+            };
+
+            let result = handle_login(LoginArgs {
+                profile: Some(profile_name.clone()),
+                url: Some("https://vp-authdx-001.example.atlassian.net".to_string()),
+                oauth: false,
+                api_token: false,
+                email,
+                token,
+                client_id: None,
+                client_secret: None,
+                cloud_id: None,
+                no_input: true,
+                output: OutputFormat::Table,
+            })
+            .await;
+
+            unsafe {
+                std::env::remove_var("JR_CONFIG_DIR");
+                std::env::remove_var("JR_CACHE_DIR");
+            }
+
+            match result {
+                Ok(()) => panic!(
+                    "VP-AUTHDX-001: with credentials incomplete under no_input, \
+                     handle_login must fail via resolve_credential, not succeed"
+                ),
+                Err(e) => e.to_string(),
+            }
+        });
+
+        proptest::prop_assert_ne!(
+            &msg,
+            NONINTERACTIVE_OAUTH_GUARD_MESSAGE,
+            "VP-AUTHDX-001: the OAuth guard must never fire here — oauth was \
+             never selected on this call, so a guard firing would mean the \
+             bare non-interactive default wrongly resolved to OAuth: {}",
+            msg
+        );
+        proptest::prop_assert!(
+            !msg.contains("OAuth"),
+            "VP-AUTHDX-001: the error must come from the api_token credential \
+             resolver, never from OAuth app-credential resolution — this proves \
+             login_oauth was never reached, so no callback-listener bind or \
+             browser-open was ever attempted: {}",
+            msg
+        );
+        proptest::prop_assert!(
+            msg.contains("is required. Provide --email or set $JR_EMAIL")
+                || msg.contains("is required. Provide --token or set $JR_API_TOKEN"),
+            "VP-AUTHDX-001: the error must be exactly resolve_credential's \
+             email/token message, proving login_token (not login_oauth) was \
+             the path reached: {}",
+            msg
+        );
     }
 }
 
