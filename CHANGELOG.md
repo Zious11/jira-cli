@@ -4,6 +4,16 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Internal
+
+- **Un-deferred ADR-0011 (Status: Deferred → Accepted, DEC-317) and landed the `Profile`
+  newtype scaffold** (`src/profile.rs`, `S-cycle3-adr0011-newtype`, BC-6.2.015). No
+  user-visible behavior change — this is a compile-time-only, in-progress refactor:
+  `Profile(String)` (`From<String>`, `AsRef<str>`, `Display`) now exists as scaffolding for
+  the type-level profile fence; the mechanical call-site sweep through `src/cache.rs`,
+  `src/api/auth.rs`'s credential functions, `Config::active_profile_name`, and
+  `JiraClient::profile_name` has not yet landed.
+
 ### Fixed
 
 - **`jr auth remove` no longer reports success while a genuine keychain

@@ -9,4 +9,5 @@ pub mod jql;
 pub(crate) mod observability;
 pub mod output;
 pub mod partial_match;
+pub mod profile;
 pub mod types;
