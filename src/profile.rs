@@ -34,6 +34,32 @@ use std::fmt;
 ///
 /// See the module docs above for the accepted design (ADR-0011) and what this newtype
 /// deliberately does NOT guarantee (that the wrapped name resolves to a real profile).
+///
+/// # Compile-fail fence demonstration (AC-005, BC-6.2.015)
+///
+/// This is the Red Gate driver for BC-6.2.015's hard-fence guarantee: a function that
+/// requires `&Profile` must reject a bare `&str` / hardcoded string literal at compile
+/// time. The block below is a `compile_fail` doctest -- `cargo test --doc` treats a
+/// doctest that FAILS TO COMPILE as a PASS. If this ever starts compiling, the fence
+/// has regressed and BC-6.2.015 is broken.
+///
+/// This demonstrates the *pattern* the fence relies on (any `&Profile`-typed parameter
+/// rejects a bare `&str`), independent of whether `src/cache.rs`'s and
+/// `src/api/auth.rs`'s own functions have been swept to `&Profile` yet (AC-002/AC-003 --
+/// a separate, mechanical call-site sweep not yet done as of this stub commit). The
+/// newtype itself already enforces the fence for any caller that uses it, which is what
+/// this doctest pins.
+///
+/// ```compile_fail
+/// use jr::profile::Profile;
+///
+/// fn requires_profile(p: &Profile) -> String {
+///     p.as_ref().to_string()
+/// }
+///
+/// let hardcoded = "sandbox"; // a profile-unaware call site
+/// requires_profile(hardcoded); // must NOT compile: `&str` does not coerce to `&Profile`
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Profile(String);
 
@@ -57,5 +83,104 @@ impl fmt::Display for Profile {
     /// change once threaded through this type.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// AC-001 regression pins (BC-6.2.015, S-cycle3-adr0011-newtype).
+//
+// These tests pin `Profile`'s trait impls against the newtype that ALREADY exists in
+// this file (landed by the stub-architect commit `023509db`) -- they are expected to
+// PASS today, as regression pins for the AC-001 slice of BC-6.2.015 that is already
+// implemented. They are NOT the Red Gate driver for the story as a whole: AC-002/003/004
+// (threading `&Profile` through `src/cache.rs`, `src/api/auth.rs`,
+// `Config::active_profile_name`, `JiraClient::profile_name`) is a separate, purely
+// mechanical call-site sweep that the implementer step still owns, and no new test here
+// depends on that sweep having happened. The `compile_fail` doctest on `Profile` above is
+// this story's actual Red Gate driver for AC-005 -- see this file's doc comment on
+// `Profile` for why a doctest was chosen over pulling in `trybuild` (not currently a
+// dev-dependency) or a review-only verification note.
+// ---------------------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bc_6_2_015_display_renders_identically_to_wrapped_string() {
+        let raw = "sandbox";
+        let p = Profile::from(raw.to_string());
+        assert_eq!(p.to_string(), raw);
+    }
+
+    #[test]
+    fn test_bc_6_2_015_display_and_as_ref_agree_for_various_inputs() {
+        for raw in ["default", "prod", "sandbox-1", "team_2", ""] {
+            let p = Profile::from(raw.to_string());
+            assert_eq!(
+                p.to_string(),
+                raw,
+                "Display must render identically to the wrapped string, no decoration"
+            );
+            assert_eq!(
+                p.as_ref(),
+                raw,
+                "AsRef<str> must return the wrapped string verbatim"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bc_6_2_015_from_string_is_infallible_for_empty_string() {
+        // AC-001 + ADR-0011 SR-017: From<String> performs NO validation -- an empty
+        // string constructs a Profile without error (presence-not-correctness).
+        let p = Profile::from(String::new());
+        assert_eq!(p.as_ref(), "");
+        assert_eq!(p.to_string(), "");
+    }
+
+    #[test]
+    fn test_bc_6_2_015_from_string_is_infallible_for_non_existent_profile_name() {
+        // EC-newtype-1 (staged ADR-0011 amendment): a Profile that names a profile
+        // that will never resolve to a real config.toml entry still constructs
+        // without error -- existence validation is deliberately NOT this type's job
+        // (see ADR-0011 Consequences / SR-017; a validating `Profile::try_new` was
+        // explicitly rejected).
+        let p = Profile::from("this-profile-will-never-exist-in-any-config".to_string());
+        assert_eq!(p.as_ref(), "this-profile-will-never-exist-in-any-config");
+    }
+
+    #[test]
+    fn test_bc_6_2_015_display_has_no_bracket_or_quote_decoration() {
+        let p = Profile::from("prod".to_string());
+        let rendered = p.to_string();
+        assert!(!rendered.contains('"'), "Display must not quote-decorate");
+        assert!(!rendered.contains('['), "Display must not bracket-decorate");
+        assert_eq!(rendered, "prod");
+    }
+
+    #[test]
+    fn test_bc_6_2_015_clone_and_eq_preserve_wrapped_value() {
+        // Regression pin for the derived Clone/PartialEq/Eq -- exercised throughout
+        // cache.rs/auth.rs call sites once threaded (e.g. cache-key comparisons,
+        // stale-heal retry guards keyed by profile identity).
+        let a = Profile::from("prod".to_string());
+        let b = a.clone();
+        assert_eq!(a, b);
+        assert_ne!(a, Profile::from("sandbox".to_string()));
+    }
+
+    #[test]
+    fn test_bc_6_2_015_ord_matches_underlying_string_ord() {
+        // Config/cache code may sort or dedupe profile lists; Ord must mirror
+        // String's Ord since Profile is a plain newtype wrapper, not a
+        // semantically-reordered type.
+        let mut profiles = [
+            Profile::from("sandbox".to_string()),
+            Profile::from("default".to_string()),
+            Profile::from("prod".to_string()),
+        ];
+        profiles.sort();
+        let rendered: Vec<String> = profiles.iter().map(|p| p.to_string()).collect();
+        assert_eq!(rendered, vec!["default", "prod", "sandbox"]);
     }
 }
