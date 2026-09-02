@@ -547,3 +547,135 @@ async fn test_ac_004_auth_remove_retry_after_resolved_backend_error_succeeds() {
         "profile must be fully removed on the successful retry; saved: {saved}"
     );
 }
+
+/// SEC-1 (HIGH, pre-PR review fix): `jr auth refresh`'s OAuth branch
+/// (`src/cli/auth/refresh.rs::refresh_credentials`) clears ONLY the OAuth
+/// pair via [`auth::clear_profile_oauth_pair`] — never
+/// [`auth::clear_profile_creds`], which (as of this story, BC-1.2.014)
+/// also deletes the namespaced `<profile>:email`/`<profile>:api-token`
+/// pair. Before this fix, `refresh.rs` still called the newly-widened
+/// `clear_profile_creds` under the OLD "clear only OAuth pair" contract,
+/// so `jr auth refresh` on an oauth-method profile that ALSO carried a
+/// leftover api-token pair (e.g. from a prior mechanism switch) would
+/// silently, irrecoverably delete it — a DEC-322 data-loss regression.
+///
+/// This cannot be driven fully end-to-end through `refresh_credentials`
+/// without a live OAuth server (the flow, after the clear step, opens a
+/// browser and binds a loopback listener via `login_oauth`), so this test
+/// asserts one level down: at [`auth::clear_profile_oauth_pair`], the
+/// EXACT function `refresh_credentials`'s `AuthFlow::OAuth` arm now calls.
+/// Seeds BOTH credential kinds, calls it directly (mirroring the refresh
+/// path verbatim), and asserts the OAuth pair is gone while the api-token
+/// pair survives byte-for-byte.
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_sec_1_auth_refresh_oauth_branch_preserves_api_token_pair() {
+    if !keyring_gate_active() {
+        return;
+    }
+    let _guard = env_lock().lock().await;
+    let svc = unique_service("refresh-preserves-api-token");
+
+    // SAFETY: env_lock is held for this whole scope.
+    unsafe {
+        scrub_jr_env();
+        std::env::set_var("JR_SERVICE_NAME", &svc);
+    }
+
+    auth::store_oauth_tokens("default", "refresh-access", "refresh-refresh").unwrap();
+    auth::store_api_token("default", "refresh@example.com", "refresh-token").unwrap();
+
+    // This is the exact call `src/cli/auth/refresh.rs`'s `AuthFlow::OAuth`
+    // arm makes (post-SEC-1-fix) immediately before re-minting OAuth
+    // tokens via `login_oauth`.
+    let result = auth::clear_profile_oauth_pair("default");
+
+    let oauth_after = auth::load_oauth_tokens("default");
+    let api_token_after = auth::load_api_token("default");
+
+    unsafe {
+        std::env::remove_var("JR_SERVICE_NAME");
+    }
+
+    result.expect("clear_profile_oauth_pair must succeed clearing a seeded OAuth pair");
+    assert!(
+        oauth_after.is_err(),
+        "auth refresh's OAuth branch must still clear the OAuth pair"
+    );
+    let (email, token) = api_token_after.expect(
+        "SEC-1: auth refresh's OAuth branch must NEVER delete the api-token \
+         pair — this is the DEC-322 data-loss regression this fix closes",
+    );
+    assert_eq!(email, "refresh@example.com");
+    assert_eq!(token, "refresh-token");
+}
+
+/// SEC-3 (LOW): destructive credential-clear operations must be
+/// profile-scoped, not global. Seeds OAuth + api-token pairs for TWO
+/// profiles (`alpha` + `beta`), clears `beta`'s pair via
+/// [`auth::clear_profile_creds`] (the same function `auth remove` calls),
+/// and asserts `alpha`'s pairs — BOTH kinds — are entirely untouched.
+/// Cheap, high-value regression pin on a destructive operation.
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_sec_3_clear_profile_creds_is_profile_scoped_not_global() {
+    if !keyring_gate_active() {
+        return;
+    }
+    let _guard = env_lock().lock().await;
+    let svc = unique_service("clear-creds-isolation");
+
+    // SAFETY: env_lock is held for this whole scope.
+    unsafe {
+        scrub_jr_env();
+        std::env::set_var("JR_SERVICE_NAME", &svc);
+    }
+
+    auth::store_oauth_tokens("alpha", "alpha-access", "alpha-refresh").unwrap();
+    auth::store_api_token("alpha", "alpha@example.com", "alpha-token").unwrap();
+    auth::store_oauth_tokens("beta", "beta-access", "beta-refresh").unwrap();
+    auth::store_api_token("beta", "beta@example.com", "beta-token").unwrap();
+
+    let result = auth::clear_profile_creds("beta");
+
+    let alpha_oauth_after = auth::load_oauth_tokens("alpha");
+    let alpha_api_token_after = auth::load_api_token("alpha");
+    let beta_oauth_after = auth::load_oauth_tokens("beta");
+    let beta_api_token_after = auth::load_api_token("beta");
+
+    let cleanup_service = svc.clone();
+    unsafe {
+        std::env::remove_var("JR_SERVICE_NAME");
+    }
+    // Best-effort cleanup of the surviving `alpha` credentials this test
+    // seeded (clear_profile_creds("beta") must not — and per the
+    // assertions below, does not — remove them).
+    let _ = keyring::Entry::new(&cleanup_service, "alpha:oauth-access-token")
+        .and_then(|e| e.delete_credential());
+    let _ = keyring::Entry::new(&cleanup_service, "alpha:oauth-refresh-token")
+        .and_then(|e| e.delete_credential());
+    let _ =
+        keyring::Entry::new(&cleanup_service, "alpha:email").and_then(|e| e.delete_credential());
+    let _ = keyring::Entry::new(&cleanup_service, "alpha:api-token")
+        .and_then(|e| e.delete_credential());
+
+    result.expect("clear_profile_creds(\"beta\") must succeed");
+
+    assert!(
+        alpha_oauth_after.is_ok(),
+        "SEC-3: clearing beta's creds must not touch alpha's OAuth pair"
+    );
+    let (email, token) = alpha_api_token_after
+        .expect("SEC-3: clearing beta's creds must not touch alpha's api-token pair");
+    assert_eq!(email, "alpha@example.com");
+    assert_eq!(token, "alpha-token");
+
+    assert!(
+        beta_oauth_after.is_err(),
+        "beta's OAuth pair must be cleared"
+    );
+    assert!(
+        beta_api_token_after.is_err(),
+        "beta's api-token pair must be cleared"
+    );
+}
