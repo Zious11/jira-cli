@@ -10,17 +10,10 @@ use crate::output;
 /// `env` line (`status.rs`) — see BC-1.6.046 Ownership clause / BC-1.6.047
 /// EC-1.6.047-3: "one shared sanitizer, two call sites."
 pub(crate) fn render_env_column(env: Option<&str>) -> String {
-    if let Some(s) = env {
-        // Referenced here (not merely declared) so the shared transform is
-        // exercised from this call site per the architecture rule above;
-        // the real None/blank/sanitized dispatch is the implementer's job.
-        let _ = crate::output::sanitize_env_display(s);
+    match env {
+        None => "-".to_string(),
+        Some(s) => crate::output::sanitize_env_display(s),
     }
-    todo!(
-        "BC-1.6.046 EC-1.6.046-1: None -> \"-\"; Some(s) -> \
-         output::sanitize_env_display(s) (Some(\"\") renders as a blank \
-         cell, never the \"-\" placeholder)"
-    )
 }
 
 /// Render the table-form output of `jr auth list`. The active profile is

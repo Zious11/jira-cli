@@ -14,15 +14,10 @@ use crate::error::JrError;
 /// architecture rule; this wrapper's None/blank/sanitized dispatch is
 /// deliberately NOT pre-implemented here.
 pub(crate) fn render_env_line(env: Option<&str>) -> String {
-    if let Some(s) = env {
-        let _ = crate::output::sanitize_env_display(s);
+    match env {
+        None => "-".to_string(),
+        Some(s) => crate::output::sanitize_env_display(s),
     }
-    todo!(
-        "BC-1.6.047 EC-1.6.047-3: None -> \"-\"; Some(s) -> \
-         output::sanitize_env_display(s) (Some(\"\") renders as a blank \
-         segment, never the \"-\" placeholder) — same convention as \
-         BC-1.6.046 EC-1.6.046-1"
-    )
 }
 
 /// Inspect — without consuming or modifying — which source would supply
