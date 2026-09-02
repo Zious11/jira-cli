@@ -45,6 +45,25 @@ All notable changes to jr will be documented here.
   functional (non-guard-rejected) use; the notice never appears under
   `--output json`.
 
+### Changed
+
+- **Breaking:** `jr auth refresh --oauth`/`--api-token` no longer override
+  the target profile's stored mechanism (S-cycle3-chosen-flow-reconcile,
+  BC-1.2.048, BC-1.2.051, DEC-321). Previously, `jr auth refresh --oauth
+  <profile>` on a profile whose stored `auth_method` was `api_token` forced
+  an OAuth relogin regardless of the profile's actual mechanism — this was
+  the sole remaining exception to "`auth_method` is intrinsic." As of this
+  change, `refresh` always follows the target profile's own stored
+  `auth_method`; `--oauth`/`--api-token` remain syntactically accepted (no
+  clap error) but have zero effect on which mechanism is used. Migration:
+  the only way to change a profile's mechanism is `auth login`
+  re-declaration (`jr auth login --profile <name> --oauth` or
+  `--api-token`), mirroring the BC-1.2.047/S-663-1 precedent
+  (`jr auth switch --profile` removal). See also the accompanying I-6
+  "relogin-then-replace" ordering fix, which ensures a failed `refresh`
+  never clears existing credentials before a replacement is confirmed
+  obtainable.
+
 ### Internal
 
 - **Un-deferred ADR-0011 (Status: Deferred → Accepted, DEC-317) and completed the

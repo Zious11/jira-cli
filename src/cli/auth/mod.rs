@@ -43,8 +43,6 @@ use anyhow::Result;
 use crate::api::auth;
 #[cfg(test)]
 use crate::api::auth_embedded::OAuthAppSource;
-#[cfg(test)]
-use crate::config::Config;
 use crate::error::JrError;
 
 /// BC-1.1.016 Postcondition 2: fixed stderr string for the airtight
@@ -145,41 +143,38 @@ impl AuthFlow {
     }
 }
 
-/// Decide which login flow to run for the **active** profile + explicit
-/// override.
+/// Decide which login flow to use for a given profile — DEC-321,
+/// BC-1.2.048/BC-1.2.051.
 ///
-/// Today this is only exercised by unit tests (production callers like
-/// `refresh_credentials` need the target profile, not the active one, and
-/// use [`chosen_flow_for_profile`] directly). It's kept as a thin wrapper
-/// so a future caller that genuinely wants the active profile has a
-/// labeled entry point — `#[cfg(test)]` because adding it without a real
-/// caller would just be dead code.
+/// **AMENDED by S-cycle3-chosen-flow-reconcile (BC-1.2.051 Postcondition 3).**
+/// `auth_method` is now fully intrinsic: the profile's own stored
+/// `auth_method` is the ONLY input to this decision. This function
+/// previously took a second `oauth_override: bool` parameter, honored by
+/// `auth refresh --oauth` to force OAuth regardless of the profile's
+/// stored mechanism — that override power is REMOVED (a documented
+/// breaking change, EC-1.2.051-1). `--oauth`/`--api-token` remain
+/// syntactically accepted on `refresh` (BC-1.2.051 Postcondition 2) but
+/// have zero effect on the flow this function returns. The only way to
+/// change a profile's mechanism is `auth login` re-declaration.
 ///
-/// Order of precedence:
-/// 1. `oauth_override = true` → always OAuth (user passed `--oauth`).
-/// 2. Active profile `auth_method == "oauth"` → OAuth.
-/// 3. Anything else (including unset) → Token. Matches the `api_token`
-///    default that `JiraClient::from_config` applies when no method is set.
-#[cfg(test)]
-fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
-    chosen_flow_for_profile(&config.active_profile(), oauth_override)
-}
-
-/// Decide which login flow to run based on a specific profile + explicit
-/// override. Use this when the caller has already resolved the target
-/// profile and that profile may differ from the active one (refresh,
-/// per-target dispatch).
-fn chosen_flow_for_profile(
-    profile: &crate::config::ProfileConfig,
-    oauth_override: bool,
-) -> AuthFlow {
-    if oauth_override {
-        return AuthFlow::OAuth;
-    }
-    match profile.auth_method.as_deref() {
-        Some("oauth") => AuthFlow::OAuth,
-        _ => AuthFlow::Token,
-    }
+/// Use this when the caller has already resolved the target profile and
+/// that profile may differ from the active one (refresh, per-target
+/// dispatch) — the caller (`refresh_credentials` in `refresh.rs`) is
+/// responsible for resolving `profile` first.
+///
+/// Per BC-5.38.005's self-check, the match logic itself is `todo!()`'d
+/// rather than left as the pre-existing real implementation: leaving it
+/// real here would let AC-002/AC-003/AC-004's new override-removal tests
+/// pass trivially with zero implementer work, which is exactly the
+/// self-check this rule exists to catch.
+fn chosen_flow_for_profile(profile: &crate::config::ProfileConfig) -> AuthFlow {
+    todo!(
+        "S-cycle3-chosen-flow-reconcile (BC-1.2.048/BC-1.2.051 AC-001): resolve \
+         solely from profile.auth_method — Some(\"oauth\") => AuthFlow::OAuth, \
+         anything else (including unset) => AuthFlow::Token — with NO override \
+         parameter of any kind. profile.auth_method={:?}",
+        profile.auth_method
+    )
 }
 
 #[cfg(test)]
