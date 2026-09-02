@@ -12,7 +12,7 @@ pub(crate) use keychain::{OAUTH_APP_HINT, resolve_oauth_app_credentials_for_test
 pub(crate) use keychain::{resolve_credential, resolve_oauth_app_credentials};
 pub use list::handle_list;
 #[cfg(test)]
-pub(crate) use list::{render_list_json, render_list_table};
+pub(crate) use list::{render_env_column, render_list_json, render_list_table};
 pub use login::{LoginArgs, handle_login, login_oauth, login_token};
 #[cfg(test)]
 pub(crate) use login::{prepare_login_target, resolve_oauth_scopes};
@@ -27,6 +27,8 @@ pub use remove::handle_remove;
 pub(crate) use remove::handle_remove_in_memory;
 #[cfg(test)]
 pub(crate) use status::peek_oauth_app_source_for_test;
+#[cfg(test)]
+pub(crate) use status::render_env_line;
 pub use status::status;
 pub use switch::handle_switch;
 #[cfg(test)]

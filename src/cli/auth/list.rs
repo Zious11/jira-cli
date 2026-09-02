@@ -9,7 +9,7 @@ use crate::output;
 /// two are NOT conflated). Shares the sanitizer with `auth status`'s text
 /// `env` line (`status.rs`) — see BC-1.6.046 Ownership clause / BC-1.6.047
 /// EC-1.6.047-3: "one shared sanitizer, two call sites."
-fn render_env_column(env: Option<&str>) -> String {
+pub(crate) fn render_env_column(env: Option<&str>) -> String {
     if let Some(s) = env {
         // Referenced here (not merely declared) so the shared transform is
         // exercised from this call site per the architecture rule above;

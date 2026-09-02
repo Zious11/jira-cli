@@ -512,6 +512,211 @@ fn list_json_shape() {
     assert_eq!(active[0]["name"], "default");
 }
 
+// ── S-cycle3-env-tag: BC-6.1.015 / BC-1.6.046 / BC-1.6.047 — ENV tag ──
+//
+// Red Gate note: `list_table_snapshot` (above) is deliberately left
+// pointing at the existing 4-column snapshot fixture rather than being
+// regenerated here — `render_list_table` now calls `render_env_column`
+// per row, which currently `todo!()`s unconditionally, so that existing
+// test already fails (panics) under the new stub. Per the story's
+// explicit alternative ("assertion tests over snapshot for the Red
+// Gate"), the ENV column's behavior is pinned below via direct,
+// independent assertion tests instead of a hand-regenerated snapshot;
+// the snapshot itself should be regenerated with `cargo insta review`
+// once `render_env_column`/`sanitize_env_display` are implemented
+// (Green step), extending the 3-profile fixture with an env-tagged row
+// per the story's File Structure Requirements.
+
+/// BC-1.6.046 EC-1.6.046-1 / AC-005: `None` renders the "-" placeholder.
+#[test]
+fn test_render_env_column_none_renders_dash_placeholder() {
+    assert_eq!(render_env_column(None), "-");
+}
+
+/// BC-1.6.046 EC-1.6.046-1 / AC-005: `Some("")` renders a BLANK cell —
+/// zero visible characters — and must NOT be conflated with `None`'s "-"
+/// placeholder.
+#[test]
+fn test_render_env_column_some_empty_renders_blank_not_dash() {
+    let got = render_env_column(Some(""));
+    assert_eq!(got, "");
+    assert_ne!(
+        got, "-",
+        "Some(\"\") must not render as the None placeholder"
+    );
+}
+
+/// BC-1.6.046 postcondition: an ordinary env value renders unchanged.
+#[test]
+fn test_render_env_column_ordinary_value_renders_unchanged() {
+    assert_eq!(render_env_column(Some("prod")), "prod");
+}
+
+/// BC-1.6.046 EC-1.6.046-2 / AC-006: a hostile env value (control chars,
+/// ANSI escapes) reaching the table column must be routed through the
+/// shared `output::sanitize_env_display` transform — this pins the
+/// CONTRACT (delegate to the shared sanitizer, byte-for-byte identical
+/// output), while `output::tests::test_sanitize_env_display_*` pin the
+/// transform's own exact stripping/capping behavior.
+#[test]
+fn test_render_env_column_hostile_value_delegates_to_shared_sanitizer() {
+    let hostile = "\u{1b}[31mBAD\r\n\u{0}";
+    let got = render_env_column(Some(hostile));
+    assert_eq!(
+        got,
+        crate::output::sanitize_env_display(hostile),
+        "table cell must use the identical shared sanitizer output"
+    );
+    assert!(!got.contains('\u{1b}'), "no raw ANSI escape in table cell");
+    assert!(
+        !got.chars().any(|c| (c as u32) <= 0x1F || c as u32 == 0x7F),
+        "no raw control bytes in table cell: {got:?}"
+    );
+}
+
+/// BC-1.6.046 AC-004: `jr auth list` (table mode) prints headers
+/// `NAME, URL, ENV, AUTH, STATUS` in that order, ENV between URL and
+/// AUTH. Uses an EMPTY profile map so this assertion is independent of
+/// `render_env_column`'s (not-yet-implemented) per-row body — header
+/// order is a property of `render_list_table` itself, not of any single
+/// row's rendering, and must not be gated behind the Red stub.
+#[test]
+fn test_render_list_table_headers_include_env_between_url_and_auth() {
+    let empty = GlobalConfig::default();
+    let rendered = render_list_table(&empty, "default");
+    let name_pos = rendered.find("NAME").expect("NAME header present");
+    let url_pos = rendered.find("URL").expect("URL header present");
+    let env_pos = rendered.find("ENV").expect("ENV header present");
+    let auth_pos = rendered.find("AUTH").expect("AUTH header present");
+    let status_pos = rendered.find("STATUS").expect("STATUS header present");
+    assert!(
+        name_pos < url_pos && url_pos < env_pos && env_pos < auth_pos && auth_pos < status_pos,
+        "expected header order NAME < URL < ENV < AUTH < STATUS, got positions: \
+         NAME={name_pos} URL={url_pos} ENV={env_pos} AUTH={auth_pos} STATUS={status_pos}\n{rendered}"
+    );
+}
+
+/// BC-1.6.047 AC-007 / Postcondition 1: `auth list --output json` includes
+/// "env" verbatim/lossless for every profile — the raw configured string
+/// (including any control chars/ANSI escapes, unmodified) when set,
+/// `null` when unset, and the key is NEVER omitted. This channel
+/// deliberately differs from the table channel (issue #398's JSON-
+/// verbatim/human-sanitized split, cited by BC-1.6.047 Invariant 3).
+#[test]
+fn test_render_list_json_env_key_is_verbatim_and_never_omitted() {
+    let mut profiles = std::collections::BTreeMap::new();
+    profiles.insert(
+        "tagged".to_string(),
+        ProfileConfig {
+            url: Some("https://acme.atlassian.net".into()),
+            env: Some("\u{1b}[31mprod\r\n".into()),
+            ..ProfileConfig::default()
+        },
+    );
+    profiles.insert(
+        "untagged".to_string(),
+        ProfileConfig {
+            url: Some("https://acme2.atlassian.net".into()),
+            env: None,
+            ..ProfileConfig::default()
+        },
+    );
+    profiles.insert(
+        "empty-env".to_string(),
+        ProfileConfig {
+            url: Some("https://acme3.atlassian.net".into()),
+            env: Some(String::new()),
+            ..ProfileConfig::default()
+        },
+    );
+    let global = GlobalConfig {
+        default_profile: Some("tagged".into()),
+        profiles,
+        ..GlobalConfig::default()
+    };
+    let json = render_list_json(&global, "tagged").unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let arr = parsed.as_array().expect("array");
+    assert_eq!(arr.len(), 3);
+
+    for p in arr {
+        assert!(
+            p.get("env").is_some(),
+            "\"env\" key must never be omitted from a profile object: {p}"
+        );
+    }
+
+    let find = |name: &str| -> &serde_json::Value {
+        arr.iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("profile {name} missing from JSON array"))
+    };
+
+    let tagged = find("tagged");
+    assert_eq!(
+        tagged["env"],
+        serde_json::Value::String("\u{1b}[31mprod\r\n".to_string()),
+        "hostile env value must be echoed byte-for-byte, no stripping/truncation"
+    );
+
+    let untagged = find("untagged");
+    assert_eq!(
+        untagged["env"],
+        serde_json::Value::Null,
+        "None must serialize to JSON null"
+    );
+
+    let empty_env = find("empty-env");
+    assert_eq!(
+        empty_env["env"],
+        serde_json::Value::String(String::new()),
+        "Some(\"\") must serialize to JSON \"\" (empty string), not null"
+    );
+}
+
+/// BC-1.6.047 AC-008 / Postcondition 2b: `auth status`'s env line uses the
+/// identical `None` -> "-" placeholder convention as the table's ENV
+/// column (BC-1.6.046 EC-1.6.046-1).
+#[test]
+fn test_render_env_line_none_renders_dash_placeholder() {
+    assert_eq!(render_env_line(None), "-");
+}
+
+/// BC-1.6.047 EC-1.6.047-3: `Some("")` renders blank, never "-" — same
+/// convention as the table's ENV column.
+#[test]
+fn test_render_env_line_some_empty_renders_blank_not_dash() {
+    let got = render_env_line(Some(""));
+    assert_eq!(got, "");
+    assert_ne!(got, "-");
+}
+
+/// BC-1.6.047 postcondition: an ordinary env value renders unchanged.
+#[test]
+fn test_render_env_line_ordinary_value_renders_unchanged() {
+    assert_eq!(render_env_line(Some("uat")), "uat");
+}
+
+/// BC-1.6.047 EC-1.6.047-3: identical control-char/ANSI-strip + length-cap
+/// transform as the table's ENV column — same shared sanitizer, same
+/// contract, exercised at this call site too. Directly pins the
+/// "one shared sanitizer, two call sites" architecture rule by asserting
+/// `render_env_line` and `render_env_column` produce byte-identical
+/// output for the same hostile input.
+#[test]
+fn test_render_env_line_hostile_value_delegates_to_shared_sanitizer() {
+    let hostile = "\u{1b}[31mBAD\r\n\u{0}";
+    let got = render_env_line(Some(hostile));
+    assert_eq!(got, crate::output::sanitize_env_display(hostile));
+    assert_eq!(
+        got,
+        render_env_column(Some(hostile)),
+        "auth list's table cell and auth status's text line must use the \
+         IDENTICAL transform output for the same hostile input — \"one \
+         shared sanitizer, two call sites\""
+    );
+}
+
 #[test]
 fn login_create_new_profile_no_input_requires_url() {
     let global = crate::config::GlobalConfig::default();

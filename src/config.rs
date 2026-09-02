@@ -926,6 +926,70 @@ mod tests {
         );
     }
 
+    /// BC-6.1.015 AC-001 / EC-3: a pre-existing `config.toml` written before
+    /// the `env` field existed (no `env` key under `[profiles.x]`) must
+    /// deserialize with `env: None` — no error, no warning. This is the
+    /// tolerant-reader contract (DEC-314): `env` is purely additive.
+    #[test]
+    fn test_profile_config_env_absent_key_deserializes_to_none() {
+        let toml = r#"
+            url = "https://acme.atlassian.net"
+            auth_method = "oauth"
+        "#;
+        let p: ProfileConfig = toml::from_str(toml).unwrap();
+        assert_eq!(
+            p.env, None,
+            "a config.toml with no `env` key must deserialize to env: None"
+        );
+    }
+
+    /// BC-6.1.015 postcondition: a profile with `env = "prod"` set
+    /// deserializes to `Some("prod")`.
+    #[test]
+    fn test_profile_config_env_present_deserializes_to_some() {
+        let toml = r#"
+            url = "https://acme.atlassian.net"
+            env = "prod"
+        "#;
+        let p: ProfileConfig = toml::from_str(toml).unwrap();
+        assert_eq!(p.env.as_deref(), Some("prod"));
+    }
+
+    /// BC-6.1.015 AC-002 / EC-2: `env = ""` (present but empty) must
+    /// deserialize distinctly from an absent key — `Some(String::new())`,
+    /// never collapsed to `None`. The `Some("")` vs `None` distinction is
+    /// spec-fixed (BC-1.6.046 EC-1.6.046-1) and depends on this round-trip
+    /// holding at the storage layer.
+    #[test]
+    fn test_profile_config_env_empty_string_deserializes_to_some_empty() {
+        let toml = r#"
+            url = "https://acme.atlassian.net"
+            env = ""
+        "#;
+        let p: ProfileConfig = toml::from_str(toml).unwrap();
+        assert_eq!(
+            p.env,
+            Some(String::new()),
+            "env = \"\" must deserialize to Some(\"\"), never None"
+        );
+    }
+
+    /// BC-6.1.015 EC-4: storage stays verbatim — no allowlist/enum
+    /// validation on `env`. Any string, including one with control
+    /// characters or unicode, round-trips unmodified through serialize ->
+    /// deserialize. (Display-layer sanitization is a separate concern,
+    /// owned by `output::sanitize_env_display`.)
+    #[test]
+    fn test_profile_config_env_accepts_arbitrary_string_no_validation() {
+        let p = ProfileConfig {
+            env: Some("not-a-real-enum-value \u{1b}[31m\x00".into()),
+            ..ProfileConfig::default()
+        };
+        let serialized = toml::to_string(&p).unwrap();
+        let round_tripped: ProfileConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(round_tripped.env, p.env);
+    }
+
     #[test]
     fn global_config_parses_new_shape() {
         let toml = r#"
@@ -2004,5 +2068,76 @@ mod tests {
             "M-6: resolved path must end with 'jr' component. Got: {}",
             result.display()
         );
+    }
+}
+
+/// VP-AUTHDX-009 (BC-6.1.015 AC-003): tolerant-reader + round-trip property
+/// coverage for `ProfileConfig.env` across arbitrary field combinations.
+#[cfg(test)]
+mod proptests_env_tag {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        /// Property 1: a TOML profile block with NO `env` key (arbitrary
+        /// other fields present or absent) always deserializes to
+        /// `env: None`. Covers BC-6.1.015 EC-3 / AC-001 across randomized
+        /// sibling-field combinations, not just the single fixed case in
+        /// `test_profile_config_env_absent_key_deserializes_to_none`.
+        #[test]
+        fn prop_profile_config_env_absent_key_always_none(
+            url in proptest::option::of("[a-zA-Z0-9.:/-]{0,40}"),
+            auth_method in proptest::option::of("[a-z_]{0,20}"),
+        ) {
+            let mut toml = String::new();
+            if let Some(u) = &url {
+                toml.push_str(&format!("url = {u:?}\n"));
+            }
+            if let Some(a) = &auth_method {
+                toml.push_str(&format!("auth_method = {a:?}\n"));
+            }
+            let p: ProfileConfig = toml::from_str(&toml).unwrap();
+            prop_assert_eq!(p.env, None);
+        }
+
+        /// Property 2: for ANY string `s` (including empty and strings with
+        /// control/unicode characters), constructing `env: Some(s.clone())`
+        /// and round-tripping through serialize -> deserialize returns
+        /// `Some(s)` unchanged. Covers BC-6.1.015 EC-4 (storage stays
+        /// verbatim, no validation/mutation at the storage layer).
+        #[test]
+        fn prop_profile_config_env_some_round_trips(s in ".*") {
+            let p = ProfileConfig {
+                env: Some(s.clone()),
+                ..ProfileConfig::default()
+            };
+            let serialized = toml::to_string(&p)
+                .expect("ProfileConfig with arbitrary env string must serialize");
+            let round_tripped: ProfileConfig = toml::from_str(&serialized)
+                .expect("serialized ProfileConfig must deserialize");
+            prop_assert_eq!(round_tripped.env, Some(s));
+        }
+
+        /// Property 3: `env: None` always round-trips as `None` (never
+        /// promoted to `Some("")` or any other value) through a
+        /// serialize -> deserialize cycle, for any combination of sibling
+        /// `Option<String>` fields.
+        #[test]
+        fn prop_profile_config_env_none_round_trips_as_none(
+            url in proptest::option::of("[a-zA-Z0-9.:/-]{0,40}"),
+        ) {
+            let p = ProfileConfig {
+                url,
+                env: None,
+                ..ProfileConfig::default()
+            };
+            let serialized = toml::to_string(&p)
+                .expect("ProfileConfig must serialize");
+            let round_tripped: ProfileConfig = toml::from_str(&serialized)
+                .expect("serialized ProfileConfig must deserialize");
+            prop_assert_eq!(round_tripped.env, None);
+        }
     }
 }

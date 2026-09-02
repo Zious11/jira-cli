@@ -13,7 +13,7 @@ use crate::error::JrError;
 /// sanitize_env_display`) per the "one shared sanitizer, two call sites"
 /// architecture rule; this wrapper's None/blank/sanitized dispatch is
 /// deliberately NOT pre-implemented here.
-fn render_env_line(env: Option<&str>) -> String {
+pub(crate) fn render_env_line(env: Option<&str>) -> String {
     if let Some(s) = env {
         let _ = crate::output::sanitize_env_display(s);
     }
