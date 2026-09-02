@@ -431,7 +431,11 @@ fn degrade_hint_for_schema(display_name: &str, schema: DegradeSchemaInfo<'_>) ->
 /// read_fields_cache`), falling back to `list_fields()` on a cache miss or
 /// a field absent from the cached list, writing the fresh list back
 /// (best-effort) before re-searching exactly once.
-async fn resolve_field_id(client: &JiraClient, profile: &str, query: &str) -> Result<String> {
+async fn resolve_field_id(
+    client: &JiraClient,
+    profile: &crate::profile::Profile,
+    query: &str,
+) -> Result<String> {
     if is_customfield_literal(query) {
         return Ok(query.to_string());
     }
@@ -1052,7 +1056,12 @@ mod tests {
     #[tokio::test]
     async fn test_bc_x_14_001_resolve_field_id_customfield_literal_bypasses_http() {
         let client = JiraClient::new_for_test("http://127.0.0.1:1".to_string(), "x".to_string());
-        let result = resolve_field_id(&client, "default", "customfield_10084").await;
+        let result = resolve_field_id(
+            &client,
+            &crate::profile::Profile::from("default"),
+            "customfield_10084",
+        )
+        .await;
         assert_eq!(result.unwrap(), "customfield_10084");
     }
 
@@ -1072,7 +1081,7 @@ mod tests {
 
     fn config_with_profile_project(project: Option<&str>) -> Config {
         let mut config = Config {
-            active_profile_name: "default".to_string(),
+            active_profile_name: "default".into(),
             ..Default::default()
         };
         config.global.profiles.insert(

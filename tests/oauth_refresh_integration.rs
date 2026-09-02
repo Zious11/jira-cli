@@ -203,7 +203,7 @@ mod harness {
     /// Only called from keyring-gated tests.
     pub fn seed_oauth_tokens() {
         jr::api::auth::store_oauth_tokens(
-            TEST_PROFILE,
+            &jr::profile::Profile::from(TEST_PROFILE),
             INITIAL_ACCESS_TOKEN,
             INITIAL_REFRESH_TOKEN,
         )
@@ -215,7 +215,7 @@ mod harness {
     /// Uses `jr::api::auth::clear_profile_creds` which goes through the same
     /// service-name resolution (`JR_SERVICE_NAME`) as the rest of the auth module.
     pub fn cleanup_oauth_tokens() {
-        let _ = jr::api::auth::clear_profile_creds(TEST_PROFILE);
+        let _ = jr::api::auth::clear_profile_creds(&jr::profile::Profile::from(TEST_PROFILE));
     }
 }
 
@@ -398,8 +398,9 @@ async fn test_refresh_persists_rotated_tokens_via_store_oauth_tokens() {
         result.err()
     );
 
-    let (stored_access, stored_refresh) = auth::load_oauth_tokens(harness::TEST_PROFILE)
-        .expect("AC-002: tokens must be in keychain after refresh");
+    let (stored_access, stored_refresh) =
+        auth::load_oauth_tokens(&jr::profile::Profile::from(harness::TEST_PROFILE))
+            .expect("AC-002: tokens must be in keychain after refresh");
 
     harness::cleanup_oauth_tokens();
 
@@ -1227,8 +1228,9 @@ async fn test_inter_process_reconcile_after_invalid_grant() {
     );
 
     // Verify Process A rotated the keychain tokens
-    let (kc_access, _kc_refresh) = auth::load_oauth_tokens(harness::TEST_PROFILE)
-        .expect("AC-010: keychain must have Process A's rotated tokens");
+    let (kc_access, _kc_refresh) =
+        auth::load_oauth_tokens(&jr::profile::Profile::from(harness::TEST_PROFILE))
+            .expect("AC-010: keychain must have Process A's rotated tokens");
     assert_eq!(
         kc_access, rotated_access,
         "AC-010: keychain must hold Process A's access token"
@@ -1402,8 +1404,9 @@ async fn test_persist_before_publish_fault_injection() {
     );
 
     // (b) Keychain must NOT be updated — initial tokens must still be present
-    let (stored_access, stored_refresh) = auth::load_oauth_tokens(harness::TEST_PROFILE)
-        .expect("AC-011: keychain must still have initial tokens after failed persist");
+    let (stored_access, stored_refresh) =
+        auth::load_oauth_tokens(&jr::profile::Profile::from(harness::TEST_PROFILE))
+            .expect("AC-011: keychain must still have initial tokens after failed persist");
 
     harness::cleanup_oauth_tokens();
 

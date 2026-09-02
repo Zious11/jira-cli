@@ -336,15 +336,25 @@ async fn test_bc_1_2_014_auth_remove_deletes_both_credential_kinds_end_to_end() 
          auth_method = \"oauth\"\n",
     );
 
-    auth::store_oauth_tokens("staging", "e2e-access", "e2e-refresh").unwrap();
-    auth::store_api_token("staging", "e2e@example.com", "e2e-token").unwrap();
+    auth::store_oauth_tokens(
+        &jr::profile::Profile::from("staging"),
+        "e2e-access",
+        "e2e-refresh",
+    )
+    .unwrap();
+    auth::store_api_token(
+        &jr::profile::Profile::from("staging"),
+        "e2e@example.com",
+        "e2e-token",
+    )
+    .unwrap();
 
     let result = handle_remove("staging", true, None, &OutputFormat::Table).await;
 
     // Verify while JR_SERVICE_NAME is still pointed at this test's
     // isolated namespace.
-    let oauth_after = auth::load_oauth_tokens("staging");
-    let api_token_after = auth::load_api_token("staging");
+    let oauth_after = auth::load_oauth_tokens(&jr::profile::Profile::from("staging"));
+    let api_token_after = auth::load_api_token(&jr::profile::Profile::from("staging"));
 
     unsafe {
         std::env::remove_var("JR_SERVICE_NAME");
@@ -397,13 +407,23 @@ async fn test_bc_1_2_013_logout_clears_only_oauth_pair_preserves_api_token_pair(
          auth_method = \"oauth\"\n",
     );
 
-    auth::store_oauth_tokens("default", "preserve-access", "preserve-refresh").unwrap();
-    auth::store_api_token("default", "preserve@example.com", "preserve-token").unwrap();
+    auth::store_oauth_tokens(
+        &jr::profile::Profile::from("default"),
+        "preserve-access",
+        "preserve-refresh",
+    )
+    .unwrap();
+    auth::store_api_token(
+        &jr::profile::Profile::from("default"),
+        "preserve@example.com",
+        "preserve-token",
+    )
+    .unwrap();
 
     let result = handle_logout(Some("default"), &OutputFormat::Table).await;
 
-    let oauth_after = auth::load_oauth_tokens("default");
-    let api_token_after = auth::load_api_token("default");
+    let oauth_after = auth::load_oauth_tokens(&jr::profile::Profile::from("default"));
+    let api_token_after = auth::load_api_token(&jr::profile::Profile::from("default"));
 
     let cleanup_service = svc.clone();
     unsafe {
@@ -582,16 +602,26 @@ async fn test_sec_1_auth_refresh_oauth_branch_preserves_api_token_pair() {
         std::env::set_var("JR_SERVICE_NAME", &svc);
     }
 
-    auth::store_oauth_tokens("default", "refresh-access", "refresh-refresh").unwrap();
-    auth::store_api_token("default", "refresh@example.com", "refresh-token").unwrap();
+    auth::store_oauth_tokens(
+        &jr::profile::Profile::from("default"),
+        "refresh-access",
+        "refresh-refresh",
+    )
+    .unwrap();
+    auth::store_api_token(
+        &jr::profile::Profile::from("default"),
+        "refresh@example.com",
+        "refresh-token",
+    )
+    .unwrap();
 
     // This is the exact call `src/cli/auth/refresh.rs`'s `AuthFlow::OAuth`
     // arm makes (post-SEC-1-fix) immediately before re-minting OAuth
     // tokens via `login_oauth`.
-    let result = auth::clear_profile_oauth_pair("default");
+    let result = auth::clear_profile_oauth_pair(&jr::profile::Profile::from("default"));
 
-    let oauth_after = auth::load_oauth_tokens("default");
-    let api_token_after = auth::load_api_token("default");
+    let oauth_after = auth::load_oauth_tokens(&jr::profile::Profile::from("default"));
+    let api_token_after = auth::load_api_token(&jr::profile::Profile::from("default"));
 
     unsafe {
         std::env::remove_var("JR_SERVICE_NAME");
@@ -631,24 +661,44 @@ async fn test_sec_3_clear_profile_creds_is_profile_scoped_not_global() {
         std::env::set_var("JR_SERVICE_NAME", &svc);
     }
 
-    auth::store_oauth_tokens("alpha", "alpha-access", "alpha-refresh").unwrap();
-    auth::store_api_token("alpha", "alpha@example.com", "alpha-token").unwrap();
-    auth::store_oauth_tokens("beta", "beta-access", "beta-refresh").unwrap();
-    auth::store_api_token("beta", "beta@example.com", "beta-token").unwrap();
+    auth::store_oauth_tokens(
+        &jr::profile::Profile::from("alpha"),
+        "alpha-access",
+        "alpha-refresh",
+    )
+    .unwrap();
+    auth::store_api_token(
+        &jr::profile::Profile::from("alpha"),
+        "alpha@example.com",
+        "alpha-token",
+    )
+    .unwrap();
+    auth::store_oauth_tokens(
+        &jr::profile::Profile::from("beta"),
+        "beta-access",
+        "beta-refresh",
+    )
+    .unwrap();
+    auth::store_api_token(
+        &jr::profile::Profile::from("beta"),
+        "beta@example.com",
+        "beta-token",
+    )
+    .unwrap();
 
-    let result = auth::clear_profile_creds("beta");
+    let result = auth::clear_profile_creds(&jr::profile::Profile::from("beta"));
 
-    let alpha_oauth_after = auth::load_oauth_tokens("alpha");
-    let alpha_api_token_after = auth::load_api_token("alpha");
-    let beta_oauth_after = auth::load_oauth_tokens("beta");
-    let beta_api_token_after = auth::load_api_token("beta");
+    let alpha_oauth_after = auth::load_oauth_tokens(&jr::profile::Profile::from("alpha"));
+    let alpha_api_token_after = auth::load_api_token(&jr::profile::Profile::from("alpha"));
+    let beta_oauth_after = auth::load_oauth_tokens(&jr::profile::Profile::from("beta"));
+    let beta_api_token_after = auth::load_api_token(&jr::profile::Profile::from("beta"));
 
     let cleanup_service = svc.clone();
     unsafe {
         std::env::remove_var("JR_SERVICE_NAME");
     }
     // Best-effort cleanup of the surviving `alpha` credentials this test
-    // seeded (clear_profile_creds("beta") must not — and per the
+    // seeded (clear_profile_creds(&jr::profile::Profile::from("beta")) must not — and per the
     // assertions below, does not — remove them).
     let _ = keyring::Entry::new(&cleanup_service, "alpha:oauth-access-token")
         .and_then(|e| e.delete_credential());

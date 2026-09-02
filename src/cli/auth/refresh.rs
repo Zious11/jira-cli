@@ -4,6 +4,7 @@ use crate::api::auth;
 use crate::config::Config;
 use crate::error::JrError;
 use crate::output;
+use crate::profile::Profile;
 
 use super::{AuthFlow, chosen_flow_for_profile, login_oauth, login_token};
 
@@ -60,7 +61,7 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
     let target = args
         .profile
         .map(str::to_string)
-        .unwrap_or_else(|| config.active_profile_name.clone());
+        .unwrap_or_else(|| config.active_profile_name.to_string());
     crate::config::validate_profile_name(&target)?;
     // Inspect the target profile's auth method (not the active profile's)
     // so `jr auth refresh --profile X` against a non-active X dispatches
@@ -114,10 +115,10 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
     //   pre-migration installs), so the #207-style "wipe-then-relogin"
     //   path is correct again here.
     match flow {
-        AuthFlow::OAuth => auth::clear_profile_oauth_pair(&target).context(
+        AuthFlow::OAuth => auth::clear_profile_oauth_pair(&Profile::from(target.clone())).context(
             "failed to clear stored OAuth tokens before refresh — keychain may still hold stale entries",
         )?,
-        AuthFlow::Token => auth::clear_all_credentials(&[target.as_str()]).context(
+        AuthFlow::Token => auth::clear_all_credentials(&[Profile::from(target.clone())]).context(
             "failed to clear stored credentials before refresh — keychain may still hold stale entries",
         )?,
     }

@@ -192,7 +192,7 @@ pub async fn handle() -> Result<()> {
     // Step 5: Discover team field
     if let Ok(Some(team_id)) = client.find_team_field_id().await {
         let mut config = Config::load_with(Some(&profile_name))?;
-        let active = config.active_profile_name.clone();
+        let active = config.active_profile_name.to_string();
         config
             .global
             .profiles
@@ -235,7 +235,7 @@ pub async fn handle() -> Result<()> {
 
             if let Some(id) = field_id {
                 let mut config = Config::load_with(Some(&profile_name))?;
-                let active = config.active_profile_name.clone();
+                let active = config.active_profile_name.to_string();
                 config
                     .global
                     .profiles
@@ -257,7 +257,7 @@ pub async fn handle() -> Result<()> {
         .trim_end_matches('/');
     if let Ok(metadata) = client.get_org_metadata(hostname).await {
         let mut config = Config::load_with(Some(&profile_name))?;
-        let active = config.active_profile_name.clone();
+        let active = config.active_profile_name.to_string();
         let entry = config.global.profiles.entry(active).or_default();
         entry.cloud_id = Some(metadata.cloud_id.clone());
         entry.org_id = Some(metadata.org_id.clone());

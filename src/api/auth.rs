@@ -1,3 +1,4 @@
+use crate::profile::Profile;
 use anyhow::{Context, Result};
 use keyring::Entry;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -264,9 +265,9 @@ pub fn load_legacy_flat_api_token() -> Result<(String, String)> {
 /// Tokens are written to the namespaced keys `<profile>:oauth-access-token`
 /// and `<profile>:oauth-refresh-token` so multiple Jira sites can coexist
 /// in a single keychain.
-pub fn store_oauth_tokens(profile: &str, access: &str, refresh: &str) -> Result<()> {
-    entry(&oauth_access_key(profile))?.set_password(access)?;
-    entry(&oauth_refresh_key(profile))?.set_password(refresh)?;
+pub fn store_oauth_tokens(profile: &Profile, access: &str, refresh: &str) -> Result<()> {
+    entry(&oauth_access_key(profile.as_ref()))?.set_password(access)?;
+    entry(&oauth_refresh_key(profile.as_ref()))?.set_password(refresh)?;
     Ok(())
 }
 
@@ -282,9 +283,9 @@ pub fn store_oauth_tokens(profile: &str, access: &str, refresh: &str) -> Result<
 /// upgrade without re-authenticating. Non-`"default"` profiles never
 /// inherit legacy keys — that would silently cross-pollinate credentials
 /// across distinct Jira sites.
-pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
-    let access_key = oauth_access_key(profile);
-    let refresh_key = oauth_refresh_key(profile);
+pub fn load_oauth_tokens(profile: &Profile) -> Result<(String, String)> {
+    let access_key = oauth_access_key(profile.as_ref());
+    let refresh_key = oauth_refresh_key(profile.as_ref());
     let access = read_keyring_optional(&access_key)?;
     let refresh = read_keyring_optional(&refresh_key)?;
 
@@ -295,11 +296,11 @@ pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
             // "default" profile (lazy-migration path). Non-default
             // profiles never inherit legacy keys; that would silently
             // cross-pollinate credentials across distinct Jira sites.
-            if profile == "default" {
+            if profile.as_ref() == "default" {
                 let legacy_access = read_keyring_optional(KEY_OAUTH_ACCESS_LEGACY)?;
                 let legacy_refresh = read_keyring_optional(KEY_OAUTH_REFRESH_LEGACY)?;
                 if let (Some(a), Some(r)) = (legacy_access, legacy_refresh) {
-                    store_oauth_tokens("default", &a, &r)?;
+                    store_oauth_tokens(&Profile::from("default"), &a, &r)?;
                     let _ = entry(KEY_OAUTH_ACCESS_LEGACY)?.delete_credential();
                     let _ = entry(KEY_OAUTH_REFRESH_LEGACY)?.delete_credential();
                     return Ok((a, r));
@@ -322,11 +323,11 @@ pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
         // state with explicit recovery instructions rather than masking
         // the corruption with a generic "no token" message.
         _ => {
-            if profile == "default" {
+            if profile.as_ref() == "default" {
                 let legacy_access = read_keyring_optional(KEY_OAUTH_ACCESS_LEGACY)?;
                 let legacy_refresh = read_keyring_optional(KEY_OAUTH_REFRESH_LEGACY)?;
                 if let (Some(a), Some(r)) = (legacy_access, legacy_refresh) {
-                    store_oauth_tokens("default", &a, &r)?;
+                    store_oauth_tokens(&Profile::from("default"), &a, &r)?;
                     let _ = entry(KEY_OAUTH_ACCESS_LEGACY)?.delete_credential();
                     let _ = entry(KEY_OAUTH_REFRESH_LEGACY)?.delete_credential();
                     return Ok((a, r));
@@ -355,9 +356,9 @@ pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
 /// (BC-1.4.033 postcondition 3, forward reference), so a later `auth login`
 /// cleanly repairs a partial-write state with no bespoke recovery logic
 /// here.
-pub fn store_api_token(profile: &str, email: &str, token: &str) -> Result<()> {
-    entry(&api_token_email_key(profile))?.set_password(email)?;
-    entry(&api_token_key(profile))?.set_password(token)?;
+pub fn store_api_token(profile: &Profile, email: &str, token: &str) -> Result<()> {
+    entry(&api_token_email_key(profile.as_ref()))?.set_password(email)?;
+    entry(&api_token_key(profile.as_ref()))?.set_password(token)?;
     Ok(())
 }
 
@@ -431,13 +432,13 @@ fn legacy_flat_pair_exists() -> Result<bool> {
 /// S-cycle3-percred-storage. The both-absent (BC-1.4.032) and
 /// namespaced-partial (BC-1.4.033) branches were implemented by
 /// S-cycle3-credential-absence-guard.
-pub fn load_api_token(profile: &str) -> Result<(String, String)> {
+pub fn load_api_token(profile: &Profile) -> Result<(String, String)> {
     // `?` here propagates a genuine backend error (EC-1.4.031-2) as-is —
     // read_keyring_optional only collapses `keyring::Error::NoEntry` to
     // `Ok(None)`; anything else (e.g. an `Invalid` service name) surfaces
     // here distinct from either absence branch below.
-    let email = read_keyring_optional(&api_token_email_key(profile))?;
-    let token = read_keyring_optional(&api_token_key(profile))?;
+    let email = read_keyring_optional(&api_token_email_key(profile.as_ref()))?;
+    let token = read_keyring_optional(&api_token_key(profile.as_ref()))?;
 
     match (email, token) {
         (Some(e), Some(t)) => Ok((e, t)),
@@ -585,10 +586,10 @@ pub fn try_load_oauth_app_credentials() -> Result<Option<(String, String)>> {
 /// `keyring::Error::NoEntry` on any step is success; any other keychain
 /// error propagates immediately via `?` (same tightening as
 /// [`clear_profile_creds`], applied consistently across both functions).
-pub fn clear_profile_oauth_pair(profile: &str) -> Result<()> {
-    delete_credential_tolerating_no_entry(&oauth_access_key(profile))?;
-    delete_credential_tolerating_no_entry(&oauth_refresh_key(profile))?;
-    if profile == "default" {
+pub fn clear_profile_oauth_pair(profile: &Profile) -> Result<()> {
+    delete_credential_tolerating_no_entry(&oauth_access_key(profile.as_ref()))?;
+    delete_credential_tolerating_no_entry(&oauth_refresh_key(profile.as_ref()))?;
+    if profile.as_ref() == "default" {
         delete_credential_tolerating_no_entry(KEY_OAUTH_ACCESS_LEGACY)?;
         delete_credential_tolerating_no_entry(KEY_OAUTH_REFRESH_LEGACY)?;
     }
@@ -635,7 +636,7 @@ pub fn clear_profile_oauth_pair(profile: &str) -> Result<()> {
 /// keys (`oauth-access-token` / `oauth-refresh-token`). Without that step,
 /// a user mid-migration would see `jr auth logout --profile default`
 /// "succeed" while the legacy keys remained — and the next
-/// `load_oauth_tokens("default")` would lazy-migrate them back into the
+/// `load_oauth_tokens(&Profile::from("default"))` would lazy-migrate them back into the
 /// namespaced slots, effectively undoing the logout. Non-`"default"`
 /// profiles never inherit legacy keys, so this clause stays scoped to
 /// `"default"` to avoid stomping on another profile's migration window.
@@ -645,15 +646,15 @@ pub fn clear_profile_oauth_pair(profile: &str) -> Result<()> {
 /// keys — it must never touch the legacy flat `KEY_EMAIL`/`KEY_API_TOKEN`
 /// pair (that is `S-cycle3-credential-absence-guard`'s no-touch invariant,
 /// BC-1.4.032).
-pub fn clear_profile_creds(profile: &str) -> Result<()> {
-    delete_credential_tolerating_no_entry(&oauth_access_key(profile))?;
-    delete_credential_tolerating_no_entry(&oauth_refresh_key(profile))?;
-    delete_credential_tolerating_no_entry(&api_token_email_key(profile))?;
-    delete_credential_tolerating_no_entry(&api_token_key(profile))?;
+pub fn clear_profile_creds(profile: &Profile) -> Result<()> {
+    delete_credential_tolerating_no_entry(&oauth_access_key(profile.as_ref()))?;
+    delete_credential_tolerating_no_entry(&oauth_refresh_key(profile.as_ref()))?;
+    delete_credential_tolerating_no_entry(&api_token_email_key(profile.as_ref()))?;
+    delete_credential_tolerating_no_entry(&api_token_key(profile.as_ref()))?;
     // For the "default" profile, also clear the legacy flat OAuth keys
-    // that load_oauth_tokens("default") would otherwise lazy-migrate
+    // that load_oauth_tokens(&Profile::from("default")) would otherwise lazy-migrate
     // back into existence on the next read — defeating logout.
-    if profile == "default" {
+    if profile.as_ref() == "default" {
         delete_credential_tolerating_no_entry(KEY_OAUTH_ACCESS_LEGACY)?;
         delete_credential_tolerating_no_entry(KEY_OAUTH_REFRESH_LEGACY)?;
     }
@@ -708,7 +709,7 @@ fn delete_credential_tolerating_no_entry(key: &str) -> Result<()> {
 /// deleted" invariant; the existing unconditional legacy-flat-key clear
 /// above is pre-existing, out of this story's scope, and must not be
 /// touched.
-pub fn clear_all_credentials(profiles: &[&str]) -> Result<()> {
+pub fn clear_all_credentials(profiles: &[Profile]) -> Result<()> {
     let mut keys: Vec<String> = vec![
         KEY_EMAIL.to_string(),
         KEY_API_TOKEN.to_string(),
@@ -721,11 +722,12 @@ pub fn clear_all_credentials(profiles: &[&str]) -> Result<()> {
     // --profile sandbox` (api_token flow) on a not-yet-migrated
     // legacy install would unconditionally wipe the default
     // profile's intact-but-unmigrated OAuth tokens.
-    if profiles.contains(&"default") {
+    if profiles.iter().any(|p| p.as_ref() == "default") {
         keys.push(KEY_OAUTH_ACCESS_LEGACY.to_string());
         keys.push(KEY_OAUTH_REFRESH_LEGACY.to_string());
     }
     for profile in profiles {
+        let profile = profile.as_ref();
         keys.push(oauth_access_key(profile));
         keys.push(oauth_refresh_key(profile));
         // S-cycle3-percred-storage: the API-token pair moved to namespaced
@@ -1090,7 +1092,12 @@ pub async fn oauth_login(
     //    the new tokens. Surface the partial state explicitly so they
     //    know to retry (after fixing keychain access) rather than
     //    re-approving from scratch.
-    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token).map_err(|e| {
+    store_oauth_tokens(
+        &Profile::from(profile),
+        &tokens.access_token,
+        &tokens.refresh_token,
+    )
+    .map_err(|e| {
         anyhow::anyhow!(
             "Authorization succeeded with Atlassian, but jr could not save the OAuth \
              tokens to the system keychain ({e:#}). Unlock your keychain (or grant \
@@ -1159,7 +1166,7 @@ pub(crate) async fn refresh_oauth_token_with_url(profile: &str, token_url: &str)
         source = ?source,
         "refresh_credentials_resolved"
     );
-    let (_, refresh_token) = load_oauth_tokens(profile).unwrap_or_default();
+    let (_, refresh_token) = load_oauth_tokens(&Profile::from(profile)).unwrap_or_default();
 
     // S-3.03 v2 DECISION: Option A-fixed (auto-refresh on 401 with
     // per-profile single-flight). Wired into JiaClient::send via
@@ -1248,7 +1255,12 @@ pub(crate) async fn refresh_oauth_token_with_url(profile: &str, token_url: &str)
     // Atlassian rotated the tokens, but if the keychain write fails the
     // new pair is lost and the next request will use the now-invalid
     // refresh token. Surface the partial state explicitly.
-    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token).map_err(|e| {
+    store_oauth_tokens(
+        &Profile::from(profile),
+        &tokens.access_token,
+        &tokens.refresh_token,
+    )
+    .map_err(|e| {
         anyhow::anyhow!(
             "Token refresh succeeded with Atlassian, but jr could not save the new \
              OAuth tokens to the system keychain ({e:#}). Unlock your keychain (or \
@@ -1609,7 +1621,7 @@ mod tests {
         // off the default test path.
         unsafe { std::env::set_var("JR_SERVICE_NAME", &svc) };
         f();
-        let _ = clear_all_credentials(&["default", "sandbox"]);
+        let _ = clear_all_credentials(&[Profile::from("default"), Profile::from("sandbox")]);
         // SAFETY: still holding KEYRING_TEST_ENV_MUTEX.
         unsafe {
             match prev {
@@ -1623,11 +1635,11 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn store_and_load_per_profile_oauth_tokens_round_trip() {
         with_test_keyring(|| {
-            store_oauth_tokens("default", "access1", "refresh1").unwrap();
-            store_oauth_tokens("sandbox", "access2", "refresh2").unwrap();
+            store_oauth_tokens(&Profile::from("default"), "access1", "refresh1").unwrap();
+            store_oauth_tokens(&Profile::from("sandbox"), "access2", "refresh2").unwrap();
 
-            let (a1, r1) = load_oauth_tokens("default").unwrap();
-            let (a2, r2) = load_oauth_tokens("sandbox").unwrap();
+            let (a1, r1) = load_oauth_tokens(&Profile::from("default")).unwrap();
+            let (a2, r2) = load_oauth_tokens(&Profile::from("sandbox")).unwrap();
 
             assert_eq!((a1.as_str(), r1.as_str()), ("access1", "refresh1"));
             assert_eq!((a2.as_str(), r2.as_str()), ("access2", "refresh2"));
@@ -1638,7 +1650,7 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn load_oauth_tokens_returns_err_for_missing_profile() {
         with_test_keyring(|| {
-            assert!(load_oauth_tokens("default").is_err());
+            assert!(load_oauth_tokens(&Profile::from("default")).is_err());
         });
     }
 
@@ -1655,7 +1667,7 @@ mod tests {
                 .set_password("legacy-refresh")
                 .unwrap();
 
-            let (access, refresh) = load_oauth_tokens("default").unwrap();
+            let (access, refresh) = load_oauth_tokens(&Profile::from("default")).unwrap();
             assert_eq!(access, "legacy-access");
             assert_eq!(refresh, "legacy-refresh");
 
@@ -1669,7 +1681,7 @@ mod tests {
         });
     }
 
-    /// Regression: `clear_profile_creds("default")` must also remove the
+    /// Regression: `clear_profile_creds(&Profile::from("default"))` must also remove the
     /// legacy flat OAuth keys. Otherwise `jr auth logout --profile default`
     /// leaves the legacy entries in place and the next `load_oauth_tokens`
     /// call resurrects them via the lazy-migration path — silently undoing
@@ -1688,7 +1700,7 @@ mod tests {
                 .set_password("legacy-refresh")
                 .unwrap();
 
-            clear_profile_creds("default").unwrap();
+            clear_profile_creds(&Profile::from("default")).unwrap();
 
             // Legacy keys must be gone — otherwise lazy migration would
             // resurrect them on the next load_oauth_tokens call.
@@ -1719,7 +1731,7 @@ mod tests {
                 .set_password("legacy-access")
                 .unwrap();
 
-            clear_profile_creds("sandbox").unwrap();
+            clear_profile_creds(&Profile::from("sandbox")).unwrap();
 
             // Legacy keys belong to the "default" profile's lazy migration;
             // logging out of "sandbox" must not touch them.
@@ -1756,20 +1768,25 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn test_bc_1_2_014_clear_profile_creds_clears_namespaced_api_token_pair_and_oauth_pair() {
         with_test_keyring(|| {
-            store_oauth_tokens("sandbox", "access-x", "refresh-x").unwrap();
-            store_api_token("sandbox", "sandbox@example.com", "sandbox-token").unwrap();
+            store_oauth_tokens(&Profile::from("sandbox"), "access-x", "refresh-x").unwrap();
+            store_api_token(
+                &Profile::from("sandbox"),
+                "sandbox@example.com",
+                "sandbox-token",
+            )
+            .unwrap();
 
             // Sanity: both pairs are actually present before the clear.
             assert!(
-                load_oauth_tokens("sandbox").is_ok(),
+                load_oauth_tokens(&Profile::from("sandbox")).is_ok(),
                 "precondition: oauth pair must be seeded"
             );
             assert!(
-                load_api_token("sandbox").is_ok(),
+                load_api_token(&Profile::from("sandbox")).is_ok(),
                 "precondition: api-token pair must be seeded"
             );
 
-            clear_profile_creds("sandbox")
+            clear_profile_creds(&Profile::from("sandbox"))
                 .expect("clear_profile_creds must succeed when both credential kinds are present");
 
             // OAuth pair gone (pre-existing behavior, unaffected by this story).
@@ -1818,7 +1835,7 @@ mod tests {
             // "ghost" never had anything stored under this test's unique
             // JR_SERVICE_NAME namespace — both credential kinds are
             // NoEntry from the start.
-            let result = clear_profile_creds("ghost");
+            let result = clear_profile_creds(&Profile::from("ghost"));
             assert!(
                 result.is_ok(),
                 "NoEntry on both credential kinds must be treated as success, got: {:?}",
@@ -1845,7 +1862,7 @@ mod tests {
             // this closure's entire duration.
             unsafe { std::env::set_var("JR_SERVICE_NAME", "") };
 
-            let result = clear_profile_creds("sandbox");
+            let result = clear_profile_creds(&Profile::from("sandbox"));
 
             assert!(
                 result.is_err(),
@@ -1866,12 +1883,12 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn test_ac_004_clear_profile_creds_retry_after_partial_success_tolerates_no_entry() {
         with_test_keyring(|| {
-            store_oauth_tokens("sandbox", "access-y", "refresh-y").unwrap();
+            store_oauth_tokens(&Profile::from("sandbox"), "access-y", "refresh-y").unwrap();
             // Deliberately do NOT store an API-token pair for "sandbox" —
             // it is already absent, standing in for "already cleared by a
             // prior partial attempt."
 
-            let first = clear_profile_creds("sandbox");
+            let first = clear_profile_creds(&Profile::from("sandbox"));
             assert!(
                 first.is_ok(),
                 "first clear must succeed: {:?}",
@@ -1879,7 +1896,7 @@ mod tests {
             );
 
             // Retry: everything this call touches is now NoEntry.
-            let second = clear_profile_creds("sandbox");
+            let second = clear_profile_creds(&Profile::from("sandbox"));
             assert!(
                 second.is_ok(),
                 "retry after a fully-completed clear must still succeed \
@@ -1904,7 +1921,8 @@ mod tests {
             // this closure's entire duration.
             unsafe { std::env::set_var("JR_SERVICE_NAME", "") };
 
-            let result = clear_all_credentials(&["default", "sandbox"]);
+            let result =
+                clear_all_credentials(&[Profile::from("default"), Profile::from("sandbox")]);
 
             assert!(
                 result.is_err(),
@@ -1931,7 +1949,7 @@ mod tests {
                 .set_password("access-only")
                 .unwrap();
 
-            let result = load_oauth_tokens("sandbox");
+            let result = load_oauth_tokens(&Profile::from("sandbox"));
             let err = result.expect_err("partial state should error");
             let msg = format!("{err:#}");
             assert!(msg.contains("partial"), "got: {msg}");
@@ -1940,7 +1958,7 @@ mod tests {
 
     /// Edge case: an interrupted lazy migration could leave the namespaced
     /// pair in a partial state for the `default` profile while the legacy
-    /// flat keys still hold a complete pair. `load_oauth_tokens("default")`
+    /// flat keys still hold a complete pair. `load_oauth_tokens(&Profile::from("default"))`
     /// should recover from the intact legacy pair rather than stranding
     /// users with a partial-state error.
     #[test]
@@ -1962,7 +1980,7 @@ mod tests {
                 .set_password("legacy-refresh")
                 .unwrap();
 
-            let (a, r) = load_oauth_tokens("default").unwrap();
+            let (a, r) = load_oauth_tokens(&Profile::from("default")).unwrap();
             assert_eq!(a, "legacy-access");
             assert_eq!(r, "legacy-refresh");
 
@@ -2009,7 +2027,7 @@ mod tests {
                 .unwrap();
 
             assert!(
-                load_oauth_tokens("sandbox").is_err(),
+                load_oauth_tokens(&Profile::from("sandbox")).is_err(),
                 "sandbox profile should NOT inherit legacy keys"
             );
         });
@@ -2232,7 +2250,7 @@ mod tests {
 
     /// AC-002 / AC-004 (BC-1.4.025 / BC-1.4.029): The legacy flat keys
     /// (`oauth-access-token`, `oauth-refresh-token`) are NOT prefixed with
-    /// any profile name. This ensures that `load_oauth_tokens("sandbox")`
+    /// any profile name. This ensures that `load_oauth_tokens(&Profile::from("sandbox"))`
     /// cannot accidentally read legacy keys by constructing a namespaced key
     /// that happens to match the legacy key string.
     ///
@@ -2377,11 +2395,21 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn store_and_load_per_profile_api_token_round_trip() {
         with_test_keyring(|| {
-            store_api_token("default", "default@example.com", "default-token-1").unwrap();
-            store_api_token("sandbox", "sandbox@example.com", "sandbox-token-2").unwrap();
+            store_api_token(
+                &Profile::from("default"),
+                "default@example.com",
+                "default-token-1",
+            )
+            .unwrap();
+            store_api_token(
+                &Profile::from("sandbox"),
+                "sandbox@example.com",
+                "sandbox-token-2",
+            )
+            .unwrap();
 
-            let (e1, t1) = load_api_token("default").unwrap();
-            let (e2, t2) = load_api_token("sandbox").unwrap();
+            let (e1, t1) = load_api_token(&Profile::from("default")).unwrap();
+            let (e2, t2) = load_api_token(&Profile::from("sandbox")).unwrap();
 
             assert_eq!(
                 (e1.as_str(), t1.as_str()),
@@ -2404,7 +2432,7 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn load_api_token_returns_err_for_missing_profile() {
         with_test_keyring(|| {
-            assert!(load_api_token("brand-new-profile").is_err());
+            assert!(load_api_token(&Profile::from("brand-new-profile")).is_err());
         });
     }
 
@@ -2421,7 +2449,7 @@ mod tests {
         with_test_keyring(|| {
             store_legacy_flat_api_token("legacy@example.com", "legacy-token").unwrap();
 
-            let result = load_api_token("default");
+            let result = load_api_token(&Profile::from("default"));
             assert!(
                 result.is_err(),
                 "load_api_token(\"default\") must NOT fall back to the legacy flat pair"
@@ -2449,11 +2477,11 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn load_api_token_cross_profile_isolation() {
         with_test_keyring(|| {
-            store_api_token("default", "p1@example.com", "p1-token").unwrap();
-            store_api_token("sandbox", "p2@example.com", "p2-token").unwrap();
+            store_api_token(&Profile::from("default"), "p1@example.com", "p1-token").unwrap();
+            store_api_token(&Profile::from("sandbox"), "p2@example.com", "p2-token").unwrap();
 
-            let (e1, t1) = load_api_token("default").unwrap();
-            let (e2, t2) = load_api_token("sandbox").unwrap();
+            let (e1, t1) = load_api_token(&Profile::from("default")).unwrap();
+            let (e2, t2) = load_api_token(&Profile::from("sandbox")).unwrap();
 
             assert_ne!((e1.as_str(), t1.as_str()), (e2.as_str(), t2.as_str()));
             assert_eq!(e1, "p1@example.com");
@@ -2462,7 +2490,7 @@ mod tests {
             assert_eq!(t2, "p2-token");
 
             // A brand-new third profile must see neither pair.
-            assert!(load_api_token("ghost-profile").is_err());
+            assert!(load_api_token(&Profile::from("ghost-profile")).is_err());
 
             cleanup_api_token_profile("default");
             cleanup_api_token_profile("sandbox");
@@ -2492,7 +2520,8 @@ mod tests {
             // closure's entire duration.
             unsafe { std::env::set_var("JR_SERVICE_NAME", "") };
 
-            let err = load_api_token("sandbox").expect_err("empty service name must error");
+            let err = load_api_token(&Profile::from("sandbox"))
+                .expect_err("empty service name must error");
             let msg = format!("{err:#}").to_lowercase();
             assert!(
                 !msg.contains("no stored credential"),
@@ -2552,10 +2581,20 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn store_api_token_overwrites_unconditionally() {
         with_test_keyring(|| {
-            store_api_token("sandbox", "first@example.com", "first-token").unwrap();
-            store_api_token("sandbox", "second@example.com", "second-token").unwrap();
+            store_api_token(
+                &Profile::from("sandbox"),
+                "first@example.com",
+                "first-token",
+            )
+            .unwrap();
+            store_api_token(
+                &Profile::from("sandbox"),
+                "second@example.com",
+                "second-token",
+            )
+            .unwrap();
 
-            let (email, token) = load_api_token("sandbox").unwrap();
+            let (email, token) = load_api_token(&Profile::from("sandbox")).unwrap();
             assert_eq!(email, "second@example.com");
             assert_eq!(token, "second-token");
 
@@ -2576,7 +2615,7 @@ mod tests {
     /// in this module are. Case count is kept small (12) since every case
     /// performs real keychain I/O.
     mod percred_proptests {
-        use super::{load_api_token, store_api_token, with_test_keyring};
+        use super::{Profile, load_api_token, store_api_token, with_test_keyring};
         use proptest::prelude::*;
 
         fn profile_strategy() -> impl Strategy<Value = String> {
@@ -2609,6 +2648,8 @@ mod tests {
                 token in token_strategy(),
             ) {
                 prop_assume!(p1 != p2);
+                let p1 = Profile::from(p1);
+                let p2 = Profile::from(p2);
 
                 with_test_keyring(|| {
                     store_api_token(&p1, &email, &token).unwrap();
@@ -2628,7 +2669,7 @@ mod tests {
                         }
                     }
 
-                    super::cleanup_api_token_profile(&p1);
+                    super::cleanup_api_token_profile(p1.as_ref());
                 });
             }
         }
@@ -2792,7 +2833,8 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn test_bc_1_4_032_absent_namespaced_keys_no_legacy_pair_returns_actionable_exit64() {
         with_test_keyring(|| {
-            let err = load_api_token("default").expect_err("absent state must error");
+            let err =
+                load_api_token(&Profile::from("default")).expect_err("absent state must error");
             let msg = assert_user_error_exit_64(&err);
             assert_eq!(msg, expected_bc_1_4_032_absent_message("default"));
         });
@@ -2809,7 +2851,7 @@ mod tests {
         with_test_keyring(|| {
             store_legacy_flat_api_token("legacy@example.com", "legacy-token-xyz").unwrap();
 
-            let err = load_api_token("default")
+            let err = load_api_token(&Profile::from("default"))
                 .expect_err("absent state with legacy pair must still error");
             let msg = assert_user_error_exit_64(&err);
             assert_eq!(msg, expected_bc_1_4_032_absent_message("default"));
@@ -2836,7 +2878,8 @@ mod tests {
             let seeded_token = "legacy-untouched-token-123";
             store_legacy_flat_api_token(seeded_email, seeded_token).unwrap();
 
-            let err = load_api_token("default").expect_err("absent namespaced state must error");
+            let err = load_api_token(&Profile::from("default"))
+                .expect_err("absent namespaced state must error");
             assert_user_error_exit_64(&err);
 
             // (a) legacy pair STILL EXISTS, byte-for-byte unchanged — never deleted.
@@ -2865,11 +2908,12 @@ mod tests {
             store_legacy_flat_api_token("shared-legacy@example.com", "shared-legacy-token")
                 .unwrap();
 
-            let default_err = load_api_token("default").expect_err("default must error");
+            let default_err =
+                load_api_token(&Profile::from("default")).expect_err("default must error");
             let default_msg = assert_user_error_exit_64(&default_err);
 
-            let sandbox_err =
-                load_api_token("sandbox").expect_err("sandbox must error identically");
+            let sandbox_err = load_api_token(&Profile::from("sandbox"))
+                .expect_err("sandbox must error identically");
             let sandbox_msg = assert_user_error_exit_64(&sandbox_err);
 
             assert_eq!(default_msg, expected_bc_1_4_032_absent_message("default"));
@@ -2894,10 +2938,12 @@ mod tests {
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn test_bc_1_4_032_repeated_calls_return_same_err_no_first_call_side_effect() {
         with_test_keyring(|| {
-            let err1 = load_api_token("sandbox").expect_err("first call must error");
+            let err1 =
+                load_api_token(&Profile::from("sandbox")).expect_err("first call must error");
             let msg1 = assert_user_error_exit_64(&err1);
 
-            let err2 = load_api_token("sandbox").expect_err("second call must error identically");
+            let err2 = load_api_token(&Profile::from("sandbox"))
+                .expect_err("second call must error identically");
             let msg2 = assert_user_error_exit_64(&err2);
 
             assert_eq!(
@@ -2921,7 +2967,8 @@ mod tests {
                 .unwrap();
             // api-token half intentionally left absent.
 
-            let err = load_api_token("sandbox").expect_err("partial namespaced state must error");
+            let err = load_api_token(&Profile::from("sandbox"))
+                .expect_err("partial namespaced state must error");
             let msg = assert_user_error_exit_64(&err);
             assert_eq!(msg, expected_bc_1_4_033_partial_message("sandbox"));
 
@@ -2942,7 +2989,8 @@ mod tests {
                 .unwrap();
             // email half intentionally left absent.
 
-            let err = load_api_token("sandbox").expect_err("partial namespaced state must error");
+            let err = load_api_token(&Profile::from("sandbox"))
+                .expect_err("partial namespaced state must error");
             let msg = assert_user_error_exit_64(&err);
             assert_eq!(msg, expected_bc_1_4_033_partial_message("sandbox"));
 
@@ -2966,8 +3014,8 @@ mod tests {
                 .unwrap();
             store_legacy_flat_api_token("legacy@example.com", "legacy-token").unwrap();
 
-            let err =
-                load_api_token("default").expect_err("namespaced-partial must take precedence");
+            let err = load_api_token(&Profile::from("default"))
+                .expect_err("namespaced-partial must take precedence");
             let msg = assert_user_error_exit_64(&err);
             assert_eq!(
                 msg,
@@ -3001,7 +3049,8 @@ mod tests {
                 .set_password("only-email@example.com")
                 .unwrap();
 
-            let err = load_api_token("sandbox").expect_err("partial state must error");
+            let err =
+                load_api_token(&Profile::from("sandbox")).expect_err("partial state must error");
             let msg = format!("{err:#}");
             assert!(
                 !msg.contains("jr auth logout"),
@@ -3039,7 +3088,7 @@ mod tests {
             store_legacy_flat_api_token(seeded_email, seeded_token).unwrap();
 
             for profile in ["default", "sandbox"] {
-                let err = load_api_token(profile)
+                let err = load_api_token(&Profile::from(profile))
                     .expect_err("first post-upgrade invocation must fail with an actionable error");
                 let msg = assert_user_error_exit_64(&err);
                 assert_eq!(msg, expected_bc_1_4_032_absent_message(profile));
@@ -3072,17 +3121,18 @@ mod tests {
             store_legacy_flat_api_token("legacy@example.com", "legacy-token").unwrap();
 
             // First post-upgrade call fails.
-            let err1 = load_api_token("default").expect_err("first call must error");
+            let err1 =
+                load_api_token(&Profile::from("default")).expect_err("first call must error");
             assert_user_error_exit_64(&err1);
 
             // Remediation: `jr auth login default` writes the namespaced pair
             // (BC-1.4.034 postcondition 2 — no flags beyond a normal login).
-            store_api_token("default", "new@example.com", "new-token").unwrap();
+            store_api_token(&Profile::from("default"), "new@example.com", "new-token").unwrap();
 
             // Permanently resolved — repeated calls all succeed identically
             // (postcondition 2: "no second re-login is ever required").
             for _ in 0..2 {
-                let (e, t) = load_api_token("default").unwrap();
+                let (e, t) = load_api_token(&Profile::from("default")).unwrap();
                 assert_eq!(e, "new@example.com");
                 assert_eq!(t, "new-token");
             }
@@ -3107,7 +3157,7 @@ mod tests {
     /// belt-and-suspenders reason as the rest of this module's gated tests.
     mod absence_guard_proptests {
         use super::{
-            JrError, KEY_API_TOKEN, KEY_EMAIL, api_token_email_key, api_token_key,
+            JrError, KEY_API_TOKEN, KEY_EMAIL, Profile, api_token_email_key, api_token_key,
             cleanup_api_token_profile, entry, expected_bc_1_4_032_absent_message,
             expected_bc_1_4_033_partial_message, load_api_token, load_legacy_flat_api_token,
             store_legacy_flat_api_token, with_test_keyring,
@@ -3140,7 +3190,8 @@ mod tests {
         /// namespaced key was written by the call), and returns the
         /// formatted message.
         fn assert_absent_err_and_no_write(profile: &str) -> String {
-            let err = load_api_token(profile).expect_err("absent-namespaced state must error");
+            let err = load_api_token(&Profile::from(profile))
+                .expect_err("absent-namespaced state must error");
             let je = err
                 .downcast_ref::<JrError>()
                 .unwrap_or_else(|| panic!("expected a JrError, got: {err:#}"));
@@ -3248,8 +3299,8 @@ mod tests {
                         entry(&api_token_key(&profile)).unwrap().set_password(&token).unwrap();
                     }
 
-                    let err =
-                        load_api_token(&profile).expect_err("partial state must error, never Ok");
+                    let err = load_api_token(&Profile::from(profile.clone()))
+                        .expect_err("partial state must error, never Ok");
                     let je = err
                         .downcast_ref::<JrError>()
                         .unwrap_or_else(|| panic!("expected a JrError, got: {err:#}"));

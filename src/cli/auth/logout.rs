@@ -1,5 +1,6 @@
 use crate::cli::OutputFormat;
 use crate::output;
+use crate::profile::Profile;
 
 use super::auth_json_response;
 
@@ -48,7 +49,11 @@ pub(crate) fn resolve_logout_target(
 /// profiles.
 pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> anyhow::Result<()> {
     let config = crate::config::Config::load_with(profile_arg)?;
-    let target = resolve_logout_target(&config.global, profile_arg, &config.active_profile_name);
+    let target = resolve_logout_target(
+        &config.global,
+        profile_arg,
+        config.active_profile_name.as_ref(),
+    );
     crate::config::validate_profile_name(&target)?;
     if !config.global.profiles.contains_key(&target) {
         let known: Vec<&str> = config.global.profiles.keys().map(String::as_str).collect();
@@ -88,7 +93,7 @@ pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> 
         // pair, even if this profile happens to carry a leftover one
         // from a prior mechanism switch (BC-1.2.013 non-destructive
         // contract).
-        crate::api::auth::clear_profile_oauth_pair(&target)?;
+        crate::api::auth::clear_profile_oauth_pair(&Profile::from(target.clone()))?;
     }
 
     if matches!(output, OutputFormat::Json) {

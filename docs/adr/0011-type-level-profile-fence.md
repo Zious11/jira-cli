@@ -194,17 +194,52 @@ This decision was to be revisited in v0.6.0 or later if any of the following occ
   future ADR could add a validating constructor as a strictly additive change without
   touching this one's decision.
 
-### Status as of this amendment (2026-09-02, cycle-003 F4 stub step)
-**Accepted; newtype scaffolding landed, call-site sweep not started.** `src/profile.rs`
-defines `Profile(String)` with `From<String>`/`AsRef<str>`/`Display` as scaffolding for the
-implementer step. No other `src/` file has changed as a result of this ADR amendment.
-Full implementation (the ~60-80 call-site sweep across `src/cache.rs`,
-`Config::active_profile_name`, `JiraClient::profile_name`, and `src/api/auth.rs`) is tracked
-as story `S-cycle3-adr0011-newtype`'s implementer step, sequenced after the
-credential-storage/migration stories per Sequencing above. `src/cache.rs`'s functions,
-`Config::active_profile_name`, and `JiraClient::profile_name` all still use `&str`/`String`
-as of this writing — this ADR describes the target design the implementer step will execute,
-not a completed migration.
+### Status as of this amendment (2026-09-02, cycle-003 F4 implementer step — COMPLETE)
+**Accepted; newtype scaffolding AND the call-site sweep have both landed.** `src/profile.rs`
+defines `Profile(String)` with `From<String>`/`From<&str>` (an ergonomic sibling added
+during the sweep, see Consequences below)/`AsRef<str>`/`Display`/`PartialEq<str>`/
+`PartialEq<&str>`/a hand-written `Debug` (delegating to the wrapped `String`'s `Debug` so
+existing `{:?}`-formatted error messages render byte-for-byte unchanged) impls.
+
+Every `src/cache.rs` per-profile function (26 of 26, both `pub` and internal), all of
+`src/api/auth.rs`'s in-scope credential/aggregation functions
+(`store_api_token`/`load_api_token`/`store_oauth_tokens`/`load_oauth_tokens`/
+`clear_profile_creds`/`clear_profile_oauth_pair`/`clear_all_credentials`),
+`Config::active_profile_name`, and `JiraClient::profile_name`/`profile_name()` are now
+`&Profile`/`Profile`-typed, per Decision items 1-4 above. The sweep also threaded `&Profile`
+through the pass-through wrapper functions the fenced functions are called from
+(`cli/issue/field_resolve.rs::resolve_edit_fields`, `cli/requesttype.rs::{handle_list,
+handle_fields, resolve_request_type_id}`, `cli/issue/jsm_create.rs::resolve_jsm_request_type_id`,
+`cli/field.rs::resolve_field_id`, `api/client.rs::load_auth_from_keychain`) so the fence
+reaches every real call site, not just the immediately-named functions — everywhere else
+(e.g. `oauth_login`, `refresh_oauth_token[_with_url]`, the private
+`oauth_access_key`/`api_token_email_key`/etc. keychain-key builders, and CLI-layer display
+helpers like `auth::list::render_list_table`) intentionally stays `&str`-typed and
+constructs a `Profile` at the boundary immediately before calling into a fenced function
+(`&Profile::from(profile)` / `.as_ref()` the other direction) — the minimal-footprint
+reading of "thread `&Profile` through every remaining call site" the story's File Structure
+Requirements table calls for, not a blanket rewrite of every `profile`-adjacent parameter in
+the codebase.
+
+**Re-measured actual scope vs. the ~60-80 estimate above:** the real diff is 22 files
+changed (~583 insertions / ~356 deletions across `src/` + `tests/`), comprising 38 function
+signatures converted to `&Profile`/`&crate::profile::Profile` and ~259
+`Profile::from(...)`/`&Profile::from(...)` boundary constructions across production code
+and test call sites (plus ~18 further `.as_ref()`/`.to_string()` adaptations at
+`active_profile_name` read sites that don't construct a new `Profile`). The pre-implementation
+~60-80 estimate undercounted materially — it was scoped to distinct *call sites needing a
+type change*, whereas the actual mechanical diff also touches every literal-`&str`-argument
+test call site across `src/cache.rs`'s and `src/api/auth.rs`'s large inline `#[cfg(test)]`
+modules (the single largest contributor: cache.rs alone has well over 100 such test call
+sites once its request-type/component/object-type-attr test coverage is included) and the
+five integration-test files (`tests/api_token_percred_wiring.rs`,
+`tests/auth_remove_logout_semantics.rs`, `tests/oauth_refresh_integration.rs`,
+`tests/issue_edit_field.rs`, `tests/worklog_duration_holdouts.rs`) exercising these
+functions with hardcoded profile-name literals. None of this changed the SHAPE of the sweep
+(still purely mechanical, compiler-checked, zero behavior change) — only its literal size.
+This paragraph supersedes the ~60-80 figure quoted earlier in this document for the purpose
+of understanding actual PR diff size; the earlier figure is left in place elsewhere as a
+historical record of the pre-implementation estimate, not corrected retroactively.
 
 ## See Also
 

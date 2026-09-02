@@ -1,6 +1,7 @@
 use crate::cli::OutputFormat;
 use crate::error::JrError;
 use crate::output;
+use crate::profile::Profile;
 
 use super::auth_json_response;
 
@@ -95,6 +96,10 @@ pub async fn handle_remove(
 ) -> anyhow::Result<()> {
     let mut config = crate::config::Config::load_with(cli_profile)?;
     crate::config::validate_profile_name(target)?;
+    // Boundary construction (BC-6.2.015, ADR-0011): `target` is a raw,
+    // already-validated `&str` from the CLI; wrap it once here for every
+    // downstream per-profile cache/credential call in this function.
+    let target_profile = Profile::from(target);
 
     // Pre-validate against a clone before prompting so a typo or
     // unremovable target (active profile, default_profile target) doesn't
@@ -102,7 +107,11 @@ pub async fn handle_remove(
     // afterward. Unaffected by this story's reorder — kept intact; this
     // call site is also what keeps `handle_remove_in_memory` reachable
     // outside `#[cfg(test)]`.
-    let _ = handle_remove_in_memory(config.global.clone(), target, &config.active_profile_name)?;
+    let _ = handle_remove_in_memory(
+        config.global.clone(),
+        target,
+        config.active_profile_name.as_ref(),
+    )?;
 
     if !no_input {
         let confirm = dialoguer::Confirm::new()
@@ -127,14 +136,14 @@ pub async fn handle_remove(
     // removal) ever run — `[profiles.<target>]` remains in config.toml,
     // and a re-run of `jr auth remove <target>` is the documented recovery
     // path (AC-002/AC-003).
-    crate::api::auth::clear_profile_creds(target)?;
+    crate::api::auth::clear_profile_creds(&target_profile)?;
 
     // Step 3 (best-effort, unchanged): cache-directory removal. A failure
     // here is surfaced as a warning, not an abort — a missing/unwritable
     // cache dir must not block the credential clear that already succeeded
     // above from reaching config-entry removal.
-    if let Err(e) = crate::cache::clear_profile_cache(target) {
-        let cache_path = crate::cache::cache_dir(target);
+    if let Err(e) = crate::cache::clear_profile_cache(&target_profile) {
+        let cache_path = crate::cache::cache_dir(&target_profile);
         output::print_warning(&format!(
             "cleared credentials but failed to clear cache for {target:?}: {e}. \
              Remove {} manually if disk space matters.",
@@ -144,7 +153,8 @@ pub async fn handle_remove(
 
     // Step 4 (LAST, BC-1.2.014 amended): config-entry removal, only after
     // steps 1/2 succeeded (or reported NoEntry).
-    config.global = handle_remove_in_memory(config.global, target, &config.active_profile_name)?;
+    config.global =
+        handle_remove_in_memory(config.global, target, config.active_profile_name.as_ref())?;
     config.save_global()?;
 
     if matches!(output, OutputFormat::Json) {

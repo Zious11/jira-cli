@@ -71,7 +71,7 @@ pub async fn login_token(
         None,
     )?;
 
-    auth::store_api_token(profile, &email, &token)?;
+    auth::store_api_token(&crate::profile::Profile::from(profile), &email, &token)?;
 
     // Persist the profile's auth_method so subsequent runs know which flow
     // to use. URL is set by `prepare_login_target` before this point, so
@@ -281,7 +281,7 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
     let target_for_check = args
         .profile
         .as_deref()
-        .unwrap_or(&config.active_profile_name);
+        .unwrap_or(config.active_profile_name.as_ref());
     // Prompt for URL whenever the target profile lacks one — both the
     // brand-new-profile case AND the existing-but-URL-less case (e.g.,
     // a hand-edited or migrated profile with status `unset`). Without
@@ -314,7 +314,7 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
         args.profile.as_deref(),
         url_resolved.as_deref(),
         args.no_input,
-        &config.active_profile_name,
+        config.active_profile_name.as_ref(),
     )?;
     config.global = global;
     config.save_global()?;

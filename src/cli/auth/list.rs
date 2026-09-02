@@ -77,10 +77,10 @@ pub async fn handle_list(
     let config = crate::config::Config::load_with(cli_profile)?;
     let rendered = match output {
         crate::cli::OutputFormat::Table => {
-            render_list_table(&config.global, &config.active_profile_name)
+            render_list_table(&config.global, config.active_profile_name.as_ref())
         }
         crate::cli::OutputFormat::Json => {
-            render_list_json(&config.global, &config.active_profile_name)?
+            render_list_json(&config.global, config.active_profile_name.as_ref())?
         }
     };
     println!("{rendered}");

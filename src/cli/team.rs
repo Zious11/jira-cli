@@ -100,8 +100,8 @@ pub async fn resolve_org_id(config: &Config, client: &JiraClient) -> Result<Stri
     // the same active-profile name we resolved from the caller's `config`,
     // so a `--profile` CLI flag (or `JR_PROFILE` env) doesn't get lost
     // between the original load and this write.
-    let mut updated_config = Config::load_with(Some(&config.active_profile_name))?;
-    let profile_name = updated_config.active_profile_name.clone();
+    let mut updated_config = Config::load_with(Some(config.active_profile_name.as_ref()))?;
+    let profile_name = updated_config.active_profile_name.to_string();
     updated_config
         .global
         .profiles

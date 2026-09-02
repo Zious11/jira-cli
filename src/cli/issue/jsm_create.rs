@@ -498,7 +498,7 @@ async fn resolve_jsm_request_type_id(
     name: &str,
     service_desk_id: &str,
     project_key: &str,
-    profile: &str,
+    profile: &crate::profile::Profile,
     client: &JiraClient,
 ) -> Result<String> {
     let types = match cache::read_request_type_cache(profile, service_desk_id)? {

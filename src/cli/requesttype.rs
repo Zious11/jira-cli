@@ -69,7 +69,7 @@ pub async fn handle(
 async fn handle_list(
     service_desk_id: &str,
     search: Option<&str>,
-    profile: &str,
+    profile: &crate::profile::Profile,
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> Result<()> {
@@ -104,7 +104,7 @@ async fn handle_fields(
     service_desk_id: &str,
     name_or_id: &str,
     project_key: &str,
-    profile: &str,
+    profile: &crate::profile::Profile,
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> Result<()> {
@@ -190,7 +190,7 @@ async fn resolve_request_type_id(
     name: &str,
     service_desk_id: &str,
     project_key: &str,
-    profile: &str,
+    profile: &crate::profile::Profile,
     client: &JiraClient,
 ) -> Result<String> {
     // Load request types (cache → fetch fallback).

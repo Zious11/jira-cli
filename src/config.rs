@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::error::JrError;
+use crate::profile::Profile;
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct FieldsConfig {
@@ -94,7 +95,7 @@ pub struct Config {
     pub global: GlobalConfig,
     pub project: ProjectConfig,
     /// Resolved at load() — flag > JR_PROFILE > default_profile > "default".
-    pub active_profile_name: String,
+    pub active_profile_name: Profile,
 }
 
 /// Resolve the active profile name from precedence chain:
@@ -331,11 +332,12 @@ impl Config {
         // is not thread-safe, so the cleaner fix is to drop the env-var seam
         // entirely. JR_PROFILE remains the user-facing env var.
         let env_profile = std::env::var("JR_PROFILE").ok();
-        let active_profile_name = resolve_active_profile_name(&global, cli_profile, env_profile);
+        let active_profile_name_raw =
+            resolve_active_profile_name(&global, cli_profile, env_profile);
         // Validate the resolved name. JR_PROFILE / --profile / default_profile
         // all flow into cache paths and keyring keys, so a bad value (e.g.
         // "foo:bar" or path separators) must be rejected at the config boundary.
-        validate_profile_name(&active_profile_name)?;
+        validate_profile_name(&active_profile_name_raw)?;
 
         // Verify the resolved active profile exists in [profiles] (when any
         // profiles are configured). A fresh install with no profiles yet is
@@ -351,15 +353,22 @@ impl Config {
         // file. Matches the wording used by switch/remove/logout/status.
         if strict
             && !global.profiles.is_empty()
-            && !global.profiles.contains_key(&active_profile_name)
+            && !global.profiles.contains_key(&active_profile_name_raw)
         {
             let known: Vec<&str> = global.profiles.keys().map(String::as_str).collect();
             return Err(JrError::UserError(format!(
-                "unknown profile: {active_profile_name}; known: {}",
+                "unknown profile: {active_profile_name_raw}; known: {}",
                 known.join(", ")
             ))
             .into());
         }
+
+        // Boundary construction (BC-6.2.015, ADR-0011): the raw profile-name
+        // `String` resolved above becomes a type-fenced `Profile` here, right
+        // where it first becomes available, so every downstream consumer of
+        // `Config::active_profile_name` is compile-time guaranteed a real
+        // `Profile` rather than a profile-unaware bare string.
+        let active_profile_name = Profile::from(active_profile_name_raw);
 
         Ok(Config {
             global,
@@ -391,7 +400,7 @@ impl Config {
         if let Ok(override_url) = std::env::var("JR_BASE_URL") {
             return Ok(override_url.trim_end_matches('/').to_string());
         }
-        let profile = self.global.profiles.get(&self.active_profile_name).ok_or_else(|| {
+        let profile = self.global.profiles.get(self.active_profile_name.as_ref()).ok_or_else(|| {
             JrError::ConfigError(format!(
                 "No Jira instance configured for profile {:?}. Run \"jr auth login --profile {}\" or \"jr init\".",
                 self.active_profile_name, self.active_profile_name
@@ -428,7 +437,7 @@ impl Config {
     pub fn active_profile(&self) -> ProfileConfig {
         self.global
             .profiles
-            .get(&self.active_profile_name)
+            .get(self.active_profile_name.as_ref())
             .cloned()
             .unwrap_or_default()
     }
@@ -437,7 +446,7 @@ impl Config {
     pub fn active_profile_or_err(&self) -> anyhow::Result<&ProfileConfig> {
         self.global
             .profiles
-            .get(&self.active_profile_name)
+            .get(self.active_profile_name.as_ref())
             .ok_or_else(|| {
                 let known: Vec<&str> = self.global.profiles.keys().map(String::as_str).collect();
                 JrError::ConfigError(format!(
@@ -662,7 +671,7 @@ mod tests {
         let config = Config {
             global: GlobalConfig::default(),
             project: ProjectConfig::default(),
-            active_profile_name: String::new(),
+            active_profile_name: Profile::default(),
         };
         assert!(config.base_url().is_err());
     }
@@ -727,7 +736,7 @@ mod tests {
                 project: Some("FOO".into()),
                 board_id: None,
             },
-            active_profile_name: String::new(),
+            active_profile_name: Profile::default(),
         };
         assert_eq!(config.project_key(Some("BAR")), Some("BAR".into()));
         assert_eq!(config.project_key(None), Some("FOO".into()));
@@ -741,7 +750,7 @@ mod tests {
                 project: None,
                 board_id: Some(42),
             },
-            active_profile_name: String::new(),
+            active_profile_name: Profile::default(),
         };
         // CLI override wins
         assert_eq!(config.board_id(Some(99)), Some(99));

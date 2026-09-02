@@ -60,8 +60,20 @@ use std::fmt;
 /// let hardcoded = "sandbox"; // a profile-unaware call site
 /// requires_profile(hardcoded); // must NOT compile: `&str` does not coerce to `&Profile`
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Profile(String);
+
+impl fmt::Debug for Profile {
+    /// Delegates to the wrapped `String`'s `Debug` (quoted, no `Profile(...)`
+    /// tuple-struct wrapper) so every pre-existing `{:?}`-formatted error
+    /// message (e.g. `"unknown profile: {active_profile_name:?}"`) renders
+    /// byte-for-byte identically to before this newtype was threaded through —
+    /// a derived `Debug` would print `Profile("name")` instead of `"name"`,
+    /// which is a real behavior change this story's AC-006 forbids.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
 
 impl From<String> for Profile {
     /// Wraps any `String` as a `Profile`, without validation (see module docs).
@@ -70,9 +82,37 @@ impl From<String> for Profile {
     }
 }
 
+impl From<&str> for Profile {
+    /// Ergonomic sibling of `From<String>` (also infallible, no validation) —
+    /// lets call sites/tests write `"prod".into()` / `Profile::from("prod")`
+    /// instead of `Profile::from("prod".to_string())`. Does not weaken the
+    /// AC-005 fence: a bare `&str` still does not coerce to `&Profile` at a
+    /// function boundary: this impl only helps *construct* an owned
+    /// `Profile` value explicitly, the same as `From<String>` already did.
+    fn from(name: &str) -> Self {
+        Self(name.to_string())
+    }
+}
+
 impl AsRef<str> for Profile {
     fn as_ref(&self) -> &str {
         &self.0
+    }
+}
+
+impl PartialEq<str> for Profile {
+    /// Lets existing test assertions keep comparing a `Profile` directly
+    /// against a `&str`/string literal (`assert_eq!(cfg.active_profile_name,
+    /// "prod")`) without call-site changes beyond construction — mirrors the
+    /// ergonomic `From<&str>` impl above, not a validation relaxation.
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for Profile {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
     }
 }
 

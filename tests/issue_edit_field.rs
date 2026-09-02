@@ -1303,7 +1303,7 @@ fn test_write_fields_cache_swallows_io_error_and_returns_ok() {
         ],
         || {
             jr::cache::write_fields_cache(
-                "test-profile-swallow",
+                &jr::profile::Profile::from("test-profile-swallow"),
                 &[("customfield_10001".to_string(), "Severity".to_string())],
             )
         },

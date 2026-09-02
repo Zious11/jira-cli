@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::api::auth;
 use crate::api::auth_embedded::OAuthAppSource;
 use crate::error::JrError;
+use crate::profile::Profile;
 
 /// Render a profile's `env` tag for `auth status`'s text `env` line
 /// (BC-1.6.047 Postcondition 2b, EC-1.6.047-3): identical control-char/
@@ -81,7 +82,7 @@ pub async fn status(profile_arg: Option<&str>) -> Result<()> {
     let config = crate::config::Config::load_with(profile_arg)?;
     let target = profile_arg
         .map(str::to_string)
-        .unwrap_or_else(|| config.active_profile_name.clone());
+        .unwrap_or_else(|| config.active_profile_name.to_string());
     crate::config::validate_profile_name(&target)?;
 
     // Special-case: fresh install with no profiles yet AND no explicit
@@ -139,9 +140,10 @@ pub async fn status(profile_arg: Option<&str>) -> Result<()> {
     // Credential probe: both API-token and OAuth creds are namespaced by
     // profile as of S-cycle3-percred-storage (BC-1.4.031) — mirrors
     // `load_oauth_tokens`'s per-profile lookup.
+    let target_profile = Profile::from(target.clone());
     let creds_ok = match method {
-        "oauth" => auth::load_oauth_tokens(&target).is_ok(),
-        _ => auth::load_api_token(&target).is_ok(),
+        "oauth" => auth::load_oauth_tokens(&target_profile).is_ok(),
+        _ => auth::load_api_token(&target_profile).is_ok(),
     };
     if creds_ok {
         println!("Credentials: stored in keychain");

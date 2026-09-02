@@ -1,6 +1,7 @@
 use crate::api::rate_limit::{MAX_RETRY_AFTER_SECS, RateLimitInfo};
 use crate::config::Config;
 use crate::error::JrError;
+use crate::profile::Profile;
 use base64::Engine;
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::Serialize;
@@ -26,7 +27,7 @@ pub struct JiraClient {
     /// Active profile name, plumbed through so per-profile cache calls can
     /// scope their reads/writes correctly without the call sites needing
     /// access to `&Config`.
-    profile_name: String,
+    profile_name: Profile,
 }
 
 impl JiraClient {
@@ -121,7 +122,10 @@ impl JiraClient {
     ///
     /// Shared by the `#[cfg(debug_assertions)]` and `#[cfg(not(debug_assertions))]` branches
     /// of `from_config` to avoid duplicating the `oauth`/`api_token` match arms.
-    fn load_auth_from_keychain(auth_method: &str, profile_name: &str) -> anyhow::Result<String> {
+    fn load_auth_from_keychain(
+        auth_method: &str,
+        profile_name: &Profile,
+    ) -> anyhow::Result<String> {
         match auth_method {
             "oauth" => {
                 let (access, _refresh) = crate::api::auth::load_oauth_tokens(profile_name)?;
@@ -150,7 +154,7 @@ impl JiraClient {
             verbose: false,
             verbose_bodies: false,
             assets_base_url,
-            profile_name: "default".to_string(),
+            profile_name: Profile::from("default"),
         }
     }
 
@@ -173,7 +177,7 @@ impl JiraClient {
             verbose: false,
             verbose_bodies: false,
             assets_base_url,
-            profile_name: profile.to_string(),
+            profile_name: Profile::from(profile),
         }
     }
 
@@ -200,14 +204,14 @@ impl JiraClient {
             verbose: false,
             verbose_bodies: false,
             assets_base_url,
-            profile_name: "default".to_string(),
+            profile_name: Profile::from("default"),
         }
     }
 
     /// Active profile name this client is bound to. Used by per-profile
     /// cache call sites (CMDB fields, workspace ID, project meta, resolutions,
     /// object-type attrs) that have a `&JiraClient` but not `&Config`.
-    pub fn profile_name(&self) -> &str {
+    pub fn profile_name(&self) -> &Profile {
         &self.profile_name
     }
 
@@ -795,15 +799,17 @@ impl JiraClient {
         let profile = self.profile_name.clone();
 
         let refresh_result = crate::api::refresh_coordinator::refresh_with_single_flight(
-            &profile,
+            profile.as_ref(),
             &token_url_snapshot,
             || {
                 let profile = profile.clone();
                 let token_url = token_url_snapshot.clone();
                 async move {
-                    let new_access =
-                        crate::api::auth::refresh_oauth_token_with_url(&profile, &token_url)
-                            .await?;
+                    let new_access = crate::api::auth::refresh_oauth_token_with_url(
+                        profile.as_ref(),
+                        &token_url,
+                    )
+                    .await?;
                     // refresh_oauth_token_with_url stores tokens in keychain (persist-before-publish).
                     // We return (access, refresh) — refresh is re-read from keychain to provide
                     // the coordinator with the new refresh token for AC-010 reconcile.

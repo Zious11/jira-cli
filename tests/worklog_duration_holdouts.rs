@@ -475,19 +475,19 @@ fn test_s_2_06_ac_005_bc_6_2_013_legacy_id_only_cmdb_cache_graceful_miss() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", temp_dir.path()) };
     // JR_CACHE_DIR is the cross-platform seam (BC-6.2.017): on Windows, XDG_CACHE_HOME
     // is ignored; JR_CACHE_DIR is the only isolation mechanism. Use .join("jr") so
-    // cache_dir("default") == <temp_dir>/jr/v1/default on both platforms.
+    // cache_dir(&jr::profile::Profile::from("default")) == <temp_dir>/jr/v1/default on both platforms.
     unsafe { std::env::set_var("JR_CACHE_DIR", temp_dir.path().join("jr")) };
 
     let result = std::panic::catch_unwind(|| {
         // Write the legacy ID-only format (a bare JSON array of strings).
         // This does NOT match the CmdbFieldsCache struct shape.
-        let cache_dir = jr::cache::cache_dir("default");
+        let cache_dir = jr::cache::cache_dir(&jr::profile::Profile::from("default"));
         std::fs::create_dir_all(&cache_dir).unwrap();
         let legacy_content = r#"["customfield_10191"]"#;
         std::fs::write(cache_dir.join("cmdb_fields.json"), legacy_content).unwrap();
 
         // AC-005 assertion (a): must return Ok(None) — graceful cache miss.
-        let result = jr::cache::read_cmdb_fields_cache("default")
+        let result = jr::cache::read_cmdb_fields_cache(&jr::profile::Profile::from("default"))
             .expect("read_cmdb_fields_cache must not return Err on format mismatch");
         assert!(
             result.is_none(),
@@ -535,13 +535,13 @@ fn test_s_2_06_ac_006_bc_6_2_013_valid_tuple_cache_hits_no_api_call() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", temp_dir.path()) };
     // JR_CACHE_DIR is the cross-platform seam (BC-6.2.017): on Windows, XDG_CACHE_HOME
     // is ignored; JR_CACHE_DIR is the only isolation mechanism. Use .join("jr") so
-    // cache_dir("default") == <temp_dir>/jr/v1/default on both platforms.
+    // cache_dir(&jr::profile::Profile::from("default")) == <temp_dir>/jr/v1/default on both platforms.
     unsafe { std::env::set_var("JR_CACHE_DIR", temp_dir.path().join("jr")) };
 
     let result = std::panic::catch_unwind(|| {
         // Write a valid tuple-format cache entry via the production writer.
         jr::cache::write_cmdb_fields_cache(
-            "default",
+            &jr::profile::Profile::from("default"),
             &[
                 ("customfield_10191".to_string(), "Client".to_string()),
                 (
@@ -553,7 +553,7 @@ fn test_s_2_06_ac_006_bc_6_2_013_valid_tuple_cache_hits_no_api_call() {
         .expect("write_cmdb_fields_cache must succeed");
 
         // AC-006 assertion: must return Ok(Some(cache)) with correct data.
-        let cache = jr::cache::read_cmdb_fields_cache("default")
+        let cache = jr::cache::read_cmdb_fields_cache(&jr::profile::Profile::from("default"))
             .expect("read_cmdb_fields_cache must not error")
             .expect("valid tuple-format cache must return Some(cache)");
 
@@ -579,7 +579,7 @@ fn test_s_2_06_ac_006_bc_6_2_013_valid_tuple_cache_hits_no_api_call() {
 
         // Verify the on-disk format can be re-parsed as Vec<(String, String)>.
         // This exercises the serde round-trip directly to catch format drift.
-        let cache_dir = jr::cache::cache_dir("default");
+        let cache_dir = jr::cache::cache_dir(&jr::profile::Profile::from("default"));
         let raw = std::fs::read_to_string(cache_dir.join("cmdb_fields.json")).unwrap();
         let parsed: jr::cache::CmdbFieldsCache =
             serde_json::from_str(&raw).expect("on-disk file must deserialize as CmdbFieldsCache");

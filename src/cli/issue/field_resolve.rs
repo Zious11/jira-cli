@@ -375,7 +375,7 @@ fn collision_error(key: &str) -> anyhow::Error {
 /// ```
 pub(crate) async fn resolve_edit_fields(
     client: &JiraClient,
-    profile: &str,
+    profile: &crate::profile::Profile,
     source: FieldMetaSource<'_>,
     field_pairs: &HashMap<String, FieldValueSpec>,
     fields: &mut serde_json::Value,

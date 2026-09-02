@@ -95,7 +95,7 @@ async fn test_login_token_writes_namespaced_pair_not_shared_flat() {
 
     // Read back while JR_SERVICE_NAME/JR_CONFIG_DIR are still pointed at
     // this test's isolated namespace.
-    let namespaced = auth::load_api_token(profile);
+    let namespaced = auth::load_api_token(&jr::profile::Profile::from(profile));
     let legacy = auth::load_legacy_flat_api_token();
 
     cleanup_api_token(&svc, profile);
@@ -147,11 +147,16 @@ fn test_from_config_api_token_branch_reads_namespaced_never_legacy_flat() {
     }
 
     // Positive case: namespaced pair present -> from_config succeeds.
-    auth::store_api_token("with-namespaced", "ac3@example.com", "ac3-token").unwrap();
+    auth::store_api_token(
+        &jr::profile::Profile::from("with-namespaced"),
+        "ac3@example.com",
+        "ac3-token",
+    )
+    .unwrap();
     let config_ok = Config {
         global: GlobalConfig::default(),
         project: ProjectConfig::default(),
-        active_profile_name: "with-namespaced".to_string(),
+        active_profile_name: "with-namespaced".into(),
     };
     let ok_result = JiraClient::from_config(&config_ok, false, false);
 
@@ -161,7 +166,7 @@ fn test_from_config_api_token_branch_reads_namespaced_never_legacy_flat() {
     let config_legacy_only = Config {
         global: GlobalConfig::default(),
         project: ProjectConfig::default(),
-        active_profile_name: "legacy-only-profile".to_string(),
+        active_profile_name: "legacy-only-profile".into(),
     };
     let legacy_result = JiraClient::from_config(&config_legacy_only, false, false);
 
