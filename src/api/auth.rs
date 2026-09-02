@@ -382,9 +382,6 @@ pub fn store_api_token(profile: &str, email: &str, token: &str) -> Result<()> {
 /// call site in this module (BC-1.4.032 Invariant 4 / BC-1.4.031
 /// EC-1.4.031-2) — it must never be coerced into
 /// [`load_api_token`]'s "no stored credential" message.
-///
-/// STUB (Red Gate step 1, S-cycle3-credential-absence-guard): body is
-/// `todo!()` pending implementation.
 fn legacy_flat_pair_exists() -> Result<bool> {
     let email_present = read_keyring_optional(KEY_EMAIL)?.is_some();
     let token_present = read_keyring_optional(KEY_API_TOKEN)?.is_some();
@@ -430,11 +427,10 @@ fn legacy_flat_pair_exists() -> Result<bool> {
 /// legacy-migration special case (BC-1.4.031 Invariant 2, reaffirmed by
 /// BC-1.4.032 Postcondition 4).
 ///
-/// STUB (Red Gate step 1, S-cycle3-credential-absence-guard): the
-/// both-absent and namespaced-partial branches below are `todo!()` pending
-/// BC-1.4.032/BC-1.4.033 implementation. The both-present success branch is
-/// unchanged, pre-existing behavior from S-cycle3-percred-storage and is
-/// out of this story's scope.
+/// The both-present success branch is unchanged, pre-existing behavior from
+/// S-cycle3-percred-storage. The both-absent (BC-1.4.032) and
+/// namespaced-partial (BC-1.4.033) branches were implemented by
+/// S-cycle3-credential-absence-guard.
 pub fn load_api_token(profile: &str) -> Result<(String, String)> {
     // `?` here propagates a genuine backend error (EC-1.4.031-2) as-is —
     // read_keyring_optional only collapses `keyring::Error::NoEntry` to
@@ -2259,6 +2255,47 @@ mod tests {
         });
     }
 
+    /// EC-1.4.031-2 pinned specifically at the [`legacy_flat_pair_exists`]
+    /// call site inside `load_api_token`'s both-namespaced-absent branch
+    /// (BC-1.4.032 Postcondition 1) — a genuine keychain backend error
+    /// occurring during the legacy-pair existence probe must propagate as
+    /// `Err`, never be silently coerced to `Ok(false)`/absent.
+    ///
+    /// **Isolation limitation (documented, not worked around):** the
+    /// `JR_SERVICE_NAME=""` backend-error mechanism this module's tests rely
+    /// on (see `load_api_token_propagates_backend_error_not_absent_message`
+    /// above) fails keychain `Entry` construction uniformly for every key —
+    /// `entry()` routes through the same [`service_name`] regardless of
+    /// which key is being read (`KEY_EMAIL`/`KEY_API_TOKEN` vs the
+    /// namespaced `<profile>:email`/`<profile>:api-token` keys). There is no
+    /// available seam to make the namespaced-key reads succeed as `NoEntry`
+    /// while only the legacy-pair probe's reads fail, so this test cannot
+    /// drive the failure through `load_api_token`'s full both-absent branch
+    /// with the namespaced reads legitimately absent. Instead it calls
+    /// [`legacy_flat_pair_exists`] directly — the exact function
+    /// `load_api_token`'s both-absent branch calls at that call site — under
+    /// the same backend-error condition, and asserts the error propagates
+    /// rather than collapsing to `Ok(false)`.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_ec_1_4_031_2_backend_error_during_legacy_pair_probe_propagates() {
+        with_test_keyring(|| {
+            // SAFETY: with_test_keyring holds KEYRING_TEST_ENV_MUTEX for this
+            // closure's entire duration.
+            unsafe { std::env::set_var("JR_SERVICE_NAME", "") };
+
+            let err = legacy_flat_pair_exists()
+                .expect_err("empty service name must error the legacy-pair probe");
+            let msg = format!("{err:#}").to_lowercase();
+            assert!(
+                !msg.contains("no stored credential"),
+                "a backend/validation error surfaced from the legacy-pair \
+                 probe must not be coerced into the absent-credential \
+                 message: {msg}"
+            );
+        });
+    }
+
     /// BC-1.4.033 Postcondition 3 (forward reference — informs this story's
     /// write semantics even though the BC itself is owned by a later story):
     /// `store_api_token` is a plain unconditional two-key overwrite, not a
@@ -2430,11 +2467,10 @@ mod tests {
 
     // -------------------------------------------------------------------------
     // S-cycle3-credential-absence-guard (BC-1.4.032/BC-1.4.033/BC-1.4.034,
-    // DEC-326 no-copy detect-and-instruct redesign). Red Gate step 2 of 2 —
-    // these tests target `load_api_token`'s both-absent and namespaced-partial
-    // branches, both currently `todo!()` (see `legacy_flat_pair_exists` and
-    // `load_api_token` stubs above), plus the `legacy_flat_pair_exists`
-    // existence-only helper itself.
+    // DEC-326 no-copy detect-and-instruct redesign). These tests target
+    // `load_api_token`'s both-absent and namespaced-partial branches (see
+    // `legacy_flat_pair_exists` and `load_api_token` above), plus the
+    // `legacy_flat_pair_exists` existence-only helper itself.
     // -------------------------------------------------------------------------
 
     /// BC-1.4.032 Postcondition 2's exact actionable error text for a given
