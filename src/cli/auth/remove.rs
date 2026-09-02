@@ -1,5 +1,8 @@
 use crate::cli::OutputFormat;
 use crate::error::JrError;
+use crate::output;
+
+use super::auth_json_response;
 
 /// Pure logic for `jr auth remove` — separated for testing without filesystem
 /// or keychain. Returns the mutated `GlobalConfig` with `target` removed from
@@ -83,7 +86,7 @@ pub async fn handle_remove(
     cli_profile: Option<&str>,
     output: &OutputFormat,
 ) -> anyhow::Result<()> {
-    let config = crate::config::Config::load_with(cli_profile)?;
+    let mut config = crate::config::Config::load_with(cli_profile)?;
     crate::config::validate_profile_name(target)?;
 
     // Pre-validate against a clone before prompting so a typo or
@@ -105,18 +108,45 @@ pub async fn handle_remove(
             .default(false)
             .interact()?;
         if !confirm {
-            crate::output::print_warning("Aborted.");
+            output::print_warning("Aborted.");
             return Ok(());
         }
     }
 
-    let _ = (config, output);
-    todo!(
-        "S-cycle3-remove-logout-semantics (BC-1.2.014): reorder to \
-         (1) OAuth-pair delete, (2) API-token-pair delete, \
-         (3) cache clear (best-effort), (4) config-entry removal LAST; \
-         a genuine (non-NoEntry) keychain error from step 1 or 2 must \
-         abort before steps 3/4 run, surfaced to the user (non-zero exit), \
-         leaving [profiles.{target}] intact for a re-run."
-    )
+    // Steps 1/2 (BC-1.2.014 amended): OAuth-pair delete then
+    // namespaced-API-token-pair delete, both via `clear_profile_creds`'s
+    // amended contract. A genuine (non-`NoEntry`) keychain error propagates
+    // via `?` HERE, before step 3 (cache clear) or step 4 (config-entry
+    // removal) ever run — `[profiles.<target>]` remains in config.toml,
+    // and a re-run of `jr auth remove <target>` is the documented recovery
+    // path (AC-002/AC-003).
+    crate::api::auth::clear_profile_creds(target)?;
+
+    // Step 3 (best-effort, unchanged): cache-directory removal. A failure
+    // here is surfaced as a warning, not an abort — a missing/unwritable
+    // cache dir must not block the credential clear that already succeeded
+    // above from reaching config-entry removal.
+    if let Err(e) = crate::cache::clear_profile_cache(target) {
+        let cache_path = crate::cache::cache_dir(target);
+        output::print_warning(&format!(
+            "cleared credentials but failed to clear cache for {target:?}: {e}. \
+             Remove {} manually if disk space matters.",
+            cache_path.display()
+        ));
+    }
+
+    // Step 4 (LAST, BC-1.2.014 amended): config-entry removal, only after
+    // steps 1/2 succeeded (or reported NoEntry).
+    config.global = handle_remove_in_memory(config.global, target, &config.active_profile_name)?;
+    config.save_global()?;
+
+    if matches!(output, OutputFormat::Json) {
+        println!(
+            "{}",
+            output::render_json(&auth_json_response(target, "remove"))?
+        );
+    } else {
+        output::print_success(&format!("Removed profile {target:?}"));
+    }
+    Ok(())
 }
