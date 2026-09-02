@@ -468,6 +468,40 @@ pub(crate) fn prepare_login_target(
     Ok((global, target))
 }
 
+/// CWE-400 (MED-1, pre-PR review): independent, `no_input`-blind terminal
+/// check used immediately before [`prompt_auth_method_picker`] would invoke
+/// `dialoguer::Select::interact()`.
+///
+/// `handle_login`'s tier-3 picker branch is normally gated by `args.no_input`
+/// alone, which is itself normally set correctly by `src/main.rs`'s
+/// auto-`--no-input` flip on non-TTY stdin. But that flip has a documented
+/// exception: `JR_OAUTH_CODE` (an OAuth-callback test seam, ungated by
+/// `#[cfg(debug_assertions)]`) suppresses the flip so a test harness can pipe
+/// stdin while still driving interactive selection. That means a *release*
+/// build with `JR_OAUTH_CODE` set and non-TTY stdin can reach `handle_login`
+/// with `no_input == false` even though there is no real terminal — which
+/// would otherwise let the picker call `Select::interact()` and hang a
+/// non-interactive session (CWE-400: uncontrolled resource consumption).
+///
+/// This function performs its OWN terminal detection rather than trusting
+/// the caller's `no_input`, so the picker is unreachable-by-construction
+/// without a real interactive terminal — regardless of `no_input`, and
+/// regardless of `JR_OAUTH_CODE`. It deliberately mirrors `src/main.rs`'s
+/// `JR_STDIN_IS_TTY` debug-only override (so interactive tests that force
+/// `JR_STDIN_IS_TTY=1` still reach the picker) but does NOT mirror
+/// `main.rs`'s `JR_OAUTH_CODE` exception — that exception is exactly the gap
+/// this check exists to close.
+fn stdin_is_interactive_tty() -> bool {
+    use std::io::IsTerminal;
+    #[cfg(debug_assertions)]
+    let forced = std::env::var("JR_STDIN_IS_TTY")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    #[cfg(not(debug_assertions))]
+    let forced = false;
+    forced || std::io::stdin().is_terminal()
+}
+
 /// BC-1.1.013: creation-time OAuth-default picker for `jr auth login`'s bare
 /// interactive path. Per SR-012's mechanism-selection precedence
 /// (BC-1.1.013 Invariant 2), this is tier 3 — reached only when neither an
@@ -481,7 +515,18 @@ pub(crate) fn prepare_login_target(
 /// token — matching `LoginArgs::oauth`'s shape so a caller can reuse the
 /// existing `if oauth { login_oauth(..) } else { login_token(..) }`
 /// dispatch unchanged.
+///
+/// CWE-400 (MED-1, pre-PR review): before touching `dialoguer::Select`, this
+/// independently confirms stdin is a real interactive terminal via
+/// [`stdin_is_interactive_tty`] — NOT via the caller's `no_input` value. When
+/// stdin is not a real TTY, this returns `Ok(false)` (the same token-first
+/// default BC-1.1.014's non-interactive tier already selects) instead of
+/// calling `Select::interact()`, so the picker can never hang a
+/// non-interactive session no matter how it is reached.
 pub fn prompt_auth_method_picker() -> Result<bool> {
+    if !stdin_is_interactive_tty() {
+        return Ok(false);
+    }
     let auth_methods = ["OAuth 2.0 (recommended)", "API Token"];
     let choice = Select::new()
         .with_prompt("Authentication method")
