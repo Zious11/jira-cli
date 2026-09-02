@@ -29,8 +29,8 @@ All notable changes to jr will be documented here.
   BC-1.1.016). An explicit `--oauth` under any non-interactive trigger, or
   a non-interactive `jr auth refresh` against a profile whose stored
   `auth_method` is already `oauth`, now exits 64 immediately — before any
-  config load, credential resolution, network call, or browser launch —
-  with `OAuth requires an interactive terminal; use --api-token for
+  network call, callback-listener bind, or browser-open attempt — with
+  `OAuth requires an interactive terminal; use --api-token for
   non-interactive auth.` This closes a class of CI/automation hangs where a
   non-interactive invocation could previously reach the OAuth flow and
   block waiting on a browser redirect that could never complete.
