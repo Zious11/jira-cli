@@ -337,7 +337,7 @@ fn relaunch_self(exact_test_name: &str) -> std::process::Output {
 
 #[test]
 fn test_bc_1_2_049_deprecation_notice_prints_to_stderr_in_table_mode() {
-    let output = relaunch_self("helper_emit_oauth_deprecation_notice_table");
+    let output = relaunch_self("helper_emit_oauth_flag_notice_table");
     assert!(
         output.status.success(),
         "helper child must not panic (todo!() -> RED today); stderr: {}",
@@ -357,8 +357,16 @@ fn test_bc_1_2_049_deprecation_notice_prints_to_stderr_in_table_mode() {
 }
 
 #[test]
+// Deliberately NOT named with the substring "deprecat" — this function's
+// name is echoed to the child process's own stdout by libtest's "test
+// <name> ... ok" summary line (unavoidable even under --nocapture), and the
+// parent test asserts stdout never contains "deprecat" (the notice itself
+// must be stderr-only). A helper name containing that substring would fail
+// the parent's assertion regardless of emit_oauth_deprecation_notice's
+// actual (correct) stderr-only behavior — a false negative from the test
+// harness's own output, not a production bug.
 #[ignore = "invoked only via relaunch_self from test_bc_1_2_049_deprecation_notice_prints_to_stderr_in_table_mode"]
-fn helper_emit_oauth_deprecation_notice_table() {
+fn helper_emit_oauth_flag_notice_table() {
     emit_oauth_deprecation_notice(OutputFormat::Table);
 }
 

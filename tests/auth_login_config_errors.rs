@@ -1,5 +1,5 @@
-//! Pin that `jr auth login --oauth` surfaces malformed-config errors
-//! instead of silently overwriting the broken file with defaults (#258).
+//! Pin that `jr auth login` surfaces malformed-config errors instead of
+//! silently overwriting the broken file with defaults (#258).
 //!
 //! Before the fix: `src/cli/auth.rs` used `Config::load().unwrap_or_default()`,
 //! which swallowed TOML parse errors, permission errors, etc. The subsequent
@@ -9,6 +9,18 @@
 //!
 //! After the fix: `Config::load()?` propagates, wrapped in
 //! `JrError::ConfigError` for exit code 78 + an actionable message.
+//!
+//! Uses the default (non-`--oauth`) login path deliberately — as of
+//! S-cycle3-oauth-default-creation (BC-1.1.016), an explicit `--oauth` under
+//! any non-interactive trigger (which a subprocess with no TTY stdin always
+//! is) now fails fast with the airtight non-interactive-OAuth-guard's exit
+//! 64, evaluated as literally the first statement in `handle_login` —
+//! *before* `Config::load` ever runs. That's correct, intentional BC-1.1.016
+//! behavior (it must win the race against every other error, including this
+//! one), but it means `--oauth` can no longer be used to exercise the
+//! config-load/overwrite-protection path this test targets. The default
+//! (api-token) path still reaches `Config::load` first and is unaffected by
+//! the guard, so it remains a faithful probe of the original #258 fix.
 
 #[allow(dead_code)]
 mod common;
@@ -16,7 +28,7 @@ mod common;
 use assert_cmd::Command;
 
 #[test]
-fn auth_login_oauth_surfaces_malformed_config_without_overwriting() {
+fn auth_login_surfaces_malformed_config_without_overwriting() {
     // Arrange: write a malformed TOML file to the config dir and capture
     // its contents so we can assert it's unchanged after the command runs.
     let cache_dir = tempfile::tempdir().unwrap();
@@ -51,16 +63,7 @@ fn auth_login_oauth_surfaces_malformed_config_without_overwriting() {
         .env_remove("JR_INSTANCE_AUTH_METHOD")
         .env_remove("JR_INSTANCE_OAUTH_SCOPES")
         .env_remove("JR_INSTANCE_CLOUD_ID")
-        .args([
-            "auth",
-            "login",
-            "--oauth",
-            "--client-id",
-            "test-client-id",
-            "--client-secret",
-            "test-client-secret",
-            "--no-input",
-        ])
+        .args(["auth", "login", "--no-input"])
         .output()
         .unwrap();
 

@@ -316,8 +316,7 @@ fn test_s_1_06_h_004_auth_refresh_no_url_configured() {
 // ---------------------------------------------------------------------------
 
 /// BC-1.1.012 postcondition: When `~/.config/jr/config.toml` is malformed
-/// TOML, `jr auth login --oauth --client-id X --client-secret Y --no-input`
-/// must:
+/// TOML, `jr auth login --no-input` must:
 ///   1. exit 78 (ConfigError)
 ///   2. write "toml" or "parse" to stderr (surface the error)
 ///   3. leave the on-disk file bytes IDENTICAL (no clobber)
@@ -325,6 +324,18 @@ fn test_s_1_06_h_004_auth_refresh_no_url_configured() {
 ///
 /// JR_SERVICE_NAME is set to isolate keychain from the developer's real
 /// keychain entries.
+///
+/// Deliberately uses the default (non-`--oauth`) login path — as of
+/// S-cycle3-oauth-default-creation (BC-1.1.016), an explicit `--oauth` under
+/// any non-interactive trigger (a subprocess with no TTY stdin always is)
+/// now fails fast with the airtight non-interactive-OAuth guard's exit 64,
+/// evaluated as literally the first statement in `handle_login` — before
+/// `Config::load` ever runs. That's correct, intentional BC-1.1.016
+/// behavior, but it means `--oauth` can no longer be used to exercise the
+/// config-load/overwrite-protection path this test targets. The default
+/// (api-token) path still reaches `Config::load` first and is unaffected by
+/// the guard, so it remains a faithful probe of the original BC-1.1.012
+/// config-error-surfacing behavior.
 #[test]
 fn test_s_1_06_h_005_malformed_config_exits_78_file_unchanged() {
     let config_dir = TempDir::new().unwrap();
@@ -352,16 +363,7 @@ fn test_s_1_06_h_005_malformed_config_exits_78_file_unchanged() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
-        .args([
-            "auth",
-            "login",
-            "--oauth",
-            "--client-id",
-            "test-client-id",
-            "--client-secret",
-            "test-client-secret",
-            "--no-input",
-        ])
+        .args(["auth", "login", "--no-input"])
         .output()
         .unwrap();
 
