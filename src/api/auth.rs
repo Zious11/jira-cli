@@ -355,24 +355,10 @@ pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
 /// (BC-1.4.033 postcondition 3, forward reference), so a later `auth login`
 /// cleanly repairs a partial-write state with no bespoke recovery logic
 /// here.
-///
-/// TODO(S-cycle3-percred-storage / BC-1.4.031): implement — write `email`
-/// under [`api_token_email_key`] and `token` under [`api_token_key`] via
-/// `entry(..)?.set_password(..)`, mirroring [`store_oauth_tokens`] byte-for-
-/// byte in shape.
 pub fn store_api_token(profile: &str, email: &str, token: &str) -> Result<()> {
-    let _ = (
-        api_token_email_key(profile),
-        api_token_key(profile),
-        email,
-        token,
-    );
-    todo!(
-        "S-cycle3-percred-storage / BC-1.4.031: write <profile>:email and \
-         <profile>:api-token via entry(..).set_password(..), mirroring \
-         store_oauth_tokens's unconditional two-key write (no legacy-fallback \
-         branch — that belongs to S-cycle3-credential-absence-guard)"
-    )
+    entry(&api_token_email_key(profile))?.set_password(email)?;
+    entry(&api_token_key(profile))?.set_password(token)?;
+    Ok(())
 }
 
 /// Load an API-token credential pair (email + token) scoped to a profile.
@@ -384,28 +370,33 @@ pub fn store_api_token(profile: &str, email: &str, token: &str) -> Result<()> {
 ///
 /// Unlike [`load_oauth_tokens`], this function has NO `"default"`-only
 /// legacy-migration special case (BC-1.4.031 Invariant 2): the
-/// detect-and-instruct legacy-pair existence check and final "no stored
+/// detect-and-instruct legacy-pair existence check and richer "no stored
 /// credential" wording belong to the follow-on story
-/// `S-cycle3-credential-absence-guard` (BC-1.4.032). This function's
-/// eventual implementation should return a plain, actionable "no stored
-/// credential for profile {profile}" error when both namespaced keys are
-/// absent (EC-1.4.031-1) and must use [`read_keyring_optional`]'s
-/// `NoEntry`-vs-other-`Err` distinction so a genuine keychain backend error
-/// (EC-1.4.031-2) is never coerced into that message.
-///
-/// TODO(S-cycle3-percred-storage / BC-1.4.031): implement — read
-/// [`api_token_email_key`] / [`api_token_key`] via [`read_keyring_optional`],
-/// mirroring [`load_oauth_tokens`]'s `(Some, Some)` / `(None, None)` /
-/// partial-state match shape, minus the `"default"` legacy-fallback arms.
+/// `S-cycle3-credential-absence-guard` (BC-1.4.032). This function returns a
+/// plain, generic, actionable "no stored API token for profile {profile}"
+/// error when either namespaced key is absent (EC-1.4.031-1), using
+/// [`read_keyring_optional`]'s `NoEntry`-vs-other-`Err` distinction so a
+/// genuine keychain backend error (EC-1.4.031-2) propagates via `?` before
+/// ever reaching that generic message.
 pub fn load_api_token(profile: &str) -> Result<(String, String)> {
-    let _ = (api_token_email_key(profile), api_token_key(profile));
-    todo!(
-        "S-cycle3-percred-storage / BC-1.4.031: read <profile>:email and \
-         <profile>:api-token via read_keyring_optional, distinguishing \
-         NoEntry (absent-credential error, EC-1.4.031-1) from a real backend \
-         error (EC-1.4.031-2) — no legacy-fallback branch for any profile, \
-         including \"default\" (that belongs to S-cycle3-credential-absence-guard)"
-    )
+    // `?` here propagates a genuine backend error (EC-1.4.031-2) as-is —
+    // read_keyring_optional only collapses `keyring::Error::NoEntry` to
+    // `Ok(None)`; anything else (e.g. an `Invalid` service name) surfaces
+    // here distinct from the generic absent-credential message below.
+    let email = read_keyring_optional(&api_token_email_key(profile))?;
+    let token = read_keyring_optional(&api_token_key(profile))?;
+
+    match (email, token) {
+        (Some(e), Some(t)) => Ok((e, t)),
+        // Either or both namespaced entries are absent (EC-1.4.031-1).
+        // Unlike `load_oauth_tokens`, there is no "default"-only legacy
+        // fallback here (BC-1.4.031 Invariant 2) — the detect-and-instruct
+        // legacy-pair check belongs to S-cycle3-credential-absence-guard.
+        _ => Err(anyhow::anyhow!(
+            "No stored API token for profile {profile:?} — \
+             run \"jr auth login --profile {profile}\""
+        )),
+    }
 }
 
 /// Read an optional keychain entry, distinguishing "not present" (`NoEntry`)
