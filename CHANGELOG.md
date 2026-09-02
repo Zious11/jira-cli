@@ -6,6 +6,20 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+- **API-token credentials (`email` / `api-token`) are now stored per-profile
+  in the OS keychain, under namespaced `<profile>:email` /
+  `<profile>:api-token` keys** (S-cycle3-percred-storage, BC-1.4.031). This
+  mirrors the existing per-profile OAuth token layout
+  (`<profile>:oauth-access-token` / `<profile>:oauth-refresh-token`) rather
+  than the old shared flat `email` / `api-token` keys. This change is
+  infrastructure for the cycle-003 per-profile auth restructure — it lands
+  the new storage/read paths (`store_api_token` / `load_api_token`) without
+  yet changing user-visible behavior; there is no legacy-key fallback for
+  any profile, including `"default"`. The user-visible breaking consequence
+  (credential-absence guidance when a profile has no per-profile
+  credentials) lands with the follow-on
+  S-cycle3-credential-absence-guard story.
+
 - **`jr auth list` (table mode) now renders a 5-column table — `NAME`, `URL`,
   `ENV`, `AUTH`, `STATUS` — adding a new `ENV` column between `URL` and
   `AUTH`** (S-cycle3-env-tag, BC-1.6.046, BC-1.6.047, BC-6.1.015, DEC-324).

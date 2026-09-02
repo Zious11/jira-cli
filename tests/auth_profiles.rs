@@ -206,8 +206,8 @@ url = "https://from-flag.example"
 /// (`subcmd.profile.or(cli.profile)`) so the global flag propagates.
 ///
 /// Gated behind `JR_RUN_KEYRING_TESTS=1` because `auth status` reaches
-/// `load_api_token()` → `keyring::Entry::get_password()`, which can block
-/// under Keychain contention on macOS or hang on Linux CI without a
+/// `load_api_token(&target)` → `keyring::Entry::get_password()`, which can
+/// block under Keychain contention on macOS or hang on Linux CI without a
 /// secret-service daemon (#526-F6-KEYRING-GATE).
 #[test]
 #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
@@ -263,9 +263,9 @@ auth_method = "api_token"
 ///
 /// `global_profile_flag_targets_auth_status` (above) was keyring-gated in
 /// `#526-F6-KEYRING-GATE` because `auth status` against an existing profile
-/// reaches `load_api_token()` → `keyring::Entry::get_password()`, which can
-/// block on CI without a secret-service daemon. That left the global-flag
-/// propagation path with ZERO default-CI coverage.
+/// reaches `load_api_token(&target)` → `keyring::Entry::get_password()`,
+/// which can block on CI without a secret-service daemon. That left the
+/// global-flag propagation path with ZERO default-CI coverage.
 ///
 /// This test recovers that coverage without touching the keychain by exploiting
 /// the strict active-profile-existence guard in `Config::load_with` (called as
