@@ -372,4 +372,49 @@ mod tests {
         assert_eq!(got, "before");
         assert!(!got.contains('\u{1b}'), "raw ESC byte must not survive");
     }
+
+    /// The OSC ST-terminator check (`next == ESC && peek == '\'`) must be a
+    /// true AND of both conditions, not an OR and not either side inverted
+    /// (S-cycle3-env-tag, PR #752 cycle-2 mutation-testing gap — 3 survived
+    /// mutants at this exact line: `&&`→`||`, and both `==`→`!=`). A stray
+    /// literal backslash mid-payload that is NOT preceded by ESC must NOT
+    /// be mistaken for the ST terminator — the scan must continue past it
+    /// to the real terminator (BEL here), stripping the whole payload.
+    #[test]
+    fn test_sanitize_env_display_osc_stray_backslash_not_preceded_by_esc_does_not_terminate_early()
+    {
+        // Payload: 'x' '\' 'y' "VISIBLE" BEL — the bare '\' after 'x' is not
+        // preceded by ESC and must not trigger early termination. Only the
+        // trailing BEL should end the OSC scan.
+        let hostile = "before\u{1b}]x\\yVISIBLE\u{7}TAIL";
+        let got = sanitize_env_display(hostile);
+        assert_eq!(
+            got, "beforeTAIL",
+            "the entire OSC payload (including the stray backslash and \
+             everything after it up to BEL) must be stripped — a premature \
+             break would leak 'yVISIBLE' into the output: {got:?}"
+        );
+        assert!(!got.contains("VISIBLE"));
+    }
+
+    /// Sibling to the stray-backslash test above: a bare ESC byte inside the
+    /// OSC payload that is NOT followed by a backslash must NOT be mistaken
+    /// for the start of an ST terminator — the scan must continue past it to
+    /// the real terminator (BEL here), stripping the whole payload.
+    #[test]
+    fn test_sanitize_env_display_osc_stray_esc_not_followed_by_backslash_does_not_terminate_early()
+    {
+        // Payload: 'p' ESC 'q' "VISIBLE" BEL — the bare ESC after 'p' is not
+        // followed by '\' and must not trigger early termination.
+        let hostile = "before\u{1b}]p\u{1b}qVISIBLE\u{7}TAIL";
+        let got = sanitize_env_display(hostile);
+        assert_eq!(
+            got, "beforeTAIL",
+            "the entire OSC payload (including the stray ESC and everything \
+             after it up to BEL) must be stripped — a premature break would \
+             leak 'VISIBLE' into the output: {got:?}"
+        );
+        assert!(!got.contains("VISIBLE"));
+        assert!(!got.contains('\u{1b}'), "raw ESC byte must not survive");
+    }
 }
