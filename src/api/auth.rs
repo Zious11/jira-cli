@@ -1652,6 +1652,189 @@ mod tests {
         });
     }
 
+    // -----------------------------------------------------------------
+    // S-cycle3-remove-logout-semantics (BC-1.2.014 amended, I-4/SR-008)
+    //
+    // `clear_profile_creds`/`clear_all_credentials` gain a namespaced
+    // API-token-pair deletion branch (the deferred gap left open by
+    // S-cycle3-percred-storage — see CLAUDE.md's "Per-profile vs shared
+    // keychain keys" entry) and tightened error handling: a genuine
+    // (non-`NoEntry`) keychain error must now propagate instead of being
+    // aggregated-and-swallowed. RED GATE: every test below fails against
+    // the current `todo!()` stub bodies.
+    // -----------------------------------------------------------------
+
+    /// **THE core gap-closing test.** Before this story, `clear_profile_creds`
+    /// cleared ONLY the OAuth pair — the namespaced `<profile>:email` /
+    /// `<profile>:api-token` pair (S-cycle3-percred-storage, BC-1.4.031) was
+    /// never touched by `auth remove`/`auth logout`'s shared clear helper,
+    /// so a removed-then-recreated profile could inherit a stale API-token
+    /// credential. Seeds BOTH credential kinds for one profile, calls
+    /// `clear_profile_creds`, and asserts ALL FOUR keychain entries
+    /// (`<profile>:oauth-access-token`, `<profile>:oauth-refresh-token`,
+    /// `<profile>:email`, `<profile>:api-token`) are gone afterward.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_2_014_clear_profile_creds_clears_namespaced_api_token_pair_and_oauth_pair() {
+        with_test_keyring(|| {
+            store_oauth_tokens("sandbox", "access-x", "refresh-x").unwrap();
+            store_api_token("sandbox", "sandbox@example.com", "sandbox-token").unwrap();
+
+            // Sanity: both pairs are actually present before the clear.
+            assert!(
+                load_oauth_tokens("sandbox").is_ok(),
+                "precondition: oauth pair must be seeded"
+            );
+            assert!(
+                load_api_token("sandbox").is_ok(),
+                "precondition: api-token pair must be seeded"
+            );
+
+            clear_profile_creds("sandbox")
+                .expect("clear_profile_creds must succeed when both credential kinds are present");
+
+            // OAuth pair gone (pre-existing behavior, unaffected by this story).
+            assert!(
+                entry(&oauth_access_key("sandbox"))
+                    .unwrap()
+                    .get_password()
+                    .is_err(),
+                "oauth access token must be deleted"
+            );
+            assert!(
+                entry(&oauth_refresh_key("sandbox"))
+                    .unwrap()
+                    .get_password()
+                    .is_err(),
+                "oauth refresh token must be deleted"
+            );
+            // THE GAP this story closes: namespaced API-token pair must
+            // ALSO be gone.
+            assert!(
+                entry(&api_token_email_key("sandbox"))
+                    .unwrap()
+                    .get_password()
+                    .is_err(),
+                "namespaced api-token email must be deleted by clear_profile_creds \
+                 (this is the gap S-cycle3-remove-logout-semantics closes)"
+            );
+            assert!(
+                entry(&api_token_key("sandbox"))
+                    .unwrap()
+                    .get_password()
+                    .is_err(),
+                "namespaced api-token must be deleted by clear_profile_creds \
+                 (this is the gap S-cycle3-remove-logout-semantics closes)"
+            );
+        });
+    }
+
+    /// EC-1.2.014-2 (BC-1.2.014 amended): both credential-deletion steps
+    /// reporting `NoEntry` (no stored credentials of either kind) must be
+    /// treated as SUCCESS, not an error.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_ec_1_2_014_2_clear_profile_creds_succeeds_when_both_credential_kinds_absent() {
+        with_test_keyring(|| {
+            // "ghost" never had anything stored under this test's unique
+            // JR_SERVICE_NAME namespace — both credential kinds are
+            // NoEntry from the start.
+            let result = clear_profile_creds("ghost");
+            assert!(
+                result.is_ok(),
+                "NoEntry on both credential kinds must be treated as success, got: {:?}",
+                result.err().map(|e| format!("{e:#}"))
+            );
+        });
+    }
+
+    /// AC-002 (BC-1.2.014 EC-1.2.014-1, I-4/SR-008): a genuine
+    /// (non-`NoEntry`) keychain backend error must ABORT
+    /// `clear_profile_creds` — propagate as `Err`, never be
+    /// aggregated-and-swallowed into a partial success the way the
+    /// pre-amendment implementation did. Simulated via the same
+    /// `JR_SERVICE_NAME=""` mechanism
+    /// `load_api_token_propagates_backend_error_not_absent_message` uses
+    /// above (every keyring backend this crate targets rejects an empty
+    /// service name with a genuine `Err`, not `NoEntry`, before any
+    /// persistent-storage I/O happens).
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_ac_002_clear_profile_creds_propagates_genuine_backend_error_not_swallowed() {
+        with_test_keyring(|| {
+            // SAFETY: with_test_keyring holds KEYRING_TEST_ENV_MUTEX for
+            // this closure's entire duration.
+            unsafe { std::env::set_var("JR_SERVICE_NAME", "") };
+
+            let result = clear_profile_creds("sandbox");
+
+            assert!(
+                result.is_err(),
+                "a genuine backend error must abort clear_profile_creds, not be \
+                 silently swallowed into Ok(())"
+            );
+        });
+    }
+
+    /// AC-004 (BC-1.2.014 amended Effects, VP-1.2.014-001): both
+    /// credential-deletion steps are independently, exhaustively
+    /// re-attempted on retry. Seeds ONLY the OAuth pair (standing in for a
+    /// profile whose API-token pair was already cleared by a prior partial
+    /// attempt, or that never had one), clears once, then clears AGAIN —
+    /// the second call must still succeed even though every key it touches
+    /// now reports `NoEntry`.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_ac_004_clear_profile_creds_retry_after_partial_success_tolerates_no_entry() {
+        with_test_keyring(|| {
+            store_oauth_tokens("sandbox", "access-y", "refresh-y").unwrap();
+            // Deliberately do NOT store an API-token pair for "sandbox" —
+            // it is already absent, standing in for "already cleared by a
+            // prior partial attempt."
+
+            let first = clear_profile_creds("sandbox");
+            assert!(
+                first.is_ok(),
+                "first clear must succeed: {:?}",
+                first.err().map(|e| format!("{e:#}"))
+            );
+
+            // Retry: everything this call touches is now NoEntry.
+            let second = clear_profile_creds("sandbox");
+            assert!(
+                second.is_ok(),
+                "retry after a fully-completed clear must still succeed \
+                 (every key now reports NoEntry): {:?}",
+                second.err().map(|e| format!("{e:#}"))
+            );
+        });
+    }
+
+    /// BC-1.2.014 amended: `clear_all_credentials`'s per-profile
+    /// credential-delete steps get the SAME error-surfacing tightening as
+    /// `clear_profile_creds` — a genuine backend error must propagate
+    /// immediately, not be aggregated into a single combined `Err` at the
+    /// end of the loop (the pre-amendment behavior, which left callers
+    /// unable to distinguish "some unspecified subset failed" from a
+    /// clean run).
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_2_014_clear_all_credentials_propagates_genuine_backend_error_not_aggregated() {
+        with_test_keyring(|| {
+            // SAFETY: with_test_keyring holds KEYRING_TEST_ENV_MUTEX for
+            // this closure's entire duration.
+            unsafe { std::env::set_var("JR_SERVICE_NAME", "") };
+
+            let result = clear_all_credentials(&["default", "sandbox"]);
+
+            assert!(
+                result.is_err(),
+                "a genuine backend error must propagate from clear_all_credentials, \
+                 not be swallowed"
+            );
+        });
+    }
+
     /// Regression: `load_oauth_tokens` must distinguish (None, None) from
     /// partial state (Some, None) / (None, Some). A pair lookup that
     /// retried via the legacy fallback on partial state would either
