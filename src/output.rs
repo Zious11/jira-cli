@@ -82,13 +82,67 @@ pub fn print_error(msg: &str) {
 /// stripped value of exactly 40 chars or fewer is NOT truncated (no marker
 /// appended). The implementer must match these exact values — see
 /// `output::tests::test_sanitize_env_display_*` for the pinned assertions.
-pub(crate) fn sanitize_env_display(_value: &str) -> String {
-    todo!(
-        "BC-1.6.046 EC-1.6.046-2 / BC-1.6.047 EC-1.6.047-3: strip ASCII \
-         control chars (0x00-0x1F, 0x7F) + ANSI CSI/OSC escape sequences; \
-         cap to a fixed max display length with a truncation marker when \
-         capped"
-    )
+pub(crate) fn sanitize_env_display(value: &str) -> String {
+    const MAX_ENV_DISPLAY_LEN: usize = 40;
+
+    let stripped = strip_control_and_ansi(value);
+
+    if stripped.chars().count() > MAX_ENV_DISPLAY_LEN {
+        let truncated: String = stripped.chars().take(MAX_ENV_DISPLAY_LEN).collect();
+        format!("{truncated}\u{2026}")
+    } else {
+        stripped
+    }
+}
+
+/// Strips ASCII control characters (`0x00`-`0x1F`, `0x7F`) and ANSI CSI/OSC
+/// escape sequences from `value`, dropping them outright (no placeholder
+/// substitution). A CSI sequence (`ESC [ … <final byte 0x40-0x7E>`) is
+/// consumed through its final byte; an OSC sequence (`ESC ] … <BEL or ST>`)
+/// is consumed through its BEL (`0x07`) or `ESC \` string terminator. A bare
+/// ESC not starting a recognized CSI/OSC sequence is dropped as an ordinary
+/// control character (it falls in `0x00-0x1F`).
+fn strip_control_and_ansi(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            match chars.peek() {
+                Some('[') => {
+                    chars.next();
+                    for next in chars.by_ref() {
+                        if ('\u{40}'..='\u{7e}').contains(&next) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next();
+                    while let Some(next) = chars.next() {
+                        if next == '\u{7}' {
+                            break;
+                        }
+                        if next == '\u{1b}' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        let code = c as u32;
+        if code <= 0x1F || code == 0x7F {
+            continue;
+        }
+
+        out.push(c);
+    }
+
+    out
 }
 
 #[cfg(test)]
