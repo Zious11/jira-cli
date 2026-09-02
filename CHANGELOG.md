@@ -4,6 +4,28 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`jr auth list` (table mode) now renders a 5-column table — `NAME`, `URL`,
+  `ENV`, `AUTH`, `STATUS` — adding a new `ENV` column between `URL` and
+  `AUTH`** (S-cycle3-env-tag, BC-1.6.046, BC-1.6.047, BC-6.1.015, DEC-324).
+  Every profile now carries an optional free-form `env` tag
+  (`ProfileConfig.env`, e.g. `"prod"`/`"sandbox"`); the table cell shows the
+  tag when set (routed through a shared control-char/ANSI-escape-stripping,
+  length-capped display sanitizer — `output::sanitize_env_display`), a blank
+  cell for `Some("")`, and a `-` placeholder when unset. This is a
+  **breaking change for anything that parses `jr auth list`'s table output
+  by column position or snapshot** — the pinned insta snapshot
+  (`src/cli/auth/tests/snapshots/jr__cli__auth__tests__list_table_snapshot.snap`)
+  changes shape accordingly. `--output json` is unaffected in shape (already
+  additive: `env` is verbatim/lossless, `null` when unset — no
+  sanitization applied on the JSON channel, mirroring issue #398's
+  description-echo asymmetry) but now carries real values for tagged
+  profiles. `jr auth status`'s text `Env:` line uses the identical shared
+  sanitizer via `render_env_line`. Migration: any script scraping the table
+  by column index must account for the new `ENV` column; `--output json`
+  consumers are unaffected beyond the new non-null `env` values.
+
 ## [0.7.0-dev.3] - 2026-09-01
 
 ### Breaking Changes
