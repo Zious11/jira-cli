@@ -347,6 +347,74 @@ Properties: invisible to user, idempotent (second call sees new keys), failure-s
 
 Already covered: legacy flat files live at `~/.cache/jr/*.json`, never touched by the new code paths in `~/.cache/jr/v1/<profile>/`.
 
+### (4) Keyring API-token credentials — no auto-migration, detect-and-instruct
+
+Unlike (2) above, `email`/`api-token` deliberately does **not** get an
+opportunistic copy-then-delete migration for any profile, including
+`"default"` (S-cycle3-percred-storage, BC-1.4.031 Invariant 2). This was
+revisited once — an initial design considered mirroring the OAuth
+copy-then-delete shape for the API-token pair too — and rejected by a human
+decision (**DEC-326, no-copy detect-and-instruct**): the legacy flat
+`email`/`api-token` pair is a shared, environment-unbound Basic-auth
+credential, and silently handing it to a freshly-tagged profile (which may
+point at a different Jira site) was judged unsafe. Instead,
+`load_api_token(profile)` (`src/api/auth.rs`) fails loudly and instructs:
+
+```rust
+pub fn load_api_token(profile: &str) -> Result<(String, String)> {
+    let email = read_keyring_optional(&api_token_email_key(profile))?;
+    let token = read_keyring_optional(&api_token_key(profile))?;
+
+    match (email, token) {
+        (Some(e), Some(t)) => Ok((e, t)),
+        (None, None) => {
+            // Existence-only check (never read as a credential, never
+            // copied, never deleted) — kept purely to mirror (2)'s
+            // migration-detection step; does not change the error below.
+            let _legacy_pair_present = legacy_flat_pair_exists()?;
+            Err(JrError::UserError(format!(
+                "No credentials stored for profile '{profile}'. This version of jr \
+                 requires per-profile credentials — run `jr auth login {profile}` to set them up."
+            )).into())
+        }
+        _ => Err(JrError::UserError(format!(
+            "Incomplete credentials stored for profile '{profile}' — run \
+             `jr auth login {profile}` to fix this."
+        )).into()),
+    }
+}
+```
+
+Properties (BC-1.4.032/BC-1.4.033/BC-1.4.034):
+
+- **No-copy invariant:** the legacy flat pair, if present, is read only for
+  existence (a bool), never for its values — it is never written into a
+  `<profile>:email`/`<profile>:api-token` entry, and never deleted.
+- **Byte-identical error regardless of legacy-pair state:** whether the old
+  flat pair exists or not, the both-absent error text is exactly the same —
+  its presence changes nothing observable.
+- **No profile special-casing:** `"default"` goes through the identical
+  branch as any other profile name — contrast (2)'s OAuth migration, which
+  is intentionally `"default"`-only.
+- **Distinct partial-write error, checked first:** exactly one of the two
+  namespaced keys present (e.g. `jr auth login` interrupted mid-write) is a
+  separate, more specific "incomplete credentials" error, and this check
+  runs *before* any legacy-pair consideration — a partial namespaced pair
+  never falls through to the both-absent message even when a legacy pair
+  also happens to exist.
+- **Never suggests `jr auth logout`:** that command is a no-op for
+  API-token profiles; the only valid remediations surfaced are
+  `jr auth login <profile>` (repair) or `jr auth remove <profile>`
+  (abandon).
+- **One-time cost:** running the remediation (`jr auth login <profile>`)
+  once permanently resolves the failure for that profile — there is no
+  first-call-migrates/subsequent-call-differs shape, since this whole path
+  is read-only with no mutating side effect of its own.
+
+Out of scope for this story (tracked as a follow-up): surfacing this
+absence state proactively in `jr auth list`'s `STATUS` column ahead of the
+next command that actually needs the credential.
+
 ### Rollback story (manual only)
 
 A user who wants to revert can `cp config.toml config.toml.backup` first (release notes will suggest this) and manually re-author `[instance]` from `[profiles.<name>]`. No `jr config rollback` ships — forward-only matches every surveyed CLI's migration behavior.

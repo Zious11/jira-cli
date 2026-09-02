@@ -6,6 +6,28 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+- **API-token credential absence now produces an actionable, exit-64
+  "detect-and-instruct" error instead of a generic auth failure**
+  (S-cycle3-credential-absence-guard, BC-1.4.032/BC-1.4.033/BC-1.4.034,
+  DEC-326). When a profile has no per-profile `<profile>:email` /
+  `<profile>:api-token` keychain entries — the state every pre-cycle-003
+  API-token profile is in after the S-cycle3-percred-storage breaking
+  change above — `jr` now exits 64 with:
+  `No credentials stored for profile '<profile>'. This version of jr
+  requires per-profile credentials — run \`jr auth login <profile>\` to set
+  them up.` A single `jr auth login <profile>` permanently resolves it; no
+  second re-login is ever required. If only one of the two per-profile keys
+  is present (a partial write), a distinct message fires instead:
+  `Incomplete credentials stored for profile '<profile>' — run
+  \`jr auth login <profile>\` to fix this.` Neither message ever suggests
+  `jr auth logout` (a no-op for API-token profiles). **No-copy guarantee
+  (DEC-326):** `jr` detects whether the old shared flat `email`/`api-token`
+  keychain pair still exists purely to keep this code path symmetric with
+  OAuth's migration-detection step — it never reads, copies, or deletes
+  that legacy pair, and the error text is byte-identical whether or not the
+  legacy pair is present. This applies uniformly to `"default"` and every
+  other profile name — there is no profile-specific special case.
+
 - **BREAKING — Action required on upgrade: API-token credentials
   (`email` / `api-token`) are now stored per-profile in the OS keychain,
   under namespaced `<profile>:email` / `<profile>:api-token` keys**
