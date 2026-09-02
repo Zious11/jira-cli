@@ -4,7 +4,42 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`jr auth remove` no longer reports success while a genuine keychain
+  backend error silently leaves stale credentials behind**
+  (S-cycle3-remove-logout-semantics, BC-1.2.014). Credential-deletion
+  errors were previously aggregated and downgraded to a warning after the
+  config entry had already been removed; a real (non-`NoEntry`) keychain
+  failure now aborts the command before the cache-clear and config-removal
+  steps run, surfaces the error to the user, and leaves `[profiles.<name>]`
+  in place so a re-run of `jr auth remove <name>` is the recovery path.
+
 ### Changed
+
+- **`jr auth remove <name>` now deletes BOTH credential kinds — the OAuth
+  pair AND the per-profile API-token pair — and reorders its steps to
+  credentials-before-config-entry** (S-cycle3-remove-logout-semantics,
+  BC-1.2.014, DEC-322). New order: (1) OAuth-pair delete, (2) API-token-pair
+  delete (NEW — targets the namespaced `<profile>:email`/`<profile>:api-token`
+  keys introduced by S-cycle3-percred-storage), (3) cache clear, (4)
+  config-entry removal LAST. This is a deliberate reversal of the prior
+  ordering (which persisted the config removal first) — see the Fixed entry
+  above for why.
+
+- **`jr auth logout` on an API-token profile now prints an informational
+  notice instead of silently no-op-ing** (S-cycle3-remove-logout-semantics,
+  BC-1.2.013, DEC-322). Running `jr auth logout` against a profile whose
+  `auth_method` is `api_token` previously succeeded silently with no visible
+  effect. It now prints, to stderr, and exits 0 (this is an expected,
+  successful outcome, not an error):
+  `This profile uses API-token auth — nothing to log out; use \`jr auth
+  remove <profile>\` to delete stored credentials.` The profile entry and
+  its credentials remain untouched — `logout` stays OAuth-specific by
+  design; use `jr auth remove <profile>` to actually delete an API-token
+  profile's stored credentials. `oauth`-method profiles are unaffected:
+  `logout` still deletes the OAuth pair and prints the ordinary success
+  message.
 
 - **API-token credential absence now produces an actionable, exit-64
   "detect-and-instruct" error instead of a generic auth failure**

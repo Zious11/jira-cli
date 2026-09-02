@@ -1,9 +1,5 @@
 use crate::cli::OutputFormat;
-use crate::config::Config;
 use crate::error::JrError;
-use crate::output;
-
-use super::auth_json_response;
 
 /// Pure logic for `jr auth remove` — separated for testing without filesystem
 /// or keychain. Returns the mutated `GlobalConfig` with `target` removed from
@@ -55,75 +51,72 @@ pub(crate) fn handle_remove_in_memory(
 
 /// `jr auth remove <name>` — permanently delete a profile.
 ///
-/// Order of operations:
+/// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.014, DEC-322) —
+/// REORDERED, and a genuine (non-`NoEntry`) keychain error now ABORTS the
+/// command instead of degrading to a warning.**
+///
+/// New order of operations (credentials BEFORE config entry, I-4/SR-008 —
+/// this is the OPPOSITE of the prior ordering documented below):
 /// 1. Confirm with the user (skipped under `--no-input`).
-/// 2. Mutate config in-memory via [`handle_remove_in_memory`] (validates name,
-///    refuses active profile, refuses unknown profile).
-/// 3. Persist config first so a subsequent keychain/cache failure can't
-///    leave the profile listed in `config.toml` after its credentials are
-///    gone.
-/// 4. Best-effort wipe of per-profile OAuth tokens and cache directory; both
-///    are intentionally non-fatal — a missing keychain entry or cache dir is
-///    the expected steady state for an already-cleaned profile, not an error.
+/// 2. OAuth-pair delete (via [`crate::api::auth::clear_profile_creds`]).
+/// 3. API-token-pair delete (namespaced `<profile>:email`/`<profile>:api-token`,
+///    also via [`crate::api::auth::clear_profile_creds`]'s amended contract).
+/// 4. Cache-directory removal — stays best-effort (unchanged from the prior
+///    behavior; only the two credential-deletion steps gained the
+///    abort-on-genuine-error tightening).
+/// 5. Config-entry removal — LAST, only after steps 2/3 succeed (or report
+///    `NoEntry`). A genuine keychain error on step 2 or 3 aborts BEFORE
+///    steps 4/5 run, surfaced to the user, non-zero exit — `[profiles.<name>]`
+///    remains in `config.toml`, and a re-run of `jr auth remove <name>` is
+///    the documented recovery path (AC-002/AC-003/AC-004/AC-005).
+///
+/// **Historical rationale (PRE-AMENDMENT, retained for context — no longer
+/// the operative behavior):** the original ordering persisted the config
+/// removal FIRST "so a subsequent keychain/cache failure can't leave the
+/// profile listed after its credentials are gone." BC-1.2.014 (amended)
+/// deliberately reverses this priority: a partial failure must now leave
+/// the profile config entry intact and RE-REMOVABLE, rather than un-listed
+/// with orphaned credentials.
 pub async fn handle_remove(
     target: &str,
     no_input: bool,
     cli_profile: Option<&str>,
     output: &OutputFormat,
 ) -> anyhow::Result<()> {
-    let mut config = Config::load_with(cli_profile)?;
+    let config = crate::config::Config::load_with(cli_profile)?;
     crate::config::validate_profile_name(target)?;
 
     // Pre-validate against a clone before prompting so a typo or
     // unremovable target (active profile, default_profile target) doesn't
     // make the user click through a confirmation dialog only to error
-    // afterward. The actual mutation runs below against the real config.
+    // afterward. Unaffected by this story's reorder — kept intact; this
+    // call site is also what keeps `handle_remove_in_memory` reachable
+    // outside `#[cfg(test)]`.
     let _ = handle_remove_in_memory(config.global.clone(), target, &config.active_profile_name)?;
 
     if !no_input {
         let confirm = dialoguer::Confirm::new()
             .with_prompt(format!(
                 "Permanently remove profile {target:?}? \
-                 This deletes its config entry, cache, and OAuth tokens. \
-                 Shared credentials remain."
+                 This deletes its config entry, cache, and stored \
+                 credentials (OAuth and API-token). Shared credentials \
+                 remain."
             ))
             .default(false)
             .interact()?;
         if !confirm {
-            output::print_warning("Aborted.");
+            crate::output::print_warning("Aborted.");
             return Ok(());
         }
     }
 
-    config.global = handle_remove_in_memory(config.global, target, &config.active_profile_name)?;
-    config.save_global()?;
-
-    // Config entry is gone — that's the persistent state. The keychain
-    // and cache cleanup is best-effort: failures here (permission denied,
-    // locked keychain, IO) shouldn't unwind the config write, but the
-    // user does need to know they have leftover state to clean up
-    // manually. Surface as warnings; report overall success.
-    if let Err(e) = crate::api::auth::clear_profile_creds(target) {
-        output::print_warning(&format!(
-            "removed config entry but failed to clear OAuth tokens for {target:?}: {e}. \
-             Remove the entries manually via your OS keychain UI."
-        ));
-    }
-    if let Err(e) = crate::cache::clear_profile_cache(target) {
-        let cache_path = crate::cache::cache_dir(target);
-        output::print_warning(&format!(
-            "removed config entry but failed to clear cache for {target:?}: {e}. \
-             Remove {} manually if disk space matters.",
-            cache_path.display()
-        ));
-    }
-    if matches!(output, OutputFormat::Json) {
-        println!(
-            "{}",
-            output::render_json(&auth_json_response(target, "remove"))?
-        );
-    } else {
-        output::print_success(&format!("Removed profile {target:?}"));
-    }
-    Ok(())
+    let _ = (config, output);
+    todo!(
+        "S-cycle3-remove-logout-semantics (BC-1.2.014): reorder to \
+         (1) OAuth-pair delete, (2) API-token-pair delete, \
+         (3) cache clear (best-effort), (4) config-entry removal LAST; \
+         a genuine (non-NoEntry) keychain error from step 1 or 2 must \
+         abort before steps 3/4 run, surfaced to the user (non-zero exit), \
+         leaving [profiles.{target}] intact for a re-run."
+    )
 }
