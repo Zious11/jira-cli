@@ -1,4 +1,7 @@
 use crate::cli::OutputFormat;
+use crate::output;
+
+use super::auth_json_response;
 
 /// Pure resolver for `jr auth logout`. Defaults to the active profile when
 /// the user passes no `--profile`. Kept module-private and split out so the
@@ -35,7 +38,9 @@ pub(crate) fn resolve_logout_target(
 /// under `--output json` the stdout payload shape is unchanged from the
 /// pre-fix no-op behavior (AC-006/AC-007). On an `oauth`-method profile,
 /// behavior is UNCHANGED — the OAuth pair is deleted via
-/// [`crate::api::auth::clear_profile_creds`] and the ordinary success
+/// [`crate::api::auth::clear_profile_oauth_pair`] (NOT
+/// [`crate::api::auth::clear_profile_creds`], which also clears the
+/// API-token pair — `logout` must never touch that) and the ordinary success
 /// message/JSON envelope is emitted, exactly as before (AC-008, regression
 /// pin). This notice text must stay consistent with
 /// `S-cycle3-credential-absence-guard`'s BC-1.4.033 SR-009 remediation-text
@@ -59,16 +64,43 @@ pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> 
         .into());
     }
 
-    let _ = output;
-    todo!(
-        "S-cycle3-remove-logout-semantics (BC-1.2.013): branch on \
-         {target:?}'s auth_method — on \"oauth\", unchanged behavior \
-         (delete OAuth pair via clear_profile_creds, ordinary success \
-         message/JSON envelope); on \"api_token\", print the exact \
-         informational stderr notice ('This profile uses API-token auth — \
-         nothing to log out; use `jr auth remove <profile>` to delete \
-         stored credentials.') and exit 0, skipping clear_profile_creds \
-         and the generic success message but preserving the JSON payload \
-         shape unchanged from the pre-fix no-op behavior."
-    )
+    let is_api_token_profile = config
+        .global
+        .profiles
+        .get(&target)
+        .and_then(|p| p.auth_method.as_deref())
+        == Some("api_token");
+
+    if is_api_token_profile {
+        // BC-1.2.013 amended (DEC-322): api-token profiles have no OAuth
+        // session to clear. Informational, non-error notice — exit 0.
+        // Stderr-only; never appears on stdout in any output mode
+        // (AC-006/AC-007). Do NOT call clear_profile_creds here — that
+        // would clear the API-token pair too, which is `auth remove`'s
+        // job, not `logout`'s (BC-1.2.013 non-destructive contract).
+        eprintln!(
+            "This profile uses API-token auth — nothing to log out; use \
+             `jr auth remove {target}` to delete stored credentials."
+        );
+    } else {
+        // Unchanged behavior for oauth (and any other/unset) profiles
+        // (AC-008 regression pin). Uses clear_profile_oauth_pair, NOT
+        // clear_profile_creds — logout must never clear the API-token
+        // pair, even if this profile happens to carry a leftover one
+        // from a prior mechanism switch (BC-1.2.013 non-destructive
+        // contract).
+        crate::api::auth::clear_profile_oauth_pair(&target)?;
+    }
+
+    if matches!(output, OutputFormat::Json) {
+        // JSON payload shape is unchanged from the pre-fix no-op behavior
+        // (AC-007) regardless of which branch above ran.
+        println!(
+            "{}",
+            output::render_json(&auth_json_response(&target, "logout"))?
+        );
+    } else if !is_api_token_profile {
+        output::print_success(&format!("Logged out of profile {target:?}"));
+    }
+    Ok(())
 }
