@@ -45,7 +45,6 @@ use crate::api::auth;
 use crate::api::auth_embedded::OAuthAppSource;
 #[cfg(test)]
 use crate::config::Config;
-#[cfg(test)]
 use crate::error::JrError;
 
 /// BC-1.1.016 Postcondition 2: fixed stderr string for the airtight
@@ -73,12 +72,10 @@ pub const NONINTERACTIVE_OAUTH_GUARD_MESSAGE: &str =
 /// flow. Returns `Err(JrError::UserError(NONINTERACTIVE_OAUTH_GUARD_MESSAGE))`
 /// (exit 64) when `no_input && oauth_selected`; `Ok(())` otherwise.
 pub fn check_noninteractive_oauth_guard(no_input: bool, oauth_selected: bool) -> Result<()> {
-    let _ = (no_input, oauth_selected);
-    todo!(
-        "BC-1.1.016: airtight non-interactive OAuth guard — exit 64 with \
-         NONINTERACTIVE_OAUTH_GUARD_MESSAGE when no_input && oauth_selected, \
-         evaluated before any network/listener/browser code in the caller"
-    )
+    if no_input && oauth_selected {
+        return Err(JrError::UserError(NONINTERACTIVE_OAUTH_GUARD_MESSAGE.to_string()).into());
+    }
+    Ok(())
 }
 
 /// BC-1.2.049 Postcondition 2: emit `--oauth`'s deprecation notice —
@@ -86,11 +83,13 @@ pub fn check_noninteractive_oauth_guard(no_input: bool, oauth_selected: bool) ->
 /// TTY-ness (EC-1.2.049-1: never emitted under `--output json`, regardless
 /// of interactivity).
 pub fn emit_oauth_deprecation_notice(output: crate::cli::OutputFormat) {
-    let _ = output;
-    todo!(
-        "BC-1.2.049: stderr-only, human-output-mode-only --oauth deprecation \
-         notice pointing at --api-token / the creation-time picker"
-    )
+    if matches!(output, crate::cli::OutputFormat::Table) {
+        eprintln!(
+            "--oauth is deprecated: the interactive login picker now defaults \
+             to OAuth 2.0. Prefer running the picker (drop this flag), or pass \
+             --api-token to select the other mechanism explicitly."
+        );
+    }
 }
 
 /// BC-1.2.050 Postcondition 3 (O-2/CV-2): emit `--api-token`'s
@@ -99,12 +98,12 @@ pub fn emit_oauth_deprecation_notice(output: crate::cli::OutputFormat) {
 /// worded for inertness rather than deprecation — `--api-token` itself is
 /// not deprecated, only its effect on `refresh` specifically is a no-op.
 pub fn emit_api_token_inert_on_refresh_notice(output: crate::cli::OutputFormat) {
-    let _ = output;
-    todo!(
-        "BC-1.2.050: stderr-only, human-output-mode-only notice that \
-         --api-token has no effect on 'auth refresh' — the profile's own \
-         stored mechanism is always used"
-    )
+    if matches!(output, crate::cli::OutputFormat::Table) {
+        eprintln!(
+            "--api-token has no effect on 'auth refresh' — the profile's own \
+             stored auth method is always used to refresh credentials."
+        );
+    }
 }
 
 /// Build the verb-aligned `--output json` success payload for the four auth
