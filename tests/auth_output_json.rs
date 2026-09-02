@@ -190,6 +190,52 @@ fn test_auth_logout_returns_json_ok() {
 }
 
 // ---------------------------------------------------------------------------
+// F2 (pre-PR review fix) / BC-1.2.013 / AC-006 — exact api-token logout notice
+// ---------------------------------------------------------------------------
+
+/// BC-1.2.013 / AC-006 requires the api-token informational logout notice to
+/// be an EXACT string (see `src/cli/auth/logout.rs::handle_logout`'s
+/// api-token branch), but until this test no assertion pinned the literal
+/// text — only the `Ok(())` exit path was verified
+/// (`tests/auth_remove_logout_semantics.rs::test_ac_006_...`). This pins the
+/// exact bytes: `jr auth logout --profile <name>` on an api_token profile
+/// must print, verbatim, to STDERR only (never stdout), and exit 0.
+#[test]
+fn test_auth_logout_api_token_profile_prints_exact_stderr_notice() {
+    let config_dir = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let cwd_dir = TempDir::new().unwrap();
+
+    write_single_profile_config(&config_dir, "default");
+
+    let output = jr_isolated(&config_dir, &cache_dir)
+        .current_dir(cwd_dir.path())
+        .args(["auth", "logout", "--profile", "default"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "auth logout on an api_token profile must exit 0; stderr: {stderr}, stdout: {stdout}"
+    );
+
+    let expected = "This profile uses API-token auth — nothing to log out; use \
+        `jr auth remove default` to delete stored credentials.\n";
+    assert_eq!(
+        stderr, expected,
+        "BC-1.2.013/AC-006: the api-token logout notice must be this exact \
+         string on stderr; got stderr: {stderr:?}"
+    );
+    assert!(
+        !stdout.contains("nothing to log out"),
+        "the notice must never appear on stdout; got stdout: {stdout:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-001c / H-020 / BC-7.3.004 — auth remove returns JSON ok
 // ---------------------------------------------------------------------------
 
