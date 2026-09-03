@@ -1188,17 +1188,26 @@ pub(crate) async fn refresh_oauth_token_with_url(profile: &str, token_url: &str)
     // AC-005: emit structured tracing at refresh entry point.
     // refresh_token value is intentionally NOT logged — only the profile.
     info!(target: "jr::auth", profile = %profile, "refresh_oauth_token_start");
+    // F2-01/F2-02: `resolve_refresh_app_credentials` deliberately returns
+    // `Err` for two different reasons — a locked/permission-denied keychain
+    // (a genuine backend error) versus no app credentials being available at
+    // all (no BYO keychain entry and no embedded build, i.e. genuinely
+    // absent). Blanket-coercing every `Err` into empty embedded creds used
+    // to erase that distinction: a locked keychain would POST with empty
+    // client_id/client_secret, get back `invalid_client`, and surface the
+    // misleading "embedded app may have been rotated" hint — actively
+    // hiding the real cause on the hourly auto-refresh hot path. Only the
+    // genuinely-absent case (`NoAppCredentialsAvailable`) still falls back
+    // to an empty-credential attempt — this preserves existing behavior for
+    // environments with no embedded build and no stored BYO creds (e.g. a
+    // mock token endpoint that doesn't validate client credentials). Any
+    // other error (a real backend/permission failure) propagates as-is.
     let (client_id, client_secret, source) = match resolve_refresh_app_credentials() {
         Ok(creds) => creds,
-        Err(_) => {
-            // No app credentials available (no BYO keychain entry and no
-            // embedded build). Use empty strings — the token endpoint will
-            // reject them with invalid_client, which surfaces as a refresh
-            // failure. For integration-test environments, the mock server
-            // ignores the credentials and returns tokens regardless, which
-            // is the correct test behaviour for always-run tests.
+        Err(e) if e.downcast_ref::<NoAppCredentialsAvailable>().is_some() => {
             (String::new(), String::new(), RefreshAppSource::Embedded)
         }
+        Err(e) => return Err(e),
     };
     // Log that we resolved credentials without logging their values.
     debug!(
@@ -1209,7 +1218,25 @@ pub(crate) async fn refresh_oauth_token_with_url(profile: &str, token_url: &str)
         source = ?source,
         "refresh_credentials_resolved"
     );
-    let (_, refresh_token) = load_oauth_tokens(&Profile::from(profile)).unwrap_or_default();
+    // Same class of bug as above (F2-02): `unwrap_or_default()` used to
+    // coerce a genuine keychain backend error reading the stored refresh
+    // token into an empty string, which then gets POSTed to Atlassian and
+    // comes back as a confusing `invalid_grant` instead of surfacing the
+    // real (locked-keychain) cause. Only fall back to an empty refresh
+    // token when the profile genuinely has no stored OAuth token (or the
+    // stored pair is partial) — never when the read itself failed at the
+    // backend/keychain level.
+    let (_, refresh_token) = match load_oauth_tokens(&Profile::from(profile)) {
+        Ok(tokens) => tokens,
+        Err(e) if is_backend_keyring_error(&e) => {
+            return Err(e.context(
+                "OAuth refresh: failed to read the stored refresh token from \
+                 the system keychain. Unlock your keychain or grant access \
+                 to jr, then retry.",
+            ));
+        }
+        Err(_) => (String::new(), String::new()),
+    };
 
     // S-3.03 v2 DECISION: Option A-fixed (auto-refresh on 401 with
     // per-profile single-flight). Wired into JiaClient::send via
@@ -1350,11 +1377,35 @@ fn resolve_refresh_app_credentials() -> Result<(String, String, RefreshAppSource
             RefreshAppSource::Embedded,
         ));
     }
-    anyhow::bail!(
-        "OAuth refresh requires either previously-stored app credentials \
-         (run `jr auth login --oauth` once) or an embedded build. \
-         This binary has neither."
-    )
+    Err(NoAppCredentialsAvailable.into())
+}
+
+/// Marker error: no OAuth app credentials are available at all — no BYO
+/// keychain entry (genuinely absent, not a backend failure) and no
+/// embedded build compiled in. Distinct, by type rather than by string
+/// matching, from a genuine keychain backend/permission error (F2-01/
+/// F2-02) so `refresh_oauth_token_with_url` can tell the two apart via
+/// `anyhow::Error::downcast_ref` and only fall back to an empty-credential
+/// refresh attempt for this genuinely-absent case.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "OAuth refresh requires either previously-stored app credentials \
+     (run `jr auth login --oauth` once) or an embedded build. \
+     This binary has neither."
+)]
+struct NoAppCredentialsAvailable;
+
+/// True if `err`'s cause chain contains a genuine [`keyring::Error`] — as
+/// opposed to a message [`load_oauth_tokens`] constructs itself to describe
+/// "no token stored" or "partial state" (both of which are plain
+/// `anyhow::anyhow!` string errors with no `keyring::Error` in their
+/// chain). Used by `refresh_oauth_token_with_url` (F2-02) to distinguish a
+/// real backend/permission failure, which must propagate, from a
+/// legitimately-absent refresh token, which may still fall back to an
+/// empty string.
+fn is_backend_keyring_error(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|cause| cause.downcast_ref::<keyring::Error>().is_some())
 }
 
 /// Where the OAuth app credentials for a token refresh resolved from.
@@ -1971,6 +2022,54 @@ mod tests {
                 result.is_err(),
                 "a genuine backend error must propagate from clear_all_credentials, \
                  not be swallowed"
+            );
+        });
+    }
+
+    /// F2-01/F2-02: a locked/backend keychain error encountered while
+    /// resolving refresh-side app credentials must propagate as the
+    /// refresh error, not be collapsed into empty embedded credentials
+    /// (which previously surfaced a misleading "embedded app rotated" hint
+    /// once Atlassian rejected the empty client_id/secret with
+    /// `invalid_client`). Uses an unreachable token URL — before the fix,
+    /// `resolve_refresh_app_credentials`'s `Err(_)` was swallowed and the
+    /// function proceeded all the way to the (failing) HTTP POST, so the
+    /// error text would be a network/URL failure, never mentioning the
+    /// keychain at all. After the fix, the function returns before ever
+    /// touching the network.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_f2_01_refresh_propagates_locked_keychain_error_not_embedded_rotation_hint() {
+        with_test_keyring(|| {
+            // SAFETY: with_test_keyring holds KEYRING_TEST_ENV_MUTEX for
+            // this closure's entire duration.
+            unsafe { std::env::set_var("JR_SERVICE_NAME", "") };
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(refresh_oauth_token_with_url(
+                "default",
+                "not-a-valid-url-would-error-if-reached",
+            ));
+
+            let err = result.expect_err(
+                "a locked/backend keychain error during credential resolution must \
+                 propagate as an Err",
+            );
+            let msg = format!("{err:#}").to_lowercase();
+            assert!(
+                msg.contains("keychain"),
+                "expected the genuine keychain/backend error to propagate: {msg}"
+            );
+            assert!(
+                !msg.contains("embedded oauth app credentials may have been rotated"),
+                "a locked/backend keychain error must not be masked by the \
+                 empty-creds embedded-rotation hint: {msg}"
+            );
+            assert!(
+                !msg.contains("token refresh failed: http"),
+                "the function must return before ever attempting the HTTP \
+                 refresh POST when credential resolution fails with a genuine \
+                 backend error: {msg}"
             );
         });
     }
