@@ -232,21 +232,25 @@ jr auth login [--profile NAME] [--url URL] [--oauth] [--api-token] [--no-input]
         via re-discovery). Passing --url is itself the explicit confirmation
         of intent — no separate prompt — so agents and scripts that pass
         --url get a deterministic write without an interactive gate.
-    Defaults to OAuth at profile creation (DEC-313/327) — a brand-new
-        profile with neither --oauth nor --api-token passed is created as
-        an oauth-method profile. --api-token (DEC-323) explicitly selects
-        the classic API-token flow instead. --oauth is DEPRECATED (accepted
-        indefinitely, no hard removal) — passing it still works and selects
-        the OAuth flow, but it is redundant with the new default; prefer
-        omitting it, or use --api-token when you want the non-default flow.
+    Defaults to OAuth at profile creation in INTERACTIVE mode only
+        (DEC-313/327) — the auth-method picker (a TTY-only prompt) defaults
+        its selection to OAuth, but the user can still choose API Token.
+        Under --no-input or a non-TTY stdin, a brand-new profile with
+        neither --oauth nor --api-token passed is created as an
+        api_token-method profile instead — the interactive OAuth default
+        does not extend to non-interactive creation. --api-token (DEC-323)
+        explicitly selects the classic API-token flow in either mode.
+        --oauth is DEPRECATED (accepted indefinitely, no hard removal) —
+        passing it still works and selects the OAuth flow, but it is
+        redundant with the interactive default; prefer omitting it, or use
+        --api-token when you want the non-default flow.
     --oauth (or --api-token) on an existing profile whose auth_method
         differs switches that profile's mechanism transparently (relogin-
         then-replace — DEC-321/BC-1.2.051 — the new credential is obtained
         and confirmed usable FIRST, and only then does it replace the
         stored one; a failed switch leaves the existing credential intact).
     Each profile stores its own `<profile>:email`/`<profile>:api-token`
-        pair — never re-prompts for the API token if one is already stored
-        for THAT profile, but does not reuse another profile's stored token.
+        pair — does not reuse another profile's stored token.
 
 jr auth switch <NAME>
     Positional-only (S-663-1) — `--profile` is rejected on this subcommand
