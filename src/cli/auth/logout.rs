@@ -18,9 +18,10 @@ pub(crate) fn resolve_logout_target(
 /// `jr auth logout [--profile <name>]` — clear OAuth tokens for the target
 /// profile. The profile entry in `config.toml` is left in place so a follow-up
 /// `jr auth login --profile <name>` re-authenticates without losing site
-/// metadata. The shared API-token credential is intentionally NOT cleared
-/// (it's keyed by host, not profile, so wiping it would log every profile
-/// out of API-token mode).
+/// metadata. The target profile's `<profile>:api-token` credential is
+/// intentionally NOT cleared here — it is namespaced per-profile (not
+/// shared/host-keyed; see BC-1.4.031), and clearing it is `jr auth remove`'s
+/// job, not `logout`'s.
 ///
 /// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.013, DEC-322).**
 /// `logout` remains OAuth-specific by design — this story does NOT extend

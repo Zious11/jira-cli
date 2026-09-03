@@ -127,36 +127,38 @@ Error message: `invalid profile name "<name>"; allowed: A-Z a-z 0-9 _ - up to 64
 
 ## Keyring Layout
 
-Single service name (`jr-jira-cli`, honoring `JR_SERVICE_NAME` for tests), keys namespaced per profile only where per-site isolation is required:
+**Shipped model (ADR-0020; DEC-315/325/326; BC-1.4.031/BC-1.4.027) — supersedes the flat/shared layout originally proposed below in this section's initial draft.** Single service name (`jr-jira-cli`, honoring `JR_SERVICE_NAME` for tests). Credentials are namespaced **per profile** except the OAuth app registration itself:
 
 | Key | Scope | Notes |
 |---|---|---|
-| `email` | Shared | User's Atlassian account email |
-| `api-token` | Shared | Classic API token, account-level |
-| `oauth_client_id` | Shared | OAuth app registered once per Atlassian org |
+| `<profile>:email` | Per-profile | User's Atlassian account email for that profile (S-cycle3-percred-storage) |
+| `<profile>:api-token` | Per-profile | Classic API token for that profile — NOT shared across profiles, even though the underlying Atlassian token is account-level; each profile stores its own copy |
+| `oauth_client_id` | Shared | OAuth app registered once per Atlassian org (account-level, flat key) |
 | `oauth_client_secret` | Shared | Same |
 | `<profile>:oauth-access-token` | Per-profile | OAuth tokens are cloudId-scoped |
 | `<profile>:oauth-refresh-token` | Per-profile | Same |
 
+Only `oauth_client_id`/`oauth_client_secret` remain flat, account-level keychain keys. `email`/`api-token` are namespaced per profile just like the OAuth token pair — there is no shared/global credential entry for either.
+
 ### Public API (`src/api/auth.rs`)
 
 ```rust
-// Shared (signatures unchanged)
-pub fn store_api_token(email: &str, token: &str) -> Result<()>
-pub fn load_api_token() -> Result<(String, String)>
+// Shared (account-level, flat keys)
 pub fn store_oauth_app_credentials(client_id: &str, client_secret: &str) -> Result<()>
 pub fn load_oauth_app_credentials() -> Result<(String, String)>
 
-// Per-profile (signatures gain `profile: &str`)
+// Per-profile (all credential read/write paths take `profile: &str`)
+pub fn store_api_token(profile: &str, email: &str, token: &str) -> Result<()>
+pub fn load_api_token(profile: &str) -> Result<(String, String)>
 pub fn store_oauth_tokens(profile: &str, access: &str, refresh: &str) -> Result<()>
 pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)>
 
 // Clear helpers
-pub fn clear_profile_creds(profile: &str) -> Result<()>          // OAuth keys for one profile
-pub fn clear_all_credentials(profiles: &[&str]) -> Result<()>    // shared keys + every listed profile's OAuth keys
+pub fn clear_profile_oauth_pair(profile: &str) -> Result<()>     // OAuth keys for one profile only (used by `auth logout` on an oauth-method profile)
+pub fn clear_profile_creds(profile: &str) -> Result<()>          // BOTH the OAuth pair AND the <profile>:email/<profile>:api-token pair for one profile (used by `auth remove`)
 ```
 
-`clear_all_credentials` takes the list of known profile names from the caller (typically derived from `config.global.profiles.keys()`) so it can clear each `<profile>:oauth-*` pair without needing to enumerate the keychain.
+`load_api_token` deliberately has **no legacy-flat-key fallback** for any profile, including `"default"` — see the Migration section's "(4) Keyring API-token credentials" for the no-copy detect-and-instruct contract this implies. This is a difference from the OAuth token pair, whose `"default"` profile still lazy-migrates legacy flat keys on first read (Migration section, "(2)").
 
 ### `:` Separator Safety
 
@@ -218,8 +220,10 @@ Old `~/.cache/jr/*.json` files are never read by the new code (they live above `
 
 ### `jr auth` subcommands
 
+**Shipped behavior (DEC-313/321/322/323/324/325/326/327; S-663-1) — this subsection reflects the current CLI, not the original proposal below it in this doc's earlier draft.**
+
 ```
-jr auth login [--profile NAME] [--url URL] [--oauth] [--no-input]
+jr auth login [--profile NAME] [--url URL] [--oauth] [--api-token] [--no-input]
     Log in (creates profile if absent). --profile defaults to active.
     --url required when creating a new profile under --no-input;
         in interactive mode, jr prompts for the URL.
@@ -228,62 +232,92 @@ jr auth login [--profile NAME] [--url URL] [--oauth] [--no-input]
         via re-discovery). Passing --url is itself the explicit confirmation
         of intent — no separate prompt — so agents and scripts that pass
         --url get a deterministic write without an interactive gate.
-    --oauth on an existing api_token profile (or vice versa) switches the
-        auth method for that profile transparently and prompts for
-        whatever the new method needs.
-    Reuses shared API-token credential when not --oauth — never re-prompts
-    for the API token if one is already stored.
+    Defaults to OAuth at profile creation (DEC-313/327) — a brand-new
+        profile with neither --oauth nor --api-token passed is created as
+        an oauth-method profile. --api-token (DEC-323) explicitly selects
+        the classic API-token flow instead. --oauth is DEPRECATED (accepted
+        indefinitely, no hard removal) — passing it still works and selects
+        the OAuth flow, but it is redundant with the new default; prefer
+        omitting it, or use --api-token when you want the non-default flow.
+    --oauth (or --api-token) on an existing profile whose auth_method
+        differs switches that profile's mechanism transparently (relogin-
+        then-replace — DEC-321/BC-1.2.051 — the new credential is obtained
+        and confirmed usable FIRST, and only then does it replace the
+        stored one; a failed switch leaves the existing credential intact).
+    Each profile stores its own `<profile>:email`/`<profile>:api-token`
+        pair — never re-prompts for the API token if one is already stored
+        for THAT profile, but does not reuse another profile's stored token.
 
 jr auth switch <NAME>
+    Positional-only (S-663-1) — `--profile` is rejected on this subcommand
+        (exit 64); only the positional <NAME> selects the switch target.
     Set default_profile in config.toml to NAME. Errors on unknown profile.
     No credential prompts.
 
 jr auth list
     Show all configured profiles. Mark active with `*`.
-    Table columns: NAME | URL | AUTH | STATUS    where STATUS ∈ {configured, unset}
-    JSON: [{"name", "url", "auth_method", "status", "active"}]
+    Table columns: NAME | URL | ENV | AUTH | STATUS    (DEC-324 — ENV
+        inserted between URL and AUTH; ENV is a free-form label such as
+        prod/sandbox/uat, or `-` when unset)
+    STATUS ∈ {configured, unset}
+    JSON: [{"name", "url", "env", "auth_method", "status", "active"}]
 
 jr auth status [--profile NAME]
-    Show one profile's auth state (default: active).
+    Show one profile's auth state (default: active). Human text only —
+        no --output json support for this subcommand.
 
 jr auth logout [--profile NAME]
-    Clear that profile's OAuth tokens. Profile entry stays in config.
-    Shared API-token credential not touched (other profiles may use it).
+    Session-clear only, non-destructive (DEC-322, BC-1.2.013/BC-1.2.014):
+      • oauth-method profile: clears only that profile's OAuth session
+        tokens (<profile>:oauth-access-token / <profile>:oauth-refresh-
+        token). Profile entry and identity in config.toml stay in place.
+      • api-token-method profile: no OAuth session exists to clear — logout
+        emits an informational, non-error stderr notice ("This profile uses
+        API-token auth — nothing to log out; use `jr auth remove <profile>`
+        to delete stored credentials.") and exits 0. The api-token pair is
+        left untouched.
+    `jr auth remove` is the full delete for either mechanism — see below.
 
 jr auth remove <NAME>
     Delete the profile entirely:
-      • OAuth tokens for that profile in keyring (no-op if api_token-auth)
+      • BOTH the OAuth pair AND the <NAME>:email/<NAME>:api-token pair for
+        that profile in keyring (whichever the profile actually used)
       • profile entry in config.toml
       • cache subdirectory ~/.cache/jr/v1/<NAME>/
-    Shared credentials (`email`, `api-token`, `oauth_client_id`,
-        `oauth_client_secret`) are NEVER touched — other profiles may use
-        them. To clear shared credentials, manage them via the OS keychain
-        UI directly (out of scope for this feature; tracked as a follow-up).
+    Only the shared, account-level oauth_client_id/oauth_client_secret are
+        NEVER touched — other profiles may use them. To clear those, manage
+        them via the OS keychain UI directly (out of scope for this
+        feature; tracked as a follow-up).
     Errors if NAME == default_profile (must `jr auth switch` first).
     Errors if NAME doesn't exist.
     Confirmation prompt unless --no-input.
 
-jr auth refresh [--profile NAME] [--oauth] [--email/--token/--client-id/--client-secret]
-    Refresh credentials for the named profile (defaults to active).
-    The flow is selected from the target profile's auth_method, with
-    `--oauth` as an explicit override (forces the OAuth path regardless
-    of stored auth_method, matching `jr auth login --oauth`).
-    Behavior:
-      • api_token flow: clears the SHARED email/api-token + client_id/
-        client_secret keychain entries (the #207 macOS keychain ACL
-        workaround) and re-prompts via flag → env → TTY. Equivalent to
-        `jr auth login` but with explicit cleanup of stale ACL-bound
-        entries first.
-      • oauth flow: clears the per-profile <profile>:oauth-* keychain
-        entries and re-runs the FULL 3LO browser flow (oauth_login),
-        not the silent refresh_token grant. This is intentional —
-        the same #207 ACL workaround applies to OAuth tokens too, so
-        a "quiet" refresh wouldn't deliver the macOS-keychain-rebind
-        guarantee users came here for.
-    Per-profile token isolation: refreshing OAuth on profile X never
-    touches the shared api-token or another profile's OAuth tokens.
-    Refreshing api_token on profile X DOES rewrite the shared keychain
-    entries (the api-token IS the shared credential).
+jr auth refresh [--profile NAME] [--oauth] [--api-token] [--email/--token/--client-id/--client-secret]
+    Refresh (re-obtain) credentials for the named profile (defaults to
+        active). DEC-321: the flow is ALWAYS selected from the target
+        profile's own stored auth_method — `--oauth`/`--api-token` on
+        `refresh` are INERT with respect to flow selection; they do NOT
+        force or override the path (unlike `jr auth login`, where they do
+        select/switch the mechanism). Passing either flag on `refresh`
+        only emits a stderr, human-mode-only notice (deprecation notice for
+        --oauth; inert-on-refresh notice for --api-token) — changing a
+        profile's auth mechanism is done via an explicit `jr auth login
+        <profile> [--oauth|--api-token]` re-declaration, not via refresh.
+    Ordering is relogin-then-replace (DEC-321, BC-1.2.051 Invariant 2):
+        the new credential value is obtained and confirmed usable FIRST;
+        only then is the existing stored value overwritten. A refresh that
+        fails to obtain a usable replacement (network error, cancelled
+        interactive re-prompt, EOF on stdin) leaves the profile's existing
+        credentials completely untouched — no prior clear/delete step.
+      • api_token flow (per the profile's own auth_method): re-prompts via
+        flag → env → TTY, then overwrites that profile's namespaced
+        <profile>:email/<profile>:api-token pair.
+      • oauth flow (per the profile's own auth_method): re-runs the FULL
+        3LO browser flow (oauth_login), not the silent refresh_token grant,
+        then overwrites that profile's <profile>:oauth-access-token/
+        <profile>:oauth-refresh-token pair.
+    Per-profile token isolation: refreshing profile X never touches
+        another profile's stored credentials, of either kind.
 ```
 
 ### `jr init` interaction
