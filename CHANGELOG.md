@@ -71,6 +71,34 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **A locked/backend keychain error during OAuth token refresh no longer
+  surfaces as a misleading "embedded app rotated" hint** (FIX-F5-refinement,
+  F2-01/F2-02, adversary-surfaced MEDIUM finding). `refresh_oauth_token_with_url`
+  (`src/api/auth.rs`) used to coerce ANY error from
+  `resolve_refresh_app_credentials` — including a locked/permission-denied
+  keychain, which that resolver deliberately returns as a distinct `Err`
+  from "no credentials stored" — into empty embedded OAuth app credentials.
+  The refresh would then POST with an empty client_id/client_secret, get
+  back `invalid_client` from Atlassian, and tell the user their embedded
+  app credentials may have been rotated — actively hiding the real cause
+  (a locked keychain) on the hourly auto-refresh hot path. The same class
+  of bug also swallowed a genuine backend error reading the stored refresh
+  token into an empty string via `unwrap_or_default()`. Both call sites now
+  propagate a genuine backend/permission error as-is; only the truly-absent
+  case (no BYO keychain entry and no embedded build, or no stored refresh
+  token at all) still falls back to an empty-credential attempt, preserving
+  existing test/mock-environment behavior.
+- **`jr auth logout` on a profile with no `auth_method` recorded now takes
+  the api-token informational-notice branch, not the OAuth-clear branch**
+  (FIX-F5-refinement, LOW-4, BC-1.1.015). An unset `auth_method` defaults to
+  `"api_token"` at runtime (`from_config`'s `.unwrap_or("api_token")`), but
+  `handle_logout`'s branch condition only recognized an *explicit*
+  `auth_method = "api_token"` — an unset value fell through to the OAuth
+  branch and printed a misleading "Logged out of profile ..." success
+  message even though there was never an OAuth session for that profile.
+  Fixed by keying the branch on "not oauth" rather than "is api_token",
+  matching the documented runtime default.
+
 - **`jr auth login`'s mechanism-switching re-declaration no longer clears
   the outgoing mechanism's credentials before the new login has succeeded**
   (FIX-F5-login-switch, a Wave-5 adversary-surfaced MEDIUM data-loss
