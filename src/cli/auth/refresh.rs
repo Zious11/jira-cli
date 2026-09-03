@@ -110,12 +110,17 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
     // BC-1.1.016 Postcondition 3, Precondition 2b: the airtight
     // non-interactive OAuth guard, evaluated as the FIRST thing done with
     // `flow` — before the URL-completeness check below, any credential
-    // clear, and any login dispatch. `chosen_flow_for_profile` has already
-    // folded BOTH the explicit `--oauth` case (Precondition 2a) and the
-    // implicit oauth-method-profile `refresh` case (Precondition 2b) into
-    // `flow == AuthFlow::OAuth`, so a single check covers both. `--api-token`
-    // has no override power here (EC-1.1.016-3) — it never reaches
-    // `chosen_flow_for_profile` at all.
+    // clear, and any login dispatch. `chosen_flow_for_profile` resolves
+    // solely from `target_profile.auth_method` (BC-1.2.051 AC-001..AC-004,
+    // DEC-321) — the explicit `--oauth` flag is deliberately NOT folded
+    // into this resolution on `refresh` (unlike `login`); `--oauth` never
+    // reaches `chosen_flow_for_profile` at all, so it cannot override an
+    // api_token-method profile's resolved flow here. This single check
+    // covers only the implicit oauth-method-profile case (Precondition
+    // 2b): `flow == AuthFlow::OAuth` is true exactly when the profile's
+    // own `auth_method` says so. `--api-token` similarly has no override
+    // power here (EC-1.1.016-3) — it never reaches `chosen_flow_for_profile`
+    // either.
     check_noninteractive_oauth_guard(args.no_input, flow == AuthFlow::OAuth)?;
 
     // BC-1.2.049 / BC-1.2.050: stderr-only, human-mode-only notices for the
@@ -129,8 +134,9 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
         emit_api_token_inert_on_refresh_notice(*args.output);
     }
 
-    // For the api_token flow, login_token re-prompts/sets the SHARED
-    // api-token but doesn't write a URL. If the target profile has no
+    // For the api_token flow, login_token re-prompts/sets the per-profile
+    // namespaced `<profile>:email`/`<profile>:api-token` pair (BC-1.4.031)
+    // but doesn't write a URL. If the target profile has no
     // URL configured (fresh install / hand-edited profile with status
     // `unset`), refresh would succeed in keychain terms while leaving
     // the profile unusable for any actual API call. Refuse upfront with

@@ -118,8 +118,8 @@ pub async fn handle_remove(
             .with_prompt(format!(
                 "Permanently remove profile {target:?}? \
                  This deletes its config entry, cache, and stored \
-                 credentials (OAuth and API-token). Shared credentials \
-                 remain."
+                 credentials (OAuth and API-token). Your BYO OAuth app \
+                 credentials (shared across profiles) remain."
             ))
             .default(false)
             .interact()?;
