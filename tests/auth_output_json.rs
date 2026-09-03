@@ -236,6 +236,64 @@ fn test_auth_logout_api_token_profile_prints_exact_stderr_notice() {
 }
 
 // ---------------------------------------------------------------------------
+// FIX-2 (LOW-4) / BC-1.1.015 — unset auth_method is a de-facto api_token
+// profile on logout
+// ---------------------------------------------------------------------------
+
+/// BC-1.1.015: an unset `auth_method` defaults to `"api_token"` at runtime
+/// (`from_config`'s `.unwrap_or("api_token")`). `jr auth logout` on such a
+/// profile must take the same api-token informational-notice branch as an
+/// explicit `auth_method = "api_token"` profile — printing the exact
+/// notice to stderr and leaving no OAuth-branch success message — rather
+/// than falling through to the OAuth-clear branch and printing the
+/// misleading "Logged out of profile ..." success text.
+#[test]
+fn test_auth_logout_unset_auth_method_profile_treated_as_api_token() {
+    let config_dir = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let cwd_dir = TempDir::new().unwrap();
+
+    let jr_dir = config_dir.path().join("jr");
+    std::fs::create_dir_all(&jr_dir).unwrap();
+    let config_path = jr_dir.join("config.toml");
+    std::fs::write(
+        &config_path,
+        "default_profile = \"default\"\n\n\
+         [profiles.default]\n\
+         url = \"https://test.atlassian.net\"\n",
+    )
+    .unwrap();
+
+    let output = jr_isolated(&config_dir, &cache_dir)
+        .current_dir(cwd_dir.path())
+        .args(["auth", "logout", "--profile", "default"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "auth logout on an unset-auth_method profile must exit 0; stderr: {stderr}, stdout: {stdout}"
+    );
+
+    let expected = "This profile uses API-token auth — nothing to log out; use \
+        `jr auth remove default` to delete stored credentials.\n";
+    assert_eq!(
+        stderr, expected,
+        "FIX-2/BC-1.1.015: an unset auth_method must take the same \
+         api-token informational-notice branch as an explicit \
+         auth_method = \"api_token\" profile; got stderr: {stderr:?}"
+    );
+    assert!(
+        !stdout.contains("Logged out of profile"),
+        "the unset-auth_method profile must not print the OAuth-branch \
+         success message; got stdout: {stdout:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-001c / H-020 / BC-7.3.004 — auth remove returns JSON ok
 // ---------------------------------------------------------------------------
 

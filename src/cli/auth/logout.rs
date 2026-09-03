@@ -68,12 +68,20 @@ pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> 
         .into());
     }
 
+    // BC-1.1.015: an unset `auth_method` defaults to `"api_token"` at
+    // runtime (`from_config`'s `.unwrap_or("api_token")`), so a profile
+    // with no `auth_method` recorded is a de-facto api-token profile —
+    // treat it identically to an explicit `Some("api_token")` here. Key on
+    // "not oauth" rather than "is api_token" so any unset/unrecognized
+    // value falls into the informational-notice branch instead of
+    // silently taking the OAuth-clear path and printing a misleading
+    // "Logged out of profile" success message. `oauth` is the only method
+    // this function treats as having an OAuth session to actually clear.
     let is_api_token_profile = config
         .global
         .profiles
         .get(&target)
-        .and_then(|p| p.auth_method.as_deref())
-        == Some("api_token");
+        .is_some_and(|p| p.auth_method.as_deref() != Some("oauth"));
 
     if is_api_token_profile {
         // BC-1.2.013 amended (DEC-322): api-token profiles have no OAuth
@@ -87,8 +95,9 @@ pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> 
              `jr auth remove {target}` to delete stored credentials."
         );
     } else {
-        // Unchanged behavior for oauth (and any other/unset) profiles
-        // (AC-008 regression pin). Uses clear_profile_oauth_pair, NOT
+        // Unchanged behavior for oauth profiles (AC-008 regression pin) —
+        // the only case that reaches this branch is an explicit
+        // `auth_method = "oauth"`. Uses clear_profile_oauth_pair, NOT
         // clear_profile_creds — logout must never clear the API-token
         // pair, even if this profile happens to carry a leftover one
         // from a prior mechanism switch (BC-1.2.013 non-destructive
