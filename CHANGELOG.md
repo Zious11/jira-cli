@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.7.0-dev.4] - 2026-09-03
+
 ### Added
 
 - **`jr auth login` defaults to an OAuth-first interactive picker, mirroring
