@@ -168,13 +168,10 @@ impl AuthFlow {
 /// pass trivially with zero implementer work, which is exactly the
 /// self-check this rule exists to catch.
 fn chosen_flow_for_profile(profile: &crate::config::ProfileConfig) -> AuthFlow {
-    todo!(
-        "S-cycle3-chosen-flow-reconcile (BC-1.2.048/BC-1.2.051 AC-001): resolve \
-         solely from profile.auth_method — Some(\"oauth\") => AuthFlow::OAuth, \
-         anything else (including unset) => AuthFlow::Token — with NO override \
-         parameter of any kind. profile.auth_method={:?}",
-        profile.auth_method
-    )
+    match profile.auth_method.as_deref() {
+        Some("oauth") => AuthFlow::OAuth,
+        _ => AuthFlow::Token,
+    }
 }
 
 #[cfg(test)]

@@ -2,10 +2,12 @@ use anyhow::Result;
 
 use crate::config::Config;
 use crate::error::JrError;
+use crate::output;
 
 use super::{
     AuthFlow, check_noninteractive_oauth_guard, chosen_flow_for_profile,
-    emit_api_token_inert_on_refresh_notice, emit_oauth_deprecation_notice,
+    emit_api_token_inert_on_refresh_notice, emit_oauth_deprecation_notice, login_oauth,
+    login_token,
 };
 
 /// Post-refresh guidance shown to humans (stderr, Table mode) and embedded
@@ -74,11 +76,10 @@ pub struct RefreshArgs<'a> {
 /// Per BC-5.38.005's self-check, the `RefreshArgs` field access, config
 /// load, target-profile resolution, the BC-1.1.016 non-interactive OAuth
 /// guard, the BC-1.2.049/050 deprecation/inertness notices, and the
-/// URL-completeness precondition are all PRE-EXISTING, unrelated-to-this-
-/// story control flow and are left intact and real. Only the
-/// relogin-then-replace credential-obtain/store sequence (previously the
-/// clear-then-login block) and its terminal success/error output are
-/// `todo!()`'d.
+/// URL-completeness precondition are all PRE-EXISTING control flow this
+/// story left intact. Only the relogin-then-replace credential-obtain/store
+/// sequence (previously the clear-then-login block) and its terminal
+/// success/error output were reordered.
 pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
     // Pass `args.profile` as the CLI-flag override so a `--profile X`
     // against an unconfigured X surfaces the strict load's "unknown
@@ -147,30 +148,64 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
         .into());
     }
 
-    todo!(
-        "S-cycle3-chosen-flow-reconcile (BC-1.2.051 Invariant 2/I-6, \
-         \"relogin-then-replace\"): obtain/confirm the new credential value \
-         FIRST — for AuthFlow::Token, via login_token(&target, args.email, \
-         args.token, args.no_input); for AuthFlow::OAuth, via \
-         login_oauth(&target, args.client_id, args.client_secret, None, \
-         args.no_input) — and only overwrite the existing stored credential \
-         (auth::clear_profile_oauth_pair for OAuth / auth::clear_all_credentials \
-         for Token, or an equivalent atomic-in-effect store) once that \
-         obtain step has succeeded. NEVER call the clear/delete step before \
-         the replacement is confirmed obtainable (AC-006). On failure to \
-         obtain a usable replacement, the existing \
-         <profile>:email/<profile>:api-token (or OAuth) pair must remain \
-         completely untouched and the error must propagate without any \
-         \"credentials were cleared\" messaging — that phrasing is itself \
-         the I-6 self-contradiction this story removes (AC-007). On \
-         success, emit the existing refresh_success_payload(flow) / \
-         REFRESH_HELP_LINE output shape unchanged: JSON mode prints \
-         output::render_json(&refresh_success_payload(flow)) to stdout; \
-         Table mode prints \"Credentials refreshed. {{REFRESH_HELP_LINE}}\" \
-         to stderr. Do NOT touch the F1 clear_all_credentials over-delete \
-         (BYO OAuth app creds) — that is a separate, already-tracked \
-         follow-up, out of this story's scope. target={target:?} flow={flow:?} \
-         would_emit={:?}",
-        refresh_success_payload(flow)
-    )
+    // Relogin-then-replace (BC-1.2.051 Invariant 2 / I-6): obtain/confirm
+    // the new credential value FIRST, then replace the stored one — never a
+    // prior delete step. `login_token`/`login_oauth` already have this
+    // shape internally: each resolves/obtains its new credential value
+    // (`resolve_credential` for Token; the OAuth browser round-trip for
+    // OAuth) and ONLY THEN persists it via `auth::store_api_token` /
+    // `auth::store_oauth_tokens` — both a plain, unconditional two-key
+    // `set_password` overwrite of the existing keychain entry, which is
+    // itself the "atomic-in-effect store" BC-1.2.051 Invariant 2 calls for.
+    // Calling them directly, with no separate clear/delete step beforehand,
+    // is therefore sufficient: on failure (e.g. `resolve_credential`'s
+    // no-input/missing-value check, or a failed/cancelled OAuth round-trip)
+    // neither store function is ever reached, so the existing
+    // <profile>:email/<profile>:api-token (or OAuth) pair is left
+    // completely untouched. This replaces the prior "clear-then-login"
+    // sequence (`clear_profile_oauth_pair`/`clear_all_credentials` called
+    // BEFORE login), which is the exact I-6 self-contradiction this story
+    // removes — it admitted deleting the working credential before a
+    // replacement was confirmed obtainable.
+    let login_result = match flow {
+        AuthFlow::Token => login_token(&target, args.email, args.token, args.no_input).await,
+        AuthFlow::OAuth => {
+            login_oauth(
+                &target,
+                args.client_id,
+                args.client_secret,
+                None,
+                args.no_input,
+            )
+            .await
+        }
+    };
+
+    if let Err(err) = login_result {
+        let login_cmd = match flow {
+            AuthFlow::Token => "jr auth login",
+            AuthFlow::OAuth => "jr auth login --oauth",
+        };
+        // Corrected I-6 framing: the old "Credentials were cleared, but…"
+        // message is gone because it is no longer true — relogin-then-
+        // replace never touches the existing credential until a
+        // replacement has been confirmed obtainable.
+        eprintln!(
+            "Refresh failed; your existing credentials for {target:?} were \
+             left unchanged. Run `{login_cmd}` to try again."
+        );
+        return Err(err);
+    }
+
+    match args.output {
+        crate::cli::OutputFormat::Json => {
+            let payload = output::render_json(&refresh_success_payload(flow))?;
+            println!("{payload}");
+        }
+        crate::cli::OutputFormat::Table => {
+            eprintln!("Credentials refreshed. {REFRESH_HELP_LINE}");
+        }
+    }
+
+    Ok(())
 }
