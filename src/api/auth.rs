@@ -709,6 +709,26 @@ fn delete_credential_tolerating_no_entry(key: &str) -> Result<()> {
 /// deleted" invariant; the existing unconditional legacy-flat-key clear
 /// above is pre-existing, out of this story's scope, and must not be
 /// touched.
+///
+/// # TEST-ONLY — do not call from production code (S-cycle3-chosen-flow-reconcile, F1 history)
+///
+/// As of this story, this function has zero production call sites — every
+/// remaining caller is `#[cfg(test)]`. It was previously invoked from
+/// `auth refresh`'s pre-login "clear-then-login" sequence; that call site
+/// was removed by the BC-1.2.051 Invariant 2 ("relogin-then-replace", I-6)
+/// fix, because clearing credentials before a replacement was confirmed
+/// obtainable was the root cause of a real data-loss defect (F1): this
+/// function unconditionally wipes the SHARED `oauth_client_id`/
+/// `oauth_client_secret` BYO OAuth app credentials, the legacy flat
+/// email/api-token keys, and every listed profile's OAuth pair — none of
+/// which a subsequent successful login necessarily restores (a BYO app's
+/// client id/secret in particular are never re-derived; they're gone for
+/// every profile, not just the one being refreshed). Do NOT reintroduce a
+/// call to this function from `refresh`, `login`, or any other production
+/// command without first re-litigating this history — a narrower,
+/// single-profile clear (see [`clear_profile_creds`]) called ONLY after a
+/// replacement credential is confirmed obtainable is almost certainly what
+/// any future "clear before replace" need actually wants.
 pub fn clear_all_credentials(profiles: &[Profile]) -> Result<()> {
     let mut keys: Vec<String> = vec![
         KEY_EMAIL.to_string(),

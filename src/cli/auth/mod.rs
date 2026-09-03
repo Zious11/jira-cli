@@ -162,11 +162,11 @@ impl AuthFlow {
 /// dispatch) — the caller (`refresh_credentials` in `refresh.rs`) is
 /// responsible for resolving `profile` first.
 ///
-/// Per BC-5.38.005's self-check, the match logic itself is `todo!()`'d
-/// rather than left as the pre-existing real implementation: leaving it
-/// real here would let AC-002/AC-003/AC-004's new override-removal tests
-/// pass trivially with zero implementer work, which is exactly the
-/// self-check this rule exists to catch.
+/// Resolution is purely a two-way match on the profile's stored
+/// `auth_method`: `Some("oauth")` → [`AuthFlow::OAuth`], anything else
+/// (including `None`, matching the login-time default) → [`AuthFlow::Token`].
+/// There is no override input of any kind — see the DEC-321 amendment note
+/// above for what was removed and why.
 fn chosen_flow_for_profile(profile: &crate::config::ProfileConfig) -> AuthFlow {
     match profile.auth_method.as_deref() {
         Some("oauth") => AuthFlow::OAuth,

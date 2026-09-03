@@ -62,7 +62,12 @@ All notable changes to jr will be documented here.
   (`jr auth switch --profile` removal). See also the accompanying I-6
   "relogin-then-replace" ordering fix, which ensures a failed `refresh`
   never clears existing credentials before a replacement is confirmed
-  obtainable.
+  obtainable. As an intentional consequence of relogin-then-replace, `jr
+  auth refresh` no longer clears ANY credentials before re-obtaining them —
+  it no longer wipes the shared BYO OAuth app credentials
+  (`oauth_client_id`/`oauth_client_secret`), legacy flat keys, or a
+  profile's other-mechanism token pair, resolving the previously-tracked F1
+  data-loss issue.
 
 ### Internal
 
