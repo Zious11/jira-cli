@@ -606,20 +606,26 @@ fn helper_emit_api_token_inert_notice_json() {
 // ---------------------------------------------------------------------------
 
 /// BC-1.1.013 EC-1.1.013-2 / BC-1.1.014 EC-1.1.014-4 (M-1), direct function
-/// contract: given an outgoing mechanism that differs from the incoming one,
-/// `clear_outgoing_mechanism_on_switch` MUST reuse `clear_profile_creds`'s
-/// existing per-kind branches — which clear BOTH the OAuth pair AND the
-/// namespaced API-token pair (see `src/api/auth.rs::clear_profile_creds`'s
-/// own doc comment). This test seeds BOTH kinds and asserts BOTH are gone
-/// afterward.
+/// contract, AMENDED by FIX-F5-login-switch: given an outgoing mechanism
+/// that differs from the incoming one, `clear_outgoing_mechanism_on_switch`
+/// MUST clear ONLY the outgoing mechanism's credential pair — NOT both
+/// kinds. This is a corrected expectation from the function's pre-fix
+/// behavior (which called the combined `clear_profile_creds` and cleared
+/// both kinds unconditionally): under `handle_login`'s new
+/// relogin-then-replace ordering, this function now runs AFTER the new
+/// mechanism's credentials are already stored, so clearing both kinds would
+/// delete the just-stored new credentials too. This test seeds BOTH kinds
+/// (the API-token pair standing in for a freshly-stored `new_method` pair)
+/// and asserts only the outgoing OAuth pair is gone afterward — the
+/// API-token pair must survive untouched.
 #[tokio::test]
 #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
-async fn test_ec_1_1_013_2_clear_outgoing_mechanism_on_switch_clears_both_credential_kinds() {
+async fn test_ec_1_1_013_2_clear_outgoing_mechanism_on_switch_clears_only_outgoing_kind() {
     if !keyring_gate_active() {
         return;
     }
     let _guard = env_lock().lock().await;
-    let svc = unique_service("switch-clear-both-kinds");
+    let svc = unique_service("switch-clear-only-outgoing");
     let tmp = tempfile::TempDir::new().unwrap();
     let cfg_dir = tmp.path().join("jr");
     let cache_dir = tmp.path().join("cache");
@@ -644,6 +650,8 @@ async fn test_ec_1_1_013_2_clear_outgoing_mechanism_on_switch_clears_both_creden
     );
 
     auth::store_oauth_tokens(&Profile::from("staging"), "sw-access", "sw-refresh").unwrap();
+    // Stands in for the NEW mechanism's credentials, already stored by the
+    // time this function runs under the corrected ordering.
     auth::store_api_token(&Profile::from("staging"), "sw@example.com", "sw-token").unwrap();
 
     let result = clear_outgoing_mechanism_on_switch(
@@ -663,19 +671,17 @@ async fn test_ec_1_1_013_2_clear_outgoing_mechanism_on_switch_clears_both_creden
     }
 
     result.expect(
-        "clear_outgoing_mechanism_on_switch must succeed when both credential \
-         kinds are cleanly deletable",
+        "clear_outgoing_mechanism_on_switch must succeed when the outgoing \
+         credential kind is cleanly deletable",
     );
     assert!(
         oauth_after.is_err(),
-        "OAuth pair must be gone after the mechanism-switch clear"
+        "outgoing OAuth pair must be gone after the mechanism-switch clear"
     );
-    assert!(
-        api_token_after.is_err(),
-        "namespaced API-token pair must be gone after the mechanism-switch \
-         clear too — the function reuses clear_profile_creds's full \
-         per-kind clearing, not a selective one"
-    );
+    let (email_after, token_after) =
+        api_token_after.expect("the NEW mechanism's api-token pair must survive untouched");
+    assert_eq!(email_after, "sw@example.com");
+    assert_eq!(token_after, "sw-token");
 }
 
 #[tokio::test]
@@ -793,6 +799,194 @@ async fn test_ac_007_handle_login_noninteractive_mechanism_switch_clears_outgoin
         oauth_after.is_err(),
         "AC-007: the outgoing OAuth pair must be cleared as part of the same \
          non-interactive `auth login` invocation that switches to api_token"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FIX-F5-login-switch (Wave-5 adversary finding, MEDIUM data loss): a
+// mechanism-switching `auth login` must never delete the outgoing
+// mechanism's working credentials before the new mechanism's credentials
+// are confirmed obtained and stored (relogin-then-replace ordering, mirrors
+// I-6 / BC-1.2.051's fix to `refresh_credentials`). Before this fix,
+// `handle_login` called `clear_outgoing_mechanism_on_switch` BEFORE
+// `login_oauth`/`login_token`, so a failed switch (browser cancel, network
+// error, a missing `--no-input` value) left the profile credential-less —
+// worse than its pre-command state.
+// ---------------------------------------------------------------------------
+
+/// FIX-F5-login-switch, failing half: a mechanism switch (`api_token` ->
+/// `oauth`) whose new-mechanism login FAILS must leave the profile's prior
+/// working `api_token` credentials completely intact.
+///
+/// The OAuth failure is forced deterministically, with zero network/browser
+/// I/O: passing `--client-id` without `--client-secret` makes
+/// `resolve_oauth_app_credentials_for_test`'s pair-gate hard-error
+/// (`JrError::UserError("--client-id was provided without --client-secret...")`)
+/// before `login_oauth` ever touches the keychain, `oauth_login`'s listener
+/// bind, or a real browser — the same "fails before any I/O beyond the
+/// flag/env layer" property the module-level safety note already relies on
+/// for the guard-ordering tests above, applied here to force a login
+/// failure instead of a guard rejection. `no_input: false` is required so
+/// this reaches `login_oauth` at all — the airtight BC-1.1.016 guard
+/// (Precondition 2a) would otherwise reject `--oauth` under `no_input: true`
+/// before ANY clear/login code runs, which cannot exercise this ordering
+/// bug in the first place.
+///
+/// RED pre-fix: the old code cleared `<profile>:email`/`<profile>:api-token`
+/// via `clear_profile_creds` BEFORE calling `login_oauth`, so by the time
+/// `login_oauth` fails, the original credentials are already gone — this
+/// assertion fails against the pre-fix ordering.
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_fix_f5_failed_login_switch_preserves_outgoing_api_token_creds() {
+    if !keyring_gate_active() {
+        return;
+    }
+    let _guard = env_lock().lock().await;
+    let svc = unique_service("login-switch-fail-preserves");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg_dir = tmp.path().join("jr");
+    let cache_dir = tmp.path().join("cache");
+
+    unsafe {
+        scrub_jr_env();
+        std::env::set_var("JR_SERVICE_NAME", &svc);
+        std::env::set_var("JR_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("JR_CACHE_DIR", &cache_dir);
+    }
+
+    write_config(
+        &cfg_dir,
+        "default_profile = \"prod\"\n\n\
+         [profiles.prod]\n\
+         url = \"https://prod.example\"\n\
+         auth_method = \"api_token\"\n",
+    );
+    auth::store_api_token(&Profile::from("prod"), "orig@example.com", "orig-token").unwrap();
+
+    let result = handle_login(LoginArgs {
+        profile: Some("prod".to_string()),
+        url: None,
+        oauth: true,
+        api_token: false,
+        email: None,
+        token: None,
+        // Partial OAuth-app-credential pair -> resolve_oauth_app_credentials
+        // hard-errors deterministically, with zero keychain/network/browser
+        // I/O, before login_oauth ever reaches a store_* call.
+        client_id: Some("only-id".to_string()),
+        client_secret: None,
+        cloud_id: None,
+        no_input: false,
+        output: OutputFormat::Table,
+    })
+    .await;
+
+    let api_token_after = auth::load_api_token(&Profile::from("prod"));
+
+    unsafe {
+        std::env::remove_var("JR_SERVICE_NAME");
+        std::env::remove_var("JR_CONFIG_DIR");
+        std::env::remove_var("JR_CACHE_DIR");
+    }
+
+    let err = result.expect_err(
+        "a --client-id-without-secret OAuth switch attempt must fail \
+         deterministically, not succeed",
+    );
+    let jr_err = err
+        .downcast_ref::<JrError>()
+        .expect("must be a JrError so it maps to a real exit code");
+    assert!(
+        jr_err.to_string().contains("--client-secret"),
+        "must fail via the OAuth app credential pair-gate, not some other \
+         path — got: {jr_err}"
+    );
+
+    let (email_after, token_after) = api_token_after.expect(
+        "FIX-F5-login-switch: a FAILED mechanism-switch login must leave the \
+         profile's prior working api_token credentials completely intact — \
+         they must never be cleared before the new mechanism's login has \
+         succeeded (relogin-then-replace)",
+    );
+    assert_eq!(
+        email_after, "orig@example.com",
+        "original email must survive a failed switch unchanged"
+    );
+    assert_eq!(
+        token_after, "orig-token",
+        "original token must survive a failed switch unchanged"
+    );
+}
+
+/// FIX-F5-login-switch, success half: a mechanism switch (`oauth` ->
+/// `api_token`) whose new-mechanism login SUCCEEDS must (a) store the new
+/// `api_token` credentials, AND (b) leave no orphaned outgoing `oauth`
+/// credentials behind — the switch semantics from BC-1.1.013 EC-1.1.013-2 /
+/// BC-1.1.014 EC-1.1.014-4 are preserved by the reorder, not weakened.
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_fix_f5_successful_login_switch_stores_new_and_clears_outgoing_oauth_creds() {
+    if !keyring_gate_active() {
+        return;
+    }
+    let _guard = env_lock().lock().await;
+    let svc = unique_service("login-switch-success-no-orphan");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg_dir = tmp.path().join("jr");
+    let cache_dir = tmp.path().join("cache");
+
+    unsafe {
+        scrub_jr_env();
+        std::env::set_var("JR_SERVICE_NAME", &svc);
+        std::env::set_var("JR_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("JR_CACHE_DIR", &cache_dir);
+    }
+
+    write_config(
+        &cfg_dir,
+        "default_profile = \"staging2\"\n\n\
+         [profiles.staging2]\n\
+         url = \"https://staging2.example\"\n\
+         auth_method = \"oauth\"\n",
+    );
+    auth::store_oauth_tokens(&Profile::from("staging2"), "old-access", "old-refresh").unwrap();
+
+    let result = handle_login(LoginArgs {
+        profile: Some("staging2".to_string()),
+        url: None,
+        oauth: false,
+        api_token: true,
+        email: Some("new@example.com".to_string()),
+        token: Some("new-token".to_string()),
+        client_id: None,
+        client_secret: None,
+        cloud_id: None,
+        no_input: true,
+        output: OutputFormat::Table,
+    })
+    .await;
+
+    let oauth_after = auth::load_oauth_tokens(&Profile::from("staging2"));
+    let api_token_after = auth::load_api_token(&Profile::from("staging2"));
+
+    unsafe {
+        std::env::remove_var("JR_SERVICE_NAME");
+        std::env::remove_var("JR_CONFIG_DIR");
+        std::env::remove_var("JR_CACHE_DIR");
+    }
+
+    result.expect("successful non-interactive mechanism-switch login must succeed");
+
+    let (email_after, token_after) =
+        api_token_after.expect("new api_token credentials must be stored on success");
+    assert_eq!(email_after, "new@example.com");
+    assert_eq!(token_after, "new-token");
+
+    assert!(
+        oauth_after.is_err(),
+        "FIX-F5-login-switch: a SUCCESSFUL switch must leave NO orphaned \
+         outgoing oauth credentials behind"
     );
 }
 
