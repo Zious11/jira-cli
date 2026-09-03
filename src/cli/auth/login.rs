@@ -379,21 +379,22 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
     };
     let new_method = if oauth_selected { "oauth" } else { "api_token" };
 
-    // BC-1.1.013 EC-1.1.013-2 / BC-1.1.014 EC-1.1.014-4 (M-1): a
-    // mechanism-switching re-declaration clears the outgoing mechanism's
-    // credentials before/alongside writing the new mechanism's. The
-    // SHOULD-level stderr notice is scoped to the non-interactive switch
-    // case only — the interactive picker interaction already makes the
-    // switch visible to the user.
+    // BC-1.1.013 EC-1.1.013-2 / BC-1.1.014 EC-1.1.014-4 (M-1), AMENDED by
+    // FIX-F5-login-switch (relogin-then-replace ordering, mirroring I-6 /
+    // BC-1.2.051's fix to `refresh_credentials`): a mechanism-switching
+    // re-declaration must obtain and STORE the new mechanism's credentials
+    // FIRST, and only clear the outgoing mechanism's now-orphaned
+    // credentials AFTER that has succeeded. The old "clear-then-login"
+    // ordering (clearing before dispatch) left a profile credential-less if
+    // the new login failed (browser cancel, network error, a missing
+    // `--no-input` value) — strictly worse than the pre-command state. See
+    // `clear_outgoing_mechanism_on_switch`'s doc comment for why the clear
+    // step itself was also narrowed to per-kind (never
+    // `auth::clear_profile_creds`, which would delete the credentials this
+    // reorder just stored).
     let switching = current_auth_method
         .as_deref()
         .is_some_and(|current| current != new_method);
-    clear_outgoing_mechanism_on_switch(
-        &Profile::from(target.clone()),
-        current_auth_method.as_deref(),
-        new_method,
-        args.no_input && switching,
-    )?;
 
     if oauth_selected {
         login_oauth(
@@ -407,6 +408,19 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
     } else {
         login_token(&target, args.email, args.token, args.no_input).await?;
     }
+
+    // Reached only when the login above succeeded — a failed login returns
+    // early via `?` and this line, and therefore the outgoing-credential
+    // clear, never runs. The SHOULD-level stderr notice is scoped to the
+    // non-interactive switch case only — the interactive picker interaction
+    // already makes the switch visible to the user.
+    clear_outgoing_mechanism_on_switch(
+        &Profile::from(target.clone()),
+        current_auth_method.as_deref(),
+        new_method,
+        args.no_input && switching,
+    )?;
+
     if matches!(args.output, OutputFormat::Json) {
         println!(
             "{}",
@@ -537,22 +551,42 @@ pub fn prompt_auth_method_picker() -> Result<bool> {
     Ok(choice == 0)
 }
 
-/// BC-1.1.013 EC-1.1.013-2 / BC-1.1.014 EC-1.1.014-4 (M-1): clear the
-/// OUTGOING mechanism's per-profile credentials when an `auth login`
-/// invocation (interactive re-declaration OR non-interactive mechanism
-/// switch) is about to persist `new_method` onto `profile` and that differs
-/// from the profile's CURRENT `auth_method` — before or alongside writing
-/// the new mechanism's credentials.
+/// BC-1.1.013 EC-1.1.013-2 / BC-1.1.014 EC-1.1.014-4 (M-1), AMENDED by
+/// FIX-F5-login-switch (relogin-then-replace ordering): clear the OUTGOING
+/// mechanism's per-profile credentials once an `auth login` invocation
+/// (interactive re-declaration OR non-interactive mechanism switch) has
+/// ALREADY persisted `new_method`'s credentials onto `profile`, and that
+/// differs from the profile's PRIOR `auth_method`.
+///
+/// **Caller contract (data-loss fix, mirrors I-6 / BC-1.2.051's fix to
+/// `refresh_credentials`):** this function MUST be called only AFTER
+/// `login_oauth`/`login_token` has returned `Ok`, never before. The old
+/// "clear-then-login" ordering called this BEFORE dispatching the new
+/// login, so a failed login (browser cancel, network error, a missing
+/// `--no-input` value) left the profile with the outgoing mechanism's
+/// credentials already deleted and no replacement ever stored — worse than
+/// the profile's state before the command ran. `handle_login` now calls
+/// `login_oauth`/`login_token` first and only reaches this call on success;
+/// a failed login returns early via `?` and this function is never invoked,
+/// so the prior credentials stay completely intact.
 ///
 /// A SAME-mechanism re-declaration, or a first-time declaration
 /// (`current_auth_method` is `None`), is a caller-side no-op — the existing
 /// `store_api_token`/`store_oauth_tokens` write already overwrites in
 /// place, so callers must not invoke this function in that case.
 ///
-/// MUST reuse [`crate::api::auth::clear_profile_creds`]'s existing per-kind
-/// branches (OAuth-pair AND API-token-pair deletion, ADR-0020 §Decision 7 /
-/// BC-1.2.014) — the O-1/SR-011 requirement is explicit that per-kind
-/// clearing must not be re-implemented inline here.
+/// **Clears ONLY the outgoing mechanism's pair — NOT both kinds.** Reuses
+/// [`crate::api::auth::clear_profile_oauth_pair`] /
+/// [`crate::api::auth::clear_profile_api_token_pair`], the SAME per-kind
+/// primitives [`crate::api::auth::clear_profile_creds`] is itself built
+/// from (ADR-0020 §Decision 7 / BC-1.2.014) — so per-kind clearing is still
+/// not re-implemented inline here, just dispatched to the single relevant
+/// kind instead of both. This is load-bearing under the new ordering:
+/// because this call now runs AFTER the new mechanism's credentials are
+/// already stored, calling the combined `clear_profile_creds` (which clears
+/// BOTH the OAuth pair AND the API-token pair unconditionally) would delete
+/// the credentials this function's caller just persisted. Dispatching on
+/// `outgoing` alone keeps the newly-stored `new_method` pair untouched.
 ///
 /// `emit_switch_notice` gates BC-1.1.014 EC-1.1.014-4's SHOULD-level
 /// informational stderr line for a NON-interactive mechanism switch (e.g.
@@ -577,16 +611,20 @@ pub fn clear_outgoing_mechanism_on_switch(
         return Ok(());
     }
 
-    // Reuse clear_profile_creds's existing per-kind branches (OAuth-pair
-    // AND API-token-pair deletion) rather than re-implementing per-kind
-    // clearing inline — the O-1/SR-011 requirement this function's doc
-    // comment cites explicitly. clear_profile_creds clears BOTH kinds
-    // unconditionally, so it's correct regardless of which specific
-    // mechanism is the outgoing one.
-    auth::clear_profile_creds(profile).with_context(|| {
+    // Dispatch to the per-kind clear matching ONLY the outgoing mechanism —
+    // never the combined clear_profile_creds, which would also delete the
+    // new_method credentials this function's caller (handle_login) has
+    // already stored by the time this runs. An unrecognized `outgoing`
+    // value (e.g. a hand-edited config) has nothing of ours to clear.
+    let clear_result = match outgoing {
+        "oauth" => auth::clear_profile_oauth_pair(profile),
+        "api_token" => auth::clear_profile_api_token_pair(profile),
+        _ => Ok(()),
+    };
+    clear_result.with_context(|| {
         format!(
             "failed to clear profile {:?}'s outgoing '{outgoing}' credentials \
-             before switching to '{new_method}'",
+             after switching to '{new_method}'",
             profile.as_ref()
         )
     })?;

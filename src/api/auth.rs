@@ -596,6 +596,29 @@ pub fn clear_profile_oauth_pair(profile: &Profile) -> Result<()> {
     Ok(())
 }
 
+/// Clear ONLY a single profile's namespaced API-token-pair credentials
+/// (`<profile>:email` / `<profile>:api-token`) — never the OAuth pair, and
+/// never the legacy flat `KEY_EMAIL`/`KEY_API_TOKEN` keys
+/// (`S-cycle3-credential-absence-guard`'s no-touch invariant, BC-1.4.032).
+///
+/// Symmetric counterpart to [`clear_profile_oauth_pair`], added by
+/// FIX-F5-login-switch (BC-1.2.051-adjacent, relogin-then-replace ordering
+/// for `jr auth login`'s mechanism-switch path — see
+/// [`crate::cli::auth::login::clear_outgoing_mechanism_on_switch`]). That
+/// caller runs AFTER the new mechanism's credentials have already been
+/// stored, so it must clear ONLY the outgoing mechanism's pair —
+/// [`clear_profile_creds`] is unsuitable there because it clears BOTH kinds
+/// unconditionally and would delete the just-stored new credentials too.
+///
+/// `keyring::Error::NoEntry` on any step is success; any other keychain
+/// error propagates immediately via `?` (same tightening as
+/// [`clear_profile_creds`]/[`clear_profile_oauth_pair`]).
+pub fn clear_profile_api_token_pair(profile: &Profile) -> Result<()> {
+    delete_credential_tolerating_no_entry(&api_token_email_key(profile.as_ref()))?;
+    delete_credential_tolerating_no_entry(&api_token_key(profile.as_ref()))?;
+    Ok(())
+}
+
 /// Clear a single profile's stored credentials from the system keychain —
 /// BOTH the OAuth-pair AND the namespaced API-token-pair (other profiles +
 /// shared keys such as `oauth_client_id`/`oauth_client_secret` are
