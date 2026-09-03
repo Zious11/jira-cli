@@ -25,34 +25,53 @@ fn config_with_auth_method(method: Option<&str>) -> Config {
 #[test]
 fn chosen_flow_defaults_to_token_when_unset() {
     let config = config_with_auth_method(None);
-    assert_eq!(chosen_flow(&config, false), AuthFlow::Token);
+    assert_eq!(
+        chosen_flow_for_profile(&config.active_profile()),
+        AuthFlow::Token
+    );
 }
 
 #[test]
 fn chosen_flow_uses_token_for_explicit_api_token() {
     let config = config_with_auth_method(Some("api_token"));
-    assert_eq!(chosen_flow(&config, false), AuthFlow::Token);
+    assert_eq!(
+        chosen_flow_for_profile(&config.active_profile()),
+        AuthFlow::Token
+    );
 }
 
 #[test]
 fn chosen_flow_uses_oauth_when_config_says_so() {
     let config = config_with_auth_method(Some("oauth"));
-    assert_eq!(chosen_flow(&config, false), AuthFlow::OAuth);
+    assert_eq!(
+        chosen_flow_for_profile(&config.active_profile()),
+        AuthFlow::OAuth
+    );
 }
 
-#[test]
-fn chosen_flow_oauth_override_wins_over_config() {
-    let config = config_with_auth_method(Some("api_token"));
-    assert_eq!(chosen_flow(&config, true), AuthFlow::OAuth);
-}
+// `chosen_flow_oauth_override_wins_over_config` (pre-S-cycle3-chosen-flow-
+// reconcile) asserted the EXACT behavior DEC-321/BC-1.2.051 postcondition 3
+// removes: an `--oauth` override forcing `AuthFlow::OAuth` on an api_token
+// profile. `chosen_flow_for_profile` no longer takes an override parameter
+// at all (compile-time enforced — there is no argument left to pass "true"
+// for), so this test's premise no longer exists; it is removed rather than
+// rewritten at this unit level, since the three tests above already fully
+// cover AC-001 ("resolves solely from profile.auth_method"). The
+// behavioral guarantee the old test's NAME implied to a reader — that a
+// per-invocation flag cannot force a different mechanism — is now covered
+// at the `refresh_credentials` integration level, where the flag actually
+// lives: see `tests/auth_chosen_flow_reconcile.rs`'s
+// `test_ac_002_refresh_oauth_flag_on_api_token_profile_uses_token_flow_not_oauth`
+// and `test_vp_authdx_003_*` (VP-AUTHDX-003, BC-1.2.048).
 
 /// Regression: refresh against a non-active profile must dispatch the
 /// flow stored on THAT profile's auth_method, not the active profile's.
-/// `chosen_flow(&Config, _)` always reads the active profile, which
-/// silently picked the wrong flow when active=api_token but the refresh
-/// target=oauth (or vice-versa). `chosen_flow_for_profile` takes the
-/// resolved target profile so callers like `refresh_credentials` can
-/// thread the right ProfileConfig in.
+/// `chosen_flow_for_profile(&config.active_profile())` always reads the
+/// active profile, which would silently pick the wrong flow if a caller
+/// passed it when active=api_token but the refresh target=oauth (or
+/// vice-versa). `chosen_flow_for_profile` takes the resolved target
+/// profile so callers like `refresh_credentials` can thread the right
+/// `ProfileConfig` in directly.
 #[test]
 fn chosen_flow_for_profile_inspects_passed_profile_not_active() {
     let mut profiles = std::collections::BTreeMap::new();
@@ -79,13 +98,17 @@ fn chosen_flow_for_profile_inspects_passed_profile_not_active() {
         project: Default::default(),
         active_profile_name: "default".into(),
     };
-    // chosen_flow without override returns Token (active is api_token)
-    assert_eq!(chosen_flow(&config, false), AuthFlow::Token);
+    // chosen_flow_for_profile(&config.active_profile()) returns Token
+    // (active is api_token).
+    assert_eq!(
+        chosen_flow_for_profile(&config.active_profile()),
+        AuthFlow::Token
+    );
     // chosen_flow_for_profile against sandbox returns OAuth even though
     // the active profile is api_token — proves the resolver looks at
     // the passed profile, not the active one.
     let sandbox = config.global.profiles["sandbox"].clone();
-    assert_eq!(chosen_flow_for_profile(&sandbox, false), AuthFlow::OAuth);
+    assert_eq!(chosen_flow_for_profile(&sandbox), AuthFlow::OAuth);
 }
 
 #[test]
