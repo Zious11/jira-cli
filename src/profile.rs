@@ -5,17 +5,16 @@
 //! literal, passed where a real active-profile name is expected) a compile error instead
 //! of a silent cross-profile leakage risk.
 //!
-//! # Scaffolding-only, as of this commit
+//! # Fence and call-site sweep complete
 //!
-//! This story lands in two steps: this stub step introduces the newtype itself, fully
-//! implemented (it is trivial — presence-not-correctness, see below). The mechanical
-//! call-site sweep through `src/cache.rs`'s 16 per-profile functions, `src/api/auth.rs`'s
-//! 4 credential functions, `Config::active_profile_name`, and `JiraClient::profile_name`
-//! is the implementer step's TDD work and has NOT happened yet — those signatures still
-//! read `profile: &str` / `profile_name: String` as of this commit. See
-//! `docs/adr/0011-type-level-profile-fence.md` for the full accepted design and
-//! `.factory/cycles/cycle-003/phase-f2-spec-evolution/adr-0011-amendment-staged.md` for the
-//! F2-gate record this ADR amendment was applied from.
+//! This story landed in two steps: the newtype itself (trivial — presence-not-correctness,
+//! see below), then the mechanical call-site sweep through `src/cache.rs`'s per-profile
+//! functions, `src/api/auth.rs`'s credential functions, `Config::active_profile_name`, and
+//! `JiraClient::profile_name` (landed in #758). Those signatures now read `profile: &Profile`
+//! (not `&str`) throughout `src/cache.rs` and the credential-facing surface of
+//! `src/api/client.rs` — see `docs/adr/0011-type-level-profile-fence.md` for the full accepted
+//! design and `.factory/cycles/cycle-003/phase-f2-spec-evolution/adr-0011-amendment-staged.md`
+//! for the F2-gate record this ADR amendment was applied from.
 //!
 //! # Infallible by design (ADR-0011 § Consequences, SR-017)
 //!

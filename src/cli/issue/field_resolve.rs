@@ -316,9 +316,10 @@ fn collision_error(key: &str) -> anyhow::Error {
 ///
 /// # Parameters
 /// - `client`: the authenticated Jira API client.
-/// - `profile`: active profile name (CLAUDE.md cache-boundary rule — every
-///   cache reader/writer takes `profile: &str`; cross-profile field-ID leakage
-///   is a correctness bug because sandbox/prod custom-field IDs can differ).
+/// - `profile`: active profile (CLAUDE.md cache-boundary rule — every
+///   cache reader/writer takes `profile: &Profile`; cross-profile field-ID
+///   leakage is a correctness bug because sandbox/prod custom-field IDs can
+///   differ).
 /// - `source`: [`FieldMetaSource::Edit`] (issue key, editmeta) or
 ///   [`FieldMetaSource::Create`] (project key + issue type name, createmeta —
 ///   S-578-4). The `Create` arm resolves via `resolve_against_createmeta`:
