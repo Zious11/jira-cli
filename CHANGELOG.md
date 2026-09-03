@@ -69,6 +69,34 @@ All notable changes to jr will be documented here.
   profile's other-mechanism token pair, resolving the previously-tracked F1
   data-loss issue.
 
+### Fixed
+
+- **`jr auth login`'s mechanism-switching re-declaration no longer clears
+  the outgoing mechanism's credentials before the new login has succeeded**
+  (FIX-F5-login-switch, a Wave-5 adversary-surfaced MEDIUM data-loss
+  finding). Previously, `handle_login` called
+  `clear_outgoing_mechanism_on_switch` — which deletes the profile's
+  outgoing credential pair — BEFORE dispatching to `login_oauth`/
+  `login_token`. If the new login then failed (browser cancel, network
+  error, a missing `--no-input` value), the profile's prior WORKING
+  credentials had already been deleted and were never replaced, leaving the
+  profile credential-less — strictly worse than its state before the
+  command ran. This mirrors the exact "clear-then-login" antipattern the
+  accompanying I-6 fix (DEC-321, above) had just removed from `auth
+  refresh`, but it had not yet been applied to this `auth login`
+  mechanism-switch path. Fixed via the same relogin-then-replace ordering:
+  `login_oauth`/`login_token` now run FIRST, and the outgoing mechanism's
+  credentials are cleared ONLY after the new mechanism's credentials are
+  confirmed obtained and stored; a failed login leaves the prior
+  credentials completely untouched. As part of this fix,
+  `clear_outgoing_mechanism_on_switch` also narrowed from clearing BOTH
+  credential kinds unconditionally (via `clear_profile_creds`) to clearing
+  ONLY the outgoing kind (via the new `clear_profile_api_token_pair`,
+  symmetric with the existing `clear_profile_oauth_pair`) — under the new
+  ordering, the combined clear would otherwise delete the new mechanism's
+  credentials this same call just stored. A successful switch still leaves
+  no orphaned outgoing-mechanism credentials behind.
+
 ### Internal
 
 - **Un-deferred ADR-0011 (Status: Deferred → Accepted, DEC-317) and completed the
