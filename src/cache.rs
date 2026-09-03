@@ -118,13 +118,39 @@ pub fn cache_root() -> PathBuf {
 }
 
 /// Per-profile cache directory: `<cache_root>/v1/<profile>/`.
+///
+/// # Empty-profile landmine (F2-05, defense-in-depth)
+///
+/// `Profile::from` performs no validation (ADR-0011) — an empty-string
+/// `Profile` is constructible. `PathBuf::join("")` appends no new path
+/// segment, so `cache_dir` given an empty profile would resolve to
+/// `<cache_root>/v1/` itself — the shared root every profile's cache lives
+/// under — rather than one profile's own subdirectory. This function has
+/// no validated way to refuse that (it isn't fallible, and every existing
+/// caller already validates the profile name before reaching here), so the
+/// hard guard against acting on that path lives at
+/// [`clear_profile_cache`], the one caller where silently resolving to the
+/// shared root would be destructive.
 pub fn cache_dir(profile: &Profile) -> PathBuf {
     cache_root().join("v1").join(profile.as_ref())
 }
 
 /// Remove all cached data for a single profile. No-op if the directory does
 /// not exist; other profiles are untouched.
+///
+/// Defense-in-depth (F2-05): refuses an empty-string profile outright,
+/// unconditionally (not just in debug builds — this is a destructive
+/// filesystem operation, not a test seam). Without this guard, an empty
+/// `Profile` (constructible per [`cache_dir`]'s doc note — `Profile::from`
+/// performs no validation, ADR-0011) would resolve to `<cache_root>/v1/`
+/// itself, and `remove_dir_all` on that path would wipe every profile's
+/// cache in one call. Not currently reachable — every caller validates the
+/// profile name first — but this is a one-line boundary guard on a
+/// "delete the whole cache" landmine, not a response to an observed bug.
 pub fn clear_profile_cache(profile: &Profile) -> Result<()> {
+    if profile.as_ref().is_empty() {
+        anyhow::bail!("refusing to clear cache: profile name is empty");
+    }
     let dir = cache_dir(profile);
     if dir.exists() {
         std::fs::remove_dir_all(dir)?;
@@ -966,6 +992,53 @@ mod tests {
                     .unwrap()
                     .is_some(),
                 "sandbox cache preserved"
+            );
+        });
+    }
+
+    /// F2-05: an empty-string `Profile` (constructible per ADR-0011 —
+    /// `Profile::from` performs no validation) resolves via `cache_dir` to
+    /// `<cache_root>/v1/` itself (`PathBuf::join("")` appends no new
+    /// segment), the shared root every profile's cache lives under.
+    /// `clear_profile_cache` must refuse this outright rather than
+    /// `remove_dir_all`-ing the entire `v1/` tree — verified here by
+    /// seeding two other profiles' caches and asserting both survive an
+    /// (errored) empty-profile clear attempt.
+    #[test]
+    fn clear_profile_cache_refuses_empty_profile_and_preserves_other_profiles() {
+        with_temp_cache(|| {
+            write_team_cache(
+                &Profile::from("prod"),
+                &[CachedTeam {
+                    id: "p".into(),
+                    name: "P".into(),
+                }],
+            )
+            .unwrap();
+            write_team_cache(
+                &Profile::from("sandbox"),
+                &[CachedTeam {
+                    id: "s".into(),
+                    name: "S".into(),
+                }],
+            )
+            .unwrap();
+
+            let result = clear_profile_cache(&Profile::from(String::new()));
+
+            assert!(
+                result.is_err(),
+                "clear_profile_cache must refuse an empty-string profile"
+            );
+            assert!(
+                read_team_cache(&Profile::from("prod")).unwrap().is_some(),
+                "prod cache must survive a refused empty-profile clear"
+            );
+            assert!(
+                read_team_cache(&Profile::from("sandbox"))
+                    .unwrap()
+                    .is_some(),
+                "sandbox cache must survive a refused empty-profile clear"
             );
         });
     }
