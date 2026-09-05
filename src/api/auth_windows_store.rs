@@ -144,6 +144,17 @@ pub(crate) mod envelope {
 /// unit-testable on any CI runner; its call site (`engage_dpapi_fallback`,
 /// `src/api/auth.rs`) is what gates DPAPI engagement to `#[cfg(windows)]`
 /// in production (BC-1.4.035 Invariant 3).
+///
+/// `#[cfg(any(windows, debug_assertions))]`: on Windows this is always a
+/// production caller (`engage_dpapi_fallback`'s `#[cfg(windows)]` arm); on
+/// non-Windows it is called ONLY from `engage_dpapi_fallback`'s
+/// `#[cfg(debug_assertions)]`-gated `JR_FORCE_DPAPI_FALLBACK` seam, so on a
+/// non-Windows RELEASE build (`debug_assertions` false) it would have no
+/// caller at all — this gate keeps it out of that one build/platform
+/// combination entirely (rather than leaving it in as unreachable code, or
+/// suppressing the lint), while every debug build (which includes every
+/// `cargo test` run) still compiles and exercises it in full.
+#[cfg(any(windows, debug_assertions))]
 pub(crate) fn should_fallback_to_dpapi(err: &keyring::Error) -> bool {
     matches!(err, keyring::Error::TooLong(_, _))
 }
