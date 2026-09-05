@@ -72,6 +72,8 @@
 //! | EC-1.2.052-2        | `test_fetch_cloud_id_soft_fails_on_404` (seam)                        |
 //! | EC-1.2.052-3        | `test_fetch_cloud_id_soft_fails_on_missing_cloud_id_field` (seam)     |
 //! | EC-1.2.052-2 redirect | `test_fetch_cloud_id_does_not_follow_redirect` (seam)               |
+//! | FIX-F6-1 (body-cap boundary) | `test_fetch_cloud_id_succeeds_on_body_exactly_at_cap` (seam) |
+//! | FIX-F6-1 (body-cap boundary) | `test_fetch_cloud_id_soft_fails_on_body_one_byte_over_cap` (seam) |
 //! | AC-001, keyring     | `test_login_token_persists_explicit_cloud_id_override_e2e`           |
 //! | AC-003, keyring     | `test_login_token_soft_fails_and_still_succeeds_on_fetch_failure`     |
 //! | AC-006, keyring     | `test_refresh_credentials_on_api_token_profile_still_succeeds_with_non_https_url` |
@@ -111,6 +113,38 @@ fn keyring_gate_active() -> bool {
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// FIX-F6-1 helper: builds a compact tenant_info JSON body — a plausible
+/// `cloudId` plus an `padding` filler field — whose SERIALIZED byte length
+/// is exactly `target_len`. Used to pin the `MAX_TENANT_INFO_RESPONSE_BYTES`
+/// boundary precisely (mutation-results.md §3): a body at this exact size
+/// must be distinguishable, via the fetch's Ok/Err outcome, from a body one
+/// byte larger, and both must otherwise be valid, parseable tenant_info
+/// JSON so the size cap itself — not JSON validity — is the only variable
+/// under test.
+fn build_tenant_info_body_of_exact_len(target_len: usize) -> String {
+    let overhead_probe = serde_json::json!({
+        "cloudId": "the-real-cloud-id",
+        "padding": ""
+    });
+    let overhead = serde_json::to_string(&overhead_probe).unwrap().len();
+    assert!(
+        target_len >= overhead,
+        "target_len {target_len} must be >= the fixed JSON overhead {overhead}"
+    );
+    let padding_len = target_len - overhead;
+    let body = serde_json::json!({
+        "cloudId": "the-real-cloud-id",
+        "padding": "a".repeat(padding_len)
+    });
+    let body_str = serde_json::to_string(&body).unwrap();
+    assert_eq!(
+        body_str.len(),
+        target_len,
+        "constructed tenant_info body length must exactly match target_len"
+    );
+    body_str
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +526,87 @@ async fn test_fetch_cloud_id_soft_fails_on_oversized_response_body() {
         result.is_err(),
         "FIX-F5-CYCLE4-2: an oversized response body must be a soft-fail \
          (Err), not an unbounded read"
+    );
+}
+
+/// FIX-F6-1 (mutation-results.md §3, tenant.rs:132:16 / tenant.rs:143:23
+/// survivors): a response body of EXACTLY `MAX_TENANT_INFO_RESPONSE_BYTES`
+/// (64 KiB) — otherwise valid, parseable tenant_info JSON with a plausible
+/// `cloudId` — must be ACCEPTED (`Ok`). The cap is `len > MAX`, not
+/// `len >= MAX`; this pins that exact boundary on BOTH the Content-Length
+/// fast-path guard and the streamed-read guard. Under either guard's
+/// `> -> >=` or `> -> ==` mutant, a body at precisely this size is
+/// incorrectly rejected, flipping this assertion from `Ok` to `Err` — the
+/// pre-existing 2 MiB oversized-body test cannot distinguish these mutants
+/// because it is so far over the cap that the OTHER (unmutated) guard
+/// backstops it, masking the mutation.
+#[tokio::test]
+async fn test_fetch_cloud_id_succeeds_on_body_exactly_at_cap() {
+    let _guard = env_lock().lock().await;
+    let server = MockServer::start().await;
+    let body = build_tenant_info_body_of_exact_len(64 * 1024);
+    Mock::given(method("GET"))
+        .and(path("/_edge/tenant_info"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+    unsafe {
+        std::env::set_var("JR_TENANT_INFO_URL", server.uri());
+    }
+
+    let result = fetch_cloud_id("https://plausible-real-site.example").await;
+
+    unsafe {
+        std::env::remove_var("JR_TENANT_INFO_URL");
+    }
+
+    assert_eq!(
+        result.expect(
+            "FIX-F6-1: a body of EXACTLY the 64 KiB cap must be accepted — \
+             the cap is `len > MAX`, not `len >= MAX`"
+        ),
+        "the-real-cloud-id"
+    );
+}
+
+/// FIX-F6-1 (mutation-results.md §3, companion boundary pin): a response
+/// body of exactly ONE BYTE OVER `MAX_TENANT_INFO_RESPONSE_BYTES` — still
+/// otherwise valid, parseable tenant_info JSON with a plausible `cloudId` —
+/// must be REJECTED (soft-fail). This proves the cap rejects the body
+/// BEFORE the parse would otherwise have succeeded: if the cap were removed
+/// or loosened, this exact body would parse fine and return
+/// `Ok("the-real-cloud-id")`. Distinguishes cap-active from cap-removed
+/// precisely at the boundary, closing the `* -> +` mutant on
+/// `MAX_TENANT_INFO_RESPONSE_BYTES` alongside the sibling `>` mutants (a
+/// wildly-oversized body rejects under either the real 64 KiB cap or a
+/// mutated ~1 KiB cap alike, so only a body this close to the true boundary
+/// can tell them apart).
+#[tokio::test]
+async fn test_fetch_cloud_id_soft_fails_on_body_one_byte_over_cap() {
+    let _guard = env_lock().lock().await;
+    let server = MockServer::start().await;
+    let body = build_tenant_info_body_of_exact_len(64 * 1024 + 1);
+    Mock::given(method("GET"))
+        .and(path("/_edge/tenant_info"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+    unsafe {
+        std::env::set_var("JR_TENANT_INFO_URL", server.uri());
+    }
+
+    let result = fetch_cloud_id("https://plausible-real-site.example").await;
+
+    unsafe {
+        std::env::remove_var("JR_TENANT_INFO_URL");
+    }
+
+    assert!(
+        result.is_err(),
+        "FIX-F6-1: a body ONE BYTE over the 64 KiB cap must be a soft-fail \
+         (Err) even though it is otherwise valid, parseable tenant_info \
+         JSON with a plausible cloudId — proving the cap rejects BEFORE the \
+         parse would have succeeded"
     );
 }
 

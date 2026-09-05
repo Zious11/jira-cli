@@ -39,6 +39,7 @@ high line coverage but untested assertion strength at the time of the F6 review.
 - `src/cli/field.rs` — `handle` (`jr field options <field>` entry point, S-580-1), `resolve_field_context`/`resolve_m2_project` (M1/M2/M3 field-context-mechanism resolution), `normalize_from_allowed_values`/`normalize_from_valid_values` (the normalized `FieldOption` model), `filter_options` (`--value` filter), `render_option_rows`, `resolve_field_id`; ~91 mutants — previously omitted from the examine_globs scope (added FIX-F6-MUTANTS-SCOPE)
 - `src/cli/issue/field_resolve.rs` — `resolve_edit_fields`/`dispatch_field_value` (shared `--field` resolution/dispatch hub for both `issue edit --field` and `issue create --field`, S-578-2/S-578-4), `detect_flag_field_overlap` (D2 collision guard), `resolve_against_createmeta`/`resolve_against_editmeta`, `compose_option_hint`/`compose_id_hint`/`compose_name_hint`/`compose_asset_hint` (wire-value composers); ~45 mutants — previously omitted from the examine_globs scope despite backing two command families (P22-001/DEC-149/S-MUTANTS-SCOPE-1 drift class) (added FIX-F6-MUTANTS-SCOPE)
 - `src/output.rs` — `sanitize_env_display`/`strip_control_and_ansi` (security-relevant display-sanitization for `ProfileConfig.env`, terminal-escape/control-char injection; same class as the CWE-116 display-safety sanitizer in `attachments.rs`), plus `render_table`/`render_json` in the same file (whole-file scope, no sub-file targeting — same tradeoff as `main.rs`/`queue.rs`) (added S-cycle3-env-tag, per pr-reviewer BLOCKING-1 on PR #752)
+- `src/api/jira/tenant.rs` — `fetch_cloud_id` (S-cycle4-cloud-id-correctness API-token cloud_id acquisition), `validate_and_trim_site_url`, `is_plausible_cloud_id`, and the `MAX_TENANT_INFO_RESPONSE_BYTES` response-body size-cap guards (both the Content-Length fast-path check and the streamed-read check). Fully default-CI-testable — no keyring or Windows-cfg boundary in this file — 21 mutants, 100% kill after the FIX-F6-1 body-cap boundary tests (see `fetch_cloud_id`'s test coverage in `tests/cloud_id_tenant_info.rs`, plus the inline constant regression pin in this file's own unit test module). Was omitted from the examine_globs scope at file-creation time (S-cycle4-cloud-id-correctness) — the same P22-001/DEC-149/S-MUTANTS-SCOPE-1 "new security-relevant file → add to mutants.toml at creation" drift class documented above, confirmed by cycle-004's F6 mutation pass (`.factory/phase-f6-hardening/cycle-004/mutation-results.md` §0) to have slipped for the ENTIRE cycle-004 auth cluster, not just this file (added FIX-F6-1)
 
 Configured in `.cargo/mutants.toml::examine_globs`. The CI job relies on this
 configuration alone (no `--file` CLI flags) for scope enforcement; `--in-diff` further
@@ -47,8 +48,42 @@ narrows to lines changed in the PR diff.
 Note: cargo-mutants v27+ reads its config from `.cargo/mutants.toml` (not `.mutants.toml`
 at repo root). This is the canonical config location for this project.
 
-Current `examine_globs` count: 21 entries (verify against `.cargo/mutants.toml` before citing
+Current `examine_globs` count: 22 entries (verify against `.cargo/mutants.toml` before citing
 this number elsewhere — it has drifted before and will drift again as scope changes).
+
+**FIX-F6-1 deferred, not added:** `src/api/auth.rs` and `src/cli/auth/login.rs` are NOT added
+to `examine_globs` by this change, despite being part of the same cycle-004 security-critical
+delta as `tenant.rs`. Both have a large majority of their mutants (29/48 for `auth.rs`, 5/19 for
+`login.rs`) unreachable under default `cargo test` — they observe only real-OS-keychain state
+(the VP-AUTHDX-005/006/007 keyring-gated boundary, `#[ignore]` + `JR_RUN_KEYRING_TESTS=1`) or are
+`#[cfg(windows)]`-only. Adding either file as-is would flood default CI with un-actionable
+"survivor" noise on every future diff touching them. Closing this gap needs either an in-CI
+keychain-injection seam or a broad, carefully-scoped `exclude_re` allowlist for the keyring-gated
+functions — both out of scope for FIX-F6-1; tracked as a follow-up (mutation-results.md §5,
+FIX-F6-A).
+
+**FIX-F6-1 `src/api/auth_windows_store.rs` — attempted, SKIPPED (not forced):** the mutation-
+results.md §3 partial run (53/71 processed before being intentionally stopped) reported only ONE
+non-cfg survivor — the documented-equivalent `fsync_parent_dir_best_effort with ()` mutant (a
+`()`-returning best-effort durability fsync; unobservable in any functional test by construction)
+— alongside 35 caught and 14 TIMEOUTs confined to the `#[cfg(windows)]` real-DPAPI region. This
+FIX-F6-1 pass attempted a fresh, clean (non-contended) scoped re-run
+(`--file src/api/auth_windows_store.rs`, `--jobs 2 --timeout 240`, restricted to the file's own
+inline unit tests plus its Windows/DPAPI-seam integration test binaries) to confirm that single-
+equivalent-mutant result before adding a narrow `exclude_re` for it. The re-run's OWN incremental
+build/test cycle per mutant proved far more expensive than the `tenant.rs` run (this file pulls in
+`keyring`/DPAPI-adjacent code paths that trigger a much larger dependency-recompilation graph per
+mutant) — observed throughput was roughly 1 mutant per ~60-90 seconds even with zero external
+contention, i.e. a full 71-mutant pass would run well over an hour, impractical to complete and
+verify within one hardening session. Rather than add the file with an `exclude_re` pinned to a
+result that was NOT independently re-confirmed end-to-end in this pass, **the addition is
+SKIPPED** — per this story's own explicit instruction not to force a scope addition that cannot be
+cleanly verified. This is a scheduling/runtime-cost deferral, not a discovered flooding problem:
+the partial-run evidence (35 caught / 1 equivalent / 14 windows-only-TIMEOUT, zero genuine
+default-CI survivors) is consistent with the file being a clean, single-`exclude_re` candidate —
+a future pass should re-run it to completion (ideally with a longer time budget or CI-side, where
+wall-clock cost is less constraining than an interactive session) and add it with the
+`fsync_parent_dir_best_effort` `exclude_re` once that full run is independently reconfirmed.
 
 ### Sibling Candidates Considered and Deferred (MAINT-MUTANTS-GLOBS-01)
 

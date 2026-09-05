@@ -6,6 +6,34 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+- **CI: mutation-test scope gap closed for `tenant.rs`; body-cap boundary
+  hardened (FIX-F6-1, cycle-004 F6 hardening):** `src/api/jira/tenant.rs`
+  (S-cycle4-cloud-id-correctness's `fetch_cloud_id` cloud_id acquisition —
+  21 mutants) is now in `examine_globs` (21 → 22 entries). The file was
+  omitted since creation, meaning the required `mutants` CI gate generated
+  zero mutants for the entire cycle-004 auth/tenant delta on any PR to date
+  — the same drift class as the prior `field.rs`/`field_resolve.rs` gap
+  (FIX-F6-MUTANTS-SCOPE). Two new tests
+  (`test_fetch_cloud_id_succeeds_on_body_exactly_at_cap` /
+  `test_fetch_cloud_id_soft_fails_on_body_one_byte_over_cap` in
+  `tests/cloud_id_tenant_info.rs`) plus an inline
+  `test_max_tenant_info_response_bytes_is_64_kib` regression pin kill 5
+  previously-surviving mutants on the `MAX_TENANT_INFO_RESPONSE_BYTES`
+  64 KiB response-body size cap (the constant itself, and the `>`/`>=`/`==`
+  boundary on both the Content-Length fast-path guard and the streamed-read
+  guard) — tenant.rs now kills 21/21 mutants (100%). `src/api/auth.rs` and
+  `src/cli/auth/login.rs` remain deliberately out of `examine_globs`
+  (dominated by keyring-gated and Windows-`#[cfg]` code unreachable under
+  default `cargo test`; needs a keychain-injection seam or a broad
+  documented `exclude_re`, tracked as a follow-up).
+  `src/api/auth_windows_store.rs` was attempted but SKIPPED: a fresh scoped
+  re-run to confirm the mutation-results.md-reported single equivalent
+  survivor (`fsync_parent_dir_best_effort with ()`) proved too slow to
+  complete and independently verify within this session (~60-90s/mutant,
+  71 mutants); rather than add an `exclude_re` pinned to a result not
+  freshly reconfirmed end-to-end, the addition is deferred to a follow-up
+  pass with a longer time budget. See `docs/specs/cargo-mutants-policy.md`
+  and `.factory/phase-f6-hardening/cycle-004/mutation-results.md`.
 - **README: corrected Windows install/config/cloud_id documentation**
   (S-cycle4-windows-docs, issue #760). Added a `Unblock-File` mark-of-the-web
   step to the Windows install instructions (a browser-downloaded `.zip` can

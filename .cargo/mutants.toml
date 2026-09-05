@@ -77,6 +77,14 @@ examine_globs = [
     # class as attachments.rs::display_sanitize_filename. Whole-file scope brings
     # render_table/render_json in too — accepted, tracked, same as main.rs/queue.rs.
     "src/output.rs",
+    # FIX-F6-1 (cycle-004 F6 hardening, examine_globs policy gap): S-cycle4-cloud-id-
+    # correctness's cloud_id acquisition (`fetch_cloud_id`, `validate_and_trim_site_url`,
+    # `is_plausible_cloud_id`, the response-body size-cap guards). Fully default-CI-
+    # testable — no keyring/Windows-cfg boundary — 21 mutants, 100% kill after the
+    # FIX-F6-1 body-cap boundary tests. Was omitted at file-creation time
+    # (S-cycle4-cloud-id-correctness); same P22-001/DEC-149 drift class as every prior
+    # "new security-relevant file → add to mutants.toml at creation" gap.
+    "src/api/jira/tenant.rs",
 ]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI

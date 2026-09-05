@@ -233,4 +233,17 @@ mod tests {
         assert!(is_plausible_cloud_id("the-real-cloud-id"));
         assert!(is_plausible_cloud_id("irrelevant-for-this-test"));
     }
+
+    /// FIX-F6-1 (mutation-results.md §3 tenant.rs:27:50 survivor): pins the
+    /// response-body size cap to exactly 64 KiB, not merely "a similarly
+    /// small number" — kills the `replace * with +` mutant
+    /// (`64 * 1024 = 65536` vs `64 + 1024 = 1088`), which no HTTP-level test
+    /// alone can distinguish from the real value since both are "small"
+    /// caps that reject the pre-existing 2 MiB oversized-body fixture the
+    /// same way.
+    #[test]
+    fn test_max_tenant_info_response_bytes_is_64_kib() {
+        assert_eq!(MAX_TENANT_INFO_RESPONSE_BYTES, 64 * 1024);
+        assert_eq!(MAX_TENANT_INFO_RESPONSE_BYTES, 65536);
+    }
 }
