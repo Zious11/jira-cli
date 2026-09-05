@@ -1374,9 +1374,10 @@ impl RedirectUriStrategy {
 ///
 /// **DEC-334 (corrected 2026-09-05, F1 adversarial finding):** the original
 /// wording instructed the Atlassian grant revoke as a REQUIRED step, framed
-/// as safe because "the grant this failed login attempt just created has no
-/// other consumer." Perplexity-validated research confirmed this is false
-/// and harmful: `jr` uses one shared embedded OAuth app, so revoking the
+/// as safe on the theory that the OAuth grant this one failed login
+/// attempt just created wasn't shared with anything else.
+/// Perplexity-validated research confirmed this is false and harmful:
+/// `jr` uses one shared embedded OAuth app, so revoking the
 /// grant is ACCOUNT-WIDE and signs out every `jr` profile on that Atlassian
 /// account, not just this one. See
 /// `.factory/research/atlassian-3lo-revoke-granularity-2026-09-05.md`. Site
@@ -5062,6 +5063,73 @@ mod tests {
     /// what was wrong and corrected — CHANGELOG.md prose is human
     /// review-guarded (PR review), not machine-guarded here.
     ///
+    /// PR #771 review Finding NB-1 (coverage): normalizes a chunk of
+    /// `auth.rs` source text for phrase-scanning purposes. Strips a leading
+    /// `///` doc-comment prefix and a trailing `\` string-literal
+    /// line-continuation marker from each physical line, then collapses
+    /// all whitespace runs (including the newlines between lines) to
+    /// single spaces.
+    ///
+    /// Without this, a raw substring scan misses a forbidden phrase split
+    /// across a rustdoc line-wrap or a `\`-continued string literal — every
+    /// message literal AND every multi-paragraph rustdoc comment in this
+    /// file uses one or the other, so a re-introduced harmful phrase could
+    /// hide behind either and evade
+    /// `test_no_account_wide_harmful_revoke_framing_in_auth_source` even
+    /// though a reader (or the rendered rustdoc / formatted string) sees
+    /// one continuous run of text. Demonstrated case: this very file's own
+    /// DEC-334 rustdoc paragraph above
+    /// [`site1_login_store_failure_message`] originally wrapped "...has no"
+    /// / "other consumer..." across two `///` lines — invisible to a raw
+    /// scan, caught once normalized.
+    fn normalize_for_phrase_scan(source: &str) -> String {
+        let mut normalized = String::with_capacity(source.len());
+        for raw_line in source.lines() {
+            let trimmed = raw_line.trim_start();
+            let after_doc_prefix = trimmed
+                .strip_prefix("///")
+                .map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
+                .unwrap_or(trimmed);
+            let without_continuation = after_doc_prefix
+                .strip_suffix('\\')
+                .unwrap_or(after_doc_prefix);
+            normalized.push_str(without_continuation);
+            normalized.push(' ');
+        }
+        normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// PR #771 review Finding NB-1: proves [`normalize_for_phrase_scan`]
+    /// actually closes the gap it claims to — a phrase deliberately wrapped
+    /// across two rustdoc lines, on a SYNTHETIC fixture (not a real doc
+    /// comment, so this test doesn't drift if the real rustdoc is later
+    /// reworded away from the phrase).
+    #[test]
+    fn test_normalize_for_phrase_scan_catches_wrapped_forbidden_phrase() {
+        let synthetic =
+            "/// this text says the grant has no\n/// other consumer in the whole system.\n";
+        let normalized = normalize_for_phrase_scan(synthetic).to_lowercase();
+        assert!(
+            normalized.contains("no other consumer"),
+            "normalize_for_phrase_scan must join a rustdoc-wrapped phrase back into one \
+             continuous run so the source-scan guard can catch it; got: {normalized}"
+        );
+    }
+
+    /// PR #771 review Finding NB-1: the same proof for a `\`-continued
+    /// string literal — every message string in this file's production
+    /// code uses this continuation style.
+    #[test]
+    fn test_normalize_for_phrase_scan_catches_backslash_continued_phrase() {
+        let synthetic = "        \"the grant this attempt created has no \\\n         other consumer in the system\"\n";
+        let normalized = normalize_for_phrase_scan(synthetic).to_lowercase();
+        assert!(
+            normalized.contains("no other consumer"),
+            "normalize_for_phrase_scan must join a backslash-continued string literal back \
+             into one continuous run; got: {normalized}"
+        );
+    }
+
     /// Research: `.factory/research/atlassian-3lo-revoke-granularity-2026-09-05.md`.
     #[test]
     fn test_no_account_wide_harmful_revoke_framing_in_auth_source() {
@@ -5074,7 +5142,13 @@ mod tests {
                  reformatted); update the split marker to match.",
             )
             .0;
-        let production_code_lower = production_code.to_lowercase();
+        // PR #771 review Finding NB-1: normalize BEFORE lower-casing so a
+        // forbidden phrase split across a rustdoc line-wrap or a
+        // `\`-continued string literal reads as one continuous run, the
+        // same way a reader (or the rendered rustdoc / formatted string)
+        // sees it -- a raw scan over `production_code` alone misses this
+        // class entirely (see `normalize_for_phrase_scan`'s doc comment).
+        let production_code_lower = normalize_for_phrase_scan(production_code).to_lowercase();
 
         const FORBIDDEN_PHRASES: &[&str] =
             &["no other consumer", "must first revoke", "safe cleanup"];
@@ -5084,7 +5158,8 @@ mod tests {
                 !production_code_lower.contains(phrase),
                 "DEC-334 VIOLATION: the CONFIRMED-harmful phrase '{phrase}' has reappeared in \
                  src/api/auth.rs's production code (a message string or rustdoc comment before \
-                 the `mod tests {{` boundary). This framing was Perplexity-validated as false \
+                 the `mod tests {{` boundary, after whitespace/continuation normalization). \
+                 This framing was Perplexity-validated as false \
                  and harmful: jr's shared embedded OAuth app means revoking its Atlassian grant \
                  is ACCOUNT-WIDE (signs out every jr profile on the account), not scoped to one \
                  profile. See \
