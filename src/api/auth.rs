@@ -1384,16 +1384,22 @@ fn site1_login_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow:
             "Authorization succeeded with Atlassian, but the OAuth tokens were too large for \
              Windows Credential Manager's 2560-byte limit AND jr's encrypted-file fallback \
              also failed ({inner}). Check available disk space and file permissions, then run \
-             \"jr auth login --oauth --profile {profile}\" again. You must first revoke the \
-             now-unused Atlassian grant: visit https://id.atlassian.com/manage-profile/apps."
+             \"jr auth login --oauth --profile {profile}\" again. To clean up this profile's \
+             stale credentials, run \"jr auth logout --profile {profile}\" or \"jr auth remove \
+             {profile}\". Optionally, you can revoke jr's access at \
+             https://id.atlassian.com/manage-profile/apps — this is ACCOUNT-WIDE and will sign \
+             out every jr profile on this Atlassian account, each needing \"jr auth login\" \
+             again."
         );
     }
     anyhow::anyhow!(
         "Authorization succeeded with Atlassian, but jr could not save the OAuth \
          tokens to the system keychain ({e:#}). Unlock your keychain (or grant \
          access to jr) and run `jr auth login --oauth --profile {profile}` again. \
-         To fully revoke the active grant first, visit \
-         https://id.atlassian.com/manage-profile/apps."
+         To clean up this profile's stored credentials, run `jr auth logout --profile \
+         {profile}` or `jr auth remove {profile}`. Optionally, you can revoke jr's access at \
+         https://id.atlassian.com/manage-profile/apps — this is ACCOUNT-WIDE and will sign out \
+         every jr profile on this Atlassian account, each needing `jr auth login` again."
     )
 }
 
@@ -4651,11 +4657,123 @@ mod tests {
             );
         }
 
-        // --- AC-002: Site 1 (login) honest-fail message REQUIRES the
-        // grant-revoke step. ---
+        // --- AC-001 / VP-AUTHDX-017 Invariant ordering proof (LOW finding,
+        // adversarial convergence): when a SINGLE anyhow::Error's chain
+        // carries BOTH markers (a pathological/defensive shape -- the two
+        // markers are produced at different points in the same call, never
+        // deliberately combined in production code, but the "checked FIRST"
+        // language in BC-1.4.039 Postcondition 1 / Invariant 4 is only a
+        // real guarantee if it holds regardless of which marker ends up
+        // deeper in the chain), ProfilePathEscape must win at BOTH sites --
+        // proven for BOTH orderings (ProfilePathEscape as the outer
+        // `.context()` layer, and as the inner/source layer), since
+        // anyhow::Error::downcast_ref searches the whole causal chain, not
+        // just the top frame. ---
+
+        /// Ordering 1 (helper): ProfilePathEscape is the OUTER `.context()`
+        /// layer, wrapping a `DpapiFallbackFailed`-based error as its source.
+        fn both_markers_escape_outer() -> anyhow::Error {
+            anyhow::Error::new(auth_windows_store::DpapiFallbackFailed("boom".to_string()))
+                .context(auth_windows_store::ProfilePathEscape::Colon)
+        }
+
+        /// Ordering 2 (helper): `DpapiFallbackFailed` is the OUTER layer,
+        /// wrapping a ProfilePathEscape-based error as its source.
+        fn both_markers_escape_inner() -> anyhow::Error {
+            anyhow::Error::new(auth_windows_store::ProfilePathEscape::Colon)
+                .context(auth_windows_store::DpapiFallbackFailed("boom".to_string()))
+        }
+
+        /// Shared assertion body for one chain ordering: builds a fresh
+        /// two-marker error per call site (an `anyhow::Error` is consumed by
+        /// value, so Site 1 and Site 3 each need their own construction),
+        /// and asserts ProfilePathEscape wins at both.
+        fn assert_profile_path_escape_wins_for_ordering(
+            label: &str,
+            build: fn() -> anyhow::Error,
+            expected_invalid_profile_name: &str,
+        ) {
+            // Sanity: the construction really does carry both markers
+            // somewhere in the chain, proving this is a genuine two-marker
+            // scenario and not an accidental single-marker construction.
+            let sanity_err = build();
+            assert!(
+                sanity_err
+                    .downcast_ref::<auth_windows_store::ProfilePathEscape>()
+                    .is_some(),
+                "test setup ({label}): expected a ProfilePathEscape marker somewhere in the \
+                 chain."
+            );
+            assert!(
+                sanity_err
+                    .downcast_ref::<auth_windows_store::DpapiFallbackFailed>()
+                    .is_some(),
+                "test setup ({label}): expected a DpapiFallbackFailed marker somewhere in the \
+                 chain."
+            );
+
+            let site1_msg = format!(
+                "{:#}",
+                site1_login_store_failure_message(TEST_PROFILE_NAME, build())
+            );
+            assert_eq!(
+                site1_msg, expected_invalid_profile_name,
+                "AC-001 VIOLATION ({label}, Site 1): ProfilePathEscape must be selected FIRST \
+                 regardless of its position in the error chain. Got: {site1_msg}"
+            );
+            assert!(
+                !site1_msg.contains("2560-byte"),
+                "AC-001 VIOLATION ({label}, Site 1): must never render the DpapiFallbackFailed \
+                 honest-fail message when ProfilePathEscape is also present. Got: {site1_msg}"
+            );
+
+            let site3_msg = format!(
+                "{:#}",
+                site3_refresh_store_failure_message(TEST_PROFILE_NAME, build())
+            );
+            assert_eq!(
+                site3_msg, expected_invalid_profile_name,
+                "AC-001 VIOLATION ({label}, Site 3): ProfilePathEscape must be selected FIRST \
+                 regardless of its position in the error chain. Got: {site3_msg}"
+            );
+            assert!(
+                !site3_msg.contains("2560-byte"),
+                "AC-001 VIOLATION ({label}, Site 3): must never render the DpapiFallbackFailed \
+                 honest-fail message when ProfilePathEscape is also present. Got: {site3_msg}"
+            );
+        }
 
         #[test]
-        fn test_bc_1_4_039_site1_dpapi_fallback_failed_requires_grant_revoke() {
+        fn test_ac_001_profile_path_escape_selected_first_regardless_of_chain_order() {
+            let escape = auth_windows_store::ProfilePathEscape::Colon;
+            let expected_invalid_profile_name = format!(
+                "{:#}",
+                invalid_profile_name_error(&Profile::from(TEST_PROFILE_NAME), escape)
+            );
+
+            assert_profile_path_escape_wins_for_ordering(
+                "escape_outer",
+                both_markers_escape_outer,
+                &expected_invalid_profile_name,
+            );
+            assert_profile_path_escape_wins_for_ordering(
+                "escape_inner",
+                both_markers_escape_inner,
+                &expected_invalid_profile_name,
+            );
+        }
+
+        // --- AC-002 (corrected 2026-09-05, DEC-334, F1 adversarial finding):
+        // Site 1 (login) honest-fail message recommends jr's own SCOPED
+        // cleanup (`jr auth logout` / `jr auth remove`) as the DEFAULT, and
+        // presents the Atlassian-side grant-revoke as OPTIONAL, carrying an
+        // explicit ACCOUNT-WIDE warning -- never as a required, "no other
+        // consumer" step (that framing was Perplexity-validated as
+        // harmful: revoking jr's shared embedded OAuth app's grant at
+        // manage-profile/apps signs out every jr profile on the account). ---
+
+        #[test]
+        fn test_bc_1_4_039_site1_dpapi_fallback_failed_recommends_scoped_cleanup_by_default() {
             let msg = format!(
                 "{:#}",
                 site1_login_store_failure_message(
@@ -4680,14 +4798,40 @@ mod tests {
                  profile. Got: {msg}"
             );
             assert!(
-                msg.to_lowercase().contains("revoke"),
-                "AC-002 VIOLATION: Site 1's honest-fail message must state the Atlassian \
-                 grant-revoke step as a REQUIRED action (this grant was created by the same \
-                 failed attempt and has no other consumer). Got: {msg}"
+                msg.contains(&format!("jr auth logout --profile {TEST_PROFILE_NAME}"))
+                    && msg.contains(&format!("jr auth remove {TEST_PROFILE_NAME}")),
+                "AC-002 VIOLATION: must recommend jr's own scoped cleanup (`jr auth logout` / \
+                 `jr auth remove`), scoped to this one profile, as the DEFAULT remediation. \
+                 Got: {msg}"
+            );
+            assert!(
+                msg.to_lowercase().contains("optionally") && msg.to_lowercase().contains("revoke"),
+                "AC-002 VIOLATION: the Atlassian grant-revoke step must be presented as \
+                 OPTIONAL (not required). Got: {msg}"
+            );
+            assert!(
+                msg.contains("ACCOUNT-WIDE")
+                    && msg
+                        .to_lowercase()
+                        .contains("sign out every jr profile on this atlassian account"),
+                "AC-002 VIOLATION: the optional revoke step must carry an explicit warning \
+                 that it is ACCOUNT-WIDE and signs out every jr profile on the account. \
+                 Got: {msg}"
             );
             assert!(
                 msg.contains("https://id.atlassian.com/manage-profile/apps"),
                 "AC-002 VIOLATION: must link to the Atlassian grant-management page. Got: {msg}"
+            );
+            assert!(
+                !msg.to_lowercase().contains("no other consumer"),
+                "AC-002 VIOLATION: must not repeat the CONFIRMED-harmful 'no other consumer' \
+                 framing (Perplexity-validated false: jr's shared embedded OAuth app's grant \
+                 has other consumers -- every other jr profile on the account). Got: {msg}"
+            );
+            assert!(
+                !msg.to_lowercase().contains("must first revoke"),
+                "AC-002 VIOLATION: must not present the revoke as a REQUIRED first step. \
+                 Got: {msg}"
             );
             assert!(
                 !msg.contains("Unlock your keychain"),
@@ -4763,11 +4907,15 @@ mod tests {
             );
         }
 
-        // --- AC-004: neither marker matched -> the existing "Unlock your
-        // keychain" message, UNCHANGED, at both sites. ---
+        // --- AC-004 (corrected 2026-09-05, DEC-334, F1 adversarial finding):
+        // neither marker matched -> Site 3's legacy "Unlock your keychain"
+        // message is BYTE-FOR-BYTE UNCHANGED; Site 1's legacy message is
+        // CORRECTED -- only its final grant-revoke sentence is replaced with
+        // the same scoped-cleanup-by-default / optional-account-wide-warned-
+        // revoke guidance AC-002 establishes. ---
 
         #[test]
-        fn test_bc_1_4_039_site1_none_matched_legacy_message_unchanged() {
+        fn test_bc_1_4_039_site1_none_matched_legacy_message_corrected() {
             let anyhow_err: anyhow::Error = keyring::Error::NoStorageAccess(Box::new(
                 std::io::Error::other("keychain is locked"),
             ))
@@ -4777,8 +4925,11 @@ mod tests {
                 "Authorization succeeded with Atlassian, but jr could not save the OAuth \
                  tokens to the system keychain ({inner_display}). Unlock your keychain (or grant \
                  access to jr) and run `jr auth login --oauth --profile {TEST_PROFILE_NAME}` again. \
-                 To fully revoke the active grant first, visit \
-                 https://id.atlassian.com/manage-profile/apps."
+                 To clean up this profile's stored credentials, run `jr auth logout --profile \
+                 {TEST_PROFILE_NAME}` or `jr auth remove {TEST_PROFILE_NAME}`. Optionally, you \
+                 can revoke jr's access at https://id.atlassian.com/manage-profile/apps — this is \
+                 ACCOUNT-WIDE and will sign out every jr profile on this Atlassian account, each \
+                 needing `jr auth login` again."
             );
             let actual = format!(
                 "{:#}",
@@ -4787,8 +4938,17 @@ mod tests {
             assert_eq!(
                 actual, expected,
                 "AC-004 VIOLATION: with neither marker present (a genuine lock/permission \
-                 error), Site 1's message must be byte-identical to the pre-existing 'Unlock \
-                 your keychain' text — EC-1.4.039-1."
+                 error), Site 1's message must match the CORRECTED text — same opening clause, \
+                 same {{e:#}} interpolation, same re-login instruction, but with the final \
+                 sentence replaced to recommend scoped cleanup by default and present the \
+                 Atlassian-side revoke as optional and account-wide-warned. Got: {actual}"
+            );
+            assert!(
+                !actual.to_lowercase().contains("no other consumer")
+                    && !actual.to_lowercase().contains("must first revoke")
+                    && !actual.contains("To fully revoke the active grant first"),
+                "AC-004 VIOLATION: must not retain any of the superseded harmful revoke \
+                 framing. Got: {actual}"
             );
         }
 

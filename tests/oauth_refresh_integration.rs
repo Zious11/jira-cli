@@ -1479,12 +1479,27 @@ async fn test_persist_before_publish_fault_injection() {
 ///       fact that `store_oauth_tokens`'s own delete-first step, BC-1.4.035,
 ///       typically already achieves this; the oracle asserts the resulting
 ///       STATE, not a call count, per BC-1.4.039 Postcondition 4's own
-///       "typically redundant, retained as defense-in-depth" framing).
+///       "typically redundant, retained as defense-in-depth" framing);
+///   (c) (MED-1, adversarial convergence) `clear_profile_oauth_pair` — the
+///       ONLY code path that touches the LEGACY flat `oauth-access-token`/
+///       `oauth-refresh-token` keys for the `"default"` profile
+///       (`store_oauth_tokens`'s delete-first step, BC-1.4.035, only ever
+///       touches the NAMESPACED `<profile>:oauth-*` keys) — was actually
+///       invoked. Without this, assertion (b) alone is satisfied whenever
+///       `store_oauth_tokens`'s own delete-first already removed the
+///       NAMESPACED pair, even if Site 3's proactive clear call were deleted
+///       entirely: `load_oauth_tokens` would still observe "no stored pair"
+///       for the namespaced keys, silently passing regardless of whether
+///       `clear_profile_oauth_pair` ran. Pre-seeding the legacy flat pair,
+///       untouched by delete-first, and asserting its absence afterward
+///       makes an accidentally-deleted proactive-clear call a genuinely
+///       detectable test failure.
 ///
 /// KEYRING-GATED: requires `JR_RUN_KEYRING_TESTS=1`.
 #[tokio::test]
 #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
-async fn test_bc_1_4_039_site3_dpapi_fallback_failed_message_and_proactive_clear() {
+async fn test_bc_1_4_039_site3_dpapi_fallback_failed_message_and_clear_profile_oauth_pair_invoked()
+{
     if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
         eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
         return;
@@ -1499,6 +1514,21 @@ async fn test_bc_1_4_039_site3_dpapi_fallback_failed_message_and_proactive_clear
 
     // Seed a real, fitting pair under the shared "default" test profile.
     harness::seed_oauth_tokens();
+
+    // MED-1 isolation seeding: pre-seed the LEGACY flat OAuth pair too.
+    // `store_oauth_tokens`'s delete-first step (BC-1.4.035) never touches
+    // these bare (non-namespaced) keys — only `clear_profile_oauth_pair`
+    // does, and only for the "default" profile (BC-1.2.014/BC-1.4.038).
+    // Their survival/removal is therefore the distinguishing signal for
+    // whether Site 3 actually invoked the proactive clear.
+    keyring::Entry::new("jr-s303-test", "oauth-access-token")
+        .expect("legacy access entry construction must succeed")
+        .set_password("legacy-access-bc-1-4-039")
+        .expect("legacy access seed write must succeed");
+    keyring::Entry::new("jr-s303-test", "oauth-refresh-token")
+        .expect("legacy refresh entry construction must succeed")
+        .set_password("legacy-refresh-bc-1-4-039")
+        .expect("legacy refresh seed write must succeed");
 
     let server = MockServer::start().await;
     set_env(
@@ -1566,6 +1596,15 @@ async fn test_bc_1_4_039_site3_dpapi_fallback_failed_message_and_proactive_clear
     // token" state afterward — never the stale, already-consumed pair.
     let load_result = auth::load_oauth_tokens(&jr::profile::Profile::from(harness::TEST_PROFILE));
 
+    // MED-1: read back the LEGACY flat pair BEFORE cleanup runs (cleanup
+    // itself would also remove these, masking the signal we're isolating).
+    let legacy_access_after = keyring::Entry::new("jr-s303-test", "oauth-access-token")
+        .expect("legacy access entry construction must succeed")
+        .get_password();
+    let legacy_refresh_after = keyring::Entry::new("jr-s303-test", "oauth-refresh-token")
+        .expect("legacy refresh entry construction must succeed")
+        .get_password();
+
     harness::cleanup_oauth_tokens();
 
     let load_err = load_result.expect_err(
@@ -1577,6 +1616,27 @@ async fn test_bc_1_4_039_site3_dpapi_fallback_failed_message_and_proactive_clear
         format!("{load_err:#}").contains("No stored OAuth token"),
         "AC-005 VIOLATION: expected the standard 'no stored OAuth token' absence error, not \
          some other failure shape. Got: {load_err:#}"
+    );
+
+    // MED-1: the LEGACY flat pair must ALSO be gone — this is the signal
+    // `store_oauth_tokens`'s delete-first step (BC-1.4.035) cannot produce
+    // on its own (it only ever touches the namespaced `<profile>:oauth-*`
+    // keys), so its absence here proves `clear_profile_oauth_pair` was
+    // actually invoked at Site 3, not merely that the namespaced pair
+    // happened to already be gone.
+    assert!(
+        legacy_access_after.is_err(),
+        "MED-1 VIOLATION: the LEGACY flat oauth-access-token must be gone after a Site-3 \
+         DpapiFallbackFailed — its survival means clear_profile_oauth_pair (AC-005's \
+         proactive clear) was never actually invoked (store_oauth_tokens's delete-first \
+         step never touches this key). Got: {legacy_access_after:?}"
+    );
+    assert!(
+        legacy_refresh_after.is_err(),
+        "MED-1 VIOLATION: the LEGACY flat oauth-refresh-token must be gone after a Site-3 \
+         DpapiFallbackFailed — its survival means clear_profile_oauth_pair (AC-005's \
+         proactive clear) was never actually invoked (store_oauth_tokens's delete-first \
+         step never touches this key). Got: {legacy_refresh_after:?}"
     );
 }
 
