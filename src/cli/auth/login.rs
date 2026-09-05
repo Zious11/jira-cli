@@ -155,12 +155,53 @@ async fn resolve_and_apply_cloud_id(
     profile: &str,
     cloud_id_override: Option<&str>,
 ) {
-    let _ = (config, profile, cloud_id_override);
-    todo!(
-        "S-cycle4-cloud-id-correctness: implement override precedence / \
-         tenant_info fetch / soft-fail fallback chain per ADR-0022 §2/§3, \
-         BC-1.2.052 Postconditions 1/2/3/5, BC-1.2.053"
-    )
+    if let Some(override_value) = cloud_id_override {
+        // AC-001 (BC-1.2.052 Postcondition 1): explicit override takes
+        // precedence — the fetch is never attempted — and is written,
+        // symmetric with a fetch-success write.
+        let p = config
+            .global
+            .profiles
+            .entry(profile.to_string())
+            .or_default();
+        p.cloud_id = Some(override_value.to_string());
+        return;
+    }
+
+    let site_url = config
+        .global
+        .profiles
+        .get(profile)
+        .and_then(|p| p.url.clone());
+
+    let Some(site_url) = site_url else {
+        // No URL to fetch against at all — soft-fail, leave cloud_id as-is.
+        eprintln!(
+            "warning: could not look up cloud_id for profile {profile:?} — no URL configured."
+        );
+        return;
+    };
+
+    match crate::api::jira::tenant::fetch_cloud_id(&site_url).await {
+        Ok(cloud_id) => {
+            // AC-005 / AC-007 (BC-1.2.052 Postcondition 5, BC-1.2.053
+            // Postcondition 1): fetch success overwrites p.cloud_id
+            // unconditionally, even a stale OAuth-era value.
+            let p = config
+                .global
+                .profiles
+                .entry(profile.to_string())
+                .or_default();
+            p.cloud_id = Some(cloud_id);
+        }
+        Err(err) => {
+            // AC-003 / AC-007 (BC-1.2.052 Postcondition 3, BC-1.2.053
+            // Postcondition 2): soft-fail — p.cloud_id is left as it
+            // already was (None stays None; a prior value survives
+            // untouched). Never abort login_token.
+            eprintln!("warning: could not look up cloud_id for profile {profile:?}: {err}");
+        }
+    }
 }
 
 /// Run the OAuth 2.0 (3LO) login flow and persist site configuration.
