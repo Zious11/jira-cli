@@ -818,6 +818,71 @@ pub fn load_api_token(profile: &Profile) -> Result<(String, String)> {
     }
 }
 
+/// Existence-only probe: does `profile` currently hold ANY stored
+/// credentials — under EITHER label (the namespaced OAuth pair, or the
+/// namespaced api-token pair) — that a subsequent ordinary command could
+/// actually load?
+///
+/// (PR #771 fresh-context re-review Finding NEW-1, S-cycle4-honest-fail-message,
+/// BC-1.4.039.) `src/cli/auth/login.rs::should_mark_auth_method_before_attempt`
+/// used `auth_method.is_none()` alone as a proxy for "brand-new profile,
+/// nothing to protect" — but `None` is also the state of a profile migrated
+/// from the legacy `[instance]` config shape
+/// ([`crate::config::migrate_legacy_global`]), which copies
+/// `instance.auth_method` verbatim and can therefore be `None` while the
+/// profile STILL holds a working, already-namespaced credential pair in the
+/// keychain. This probe makes that predicate's "no working credentials
+/// exist under any label yet" doc claim actually true, so a failing
+/// mechanism switch on such a profile no longer mislabels it and orphans
+/// its still-working credentials.
+///
+/// Checks, in order:
+/// 1. The namespaced OAuth pair (`<profile>:oauth-access-token` /
+///    `<profile>:oauth-refresh-token`).
+/// 2. The namespaced api-token pair (`<profile>:email` /
+///    `<profile>:api-token`).
+/// 3. For the `"default"` profile ONLY, the pre-multi-profile legacy flat
+///    OAuth pair (`oauth-access-token` / `oauth-refresh-token`) — mirroring
+///    [`load_oauth_tokens`]'s own migration fallback, since that pair would
+///    be silently migrated and used on the very next command.
+///
+/// Deliberately NOT probed: the legacy flat api-token pair (`email` /
+/// `api-token`). BC-1.4.032 already made that pair permanently unusable by
+/// [`load_api_token`] (it forces `jr auth login <profile>` regardless of
+/// `auth_method`), so its mere presence must NOT block a pre-mark — doing
+/// so would resurrect exactly the "trust a credential that can't actually
+/// be loaded" bug BC-1.4.032 was designed to close. Also not probed: the
+/// Windows DPAPI-encrypted-file OAuth fallback
+/// (`auth_windows_store::load_pair`) — every write to that fallback happens
+/// inside `store_oauth_tokens`, which is always reached through a
+/// successful login that also records `auth_method`, so a profile cannot
+/// reach that fallback while simultaneously carrying `auth_method: None`;
+/// tracked as an accepted, narrower-than-total residual rather than
+/// silently claimed closed.
+///
+/// A genuine keychain backend error propagates via `?`, exactly like every
+/// other [`read_keyring_optional`] call site in this module — it must never
+/// be coerced into "no stored credentials".
+pub fn profile_has_stored_credentials(profile: &Profile) -> Result<bool> {
+    if read_keyring_optional(&oauth_access_key(profile.as_ref()))?.is_some()
+        && read_keyring_optional(&oauth_refresh_key(profile.as_ref()))?.is_some()
+    {
+        return Ok(true);
+    }
+    if read_keyring_optional(&api_token_email_key(profile.as_ref()))?.is_some()
+        && read_keyring_optional(&api_token_key(profile.as_ref()))?.is_some()
+    {
+        return Ok(true);
+    }
+    if profile.as_ref() == "default"
+        && read_keyring_optional(KEY_OAUTH_ACCESS_LEGACY)?.is_some()
+        && read_keyring_optional(KEY_OAUTH_REFRESH_LEGACY)?.is_some()
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Read an optional keychain entry, distinguishing "not present" (`NoEntry`)
 /// from real backend failures.
 ///

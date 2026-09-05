@@ -1261,16 +1261,42 @@ fn test_auth_remove_json_shape() {
 
 #[test]
 fn should_mark_auth_method_before_attempt_true_for_brand_new_profile() {
-    assert!(should_mark_auth_method_before_attempt(None));
+    assert!(should_mark_auth_method_before_attempt(None, false));
 }
 
 #[test]
 fn should_mark_auth_method_before_attempt_false_when_switching_from_established_method() {
     // FIX-F5-login-switch territory: a profile with a WORKING, different
     // mechanism on record must not be pre-marked -- see
-    // `should_mark_auth_method_before_attempt`'s doc comment for why.
-    assert!(!should_mark_auth_method_before_attempt(Some("api_token")));
-    assert!(!should_mark_auth_method_before_attempt(Some("oauth")));
+    // `should_mark_auth_method_before_attempt`'s doc comment for why. This
+    // must hold regardless of `has_stored_credentials`, since a `Some(_)`
+    // `current_auth_method` short-circuits before that parameter is even
+    // consulted.
+    assert!(!should_mark_auth_method_before_attempt(
+        Some("api_token"),
+        false
+    ));
+    assert!(!should_mark_auth_method_before_attempt(
+        Some("oauth"),
+        false
+    ));
+    assert!(!should_mark_auth_method_before_attempt(
+        Some("api_token"),
+        true
+    ));
+}
+
+/// PR #771 fresh-context re-review Finding NEW-1 (S-cycle4-honest-fail-message,
+/// BC-1.4.039): `current_auth_method.is_none()` alone is an unsafe proxy for
+/// "brand-new profile, nothing to protect" -- a profile migrated from the
+/// legacy `[instance]` config shape can carry `auth_method: None` while
+/// STILL holding working credentials under some label. This predicate must
+/// NOT pre-mark such a profile even though its `current_auth_method` is
+/// `None`.
+#[test]
+fn should_mark_auth_method_before_attempt_false_when_none_labelled_profile_has_stored_credentials()
+{
+    assert!(!should_mark_auth_method_before_attempt(None, true));
 }
 
 #[test]
@@ -1289,7 +1315,7 @@ fn mark_auth_method_if_new_sets_method_for_brand_new_profile() {
         profiles,
         ..crate::config::GlobalConfig::default()
     };
-    let mutated = mark_auth_method_if_new(global, "fresh", None, "oauth");
+    let mutated = mark_auth_method_if_new(global, "fresh", None, "oauth", false);
     assert_eq!(
         mutated.profiles["fresh"].auth_method.as_deref(),
         Some("oauth")
@@ -1312,12 +1338,60 @@ fn mark_auth_method_if_new_leaves_switching_profile_untouched() {
         profiles,
         ..crate::config::GlobalConfig::default()
     };
-    let mutated = mark_auth_method_if_new(global, "existing", Some("api_token"), "oauth");
+    let mutated = mark_auth_method_if_new(global, "existing", Some("api_token"), "oauth", false);
     assert_eq!(
         mutated.profiles["existing"].auth_method.as_deref(),
         Some("api_token"),
         "a mechanism SWITCH must not be pre-marked -- the profile's still-working prior \
          mechanism must remain on record until the new login actually succeeds"
+    );
+}
+
+/// PR #771 fresh-context re-review Finding NEW-1 (S-cycle4-honest-fail-message,
+/// BC-1.4.039): reproduces the exact regression the review found in the B-1
+/// fix. A profile migrated from the legacy `[instance]` config shape can
+/// have `auth_method: None` while STILL holding working api-token
+/// credentials in the keychain (`profile_has_stored_credentials` would
+/// return `true` for it). Before this fix, `mark_auth_method_if_new` would
+/// still pre-mark such a profile as `"oauth"` ahead of a `jr auth login
+/// --oauth` switch attempt -- if that attempt then failed partway through,
+/// the profile was left labelled `"oauth"` with no OAuth credentials,
+/// breaking it even though its pre-existing api-token credentials were
+/// still perfectly valid. This test proves `auth_method` now stays `None`
+/// (not mislabelled) in exactly that scenario, so the profile keeps working
+/// via its existing credentials after a failed switch.
+#[test]
+fn mark_auth_method_if_new_leaves_legacy_none_labelled_profile_with_stored_credentials_untouched() {
+    let mut profiles = std::collections::BTreeMap::new();
+    profiles.insert(
+        "legacy".to_string(),
+        crate::config::ProfileConfig {
+            url: Some("https://legacy.example".into()),
+            // Legacy `[instance]`-migrated profile: `auth_method` was never
+            // tracked, so it copies through as `None` -- even though the
+            // profile still has working api-token credentials in the
+            // keychain (simulated here via `has_stored_credentials = true`).
+            auth_method: None,
+            ..crate::config::ProfileConfig::default()
+        },
+    );
+    let global = crate::config::GlobalConfig {
+        default_profile: Some("legacy".into()),
+        profiles,
+        ..crate::config::GlobalConfig::default()
+    };
+
+    // Simulate `handle_login`'s probe finding working credentials already
+    // stored under some label, then the OAuth switch attempt failing
+    // partway through (e.g. at the credential-store step).
+    let mutated = mark_auth_method_if_new(global, "legacy", None, "oauth", true);
+
+    assert_eq!(
+        mutated.profiles["legacy"].auth_method, None,
+        "NEW-1 regression: a legacy None-labelled profile with WORKING credentials under \
+         some label must not be pre-marked -- doing so mislabels the profile as \"oauth\" \
+         with no OAuth credentials, orphaning its still-working api-token credentials, if \
+         the switch attempt then fails"
     );
 }
 
@@ -1374,8 +1448,13 @@ fn b1_brand_new_oauth_profile_login_failure_logout_routes_to_oauth_branch() {
 
     // Simulate handle_login's pre-mark step firing before the OAuth flow is
     // attempted, then the flow failing partway through (e.g. at the
-    // credential-store step).
-    let global = mark_auth_method_if_new(global, "fresh", None, "oauth");
+    // credential-store step). `has_stored_credentials = false` because this
+    // is a genuinely brand-new profile -- no credentials exist under any
+    // label yet (distinguishing it from the NEW-1 regression scenario
+    // covered by
+    // `mark_auth_method_if_new_leaves_legacy_none_labelled_profile_with_stored_credentials_untouched`
+    // above).
+    let global = mark_auth_method_if_new(global, "fresh", None, "oauth", false);
 
     let auth_method = global.profiles["fresh"].auth_method.as_deref();
     assert!(
