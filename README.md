@@ -68,6 +68,22 @@ Stable releases ship a Windows asset (`x86_64-pc-windows-msvc.zip`) as of
 plain `@latest`. Set `prerelease = true` only if you want to track
 pre-release builds cut from `develop`, per the block above.
 
+**Windows: clear the "mark of the web" after downloading.** A `.zip`
+fetched via a browser (or mise, or any HTTP download) is tagged by Windows
+as coming from the internet; extracting or running it without clearing
+that tag can trigger a SmartScreen warning, or `jr.exe` can silently
+refuse to run with no explanation. Clear it with PowerShell's
+`Unblock-File` before extracting the archive:
+
+```powershell
+Unblock-File -Path .\jr-x86_64-pc-windows-msvc.zip
+Expand-Archive -Path .\jr-x86_64-pc-windows-msvc.zip -DestinationPath .
+```
+
+If you already extracted first, run `Unblock-File -Path .\jr.exe` on the
+binary itself instead — either order works, as long as the mark is
+cleared before you try to run `jr.exe`.
+
 If mise-installed `jr` refuses to launch on macOS with a Gatekeeper
 warning, clear the quarantine attribute. When mise is active in your
 shell, `mise which jr` resolves the shim:
@@ -312,15 +328,24 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 
 ## Configuration
 
-```bash
-# Global config
-~/.config/jr/config.toml
+Config and cache locations are platform-specific:
 
+| | Unix (macOS/Linux) | Windows |
+|---|---|---|
+| Global config | `~/.config/jr/config.toml` | `%APPDATA%\jr\config.toml` |
+| Per-profile cache (disposable, 7-day TTL) | `~/.cache/jr/v1/<profile>/teams.json` | `%LOCALAPPDATA%\jr\v1\<profile>\teams.json` |
+
+Config lives under Roaming (`%APPDATA%`) so it can follow a roaming
+Windows profile; cache lives under Local (`%LOCALAPPDATA%`) because it's
+disposable and shouldn't sync. If a command reports "No profiles
+configured" on Windows even though you're sure you've run `jr init`,
+check `%APPDATA%\jr\config.toml` — the Windows equivalent of `~/.config/jr/`.
+
+Per-project config is the same on every platform:
+
+```bash
 # Per-project config (in your repo root)
 .jr.toml
-
-# Per-profile cache (disposable, 7-day TTL)
-~/.cache/jr/v1/<profile>/teams.json
 ```
 
 **Global config (multi-profile shape):**
@@ -331,8 +356,8 @@ default_profile = "default"
 url = "https://yourorg.atlassian.net"
 auth_method = "api_token"  # or "oauth"
 # cloud_id, org_id, oauth_scopes, team_field_id, story_points_field_id
-# are auto-discovered during `jr init` / `jr auth login --oauth` and
-# populated here per profile.
+# are auto-discovered during `jr init` / `jr auth login` / `jr auth
+# refresh` (both OAuth and API-token flows) and populated here per profile.
 # oauth_scopes = "read:issue:jira write:issue:jira ... offline_access"
 
 [profiles.sandbox]
@@ -364,6 +389,24 @@ A single classic Atlassian API token authenticates the same user against
 any Atlassian Cloud site, so `email` + `api-token` are stored once in the
 OS keychain and shared by all `api_token` profiles. OAuth tokens are
 cloudId-scoped and stored per profile.
+
+**`cloud_id` auto-discovery.** `cloud_id` (Atlassian's internal tenant
+identifier, required by Assets/CMDB commands) is auto-discovered for
+*both* auth methods, not just OAuth: the OAuth flow gets it for free from
+the `accessible-resources` step during login; an API-token profile
+acquires it via an unauthenticated `GET {site}/_edge/tenant_info` lookup,
+attempted on `jr auth login`, `jr init`, and `jr auth refresh` alike. This
+lookup is best-effort and never blocks login — on failure (network error,
+non-2xx response, malformed body) `jr` prints a warning and leaves any
+existing `cloud_id` untouched, rather than failing the command. Pass
+`--cloud-id <uuid>` on `jr auth login` to set the value explicitly and
+skip the lookup entirely (useful in scripts, or if the endpoint is
+unreachable from your network). If `cloud_id` was never successfully
+acquired for a profile, Assets/CMDB commands (`jr assets ...`,
+`jr issue list --asset ...`) fail with an actionable `"Cloud ID not
+configured. Run \"jr init\" to set up your instance."` error — core
+commands (`jr issue`, `jr board`, `jr sprint`, etc.) are unaffected either
+way, regardless of auth method.
 
 **Per-project config:**
 ```toml

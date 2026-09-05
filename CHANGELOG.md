@@ -4,6 +4,19 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **README: corrected Windows install/config/cloud_id documentation**
+  (S-cycle4-windows-docs, issue #760). Added a `Unblock-File` mark-of-the-web
+  step to the Windows install instructions (a browser-downloaded `.zip` can
+  otherwise trigger a SmartScreen warning or silently refuse to run), a
+  per-platform config/cache path table (Windows: `%APPDATA%\jr\config.toml`,
+  `%LOCALAPPDATA%\jr\v1\<profile>\`; Unix: `~/.config/jr/config.toml`,
+  `~/.cache/jr/v1/<profile>/`, replacing the previous Unix-only reference),
+  and rewrote the `cloud_id` caveat to describe the corrected, both-auth-methods
+  auto-discovery behavior shipped by `S-cycle4-cloud-id-correctness` rather than
+  the pre-fix OAuth-only limitation. Doc-only; no `src/` changes.
+
 ### Fixed
 
 - **Windows: `jr auth login --oauth` no longer fails deterministically on
