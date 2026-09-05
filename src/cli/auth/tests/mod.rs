@@ -1299,6 +1299,52 @@ fn should_mark_auth_method_before_attempt_false_when_none_labelled_profile_has_s
     assert!(!should_mark_auth_method_before_attempt(None, true));
 }
 
+// ---------------------------------------------------------------------------
+// FIX-F5-CYCLE4-1 LOW-1 (F5-scoped adversarial review, cycle-004,
+// credential-orphan on legacy-None-mechanism switch): pure-branch unit tests
+// for `reconcile_legacy_none_outgoing_credentials`. Only the two branches
+// that never touch the keychain are covered here (`None` probe input, and a
+// probed kind equal to `new_method`) -- the branch that actually clears a
+// credential kind requires a real keyring backend and is covered by the
+// keyring-gated end-to-end tests in `tests/auth_oauth_default_creation.rs`
+// (`test_fix_f5_cycle4_1_low1_*`), which also reproduce the original orphan
+// bug against `handle_login` itself.
+// ---------------------------------------------------------------------------
+
+/// Guard: a genuinely brand-new (or otherwise nothing-stored) profile must
+/// be a pure no-op -- no keychain call is even attempted. Uses a profile
+/// name that has never touched any keychain in this process; if this
+/// function attempted a clear call for the `None` case, it would still
+/// return `Ok(())` here (deleting a nonexistent entry is tolerated), so the
+/// meaningful assertion is `Ok(())` reached via the EARLY branch, which
+/// `probed_outgoing_kind: None` forces by construction -- the function
+/// cannot reach `clear_stored_credential_kind` at all in this call.
+#[test]
+fn reconcile_legacy_none_outgoing_credentials_noop_when_nothing_was_stored() {
+    let profile = crate::profile::Profile::from("brand-new-cycle4-fix-f5-low1".to_string());
+    let result = reconcile_legacy_none_outgoing_credentials(&profile, None, "api_token");
+    assert!(
+        result.is_ok(),
+        "a probe result of None (nothing stored under any label) must be a \
+         caller-side no-op, never an error"
+    );
+}
+
+/// Guard: a probed kind that already matches `new_method` (the credential
+/// just re-stored under the same kind, on a `None`-labelled profile) must
+/// also be a pure no-op -- the ordinary `store_*` overwrite already
+/// handled it; this function must not attempt to clear the pair it was
+/// just told is the CURRENT one.
+#[test]
+fn reconcile_legacy_none_outgoing_credentials_noop_when_probed_kind_matches_new_method() {
+    let profile = crate::profile::Profile::from("same-kind-cycle4-fix-f5-low1".to_string());
+    let result = reconcile_legacy_none_outgoing_credentials(&profile, Some("oauth"), "oauth");
+    assert!(
+        result.is_ok(),
+        "a probed kind equal to new_method must be a no-op, never an error"
+    );
+}
+
 #[test]
 fn mark_auth_method_if_new_sets_method_for_brand_new_profile() {
     let mut profiles = std::collections::BTreeMap::new();

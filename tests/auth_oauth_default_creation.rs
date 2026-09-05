@@ -990,6 +990,268 @@ async fn test_fix_f5_successful_login_switch_stores_new_and_clears_outgoing_oaut
     );
 }
 
+// ---------------------------------------------------------------------------
+// FIX-F5-CYCLE4-1 LOW-1 (F5-scoped adversarial review, cycle-004,
+// credential-orphan on legacy-`None`-mechanism switch): the symmetric other
+// half of PR #771's NEW-1 fix. NEW-1 protected the PRE-login label (a legacy
+// `auth_method: None` profile with stored credentials under some label must
+// not be pre-marked ahead of an attempt). This story closes the POST-login
+// gap NEW-1 left open: such a profile's `switching` flag is `false` (it's
+// computed only from `current_auth_method.as_deref().is_some_and(...)`,
+// which is always `false` when `current_auth_method` is `None`), and
+// `clear_outgoing_mechanism_on_switch` itself early-returns whenever
+// `current_auth_method` is `None` by design — so before this fix, a
+// SUCCESSFUL login under a DIFFERENT mechanism on such a profile stored the
+// new pair and set `auth_method`, but never cleared the still-present old
+// credential, silently orphaning it in the keychain.
+// ---------------------------------------------------------------------------
+
+/// Reproduction: a profile migrated from the legacy `[instance]` config
+/// shape (`auth_method` absent from the TOML — copies through as `None`)
+/// that already holds a working OAuth pair. A non-interactive `jr auth
+/// login --api-token` on it must SUCCEED (storing the new api-token pair)
+/// AND clear the now-orphaned outgoing OAuth pair — not leave it behind.
+///
+/// RED pre-fix: `switching` is `false` (computed only against
+/// `current_auth_method.as_deref()`, which is `None` here), and
+/// `clear_outgoing_mechanism_on_switch` takes its own `current_auth_method
+/// == None` early return regardless — so the pre-fix code stores the new
+/// api-token pair but never touches the stale OAuth pair, which survives.
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_fix_f5_cycle4_1_low1_none_labelled_profile_with_stored_oauth_clears_orphan_on_successful_switch()
+ {
+    if !keyring_gate_active() {
+        return;
+    }
+    let _guard = env_lock().lock().await;
+    let svc = unique_service("cycle4-low1-orphan-clear");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg_dir = tmp.path().join("jr");
+    let cache_dir = tmp.path().join("cache");
+
+    unsafe {
+        scrub_jr_env();
+        std::env::set_var("JR_SERVICE_NAME", &svc);
+        std::env::set_var("JR_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("JR_CACHE_DIR", &cache_dir);
+    }
+
+    // Deliberately NO `auth_method` line — mirrors a profile migrated from
+    // the legacy `[instance]` config shape, which copies `auth_method`
+    // through verbatim and can leave it absent (`None`) even though the
+    // profile still holds working credentials.
+    write_config(
+        &cfg_dir,
+        "default_profile = \"legacy\"\n\n\
+         [profiles.legacy]\n\
+         url = \"https://legacy.example\"\n",
+    );
+    auth::store_oauth_tokens(&Profile::from("legacy"), "orphan-access", "orphan-refresh").unwrap();
+
+    let result = handle_login(LoginArgs {
+        profile: Some("legacy".to_string()),
+        url: None,
+        oauth: false,
+        api_token: true,
+        email: Some("cycle4@example.com".to_string()),
+        token: Some("cycle4-token".to_string()),
+        client_id: None,
+        client_secret: None,
+        cloud_id: None,
+        no_input: true,
+        output: OutputFormat::Table,
+    })
+    .await;
+
+    let oauth_after = auth::load_oauth_tokens(&Profile::from("legacy"));
+    let api_token_after = auth::load_api_token(&Profile::from("legacy"));
+
+    unsafe {
+        std::env::remove_var("JR_SERVICE_NAME");
+        std::env::remove_var("JR_CONFIG_DIR");
+        std::env::remove_var("JR_CACHE_DIR");
+    }
+
+    result.expect(
+        "a non-interactive api-token login on a legacy None-labelled profile \
+         with stored OAuth credentials must succeed",
+    );
+
+    let (email_after, token_after) =
+        api_token_after.expect("the new api_token credentials must be stored on success");
+    assert_eq!(email_after, "cycle4@example.com");
+    assert_eq!(token_after, "cycle4-token");
+
+    assert!(
+        oauth_after.is_err(),
+        "FIX-F5-CYCLE4-1 LOW-1: a SUCCESSFUL login on a legacy None-labelled \
+         profile must clear the now-orphaned outgoing OAuth pair, not leave \
+         it behind in the keychain"
+    );
+}
+
+/// Guard: a genuinely brand-new profile (no `auth_method`, no stored
+/// credentials under any label) must reach exactly the same successful
+/// outcome as before this fix — no spurious clear attempt, no error, and
+/// only the newly-stored api-token pair present afterward.
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_fix_f5_cycle4_1_low1_brand_new_none_labelled_profile_clears_nothing() {
+    if !keyring_gate_active() {
+        return;
+    }
+    let _guard = env_lock().lock().await;
+    let svc = unique_service("cycle4-low1-brand-new");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg_dir = tmp.path().join("jr");
+    let cache_dir = tmp.path().join("cache");
+
+    unsafe {
+        scrub_jr_env();
+        std::env::set_var("JR_SERVICE_NAME", &svc);
+        std::env::set_var("JR_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("JR_CACHE_DIR", &cache_dir);
+    }
+
+    write_config(
+        &cfg_dir,
+        "default_profile = \"brandnew\"\n\n\
+         [profiles.brandnew]\n\
+         url = \"https://brandnew.example\"\n",
+    );
+    // Deliberately: no seeded credentials of any kind.
+
+    let result = handle_login(LoginArgs {
+        profile: Some("brandnew".to_string()),
+        url: None,
+        oauth: false,
+        api_token: true,
+        email: Some("fresh@example.com".to_string()),
+        token: Some("fresh-token".to_string()),
+        client_id: None,
+        client_secret: None,
+        cloud_id: None,
+        no_input: true,
+        output: OutputFormat::Table,
+    })
+    .await;
+
+    let oauth_after = auth::load_oauth_tokens(&Profile::from("brandnew"));
+    let api_token_after = auth::load_api_token(&Profile::from("brandnew"));
+
+    unsafe {
+        std::env::remove_var("JR_SERVICE_NAME");
+        std::env::remove_var("JR_CONFIG_DIR");
+        std::env::remove_var("JR_CACHE_DIR");
+    }
+
+    result.expect("a brand-new profile's first login must succeed cleanly");
+
+    let (email_after, token_after) =
+        api_token_after.expect("the new api_token credentials must be stored");
+    assert_eq!(email_after, "fresh@example.com");
+    assert_eq!(token_after, "fresh-token");
+    assert!(
+        oauth_after.is_err(),
+        "a brand-new profile must never end up with an OAuth pair when only \
+         api_token was ever selected — the None-case reconcile step must not \
+         have fabricated or touched anything"
+    );
+}
+
+/// A FAILED mechanism-switch login on a legacy None-labelled profile that
+/// already holds stored credentials must leave BOTH the old credentials AND
+/// `auth_method` completely untouched — the reconcile step must never run
+/// before a successful login (relogin-then-replace, mirrors
+/// FIX-F5-login-switch's failing-half test for the `Some(_)` case).
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_fix_f5_cycle4_1_low1_failed_login_on_none_labelled_profile_leaves_old_creds_and_auth_method_untouched()
+ {
+    if !keyring_gate_active() {
+        return;
+    }
+    let _guard = env_lock().lock().await;
+    let svc = unique_service("cycle4-low1-failed-login");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg_dir = tmp.path().join("jr");
+    let cache_dir = tmp.path().join("cache");
+
+    unsafe {
+        scrub_jr_env();
+        std::env::set_var("JR_SERVICE_NAME", &svc);
+        std::env::set_var("JR_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("JR_CACHE_DIR", &cache_dir);
+    }
+
+    write_config(
+        &cfg_dir,
+        "default_profile = \"legacy2\"\n\n\
+         [profiles.legacy2]\n\
+         url = \"https://legacy2.example\"\n",
+    );
+    auth::store_oauth_tokens(&Profile::from("legacy2"), "keep-access", "keep-refresh").unwrap();
+
+    // Deterministic OAuth failure, zero keychain/network/browser I/O beyond
+    // the flag/env layer — mirrors
+    // `test_fix_f5_failed_login_switch_preserves_outgoing_api_token_creds`.
+    let result = handle_login(LoginArgs {
+        profile: Some("legacy2".to_string()),
+        url: None,
+        oauth: true,
+        api_token: false,
+        email: None,
+        token: None,
+        client_id: Some("only-id".to_string()),
+        client_secret: None,
+        cloud_id: None,
+        no_input: false,
+        output: OutputFormat::Table,
+    })
+    .await;
+
+    let oauth_after = auth::load_oauth_tokens(&Profile::from("legacy2"));
+
+    // Read back the persisted config to confirm `auth_method` was never
+    // written for this profile either — the pre-mark guard (PR #771 NEW-1)
+    // and this story's post-login reconcile step must both stay inert on a
+    // failed login.
+    let saved_config = std::fs::read_to_string(cfg_dir.join("config.toml")).unwrap();
+
+    unsafe {
+        std::env::remove_var("JR_SERVICE_NAME");
+        std::env::remove_var("JR_CONFIG_DIR");
+        std::env::remove_var("JR_CACHE_DIR");
+    }
+
+    let err = result.expect_err(
+        "a --client-id-without-secret OAuth switch attempt must fail deterministically",
+    );
+    let jr_err = err
+        .downcast_ref::<JrError>()
+        .expect("must be a JrError so it maps to a real exit code");
+    assert!(
+        jr_err.to_string().contains("--client-secret"),
+        "must fail via the OAuth app credential pair-gate, not some other \
+         path — got: {jr_err}"
+    );
+
+    let (access_after, refresh_after) = oauth_after.expect(
+        "FIX-F5-CYCLE4-1 LOW-1: a FAILED login on a legacy None-labelled \
+         profile must leave its prior stored OAuth credentials completely \
+         intact — the reconcile step must never run before a successful \
+         login",
+    );
+    assert_eq!(access_after, "keep-access");
+    assert_eq!(refresh_after, "keep-refresh");
+    assert!(
+        !saved_config.contains("auth_method"),
+        "a failed login on a legacy None-labelled profile must not write \
+         auth_method at all — got config:\n{saved_config}"
+    );
+}
+
 /// AC-010 (BC-1.1.016 Postcondition 1/2/3, Precondition 2a) — see the
 /// module-level "Safety note" for exactly why this cannot reach real
 /// network/browser code, and why the exact-message assertion below is the

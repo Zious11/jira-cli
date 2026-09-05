@@ -19,8 +19,8 @@ pub use login::{
 };
 #[cfg(test)]
 pub(crate) use login::{
-    mark_auth_method_if_new, prepare_login_target, resolve_oauth_scopes,
-    should_mark_auth_method_before_attempt,
+    mark_auth_method_if_new, prepare_login_target, reconcile_legacy_none_outgoing_credentials,
+    resolve_oauth_scopes, should_mark_auth_method_before_attempt,
 };
 pub use logout::handle_logout;
 #[cfg(test)]
