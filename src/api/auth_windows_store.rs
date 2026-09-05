@@ -342,14 +342,72 @@ fn cleanup_stale_tmp_siblings(final_path: &std::path::Path) {
     }
 }
 
+/// FIX-F5-CYCLE4-1 LOW-3 (F5-scoped adversarial review, cycle-004,
+/// atomic_write durability): best-effort `fsync` of `dir` — intended to be
+/// the tmp file's parent directory, called AFTER [`atomic_write`]'s
+/// `rename` — so the directory-entry update the rename itself performs is
+/// also flushed, not just the file's own contents (a bare file-content
+/// `fsync` plus `rename`, with no fsync on the directory, is not sufficient
+/// for the rename to durably survive a power loss on many POSIX
+/// filesystems: the file's bytes can be safely on disk while the directory
+/// entry pointing at the new name is still only in the OS's page cache).
+///
+/// **Platform scope, stated precisely — this is a Unix-filesystem
+/// guarantee, not a portable one.** `std::fs::File::open` on a directory
+/// path fails on Windows (Windows does not permit opening a directory as a
+/// plain file without `FILE_FLAG_BACKUP_SEMANTICS`, which `std::fs::File`
+/// never sets), so on Windows — this module's only real production target
+/// (`store_pair`'s `#[cfg(not(windows))]` arm never calls [`atomic_write`]
+/// at all) — this function's `File::open` call itself returns `Err` and the
+/// whole thing is a guaranteed, silent no-op every time it runs there.
+///
+/// **Model-b: swallow, never propagate** (matching
+/// `write_cmdb_fields_cache`/`write_object_type_attr_cache`'s documented
+/// choice in `src/cache.rs`'s "Cache-write error handling" convention).
+/// ANY error opening or syncing the directory — the expected Windows `Err`
+/// above, or a genuine permissions/backend failure on a Unix host running
+/// the test suite — is swallowed rather than propagated. By the time this
+/// runs, [`atomic_write`]'s rename has already completed and the new
+/// content is already visible under `final_path`; failing the whole
+/// `atomic_write` call over this best-effort extra durability step (which
+/// could not itself have corrupted anything already written) would be
+/// strictly worse than leaving the step best-effort. See [`atomic_write`]'s
+/// doc comment for the durability guarantee this does and does not add.
+#[cfg(any(windows, test))]
+fn fsync_parent_dir_best_effort(dir: &std::path::Path) {
+    if let Ok(dir_handle) = std::fs::File::open(dir) {
+        let _ = dir_handle.sync_all();
+    }
+}
+
 /// Atomically write `contents` to `final_path` (ADR-0021 §3, AC-013):
 /// best-effort age-gated stale-temp cleanup first (see
 /// [`cleanup_stale_tmp_siblings`]), then write to a `.tmp-<suffix>` sibling
 /// in the SAME directory, `fsync` it (`File::sync_all`, so a crash
 /// immediately after `rename` cannot leave a truncated file visible under
-/// the final name), then `rename` over `final_path`. `rename` within one
-/// filesystem volume is atomic; the parent directory is created
+/// the final name), then `rename` over `final_path`, then (FIX-F5-CYCLE4-1
+/// LOW-3) best-effort `fsync` the PARENT DIRECTORY too (see
+/// [`fsync_parent_dir_best_effort`]) so the rename's own directory-entry
+/// update is also flushed, not just the file's contents. `rename` within
+/// one filesystem volume is atomic; the parent directory is created
 /// (`create_dir_all`) if absent.
+///
+/// **Durability scope, stated precisely (FIX-F5-CYCLE4-1 LOW-3).** Even
+/// with the added parent-directory fsync, this function's crash-safety
+/// across an actual power loss is BEST-EFFORT, not a proven cross-platform
+/// guarantee: [`fsync_parent_dir_best_effort`] is a documented, silent
+/// no-op on Windows (this module's only real production target — see that
+/// function's own doc comment for exactly why), and even on a POSIX
+/// filesystem where it does run, "durable rename" carries
+/// platform/filesystem-specific caveats this crate does not attempt to
+/// fully enumerate or independently verify (see DEC-335's note elsewhere in
+/// this module on why the real `CryptProtectData` round-trip similarly
+/// cannot be exercised on a non-Windows host). If a crash still leaves this
+/// file corrupted or missing despite these best-effort steps, the fallback
+/// is simply `jr auth login` — an expected, already-handled recovery path,
+/// not a newly-introduced data-loss regression: [`load_pair`]'s
+/// corruption-envelope handling already treats a deserialize failure the
+/// same as a missing file.
 ///
 /// Plain filesystem work with no DPAPI/Windows dependency — see
 /// [`cleanup_stale_tmp_siblings`]'s doc comment for why this is factored
@@ -389,6 +447,7 @@ fn atomic_write(final_path: &std::path::Path, contents: &[u8]) -> std::io::Resul
         file.sync_all()?;
     }
     std::fs::rename(&tmp_path, final_path)?;
+    fsync_parent_dir_best_effort(parent);
     Ok(())
 }
 
@@ -1408,6 +1467,73 @@ mod tests {
         assert!(final_path.exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ------------------------------------------------------------------
+    // FIX-F5-CYCLE4-1 LOW-3 (F5-scoped adversarial review, cycle-004,
+    // atomic_write durability): `fsync_parent_dir_best_effort` +
+    // `atomic_write`'s call to it after `rename`. A real power-loss test
+    // isn't feasible (per the finding's own scope) — these tests instead
+    // pin (a) the round-trip is unaffected by the added step, and (b) the
+    // step is genuinely best-effort: it never turns a directory it cannot
+    // open/sync into a write failure.
+    // ------------------------------------------------------------------
+
+    /// Round-trip regression pin: `atomic_write` must still succeed and
+    /// still produce byte-exact content once it fsyncs the parent directory
+    /// after `rename` — the added durability step must not change
+    /// `atomic_write`'s observable success contract.
+    #[test]
+    fn test_atomic_write_round_trips_after_parent_dir_fsync_added() {
+        let dir = std::env::temp_dir().join(format!("jr-awt-dirfsync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let final_path = dir.join("oauth-tokens.dat");
+
+        atomic_write(&final_path, b"round-trip-payload").expect(
+            "FIX-F5-CYCLE4-1 LOW-3: atomic_write must still succeed once it fsyncs the parent \
+             directory after rename",
+        );
+        let contents = std::fs::read(&final_path).unwrap();
+        assert_eq!(contents, b"round-trip-payload");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `fsync_parent_dir_best_effort` must never panic and must complete
+    /// normally on a real, openable directory — the ordinary case this
+    /// function runs under on every successful `atomic_write` call.
+    #[test]
+    fn test_fsync_parent_dir_best_effort_succeeds_for_real_directory() {
+        let dir = std::env::temp_dir().join(format!("jr-fsyncdir-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // No panic, no return value to assert on by design (model-b:
+        // swallow) — completing this call at all is the test.
+        fsync_parent_dir_best_effort(&dir);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Model-b (swallow, never propagate): `fsync_parent_dir_best_effort`
+    /// must never panic even when the directory cannot be opened at all —
+    /// mirrors the guaranteed `File::open` failure this function documents
+    /// for every Windows production call. A nonexistent path is the
+    /// portable stand-in for "cannot be opened" available on any host OS.
+    #[test]
+    fn test_fsync_parent_dir_best_effort_swallows_error_for_unopenable_directory() {
+        let missing = std::env::temp_dir().join(format!(
+            "jr-fsyncdir-missing-{}-does-not-exist",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(!missing.exists(), "test setup: path must not exist");
+
+        // Must not panic and must not be observable as an error to the
+        // caller — this function's return type is `()`, so completing
+        // normally IS the assertion.
+        fsync_parent_dir_best_effort(&missing);
     }
 
     /// AC-013 (age-gated cleanup, ADR-0021 §3 Pass-2 Finding #6): a `*.tmp-*`

@@ -125,6 +125,46 @@ All notable changes to jr will be documented here.
   failure MODE itself (both message sites' distinct honest-fail text) is
   unreachable on macOS/Linux by construction; the generic keychain-failure
   message correction described above is NOT platform-limited.
+- **Three LOW findings from the cycle-004 F5 scoped adversarial review**
+  (FIX-F5-CYCLE4-1). (1) LOW-1: `jr auth login` no longer orphans a
+  credential pair when switching mechanisms on a profile migrated from the
+  legacy `[instance]` config shape (`auth_method: None` on record, but
+  still holding a working credential pair under some label). Previously,
+  `switching`/`clear_outgoing_mechanism_on_switch` only ever consulted
+  `current_auth_method`, which is `None` for such a profile regardless of
+  what's actually stored — so a successful login under a DIFFERENT
+  mechanism stored the new pair and set `auth_method`, but silently left
+  the old pair behind in the keychain. `handle_login` now probes WHICH
+  credential kind (if any) is stored under the `None` label BEFORE
+  attempting the new login (`auth::probe_stored_credential_kind`, a new
+  crate-public probe `profile_has_stored_credentials` is now expressed in
+  terms of), and — only AFTER the new login succeeds — clears that kind if
+  it differs from the newly-selected mechanism
+  (`reconcile_legacy_none_outgoing_credentials`, sharing its per-kind clear
+  dispatch with `clear_outgoing_mechanism_on_switch`). A genuinely brand-new
+  profile, a same-kind re-declaration, and a FAILED login all remain
+  no-ops/unaffected — the reconcile step runs only after both the login and
+  the pre-existing switch-clear have succeeded (relogin-then-replace,
+  unchanged). (2) LOW-2: `src/api/auth.rs`'s DEC-334 source-scan guard
+  (`normalize_for_phrase_scan`, `test_no_account_wide_harmful_revoke_framing_in_auth_source`)
+  stripped a leading `///` doc-comment prefix but not `//!` (inner-doc) or
+  a plain `//` line comment, so a forbidden revoke-framing phrase wrapped
+  across two `//!`- or `//`-prefixed lines evaded detection (the unstripped
+  marker sat between the two halves of the phrase after line-joining). Now
+  strips the longest matching marker (`///`, then `//!`, then bare `//`)
+  before whitespace-collapsing. (3) LOW-3: `auth_windows_store.rs`'s
+  `atomic_write` fsynced the renamed-into-place file's tmp sibling before
+  `rename`, but never fsynced the PARENT DIRECTORY afterward — so its doc
+  comment's crash-safety claim didn't actually cover the rename's own
+  directory-entry update surviving a power loss on POSIX filesystems. Added
+  `fsync_parent_dir_best_effort` (model-b: swallow any error, matching
+  `src/cache.rs`'s documented cache-write convention) and call it after
+  `rename`; softened `atomic_write`'s doc comment to state the durability
+  scope precisely — best-effort, not a proven guarantee, a documented
+  silent no-op on Windows (this module's only real production target,
+  since `std::fs::File::open` fails on a directory path there without
+  `FILE_FLAG_BACKUP_SEMANTICS`), with `jr auth login` as the expected
+  recovery path if a crash still corrupts the file despite these steps.
 
 ## [0.7.0-dev.4] - 2026-09-03
 
