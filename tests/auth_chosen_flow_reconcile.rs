@@ -611,3 +611,104 @@ async fn test_ac_007_failed_relogin_preserves_existing_api_token_pair() {
         "a failed refresh must leave the pre-refresh api-token completely unchanged"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Tier 4 (gated, #[ignore] + JR_RUN_KEYRING_TESTS=1): S-cycle4-cloud-id-
+// correctness — OPTIONAL keyring-gated confirmation tail for AC-007/008
+// (BC-1.2.053 mechanism-switch refresh-not-clear, VP-AUTHDX-020).
+//
+// VP-AUTHDX-020's PRIMARY oracle is the config-layer test inline in
+// `src/cli/auth/login.rs::cloud_id_fallback_chain_tests` (wiremock +
+// in-memory `Config`, no real keychain — `resolve_and_apply_cloud_id` is
+// module-private and unreachable from this file). This tail exists only to
+// confirm the full, real-keychain `login_token` path (the function `jr auth
+// login`'s mechanism-switch dispatch actually calls, per BC-1.2.053
+// Invariant 1 — no separate switch-detection code) behaves identically end
+// to end, per the story's own File Structure Requirements row for this
+// file ("Extend with the config-layer mechanism-switch scenario (AC-007/008)
+// and an optional keyring-gated confirmation tail").
+//
+// Only the PRESERVE-on-failure branch is exercised here (a non-https
+// profile url deterministically triggers fetch_cloud_id's own https-only
+// precondition skip — EC-1.2.052-2 — with zero network dependency). The
+// OVERWRITE-on-success branch needs a real HTTPS-reachable tenant_info
+// endpoint (or the `JR_TENANT_INFO_URL` seam documented in
+// `tests/cloud_id_tenant_info.rs`'s header, not yet implemented) and is
+// therefore NOT duplicated here — see that file's header comment for the
+// full explanation of why `wiremock` cannot produce a genuine success
+// response under `fetch_cloud_id`'s `https://` precondition.
+// ---------------------------------------------------------------------------
+
+/// AC-007 (BC-1.2.053 Postcondition 2, VP-AUTHDX-020), real-keychain tail:
+/// a profile holding a stale OAuth-era `cloud_id` that undergoes a
+/// mechanism switch (simulated here by calling `login_token` directly —
+/// the exact function `handle_login`'s switch dispatch calls, per
+/// Invariant 1) keeps that stale value intact when the `tenant_info` fetch
+/// fails, AND the real keychain pair is still written (the login itself
+/// succeeds — the fetch failure is ancillary, never blocking).
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_ac_007_mechanism_switch_preserves_stale_cloud_id_e2e_real_keychain() {
+    if !keyring_gate_active() {
+        return;
+    }
+    let _guard = env_lock().lock().await;
+
+    let svc = unique_service("cloud-id-switch-preserve");
+    let tmp = TempDir::new().unwrap();
+    let cfg_dir = tmp.path().join("jr");
+
+    unsafe {
+        std::env::set_var("JR_SERVICE_NAME", &svc);
+        std::env::set_var("JR_CONFIG_DIR", &cfg_dir);
+    }
+
+    // A profile that just switched FROM oauth: auth_method already flipped
+    // to api_token by the point login_token runs (handle_login updates
+    // auth_method as part of the very call under test — mirrored here by
+    // seeding it directly, since this test drives login_token in
+    // isolation), still holding the stale OAuth-era cloud_id, and a
+    // non-https url so the tenant_info fetch deterministically fails.
+    write_config(
+        &cfg_dir,
+        "default_profile = \"sandbox\"\n\n\
+         [profiles.sandbox]\n\
+         url = \"http://not-https.example.net\"\n\
+         auth_method = \"oauth\"\n\
+         cloud_id = \"stale-oauth-era-uuid\"\n",
+    );
+
+    let login_result = jr::cli::auth::login_token(
+        "sandbox",
+        Some("switch@example.com".to_string()),
+        Some("switch-token".to_string()),
+        None,
+        true,
+    )
+    .await;
+
+    let saved = std::fs::read_to_string(cfg_dir.join("config.toml")).unwrap();
+    let namespaced = auth::load_api_token(&Profile::from("sandbox"));
+
+    let _ = keyring::Entry::new(&svc, "sandbox:email").and_then(|e| e.delete_credential());
+    let _ = keyring::Entry::new(&svc, "sandbox:api-token").and_then(|e| e.delete_credential());
+    unsafe {
+        std::env::remove_var("JR_SERVICE_NAME");
+        std::env::remove_var("JR_CONFIG_DIR");
+    }
+
+    login_result.expect(
+        "AC-007: a tenant_info fetch failure during a mechanism switch must \
+         never abort login_token",
+    );
+    assert!(
+        saved.contains("stale-oauth-era-uuid"),
+        "AC-007/BC-1.2.053 Postcondition 2: the stale cloud_id must be \
+         PRESERVED (never bare-cleared) when the fetch fails. Saved:\n{saved}"
+    );
+    assert!(
+        namespaced.is_ok(),
+        "the real keychain pair must still be written despite the \
+         cloud_id fetch failure"
+    );
+}

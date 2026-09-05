@@ -40,5 +40,7 @@ struct TenantInfo {
 /// Postcondition 3) — this function never panics and never blocks a login.
 pub async fn fetch_cloud_id(site_url: &str) -> anyhow::Result<String> {
     let _ = site_url;
-    todo!("S-cycle4-cloud-id-correctness: implement https-only precondition + bare GET + bounded timeout + no-redirect + cloudId-only parse per ADR-0022 §1")
+    todo!(
+        "S-cycle4-cloud-id-correctness: implement https-only precondition + bare GET + bounded timeout + no-redirect + cloudId-only parse per ADR-0022 §1"
+    )
 }

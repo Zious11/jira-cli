@@ -2078,6 +2078,95 @@ mod tests {
             result.display()
         );
     }
+
+    /// S-cycle4-cloud-id-correctness — Two-Step Red Gate TEST (step 2 of 2)
+    /// for AC-009 (BC-1.2.054 Postcondition 1, Invariant 1/2; VP-AUTHDX-021):
+    /// `Config::base_url()` selects the OAuth gateway URL IFF
+    /// `auth_method == Some("oauth")` AND `cloud_id` is present — for the
+    /// FULL cross product of `auth_method` in {oauth, api_token,
+    /// unset/None} x `cloud_id` in {present, absent}. A "stale" vs
+    /// "correct" cloud_id makes no observable difference to this pure,
+    /// config-derived function — it is opaque UUID text substituted
+    /// verbatim into the gateway URL string — so {present, absent} is the
+    /// complete cross product this property needs, not a three-way
+    /// {correct, stale, absent} split (the story's own AC-009 text lists
+    /// "present-correct/present-stale/absent" as the conceptual states a
+    /// human might reason about; this pin covers "present" generically
+    /// since the two present-cases are byte-identical from `base_url()`'s
+    /// point of view).
+    ///
+    /// This is a REGRESSION PIN on already-correct, PRE-EXISTING behavior
+    /// (ADR-0022 §4) — no `src/config.rs` code change is made by this
+    /// story. It must FAIL LOUD if a future change removes the `oauth`
+    /// gate from `base_url()`.
+    ///
+    /// This test currently PASSES against `base_url()`'s existing,
+    /// unmodified implementation (confirmed: `cargo test
+    /// prop_base_url_selects_gateway_iff_oauth_and_cloud_id_present` is
+    /// green today) — it is a regression pin on already-correct code, not a
+    /// Red Gate test for new production code. Included here per Task 12 /
+    /// AC-009 so the pin exists from this story's first commit onward,
+    /// consistent with the "no code change to either function" contract.
+    mod proptests_ac_009_base_url_gateway_guard {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            #[test]
+            fn prop_base_url_selects_gateway_iff_oauth_and_cloud_id_present(
+                auth_method in prop_oneof![
+                    Just(Some("oauth".to_string())),
+                    Just(Some("api_token".to_string())),
+                    Just(None::<String>),
+                ],
+                cloud_id_present in any::<bool>(),
+                cloud_id in "[a-f0-9-]{8,36}",
+            ) {
+                let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+                // SAFETY: ENV_MUTEX held for this whole property test body —
+                // base_url() consults JR_BASE_URL first (debug builds only)
+                // and must not be short-circuited by a leaking env var from
+                // another test.
+                unsafe {
+                    std::env::remove_var("JR_BASE_URL");
+                }
+
+                let mut profiles = std::collections::BTreeMap::new();
+                profiles.insert(
+                    "sandbox".to_string(),
+                    ProfileConfig {
+                        url: Some("https://sandbox.atlassian.net".into()),
+                        auth_method: auth_method.clone(),
+                        cloud_id: if cloud_id_present { Some(cloud_id.clone()) } else { None },
+                        ..ProfileConfig::default()
+                    },
+                );
+                let config = Config {
+                    global: GlobalConfig {
+                        default_profile: Some("sandbox".into()),
+                        profiles,
+                        ..GlobalConfig::default()
+                    },
+                    project: ProjectConfig::default(),
+                    active_profile_name: "sandbox".into(),
+                };
+
+                let result = config.base_url().unwrap();
+                let expects_gateway = auth_method.as_deref() == Some("oauth") && cloud_id_present;
+
+                if expects_gateway {
+                    prop_assert_eq!(
+                        &result,
+                        &format!("https://api.atlassian.com/ex/jira/{cloud_id}")
+                    );
+                } else {
+                    prop_assert_eq!(&result, &"https://sandbox.atlassian.net".to_string());
+                }
+            }
+        }
+    }
 }
 
 /// VP-AUTHDX-009 (BC-6.1.015 AC-003): tolerant-reader + round-trip property

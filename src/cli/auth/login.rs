@@ -702,3 +702,302 @@ pub fn clear_outgoing_mechanism_on_switch(
 
     Ok(())
 }
+
+/// S-cycle4-cloud-id-correctness — Two-Step Red Gate TESTS (step 2 of 2) for
+/// `resolve_and_apply_cloud_id`'s override/fetch/soft-fail fallback chain
+/// (BC-1.2.052/053, ADR-0022 §2/§3, VP-AUTHDX-019/020).
+///
+/// `resolve_and_apply_cloud_id` is module-private — this inline test module
+/// is the ONLY place these behaviors can be exercised WITHOUT going through
+/// the real OS keychain (`login_token`'s `auth::store_api_token` write).
+/// This is exactly the "config-layer verification without a real credential
+/// store" AC-008/VP-AUTHDX-020 calls for: an in-memory `Config`/
+/// `ProfileConfig` plus `wiremock`, no keychain touched anywhere below.
+///
+/// ## `JR_TENANT_INFO_URL` seam — REQUIRED, NOT YET IMPLEMENTED
+///
+/// `fetch_cloud_id` (ADR-0022 §1, `src/api/jira/tenant.rs`) REQUIRES
+/// `site_url` to start with `https://` — a real security invariant (Pass-4
+/// adversarial review Finding #4: closes an on-path plaintext
+/// wrong-tenant-`cloudId` vector), not a testing inconvenience to relax.
+/// `wiremock` 0.6.5 has NO HTTPS/TLS support (verified directly against its
+/// public `MockServerBuilder` API: only `.listener()` and
+/// `.disable_request_recording()` exist — no TLS/cert configuration of any
+/// kind), so a genuine 200-plus-`cloudId` response can never be produced by
+/// pointing `fetch_cloud_id` at a real `wiremock` server while honoring the
+/// `https://` requirement literally: the TLS handshake against a plaintext
+/// server fails before any HTTP semantics are ever exchanged. This is a
+/// hard technical constraint of the available tooling, not a design choice
+/// made by this test suite, and it is NOT solvable by adding a new
+/// dependency (this story's own Library & Framework Requirements table
+/// says no new dependency is introduced).
+///
+/// The tests below that need a fetch *success* therefore assume
+/// `fetch_cloud_id` gains a debug-only `JR_TENANT_INFO_URL` env var
+/// override: when set, the ACTUAL GET request goes to
+/// `format!("{}/_edge/tenant_info", env::var("JR_TENANT_INFO_URL").unwrap())`
+/// instead of `format!("{}/_edge/tenant_info", site_url)`, while `site_url`
+/// itself is STILL what the `https://`-prefix precondition check validates.
+/// This is the same "override the actual network target while the logical
+/// argument still drives validation" shape as the already-established
+/// `JR_BASE_URL` (`src/config.rs::Config::base_url`) and
+/// `JR_ACCESSIBLE_RESOURCES_URL` (`src/api/auth.rs::oauth_login`) seams —
+/// see CLAUDE.md's "AI Agent Notes" section for the full family. It should
+/// be gated `#[cfg(debug_assertions)]` exactly like its siblings, with a
+/// matching CLAUDE.md entry and a `tests/*_release_gate.rs` pin added in
+/// the SAME commit, per this codebase's own documented convention for new
+/// `JR_*` test seams.
+///
+/// Until this seam is added, every test below fails via the current
+/// `todo!()` panic (Red Gate, step 2 — this is the required state right
+/// now). Once `resolve_and_apply_cloud_id`/`fetch_cloud_id` are implemented
+/// literally per ADR-0022's reference code WITHOUT this seam, the
+/// success-dependent tests will continue to fail (a TLS handshake error,
+/// not `Ok`) rather than flip green — flagged prominently in this story's
+/// Test Writer report as the single highest-priority open question, not
+/// left for a future reader to silently rediscover. The failure-path tests
+/// (soft-fail / preserve-on-failure) need no such seam and are fully
+/// self-contained: any `http://`/scheme-less `site_url` deterministically
+/// triggers `fetch_cloud_id`'s own https-only precondition skip, which is
+/// itself a legitimate, spec-documented failure shape (EC-1.2.052-2) from
+/// this caller's point of view.
+#[cfg(test)]
+mod cloud_id_fallback_chain_tests {
+    use std::collections::BTreeMap;
+    use std::sync::OnceLock;
+
+    use tokio::sync::Mutex;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::config::{Config, GlobalConfig, ProfileConfig, ProjectConfig};
+
+    use super::resolve_and_apply_cloud_id;
+
+    /// Serializes access to the process-global `JR_TENANT_INFO_URL` env var
+    /// across this module's tests — mirrors `src/config.rs`'s `ENV_MUTEX`
+    /// pattern for `JR_BASE_URL`, but async-aware (`tokio::sync::Mutex`, not
+    /// `std::sync::Mutex`) since the guard is held across `.await` points
+    /// here — `clippy::await_holding_lock` requires this. Only this
+    /// module's tests touch this env var, so a module-local guard is
+    /// sufficient (no cross-file races).
+    fn env_mutex() -> &'static Mutex<()> {
+        static M: OnceLock<Mutex<()>> = OnceLock::new();
+        M.get_or_init(|| Mutex::new(()))
+    }
+
+    /// Build a minimal, fully in-memory `Config` with exactly one profile —
+    /// no disk I/O, no keychain, matching AC-008's config-layer contract.
+    fn make_config(profile_name: &str, url: Option<&str>, cloud_id: Option<&str>) -> Config {
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            profile_name.to_string(),
+            ProfileConfig {
+                url: url.map(str::to_string),
+                cloud_id: cloud_id.map(str::to_string),
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        Config {
+            global: GlobalConfig {
+                default_profile: Some(profile_name.to_string()),
+                profiles,
+                ..GlobalConfig::default()
+            },
+            project: ProjectConfig::default(),
+            active_profile_name: profile_name.into(),
+        }
+    }
+
+    fn cloud_id_of<'a>(config: &'a Config, profile_name: &str) -> Option<&'a str> {
+        config
+            .global
+            .profiles
+            .get(profile_name)
+            .and_then(|p| p.cloud_id.as_deref())
+    }
+
+    /// AC-001 (BC-1.2.052 Postcondition 1, VP-AUTHDX-019): an explicit
+    /// `--cloud-id` override takes precedence — the fetch is never
+    /// attempted (proven by pointing `url` at a value that could never
+    /// resolve a real fetch) — and the override value is WRITTEN to
+    /// `p.cloud_id`, symmetric with a fetch-success write, not merely used
+    /// in-memory to skip the fetch.
+    #[tokio::test]
+    async fn test_ac_001_explicit_override_takes_precedence_and_is_written() {
+        let mut config = make_config("sandbox", Some("not-a-real-url"), None);
+
+        resolve_and_apply_cloud_id(&mut config, "sandbox", Some("override-uuid-123")).await;
+
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            Some("override-uuid-123"),
+            "AC-001: explicit --cloud-id override must overwrite p.cloud_id \
+             even though the profile's url could never resolve a real fetch"
+        );
+    }
+
+    /// AC-001 (Pass-2 adversarial review Finding #8): the override REPLACES
+    /// a pre-existing value too, not merely a brand-new-profile
+    /// None -> Some transition.
+    #[tokio::test]
+    async fn test_ac_001_explicit_override_replaces_existing_cloud_id() {
+        let mut config = make_config("sandbox", Some("not-a-real-url"), Some("old-uuid"));
+
+        resolve_and_apply_cloud_id(&mut config, "sandbox", Some("override-uuid-456")).await;
+
+        assert_eq!(cloud_id_of(&config, "sandbox"), Some("override-uuid-456"));
+    }
+
+    /// AC-003 (BC-1.2.052 Postcondition 3, Invariant 2; VP-AUTHDX-019): on
+    /// fetch failure (here: the https-only precondition skip, EC-1.2.052-2
+    /// — the cheapest deterministic way to force an `Err` from
+    /// `fetch_cloud_id` with zero network dependency) — a brand-new
+    /// profile's `p.cloud_id` stays `None`; the function never aborts its
+    /// caller.
+    #[tokio::test]
+    async fn test_ac_003_soft_fail_leaves_new_profile_cloud_id_none() {
+        let mut config = make_config("sandbox", Some("http://not-https.example.net"), None);
+
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            None,
+            "AC-003: a brand-new profile's cloud_id must stay None on fetch failure"
+        );
+    }
+
+    /// AC-003, existing-profile half: a PRIOR value survives a fetch
+    /// failure completely untouched (not merely None -> None).
+    #[tokio::test]
+    async fn test_ac_003_soft_fail_leaves_existing_cloud_id_untouched() {
+        let mut config = make_config(
+            "sandbox",
+            Some("http://not-https.example.net"),
+            Some("prior-uuid"),
+        );
+
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+
+        assert_eq!(cloud_id_of(&config, "sandbox"), Some("prior-uuid"));
+    }
+
+    /// EC-1.2.053-1: mechanism switch, fetch fails, and the profile never
+    /// had a `cloud_id` to begin with -> preserved AS `None` (not `""`, not
+    /// a panic) — Postcondition 2's "preserve" applies uniformly regardless
+    /// of whether the preserved value is itself present or absent.
+    #[tokio::test]
+    async fn test_ec_1_2_053_1_preserve_none_on_failure_is_still_none() {
+        let mut config = make_config("sandbox", Some("http://not-https.example.net"), None);
+
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+
+        assert_eq!(cloud_id_of(&config, "sandbox"), None);
+    }
+
+    /// AC-005 / VP-AUTHDX-019 (BC-1.2.052 Postcondition 5): fetch SUCCESS
+    /// overwrites `p.cloud_id` unconditionally and this function's caller
+    /// (`login_token`) is expected to persist it via the normal
+    /// `Config::save_global()` path (this test itself stays at the
+    /// config-layer / does not touch disk).
+    ///
+    /// Depends on the `JR_TENANT_INFO_URL` seam documented in this module's
+    /// header doc comment.
+    #[tokio::test]
+    async fn test_ac_005_fetch_success_overwrites_cloud_id() {
+        let _guard = env_mutex().lock().await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/_edge/tenant_info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudId": "fetched-uuid-789"
+            })))
+            .mount(&server)
+            .await;
+        // SAFETY: env_mutex is held for this whole scope; no other test in
+        // this module reads/writes JR_TENANT_INFO_URL concurrently.
+        unsafe {
+            std::env::set_var("JR_TENANT_INFO_URL", server.uri());
+        }
+
+        let mut config = make_config("sandbox", Some("https://plausible-site.example"), None);
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+
+        unsafe {
+            std::env::remove_var("JR_TENANT_INFO_URL");
+        }
+
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            Some("fetched-uuid-789"),
+            "AC-005: fetch success must overwrite p.cloud_id unconditionally"
+        );
+    }
+
+    /// AC-007 (BC-1.2.053 Postcondition 1, VP-AUTHDX-020): the
+    /// mechanism-switch scenario's SUCCESS branch — a stale OAuth-era
+    /// `cloud_id` is unconditionally overwritten on fetch success. No
+    /// switch-specific code exists (Invariant 1) — this exercises the exact
+    /// same `resolve_and_apply_cloud_id` codepath as
+    /// `test_ac_005_fetch_success_overwrites_cloud_id` above, just
+    /// pre-seeded with a stale value matching BC-1.2.053's own precondition
+    /// shape. Same `JR_TENANT_INFO_URL` seam dependency.
+    #[tokio::test]
+    async fn test_ac_007_mechanism_switch_overwrites_stale_cloud_id_on_fetch_success() {
+        let _guard = env_mutex().lock().await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/_edge/tenant_info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudId": "fresh-uuid-after-switch"
+            })))
+            .mount(&server)
+            .await;
+        unsafe {
+            std::env::set_var("JR_TENANT_INFO_URL", server.uri());
+        }
+
+        let mut config = make_config(
+            "sandbox",
+            Some("https://plausible-site.example"),
+            Some("stale-oauth-era-uuid"),
+        );
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+
+        unsafe {
+            std::env::remove_var("JR_TENANT_INFO_URL");
+        }
+
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            Some("fresh-uuid-after-switch"),
+            "AC-007/BC-1.2.053 Postcondition 1: fetch success must overwrite \
+             even a stale OAuth-era cloud_id"
+        );
+    }
+
+    /// AC-007 (BC-1.2.053 Postcondition 2, VP-AUTHDX-020): the
+    /// mechanism-switch scenario's FAILURE branch — a stale value is
+    /// PRESERVED, never bare-cleared, on fetch failure. Fully testable
+    /// without any new seam — the https-skip is itself a legitimate
+    /// `fetch_cloud_id` failure from this caller's point of view.
+    #[tokio::test]
+    async fn test_ac_007_mechanism_switch_preserves_stale_cloud_id_on_fetch_failure() {
+        let mut config = make_config(
+            "sandbox",
+            Some("http://not-https.example.net"),
+            Some("stale-oauth-era-uuid"),
+        );
+
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            Some("stale-oauth-era-uuid"),
+            "AC-007/BC-1.2.053 Postcondition 2: a stale value must be \
+             preserved on fetch failure, never bare-cleared"
+        );
+    }
+}

@@ -88,6 +88,7 @@ async fn test_login_token_writes_namespaced_pair_not_shared_flat() {
         profile,
         Some("wired@example.com".to_string()),
         Some("wired-token-123".to_string()),
+        None,
         true,
     )
     .await
