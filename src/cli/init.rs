@@ -276,7 +276,24 @@ pub async fn handle() -> Result<()> {
         let mut config = Config::load_with(Some(&profile_name))?;
         let active = config.active_profile_name.to_string();
         let entry = config.global.profiles.entry(active).or_default();
-        entry.cloud_id = Some(metadata.cloud_id.clone());
+        // FIX-F5-CYCLE4-2 finding #3: this GraphQL call always runs (org_id
+        // has no other source, and Step 7's team-list prefetch below needs
+        // it), but on the API-token branch `login_token` (Step 3, via
+        // `resolve_and_apply_cloud_id` -> `fetch_cloud_id`'s tenant_info
+        // lookup, BC-1.2.052/053) has ALREADY resolved and persisted
+        // `cloud_id` for this exact profile+site. `cloudId` is one
+        // canonical value per Jira Cloud tenant, so re-fetching it here via
+        // GraphQL and unconditionally overwriting would be a second,
+        // redundant network round-trip for the identical value — not a
+        // more-authoritative one. Only set it here when it is not already
+        // present: this preserves login_token's fetch for the API-token
+        // branch (no BC pins the GraphQL value as authoritative over
+        // tenant_info's) while still being the sole source for the OAuth
+        // branch (`login_oauth` never touches `cloud_id`) and acting as a
+        // fallback if Step 3's tenant_info fetch soft-failed.
+        if entry.cloud_id.is_none() {
+            entry.cloud_id = Some(metadata.cloud_id.clone());
+        }
         entry.org_id = Some(metadata.org_id.clone());
         config.save_global()?;
 

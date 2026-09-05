@@ -4,9 +4,18 @@
 //! keyring-gated tier, `login_token`/`refresh_credentials`'s use of it
 //! (AC-001, AC-002, AC-003, AC-004, AC-006).
 //!
-//! Stub landed at commit `6a8b17c0`: `fetch_cloud_id` is `todo!()`. Every
-//! test in this file is expected to FAIL today by panicking on that
-//! `todo!()` — not by a compile error, and not vacuously passing.
+//! Stub landed at commit `6a8b17c0`: `fetch_cloud_id` was `todo!()`. Every
+//! test in this file was expected to FAIL at that point by panicking on
+//! that `todo!()` — not by a compile error, and not vacuously passing.
+//!
+//! **Status (FIX-F5-CYCLE4-2 doc sweep):** `fetch_cloud_id` shipped in
+//! S-cycle4-cloud-id-correctness (ADR-0022, BC-1.2.052/053/054) and has
+//! since been through the cycle-004 F5 scoped adversarial review plus its
+//! FIX-F5-CYCLE4-1/-2 fix rounds. Every test in this file is green today
+//! (the keyring-gated tier remains `#[ignore]`d pending
+//! `JR_RUN_KEYRING_TESTS=1`, by design — not because it fails). The
+//! Two-Step Red Gate narrative below is retained as historical record of
+//! how these tests were authored, not a description of current behavior.
 //!
 //! ## Why `wiremock` cannot exercise a genuine HTTPS success/status-shape
 //! response here, and the `JR_TENANT_INFO_URL` seam this depends on
@@ -384,6 +393,105 @@ async fn test_fetch_cloud_id_soft_fails_on_missing_cloud_id_field() {
         result.is_err(),
         "a 200 response missing the cloudId field must be a soft-fail (Err), \
          never a panic"
+    );
+}
+
+/// FIX-F5-CYCLE4-2 hardening #1a: a 200 response whose `cloudId` field is
+/// present but EMPTY must be treated as a fetch failure (soft-fail path,
+/// BC-1.2.053 Postcondition 2/3) — an empty cloudId is not a plausible
+/// value and must never be persisted. Seam-dependent, see file header.
+#[tokio::test]
+async fn test_fetch_cloud_id_soft_fails_on_empty_cloud_id_field() {
+    let _guard = env_lock().lock().await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/_edge/tenant_info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "cloudId": ""
+        })))
+        .mount(&server)
+        .await;
+    unsafe {
+        std::env::set_var("JR_TENANT_INFO_URL", server.uri());
+    }
+
+    let result = fetch_cloud_id("https://plausible-real-site.example").await;
+
+    unsafe {
+        std::env::remove_var("JR_TENANT_INFO_URL");
+    }
+
+    assert!(
+        result.is_err(),
+        "FIX-F5-CYCLE4-2: an empty cloudId field must be a soft-fail (Err), \
+         never persisted as a valid value"
+    );
+}
+
+/// FIX-F5-CYCLE4-2 hardening #1a: a `cloudId` value containing whitespace
+/// is not a plausible cloudId shape and must be rejected the same way as an
+/// empty one. Seam-dependent, see file header.
+#[tokio::test]
+async fn test_fetch_cloud_id_soft_fails_on_whitespace_cloud_id_field() {
+    let _guard = env_lock().lock().await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/_edge/tenant_info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "cloudId": "not a real cloud id"
+        })))
+        .mount(&server)
+        .await;
+    unsafe {
+        std::env::set_var("JR_TENANT_INFO_URL", server.uri());
+    }
+
+    let result = fetch_cloud_id("https://plausible-real-site.example").await;
+
+    unsafe {
+        std::env::remove_var("JR_TENANT_INFO_URL");
+    }
+
+    assert!(
+        result.is_err(),
+        "FIX-F5-CYCLE4-2: a cloudId containing whitespace must be a \
+         soft-fail (Err), never persisted as a valid value"
+    );
+}
+
+/// FIX-F5-CYCLE4-2 hardening #1c: a response body larger than the bounded
+/// read cap must be a soft-fail, never an unbounded-memory read. Uses a
+/// legitimately-shaped JSON body padded with a huge unrelated field so the
+/// only thing under test is the size cap, not JSON validity. Seam-dependent,
+/// see file header.
+#[tokio::test]
+async fn test_fetch_cloud_id_soft_fails_on_oversized_response_body() {
+    let _guard = env_lock().lock().await;
+    let server = MockServer::start().await;
+    // Comfortably larger than any reasonable bound (well over 64 KiB).
+    let huge_padding = "x".repeat(2 * 1024 * 1024);
+    Mock::given(method("GET"))
+        .and(path("/_edge/tenant_info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "cloudId": "the-real-cloud-id",
+            "padding": huge_padding
+        })))
+        .mount(&server)
+        .await;
+    unsafe {
+        std::env::set_var("JR_TENANT_INFO_URL", server.uri());
+    }
+
+    let result = fetch_cloud_id("https://plausible-real-site.example").await;
+
+    unsafe {
+        std::env::remove_var("JR_TENANT_INFO_URL");
+    }
+
+    assert!(
+        result.is_err(),
+        "FIX-F5-CYCLE4-2: an oversized response body must be a soft-fail \
+         (Err), not an unbounded read"
     );
 }
 

@@ -1093,13 +1093,54 @@ pub fn clear_profile_oauth_pair(profile: &Profile) -> Result<()> {
 /// [`clear_profile_creds`] is unsuitable there because it clears BOTH kinds
 /// unconditionally and would delete the just-stored new credentials too.
 ///
-/// `keyring::Error::NoEntry` on any step is success; any other keychain
-/// error propagates immediately via `?` (same tightening as
-/// [`clear_profile_creds`]/[`clear_profile_oauth_pair`]).
+/// `keyring::Error::NoEntry` on any step is success. A genuine (non-`NoEntry`)
+/// keychain error does not stop the OTHER step from being attempted — this
+/// function attempts BOTH deletions unconditionally and returns the FIRST
+/// genuine error encountered (in call order), exactly like
+/// [`clear_profile_creds`]/[`clear_profile_oauth_pair`]'s attempt-all
+/// pattern.
+///
+/// **FIX-F5-CYCLE4-2 finding #2:** previously this function used `?` to
+/// early-abort after the first step, so a genuine backend error deleting
+/// `<profile>:email` left `<profile>:api-token` completely un-attempted —
+/// orphaning the token half of the pair on the
+/// mechanism-switch/reconcile path
+/// ([`crate::cli::auth::login::clear_stored_credential_kind`]), the one
+/// caller of this function. Delegates the attempt-all sequencing to
+/// [`clear_api_token_pair_attempt_all`], a host-pure helper extracted so
+/// the sequencing itself is directly unit-testable without a keychain
+/// backend.
 pub fn clear_profile_api_token_pair(profile: &Profile) -> Result<()> {
-    delete_credential_tolerating_no_entry(&api_token_email_key(profile.as_ref()))?;
-    delete_credential_tolerating_no_entry(&api_token_key(profile.as_ref()))?;
-    Ok(())
+    clear_api_token_pair_attempt_all(
+        || delete_credential_tolerating_no_entry(&api_token_email_key(profile.as_ref())),
+        || delete_credential_tolerating_no_entry(&api_token_key(profile.as_ref())),
+    )
+}
+
+/// Host-pure attempt-all core of [`clear_profile_api_token_pair`]: runs
+/// `clear_email` and `clear_token` unconditionally, in that order, and
+/// returns the FIRST `Err` encountered — never short-circuiting on the
+/// first failure the way `?` would. Extracted purely for testability
+/// (`tests::test_clear_api_token_pair_attempt_all_*`, FIX-F5-CYCLE4-2
+/// finding #2) — the production call site above wires in the real
+/// `delete_credential_tolerating_no_entry` calls.
+fn clear_api_token_pair_attempt_all(
+    clear_email: impl FnOnce() -> Result<()>,
+    clear_token: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let mut first_error: Option<anyhow::Error> = None;
+    if let Err(e) = clear_email() {
+        first_error = Some(e);
+    }
+    if let Err(e) = clear_token() {
+        if first_error.is_none() {
+            first_error = Some(e);
+        }
+    }
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Clear a single profile's stored credentials from the system keychain —
@@ -2201,6 +2242,105 @@ mod tests {
     fn test_extract_query_param_no_query() {
         let request = "GET /callback HTTP/1.1\r\n";
         assert_eq!(extract_query_param(request, "code"), None);
+    }
+
+    // -----------------------------------------------------------------
+    // FIX-F5-CYCLE4-2 finding #2: `clear_profile_api_token_pair` must
+    // attempt BOTH deletion steps even if the first one fails — mirroring
+    // `clear_profile_oauth_pair`/`clear_profile_creds`'s attempt-all
+    // pattern, instead of early-aborting via `?` on the first `Err` and
+    // leaving the second step (the api-token entry) un-attempted, which
+    // orphans it on the mechanism-switch/reconcile path
+    // (`clear_stored_credential_kind`, `src/cli/auth/login.rs`).
+    //
+    // `clear_api_token_pair_attempt_all` is the host-pure core of
+    // `clear_profile_api_token_pair`, extracted so this sequencing
+    // property is directly unit-testable with fake steps — no keychain
+    // backend required — unlike its sibling attempt-all functions, whose
+    // equivalent tests are all keyring-gated (see e.g.
+    // `test_ac_002_clear_profile_creds_propagates_genuine_backend_error_not_swallowed`
+    // below).
+    // -----------------------------------------------------------------
+
+    /// RED before the fix: with the old `?`-early-abort implementation,
+    /// the second step is a source statement that is only *reached*, and
+    /// therefore only *invoked*, if the first step returned `Ok`. This
+    /// test proves the fixed sequencing directly: the second step's
+    /// closure must run even though the first one returns `Err`.
+    #[test]
+    fn test_clear_api_token_pair_attempt_all_runs_second_step_even_when_first_errors() {
+        let second_ran = std::cell::Cell::new(false);
+
+        let result = clear_api_token_pair_attempt_all(
+            || Err(anyhow::anyhow!("simulated email-delete backend error")),
+            || {
+                second_ran.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(
+            result.is_err(),
+            "the first step's error must still propagate"
+        );
+        assert!(
+            second_ran.get(),
+            "FIX-F5-CYCLE4-2: the api-token delete step must still be \
+             attempted even when the email delete fails — early-abort via \
+             `?` would leave the token entry un-attempted, orphaning it on \
+             the switch/reconcile path"
+        );
+    }
+
+    /// When both steps fail, the FIRST error (call order) is the one
+    /// returned — matching `clear_profile_oauth_pair`/`clear_profile_creds`'s
+    /// documented first-error-wins contract.
+    #[test]
+    fn test_clear_api_token_pair_attempt_all_returns_first_error_when_both_fail() {
+        let result = clear_api_token_pair_attempt_all(
+            || Err(anyhow::anyhow!("first error")),
+            || Err(anyhow::anyhow!("second error")),
+        );
+
+        let err = result.expect_err("both steps failing must still return Err");
+        assert_eq!(
+            err.to_string(),
+            "first error",
+            "the FIRST error in call order must win, not the last"
+        );
+    }
+
+    /// The second step is still attempted (and its success observed) even
+    /// though it has no bearing on the overall `Ok` result here — this is
+    /// the "both succeed" control case.
+    #[test]
+    fn test_clear_api_token_pair_attempt_all_ok_when_both_steps_succeed() {
+        let second_ran = std::cell::Cell::new(false);
+
+        let result = clear_api_token_pair_attempt_all(
+            || Ok(()),
+            || {
+                second_ran.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result.is_ok());
+        assert!(second_ran.get());
+    }
+
+    /// When only the SECOND step fails, the first step's success must not
+    /// suppress the second step's error — mirrors the reverse ordering to
+    /// the "first fails" test above.
+    #[test]
+    fn test_clear_api_token_pair_attempt_all_surfaces_second_step_error_alone() {
+        let result = clear_api_token_pair_attempt_all(
+            || Ok(()),
+            || Err(anyhow::anyhow!("token-delete backend error")),
+        );
+
+        let err = result.expect_err("a second-step-only failure must still return Err");
+        assert_eq!(err.to_string(), "token-delete backend error");
     }
 
     #[test]

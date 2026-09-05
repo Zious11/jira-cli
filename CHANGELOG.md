@@ -165,6 +165,65 @@ All notable changes to jr will be documented here.
   since `std::fs::File::open` fails on a directory path there without
   `FILE_FLAG_BACKUP_SEMANTICS`), with `jr auth login` as the expected
   recovery path if a crash still corrupts the file despite these steps.
+- **Actionable LOW findings from the cycle-004 F5 scoped adversarial review,
+  second pass** (FIX-F5-CYCLE4-2). (1) `fetch_cloud_id`
+  (`src/api/jira/tenant.rs`) gains three hardening changes to the
+  tenant_info path, none changing any F2-approved BC-1.2.052/053/054
+  behavior: (a) a fetched `cloudId` is now validated (non-empty, no
+  whitespace, ASCII-alphanumeric-and-hyphen only) before being returned —
+  an empty or garbage value is treated as a fetch failure and flows into
+  the existing documented soft-fail path, never persisted; (b) the request
+  base is now derived from the SAME `site_url.trim()` the `https://`
+  precondition validates, closing a whitespace inconsistency where a
+  leading/trailing-whitespace `site_url` could pass the precondition but
+  build a malformed request URL from the untrimmed string; (c) the
+  response body is now bounded (64 KiB, Content-Length fast-path plus an
+  authoritative streamed-read cap) before being buffered and parsed,
+  closing an unbounded-memory-read vector on an oversized or hostile
+  response. (2) `clear_profile_api_token_pair` (`src/api/auth.rs`) now
+  attempts BOTH the email and api-token keychain deletes unconditionally,
+  returning the first genuine error encountered — the same attempt-all
+  pattern already used by its siblings `clear_profile_oauth_pair`/
+  `clear_profile_creds` — instead of early-aborting via `?` after the
+  first step, which previously left the api-token entry completely
+  un-attempted (and therefore orphaned) whenever the email delete hit a
+  genuine backend error on the mechanism-switch/reconcile path. (3) `jr
+  init`'s Step 6 GraphQL org-metadata call no longer unconditionally
+  overwrites a `cloud_id` the API-token branch's `login_token` call
+  (Step 3) already fetched via `tenant_info` — it now only sets `cloud_id`
+  when the profile doesn't already have one, eliminating a redundant
+  double-fetch-and-overwrite of the identical value for API-token
+  profiles while remaining the sole `cloud_id` source for the OAuth branch
+  (which never calls `tenant_info`) and a fallback when Step 3's fetch
+  soft-failed. `org_id` is unaffected — the GraphQL call still runs on
+  every invocation, since `org_id` and the Step 7 team-cache prefetch have
+  no other source. (4) A stale doc-comment sweep updated
+  `tests/cloud_id_tenant_info.rs`, `tests/auth_chosen_flow_reconcile.rs`,
+  and `tests/auth_oauth_default_creation.rs`'s module headers, which still
+  described their subjects as `todo!()` stubs "expected to FAIL" from
+  their original Two-Step Red Gate authoring — all three are shipped,
+  reviewed, and green today; the historical RED narrative is retained
+  for context, not presented as current behavior. (5) The legacy-`None`
+  orphan-clear dispatch decision in
+  `reconcile_legacy_none_outgoing_credentials`
+  (`src/cli/auth/login.rs`) is now backed by a small, host-pure helper,
+  `legacy_none_orphan_clear_target`, extracted so this branch's decision
+  logic (no-op on nothing-probed, no-op on same-mechanism, clear on a
+  differing probed kind) is directly unit-testable without a keychain
+  backend — a code-reviewer suggestion from the F5 pass, applied as a
+  clean, behavior-preserving refactor. Two items were assessed and left
+  unchanged, reported here rather than silently skipped: reducing the
+  soft-fail warning noise on the API-token cloud_id path was NOT done —
+  the exact warning text (`"warning: could not look up cloud_id for
+  profile ..."` / `"warning: could not refresh cloud_id for profile
+  ..."`) is pinned byte-for-byte by existing tests in
+  `src/cli/auth/login.rs`, so trimming it would break a pinned
+  BC-1.2.053-adjacent contract rather than merely tidy cosmetics; `--
+  cloud-id` remaining unvalidated on the API-token path and API-token
+  `cloud_id` being unused by `base_url()` are both unchanged, documented
+  by-design behavior (BC-1.2.052 PC1, BC-1.2.054) with no server
+  round-trip available to validate against and Assets/CMDB as the actual
+  consumer, respectively.
 
 ## [0.7.0-dev.4] - 2026-09-03
 

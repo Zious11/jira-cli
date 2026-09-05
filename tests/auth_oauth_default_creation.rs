@@ -11,13 +11,22 @@
 //! - `cli::auth::clear_outgoing_mechanism_on_switch`     (BC-1.1.013 EC-1.1.013-2 /
 //!   BC-1.1.014 EC-1.1.014-4)
 //!
-//! None of the five are wired into `handle_login`'s or `refresh_credentials`'s
-//! control flow yet (implementer scope) — so most of the assertions below
-//! exercise either (a) the stub function directly (panics via `todo!()` today
-//! -> RED), or (b) the observable end-to-end behavior of `handle_login` /
-//! `refresh_credentials`, which today still takes the PRE-story code path and
-//! therefore produces a *different* outcome than the BC requires (RED for a
-//! content-mismatch reason, not a panic).
+//! At that point none of the five were wired into `handle_login`'s or
+//! `refresh_credentials`'s control flow yet (implementer scope) — so most
+//! of the assertions below exercised either (a) the stub function directly
+//! (panicking via `todo!()` -> RED), or (b) the observable end-to-end
+//! behavior of `handle_login`/`refresh_credentials`, which at the time
+//! still took the PRE-story code path and therefore produced a *different*
+//! outcome than the BC required (RED for a content-mismatch reason, not a
+//! panic).
+//!
+//! **Status (FIX-F5-CYCLE4-2 doc sweep):** all five are implemented and
+//! wired in per BC-1.1.013/014/015/016 and BC-1.2.049/050, and this file
+//! has since accreted `clear_outgoing_mechanism_on_switch`'s FIX-F5-login-
+//! switch relogin-then-replace coverage plus review fixes from the
+//! cycle-004 F5 scoped adversarial review. Every test in this file is
+//! green today. The RED narrative above is retained as historical record
+//! of how these tests were authored, not current behavior.
 //!
 //! # Safety note — why nothing here can reach a real browser / network call
 //!

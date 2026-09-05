@@ -1044,12 +1044,9 @@ pub(crate) fn reconcile_legacy_none_outgoing_credentials(
     probed_outgoing_kind: Option<&'static str>,
     new_method: &str,
 ) -> Result<()> {
-    let Some(outgoing) = probed_outgoing_kind else {
+    let Some(outgoing) = legacy_none_orphan_clear_target(probed_outgoing_kind, new_method) else {
         return Ok(());
     };
-    if outgoing == new_method {
-        return Ok(());
-    }
     clear_stored_credential_kind(profile, outgoing).with_context(|| {
         format!(
             "failed to clear profile {:?}'s orphaned '{outgoing}' credentials \
@@ -1057,6 +1054,76 @@ pub(crate) fn reconcile_legacy_none_outgoing_credentials(
             profile.as_ref()
         )
     })
+}
+
+/// Pure dispatch decision behind [`reconcile_legacy_none_outgoing_credentials`]:
+/// given what was probed as already stored under the legacy
+/// `auth_method: None` label, and the mechanism a login just established,
+/// decides whether an orphan-clear is needed and, if so, which credential
+/// kind to clear. Returns `None` for either no-op case documented on the
+/// caller above (nothing was probed, or the probed kind matches the new
+/// method).
+///
+/// Extracted so this branch's DECISION logic is directly unit-testable
+/// (`dispatch_decision_tests` below) without a keychain backend — the
+/// actual clearing side effect (`clear_stored_credential_kind`) stays a
+/// separate call the caller makes only when this returns `Some`
+/// (FIX-F5-CYCLE4-2 finding #6, code-reviewer suggestion: extract an
+/// injectable/pure decision so the dispatch branch gains non-keychain-gated
+/// coverage).
+fn legacy_none_orphan_clear_target<'a>(
+    probed_outgoing_kind: Option<&'a str>,
+    new_method: &str,
+) -> Option<&'a str> {
+    let outgoing = probed_outgoing_kind?;
+    if outgoing == new_method {
+        None
+    } else {
+        Some(outgoing)
+    }
+}
+
+#[cfg(test)]
+mod dispatch_decision_tests {
+    use super::legacy_none_orphan_clear_target;
+
+    /// Host-pure (no keychain, no I/O): nothing was probed under the
+    /// legacy `None` label — a genuinely brand-new profile — so there is
+    /// nothing to clear.
+    #[test]
+    fn test_legacy_none_orphan_clear_target_none_when_nothing_probed() {
+        assert_eq!(legacy_none_orphan_clear_target(None, "oauth"), None);
+    }
+
+    /// The probed kind matches the new method — a same-kind re-declaration
+    /// under a `None` label, not an orphan; the ordinary
+    /// `store_api_token`/`store_oauth_tokens` overwrite already handled it.
+    #[test]
+    fn test_legacy_none_orphan_clear_target_none_when_same_mechanism() {
+        assert_eq!(
+            legacy_none_orphan_clear_target(Some("oauth"), "oauth"),
+            None
+        );
+        assert_eq!(
+            legacy_none_orphan_clear_target(Some("api_token"), "api_token"),
+            None
+        );
+    }
+
+    /// The probed kind differs from the new method — this IS the orphan
+    /// case: the differing, probed kind must be returned so the caller
+    /// clears exactly that one.
+    #[test]
+    fn test_legacy_none_orphan_clear_target_some_when_switching_mechanism() {
+        assert_eq!(
+            legacy_none_orphan_clear_target(Some("api_token"), "oauth"),
+            Some("api_token")
+        );
+        assert_eq!(
+            legacy_none_orphan_clear_target(Some("oauth"), "api_token"),
+            Some("oauth")
+        );
+    }
 }
 
 /// S-cycle4-cloud-id-correctness — Two-Step Red Gate TESTS (step 2 of 2) for

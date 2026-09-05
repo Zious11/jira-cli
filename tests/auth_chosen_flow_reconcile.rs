@@ -7,14 +7,21 @@
 //! - `cli::auth::refresh_credentials`'s relogin-then-replace credential
 //!   obtain/store sequence and its terminal success/error output.
 //!
-//! Everything in this file drives `refresh_credentials` end to end and is
-//! therefore RED today: `chosen_flow_for_profile` panics via `todo!()` on
-//! its very first call inside `refresh_credentials`, before any of the
-//! already-implemented (non-`todo!()`'d) control flow below it — the
-//! BC-1.1.016 non-interactive OAuth guard, the BC-1.2.049/050 notices, the
-//! URL-completeness check — is ever reached. Once `chosen_flow_for_profile`
-//! and the relogin-then-replace sequence are implemented per BC-1.2.048/
-//! BC-1.2.051, these tests assert the correct, non-panicking outcomes.
+//! At that point everything in this file drove `refresh_credentials` end
+//! to end and was therefore RED: `chosen_flow_for_profile` panicked via
+//! `todo!()` on its very first call inside `refresh_credentials`, before
+//! any of the already-implemented (non-`todo!()`'d) control flow below it —
+//! the BC-1.1.016 non-interactive OAuth guard, the BC-1.2.049/050 notices,
+//! the URL-completeness check — was ever reached.
+//!
+//! **Status (FIX-F5-CYCLE4-2 doc sweep):** `chosen_flow_for_profile` and
+//! the relogin-then-replace sequence shipped per BC-1.2.048/BC-1.2.051, and
+//! this file's tests have since carried the `test_ac_007_...` cloud_id
+//! reconciliation coverage added by S-cycle4-cloud-id-correctness plus
+//! review fixes from the cycle-004 F5 scoped adversarial review. Every test
+//! in this file is green today (keyring-gated tests remain `#[ignore]`d
+//! pending `JR_RUN_KEYRING_TESTS=1`, by design). The RED narrative above is
+//! retained as historical record, not current behavior.
 //!
 //! # Why the non-gated tests below never touch a real browser or the OS
 //! keychain
