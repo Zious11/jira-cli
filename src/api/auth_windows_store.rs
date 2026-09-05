@@ -430,7 +430,7 @@ mod dpapi {
     /// contract Win32 documents for this API.
     pub fn protect(plaintext: &[u8]) -> std::io::Result<Vec<u8>> {
         unsafe {
-            let mut input = CRYPT_INTEGER_BLOB {
+            let input = CRYPT_INTEGER_BLOB {
                 cbData: plaintext.len() as u32,
                 pbData: plaintext.as_ptr() as *mut u8,
             };
@@ -439,7 +439,7 @@ mod dpapi {
                 pbData: std::ptr::null_mut(),
             };
             let ok = CryptProtectData(
-                &mut input,
+                &input,
                 std::ptr::null(),
                 std::ptr::null(), // pOptionalEntropy = NULL (ADR-0021 §8)
                 std::ptr::null(),
@@ -449,6 +449,15 @@ mod dpapi {
             );
             if ok == 0 {
                 return Err(std::io::Error::last_os_error());
+            }
+            // Defense-in-depth (pr-review, PR #768): a success return with a
+            // null output blob would be a Win32 contract violation, but
+            // `from_raw_parts` on a null pointer is UB regardless of length
+            // — guard explicitly rather than trust the contract silently.
+            if output.pbData.is_null() {
+                return Err(std::io::Error::other(
+                    "CryptProtectData returned success with a null output blob",
+                ));
             }
             let out = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
             LocalFree(output.pbData as *mut core::ffi::c_void);
@@ -461,7 +470,7 @@ mod dpapi {
     /// build-call-copy-free contract.
     pub fn unprotect(blob: &[u8]) -> std::io::Result<Vec<u8>> {
         unsafe {
-            let mut input = CRYPT_INTEGER_BLOB {
+            let input = CRYPT_INTEGER_BLOB {
                 cbData: blob.len() as u32,
                 pbData: blob.as_ptr() as *mut u8,
             };
@@ -470,7 +479,7 @@ mod dpapi {
                 pbData: std::ptr::null_mut(),
             };
             let ok = CryptUnprotectData(
-                &mut input,
+                &input,
                 std::ptr::null_mut(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -480,6 +489,15 @@ mod dpapi {
             );
             if ok == 0 {
                 return Err(std::io::Error::last_os_error());
+            }
+            // Defense-in-depth (pr-review, PR #768): see the matching guard
+            // in `protect` above — a null output blob on success is a Win32
+            // contract violation, but `from_raw_parts` on null is UB
+            // regardless, so we guard explicitly rather than trust it.
+            if output.pbData.is_null() {
+                return Err(std::io::Error::other(
+                    "CryptUnprotectData returned success with a null output blob",
+                ));
             }
             let out = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
             LocalFree(output.pbData as *mut core::ffi::c_void);
@@ -1147,14 +1165,29 @@ mod tests {
 
     /// Design-conformance sanity check (Pass-2 adversarial review Finding
     /// #1): demonstrates the underlying claim the guard exists to defeat —
-    /// `std::path::Path` on THIS (non-Windows) host treats a
+    /// `std::path::Path` on a NON-WINDOWS host treats a
     /// Windows-drive-letter/UNC/ADS string as a single opaque
     /// `Component::Normal`, which would be wrongly ACCEPTED by a
-    /// `std::path`-based implementation. This does not call
+    /// `std::path`-based implementation on THAT host. This does not call
     /// `reject_unsafe_profile_component` at all — it is a fixture proving
-    /// the guard's `std::path`-avoidance is not a hypothetical concern on
-    /// this CI host.
+    /// the guard's `std::path`-avoidance is not a hypothetical concern on a
+    /// non-Windows CI runner.
+    ///
+    /// `#[cfg(not(windows))]` (PR #768 CI-spike fix, live `windows-latest`
+    /// run): on a REAL Windows host, `std::path::Path` correctly
+    /// understands Windows path syntax and parses `"C:\\evil"` into
+    /// `Prefix`+`RootDir`+`Normal` components, NOT a single opaque
+    /// `Normal` — the exact opposite of what this fixture demonstrates.
+    /// That is expected and does not weaken ADR-0021 §9's rationale: the
+    /// design-conformance argument is specifically that a *non-Windows*
+    /// CI runner (where the guard's unit tests otherwise run) would get
+    /// this wrong via `std::path`, which is why
+    /// `reject_unsafe_profile_component` is a host-independent
+    /// character-level scan instead. This fixture has no informative value
+    /// on Windows and was never meant to assert anything there — the first
+    /// live `windows-latest` execution surfaced that it lacked this gate.
     #[test]
+    #[cfg(not(windows))]
     fn test_design_conformance_std_path_would_wrongly_accept_windows_vectors_on_this_host() {
         use std::path::{Component, Path};
         for vector in ["C:\\evil", "\\\\server\\share", "name:$DATA"] {
