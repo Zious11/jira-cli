@@ -3554,4 +3554,424 @@ mod tests {
             }
         }
     }
+
+    // ========================================================================
+    // S-cycle4-dpapi-storage-fix — Windows DPAPI OAuth-token fallback tests
+    // (Two-Step Red Gate, Step 2). BC-1.4.035/036/038/040, VP-AUTHDX-008/011/
+    // 015/018/019/022.
+    //
+    // These tests live HERE (inline in `src/api/auth.rs`'s own test module)
+    // rather than in `tests/*.rs` for two reasons:
+    //   1. `auth_windows_store` is `pub(crate)` (see `src/api/mod.rs`) — its
+    //      marker types (`DpapiFallbackFailed`, `ProfilePathEscape`,
+    //      `CorruptSecretFile`) are not nameable from an external
+    //      integration-test crate, so any assertion that downcasts to one
+    //      of them MUST live inside the crate.
+    //   2. `engage_dpapi_fallback` and `clear_dpapi_file_tolerating_path_escape`
+    //      are private (`fn`, no `pub`/`pub(crate)`) — only reachable from
+    //      code inside `src/api/auth.rs` itself.
+    //
+    // A NEW fault-injection seam this Red Gate step DEPENDS ON but does NOT
+    // implement: `JR_S759_FORCE_TOOLONG` (values: "access" | "refresh"),
+    // read by `store_oauth_tokens` to simulate `keyring::Error::TooLong` on
+    // the named key's `set_password` call, REGARDLESS of what the real
+    // backend actually returns for a small test value. This mirrors the
+    // pre-existing `JR_S303_PERSIST_FAIL` precedent in
+    // `tests/oauth_refresh_integration.rs` (a test written and `#[ignore]`d
+    // against a seam that "doesn't exist yet," with "TO UN-IGNORE:
+    // implementer adds this seam" instructions) — it exists because no real
+    // OS keychain backend on macOS/Linux CI naturally produces `TooLong` at
+    // a size small enough to seed/observe deterministically in a test, so
+    // `store_oauth_tokens`'s `TooLong`-routing match arms (BC-1.4.035
+    // Postconditions 2/3) are otherwise UNREACHABLE off-Windows even with
+    // `JR_FORCE_DPAPI_FALLBACK=1` (that seam only lifts
+    // `engage_dpapi_fallback`'s cfg-gate — it does not manufacture the
+    // `TooLong` `Err` the `match` arm's guard requires in the first place).
+    // Until the implementer adds this seam, every test below that sets
+    // `JR_S759_FORCE_TOOLONG` observes NO EFFECT (the real `set_password`
+    // succeeds normally for the small test values used here) — this is a
+    // genuine RED failure (assertion mismatch), not a compile error.
+    #[cfg(not(windows))]
+    mod dpapi_seam_tests {
+        use super::*;
+
+        /// Serializes `JR_FORCE_DPAPI_FALLBACK` mutation across this
+        /// sub-module's tests AND against `dpapi_routing_keyring_gated_tests`
+        /// below (Pass-6 adversarial review Finding #4's `env_lock`-style
+        /// requirement) — reuses the SAME mutex `with_test_keyring` already
+        /// holds for its whole duration, so a keyring-gated test setting
+        /// this var (inside `with_test_keyring`) can never interleave with
+        /// one of these host-pure tests setting it outside that wrapper.
+        fn seam_lock() -> std::sync::MutexGuard<'static, ()> {
+            KEYRING_TEST_ENV_MUTEX
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+        }
+
+        /// AC-008 / BC-1.4.035 Invariant 3 — seam DISABLED (env var unset):
+        /// `engage_dpapi_fallback` stays hardcoded `false` for `TooLong`,
+        /// matching pre-cycle-004 release behavior. HOST-PURE.
+        #[test]
+        fn test_engage_dpapi_fallback_seam_disabled_returns_false_for_toolong() {
+            let _guard = seam_lock();
+            // SAFETY: held under seam_lock() for this test's whole duration.
+            unsafe { std::env::remove_var("JR_FORCE_DPAPI_FALLBACK") };
+            let err = keyring::Error::TooLong("password".to_string(), 2560);
+            assert!(
+                !engage_dpapi_fallback(&err),
+                "AC-007/BC-1.4.035 Invariant 3 VIOLATION: engage_dpapi_fallback must stay \
+                 hardcoded false on non-Windows with the seam unset, even for TooLong."
+            );
+        }
+
+        /// AC-008 — seam ENABLED: `engage_dpapi_fallback` returns
+        /// `should_fallback_to_dpapi(err)` — true for TooLong. HOST-PURE.
+        #[test]
+        fn test_engage_dpapi_fallback_seam_enabled_returns_true_for_toolong() {
+            let _guard = seam_lock();
+            // SAFETY: held under seam_lock() for this test's whole duration.
+            unsafe { std::env::set_var("JR_FORCE_DPAPI_FALLBACK", "1") };
+            let err = keyring::Error::TooLong("password".to_string(), 2560);
+            let result = engage_dpapi_fallback(&err);
+            // SAFETY: still under seam_lock().
+            unsafe { std::env::remove_var("JR_FORCE_DPAPI_FALLBACK") };
+            assert!(
+                result,
+                "AC-008 VIOLATION: with JR_FORCE_DPAPI_FALLBACK=1, engage_dpapi_fallback must \
+                 return true for keyring::Error::TooLong."
+            );
+        }
+
+        /// AC-008 (Pass-7 adversarial review Finding #1) — seam ENABLED but
+        /// a NON-TooLong error: must still return `false`. The seam is NOT
+        /// "return true unconditionally" — it only lifts the cfg-gate so
+        /// `should_fallback_to_dpapi`'s real `TooLong`-only predicate can be
+        /// evaluated at all on non-Windows. HOST-PURE.
+        #[test]
+        fn test_engage_dpapi_fallback_seam_enabled_returns_false_for_non_toolong() {
+            let _guard = seam_lock();
+            // SAFETY: held under seam_lock() for this test's whole duration.
+            unsafe { std::env::set_var("JR_FORCE_DPAPI_FALLBACK", "1") };
+            let cases: Vec<keyring::Error> = vec![
+                keyring::Error::NoEntry,
+                keyring::Error::BadEncoding(vec![0xff]),
+                keyring::Error::Invalid("attr".into(), "reason".into()),
+                keyring::Error::PlatformFailure(Box::new(std::io::Error::other("boom"))),
+                keyring::Error::NoStorageAccess(Box::new(std::io::Error::other("locked"))),
+                keyring::Error::Ambiguous(Vec::new()),
+            ];
+            let mut violations = Vec::new();
+            for err in cases {
+                if engage_dpapi_fallback(&err) {
+                    violations.push(format!("{err:?}"));
+                }
+            }
+            // SAFETY: still under seam_lock().
+            unsafe { std::env::remove_var("JR_FORCE_DPAPI_FALLBACK") };
+            assert!(
+                violations.is_empty(),
+                "AC-008 VIOLATION: with the seam engaged, engage_dpapi_fallback must still \
+                 return false for every non-TooLong error — never unconditionally true. \
+                 Violating cases: {violations:?}"
+            );
+        }
+    }
+
+    /// Keyring-gated tests for `store_oauth_tokens`'s DPAPI-routing/rollback
+    /// (AC-001-006, AC-019) and the clear-path `ProfilePathEscape`-tolerance
+    /// adapter (AC-015/016). `JR_RUN_KEYRING_TESTS=1` required; all tests
+    /// wrap their body in `with_test_keyring` for env-var/service-name
+    /// isolation, per this file's established convention.
+    mod dpapi_routing_keyring_gated_tests {
+        use super::*;
+
+        /// Sets `JR_FORCE_DPAPI_FALLBACK=1` for the duration of the guard,
+        /// restoring the previous value on drop. Must be constructed only
+        /// while already holding `KEYRING_TEST_ENV_MUTEX` (i.e. inside a
+        /// `with_test_keyring` closure) — `with_test_keyring` already holds
+        /// that mutex for its whole duration, so no separate lock
+        /// acquisition happens here.
+        struct DpapiFallbackSeamGuard {
+            prev: Option<String>,
+        }
+        impl DpapiFallbackSeamGuard {
+            fn engaged() -> Self {
+                let prev = std::env::var("JR_FORCE_DPAPI_FALLBACK").ok();
+                // SAFETY: caller holds KEYRING_TEST_ENV_MUTEX via
+                // with_test_keyring for this guard's whole lifetime.
+                unsafe { std::env::set_var("JR_FORCE_DPAPI_FALLBACK", "1") };
+                Self { prev }
+            }
+        }
+        impl Drop for DpapiFallbackSeamGuard {
+            fn drop(&mut self) {
+                // SAFETY: still holding KEYRING_TEST_ENV_MUTEX.
+                unsafe {
+                    match &self.prev {
+                        Some(p) => std::env::set_var("JR_FORCE_DPAPI_FALLBACK", p),
+                        None => std::env::remove_var("JR_FORCE_DPAPI_FALLBACK"),
+                    }
+                }
+            }
+        }
+
+        /// Sets the NOT-YET-IMPLEMENTED `JR_S759_FORCE_TOOLONG` fault-
+        /// injection seam (see this file's module doc above) for the
+        /// duration of the guard. `value` is `"access"` or `"refresh"`.
+        struct ForceTooLongGuard {
+            prev: Option<String>,
+        }
+        impl ForceTooLongGuard {
+            fn engaged(value: &str) -> Self {
+                let prev = std::env::var("JR_S759_FORCE_TOOLONG").ok();
+                // SAFETY: caller holds KEYRING_TEST_ENV_MUTEX via
+                // with_test_keyring for this guard's whole lifetime.
+                unsafe { std::env::set_var("JR_S759_FORCE_TOOLONG", value) };
+                Self { prev }
+            }
+        }
+        impl Drop for ForceTooLongGuard {
+            fn drop(&mut self) {
+                // SAFETY: still holding KEYRING_TEST_ENV_MUTEX.
+                unsafe {
+                    match &self.prev {
+                        Some(p) => std::env::set_var("JR_S759_FORCE_TOOLONG", p),
+                        None => std::env::remove_var("JR_S759_FORCE_TOOLONG"),
+                    }
+                }
+            }
+        }
+
+        /// AC-001 — both `set_password` calls succeed: pair is stored in
+        /// the keyring exactly as before this cycle. This is a REGRESSION
+        /// PIN for pre-existing, by-design-UNCHANGED behavior (BC-1.4.035
+        /// Postcondition 1's happy path is deliberately untouched) — it is
+        /// expected to pass both before and after this story's TDD Green
+        /// step, unlike this module's other tests. The best-effort
+        /// stale-DPAPI-file removal half of AC-001 (EC-1.4.035-2) is
+        /// Windows-only-observable (no DPAPI file can ever exist on
+        /// macOS/Linux) and is not exercised here — see this story's Red
+        /// Gate report for that residual.
+        #[test]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+        fn test_store_oauth_tokens_both_fit_keyring_write_unchanged() {
+            with_test_keyring(|| {
+                let profile = Profile::from("default");
+                store_oauth_tokens(&profile, "small-access", "small-refresh")
+                    .expect("AC-001: both-fit write must succeed");
+                let (a, r) =
+                    load_oauth_tokens(&profile).expect("AC-001: the stored pair must load back");
+                assert_eq!((a.as_str(), r.as_str()), ("small-access", "small-refresh"));
+            });
+        }
+
+        /// AC-002, AC-005, AC-019, VP-AUTHDX-022 (keyring-gated core) —
+        /// refresh-`TooLong`-after-access-succeeded: the ENTIRE pre-existing
+        /// keyring pair is deleted (both keys, including the just-written
+        /// access value) BEFORE `auth_windows_store::store_pair` is called;
+        /// on non-Windows, `store_pair`'s `#[cfg(not(windows))]` arm always
+        /// fails with `DpapiFallbackFailed` once the guard passes (AC-007) —
+        /// this is reused here as the deterministic, cross-platform fault
+        /// source (vp-delta.md's documented AC-019 coverage-boundary
+        /// strategy), so this single test proves BOTH the delete-first
+        /// ordering (AC-005) AND the propagated error's TYPE (AC-019) in
+        /// one shot, without needing a real Windows machine.
+        #[test]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run. ALSO requires \
+                    the JR_S759_FORCE_TOOLONG fault-injection seam described in this file's \
+                    module doc above — NOT YET IMPLEMENTED as of this Red Gate commit. \
+                    TO UN-IGNORE: implementer adds JR_S759_FORCE_TOOLONG support to \
+                    store_oauth_tokens's set_password call sites, then: \
+                    JR_RUN_KEYRING_TESTS=1 cargo test --lib -- --include-ignored"]
+        fn test_store_oauth_tokens_refresh_overflow_deletes_stale_pair_and_routes_to_dpapi() {
+            with_test_keyring(|| {
+                let _seam = DpapiFallbackSeamGuard::engaged();
+                let profile = Profile::from("default");
+
+                // Pre-seed a COMPLETE, FITTING keyring pair (EC-1.4.035-4 /
+                // VP-AUTHDX-022 setup) — the precise stale-keyring-shadow
+                // scenario Pass-3 adversarial review Finding #1 identified.
+                store_oauth_tokens(&profile, "old-access", "old-refresh")
+                    .expect("seeding the stale pair must succeed");
+
+                let result = {
+                    let _force = ForceTooLongGuard::engaged("refresh");
+                    store_oauth_tokens(&profile, "new-access", "new-refresh")
+                };
+
+                let err = result.expect_err(
+                    "AC-002/AC-019: once the refresh-TooLong routing arm is reached, \
+                     store_pair's #[cfg(not(windows))] arm always fails — store_oauth_tokens \
+                     must propagate that failure, not silently succeed.",
+                );
+                assert!(
+                    err.downcast_ref::<auth_windows_store::DpapiFallbackFailed>()
+                        .is_some(),
+                    "AC-019 VIOLATION: the propagated error must carry the DpapiFallbackFailed \
+                     marker, asserted by type (not merely 'the call returned Err'). Got: {err:#}"
+                );
+
+                // AC-002/AC-005/VP-AUTHDX-022(a): the ENTIRE stale keyring
+                // pair — both keys, including the just-attempted access
+                // write — must be gone BEFORE the (failing) DPAPI store, so
+                // neither backend holds a usable pair afterward.
+                let access_result = entry(&oauth_access_key(profile.as_ref()))
+                    .unwrap()
+                    .get_password();
+                let refresh_result = entry(&oauth_refresh_key(profile.as_ref()))
+                    .unwrap()
+                    .get_password();
+                assert!(
+                    matches!(access_result, Err(keyring::Error::NoEntry)),
+                    "AC-002/AC-005 VIOLATION: the stale access key must be deleted before the \
+                     DPAPI store is attempted. Got: {access_result:?}"
+                );
+                assert!(
+                    matches!(refresh_result, Err(keyring::Error::NoEntry)),
+                    "AC-002/AC-005 VIOLATION: the stale refresh key must be deleted too. \
+                     Got: {refresh_result:?}"
+                );
+            });
+        }
+
+        /// AC-003, AC-005, AC-019 — access-`TooLong`: refresh is never
+        /// attempted against keyring at all; the entire existing keyring
+        /// pair is deleted first, then the whole pair routes to
+        /// `store_pair`, which fails deterministically off-Windows
+        /// (DpapiFallbackFailed). Mirrors the refresh-overflow test above.
+        #[test]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run. ALSO requires \
+                    the JR_S759_FORCE_TOOLONG fault-injection seam — see module doc above."]
+        fn test_store_oauth_tokens_access_overflow_deletes_stale_pair_and_routes_to_dpapi() {
+            with_test_keyring(|| {
+                let _seam = DpapiFallbackSeamGuard::engaged();
+                let profile = Profile::from("default");
+
+                store_oauth_tokens(&profile, "old-access", "old-refresh")
+                    .expect("seeding the stale pair must succeed");
+
+                let result = {
+                    let _force = ForceTooLongGuard::engaged("access");
+                    store_oauth_tokens(&profile, "new-access", "new-refresh")
+                };
+
+                let err = result.expect_err(
+                    "AC-003/AC-019: once the access-TooLong routing arm is reached, refresh \
+                     must never be attempted against keyring and store_pair's \
+                     #[cfg(not(windows))] arm always fails.",
+                );
+                assert!(
+                    err.downcast_ref::<auth_windows_store::DpapiFallbackFailed>()
+                        .is_some(),
+                    "AC-019 VIOLATION: expected DpapiFallbackFailed. Got: {err:#}"
+                );
+
+                let access_result = entry(&oauth_access_key(profile.as_ref()))
+                    .unwrap()
+                    .get_password();
+                let refresh_result = entry(&oauth_refresh_key(profile.as_ref()))
+                    .unwrap()
+                    .get_password();
+                assert!(
+                    matches!(access_result, Err(keyring::Error::NoEntry)),
+                    "AC-003/AC-005 VIOLATION: the stale access key must be deleted. \
+                     Got: {access_result:?}"
+                );
+                assert!(
+                    matches!(refresh_result, Err(keyring::Error::NoEntry)),
+                    "AC-003/AC-005 VIOLATION: the stale refresh key must be deleted, even \
+                     though refresh's own set_password was never attempted this call. \
+                     Got: {refresh_result:?}"
+                );
+            });
+        }
+
+        /// AC-006, VP-AUTHDX-022 — stale-keyring-shadow closure, asserted a
+        /// SECOND way beyond the two tests above: a fresh profile (no
+        /// pre-existing pair at all) hitting the refresh-overflow arm must
+        /// ALSO end up with both keyring keys absent — i.e. the delete-first
+        /// step is unconditional, not merely "delete IF a stale pair
+        /// happens to exist."
+        #[test]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run. ALSO requires \
+                    the JR_S759_FORCE_TOOLONG fault-injection seam — see module doc above."]
+        fn test_store_oauth_tokens_toolong_on_fresh_profile_leaves_no_keyring_remnant() {
+            with_test_keyring(|| {
+                let _seam = DpapiFallbackSeamGuard::engaged();
+                let profile = Profile::from("default");
+                // No pre-seeding — fresh profile, no pair in either backend.
+
+                let result = {
+                    let _force = ForceTooLongGuard::engaged("refresh");
+                    store_oauth_tokens(&profile, "new-access", "new-refresh")
+                };
+                assert!(
+                    result.is_err(),
+                    "AC-006: expected the (non-Windows) DPAPI store to fail"
+                );
+
+                let access_result = entry(&oauth_access_key(profile.as_ref()))
+                    .unwrap()
+                    .get_password();
+                assert!(
+                    matches!(access_result, Err(keyring::Error::NoEntry)),
+                    "AC-006 VIOLATION: the just-written access key must be rolled back even \
+                     when there was no PRE-EXISTING stale pair to begin with. Got: {access_result:?}"
+                );
+            });
+        }
+
+        /// AC-015/AC-016 (adapter-level, HOST-PURE within this keyring-gated
+        /// module's file — no real keychain touch needed for THIS specific
+        /// assertion since the guard rejects before any I/O): the
+        /// `clear_dpapi_file_tolerating_path_escape` adapter maps a
+        /// `ProfilePathEscape` result from `remove_if_present` to `Ok(())`,
+        /// identically to `NotFound`. Not `#[ignore]`d — no keychain
+        /// backend is touched by a guard-rejecting profile name.
+        #[test]
+        fn test_clear_dpapi_file_tolerating_path_escape_maps_guard_rejection_to_ok() {
+            for bad_name in ["my:profile", "con", "sub/dir"] {
+                let profile = Profile::from(bad_name);
+                let result = clear_dpapi_file_tolerating_path_escape(&profile);
+                assert!(
+                    result.is_ok(),
+                    "AC-015/AC-016 VIOLATION: clear_dpapi_file_tolerating_path_escape must map \
+                     a ProfilePathEscape from remove_if_present (profile {bad_name:?}) to \
+                     Ok(()), identically to NotFound. Got: {result:?}"
+                );
+            }
+        }
+
+        /// AC-016 — a guard-colliding profile name still clears \
+        /// successfully end-to-end via `clear_profile_oauth_pair` (the two
+        /// real keyring deletes still run and tolerate `NoEntry`; the
+        /// DPAPI-removal step is tolerated per the adapter test above).
+        /// KEYRING-GATED because the two keyring deletes are real calls
+        /// against the OS backend.
+        #[test]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+        fn test_clear_profile_oauth_pair_succeeds_for_guard_colliding_profile_name() {
+            with_test_keyring(|| {
+                let profile = Profile::from("my:profile");
+                assert!(
+                    clear_profile_oauth_pair(&profile).is_ok(),
+                    "AC-016 VIOLATION: clear_profile_oauth_pair must succeed (Ok(())) for a \
+                     guard-rejecting profile name on every OS."
+                );
+            });
+        }
+
+        #[test]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+        fn test_clear_profile_creds_succeeds_for_reserved_device_name() {
+            with_test_keyring(|| {
+                let profile = Profile::from("con");
+                assert!(
+                    clear_profile_creds(&profile).is_ok(),
+                    "AC-016 VIOLATION: clear_profile_creds must succeed (Ok(())) for a \
+                     reserved-device-name profile on every OS."
+                );
+            });
+        }
+    }
 }
