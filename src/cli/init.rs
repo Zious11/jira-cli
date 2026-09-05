@@ -152,8 +152,18 @@ pub async fn handle() -> Result<()> {
         // — no second, independent tenant_info call site (BC-1.2.052
         // Postcondition 4, AC-004). `jr init` has no `--cloud-id` flag, so
         // the override is hardcoded `None`, mirroring the `login_oauth`
-        // call above.
-        crate::cli::auth::login_token(&profile_name, None, None, None, false).await?;
+        // call above. `jr init` is inherently interactive (human-run setup,
+        // no `--output json` mode of its own), so the soft-fail diagnostic
+        // output mode is hardcoded `OutputFormat::Table`.
+        crate::cli::auth::login_token(
+            &profile_name,
+            None,
+            None,
+            None,
+            false,
+            crate::cli::OutputFormat::Table,
+        )
+        .await?;
     }
 
     // Step 4: Per-project setup

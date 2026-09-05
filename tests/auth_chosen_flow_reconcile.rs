@@ -684,6 +684,7 @@ async fn test_ac_007_mechanism_switch_preserves_stale_cloud_id_e2e_real_keychain
         Some("switch-token".to_string()),
         None,
         true,
+        OutputFormat::Table,
     )
     .await;
 

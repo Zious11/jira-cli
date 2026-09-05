@@ -62,18 +62,26 @@ pub(crate) fn resolve_oauth_scopes(profile: &crate::config::ProfileConfig) -> Re
 ///    against the profile's `url` (already resolved by
 ///    `prepare_login_target` before this function runs).
 /// 3. On fetch failure, soft-fail: `p.cloud_id` is left untouched and a
-///    single `eprintln!` diagnostic is emitted (BC-1.2.052 Postcondition 3).
+///    single `eprintln!` diagnostic is emitted in Table (human) mode only
+///    (BC-1.2.052 Postcondition 3) — see [`resolve_and_apply_cloud_id`]'s
+///    own doc comment for the output-channel contract.
+///
+/// `output` selects the output-channel contract for the soft-fail
+/// diagnostic — passed straight through to [`resolve_and_apply_cloud_id`].
 ///
 /// Call sites (BC-1.2.052 Invariant 3 — exactly three): `handle_login`
-/// (`auth login`), `jr init`'s API-token branch, and
-/// `refresh_credentials` (`jr auth refresh`, hardcoded `None` — no
-/// `--cloud-id` flag on `RefreshArgs`).
+/// (`auth login`, threads `args.output`), `jr init`'s API-token branch
+/// (hardcoded `OutputFormat::Table` — `jr init` is inherently interactive),
+/// and `refresh_credentials` (`jr auth refresh`, threads `*args.output`;
+/// `cloud_id_override` stays hardcoded `None` — no `--cloud-id` flag on
+/// `RefreshArgs`).
 pub async fn login_token(
     profile: &str,
     email: Option<String>,
     token: Option<String>,
     cloud_id_override: Option<&str>,
     no_input: bool,
+    output: OutputFormat,
 ) -> Result<()> {
     let email = resolve_credential(
         email,
@@ -125,7 +133,7 @@ pub async fn login_token(
         config.global.default_profile = Some(profile.to_string());
     }
 
-    resolve_and_apply_cloud_id(&mut config, profile, cloud_id_override).await;
+    resolve_and_apply_cloud_id(&mut config, profile, cloud_id_override, output).await;
 
     config.save_global()?;
 
@@ -144,24 +152,38 @@ pub async fn login_token(
 /// Never returns an error — every failure mode (missing override, fetch
 /// failure of any shape, non-`https://` `site_url`) is a soft-fail per
 /// BC-1.2.052 Postcondition 3/Invariant 2: `p.cloud_id` is left as it
-/// already was, and a single human-mode-only `eprintln!` diagnostic is
-/// emitted. This is the single implementation both the override-precedence
-/// (AC-001), fetch-success-overwrite (AC-005), and mechanism-switch
-/// refresh-not-clear (AC-007, BC-1.2.053) acceptance criteria share — no
-/// separate "mechanism switch" detection code exists anywhere (BC-1.2.053
-/// Invariant 1).
+/// already was, and a single `eprintln!` diagnostic is emitted — but ONLY in
+/// Table (human) output mode, gated on `matches!(output, OutputFormat::Table)`.
+/// Under `--output json` the diagnostic is suppressed entirely: nothing is
+/// written to stderr, and the return value reflects that (`None`, not the
+/// would-be message) so a caller/test can't mistake "suppressed" for
+/// "printed". This mirrors the established sibling convention in this same
+/// module — [`super::emit_oauth_deprecation_notice`] and
+/// [`super::emit_api_token_inert_on_refresh_notice`] gate their stderr
+/// notices the same way — and matches this function's own long-standing doc
+/// claim of being "human-mode-only," which prior to this change was
+/// documented but not actually implemented (ADV MED, S-cycle4-cloud-id-
+/// correctness). This is the single implementation both the
+/// override-precedence (AC-001), fetch-success-overwrite (AC-005), and
+/// mechanism-switch refresh-not-clear (AC-007, BC-1.2.053) acceptance
+/// criteria share — no separate "mechanism switch" detection code exists
+/// anywhere (BC-1.2.053 Invariant 1).
 ///
 /// Returns the exact text of the `eprintln!` diagnostic when one was
-/// emitted (`None` on the override and fetch-success paths, which print
-/// nothing) — a testability seam only (ADV LOW-1): production callers
-/// ([`login_token`]) ignore it, since the diagnostic has already reached
-/// stderr as a side effect by the time this returns. This lets tests assert
-/// on the exact soft-fail wording (preserved-vs-none, ADV LOW-4) without
-/// needing to capture the real stderr file descriptor.
+/// ACTUALLY EMITTED — i.e. only on a fetch-failure/no-URL soft-fail path
+/// AND `output == OutputFormat::Table` (`None` on the override path, the
+/// fetch-success path, and any soft-fail path under `OutputFormat::Json`,
+/// none of which print anything) — a testability seam only (ADV LOW-1):
+/// production callers ([`login_token`]) ignore it, since the diagnostic has
+/// already reached stderr as a side effect by the time this returns (when
+/// it returns `Some` at all). This lets tests assert on the exact soft-fail
+/// wording (preserved-vs-none, ADV LOW-4) AND on JSON-mode suppression
+/// (ADV MED) without needing to capture the real stderr file descriptor.
 async fn resolve_and_apply_cloud_id(
     config: &mut Config,
     profile: &str,
     cloud_id_override: Option<&str>,
+    output: OutputFormat,
 ) -> Option<String> {
     if let Some(override_value) = cloud_id_override {
         // AC-001 (BC-1.2.052 Postcondition 1): explicit override takes
@@ -184,11 +206,16 @@ async fn resolve_and_apply_cloud_id(
 
     let Some(site_url) = site_url else {
         // No URL to fetch against at all — soft-fail, leave cloud_id as-is.
+        // Human-mode-only (BC-1.2.052 Postcondition 3): suppressed under
+        // `--output json`, matching the sibling notice convention.
         let msg = format!(
             "warning: could not look up cloud_id for profile {profile:?} — no URL configured."
         );
-        eprintln!("{msg}");
-        return Some(msg);
+        if matches!(output, OutputFormat::Table) {
+            eprintln!("{msg}");
+            return Some(msg);
+        }
+        return None;
     };
 
     // Captured before the fetch so the soft-fail diagnostic (below) can
@@ -228,8 +255,15 @@ async fn resolve_and_apply_cloud_id(
             } else {
                 format!("warning: could not look up cloud_id for profile {profile:?}: {err}")
             };
-            eprintln!("{msg}");
-            Some(msg)
+            // Human-mode-only (BC-1.2.052 Postcondition 3): suppressed
+            // under `--output json`, matching the sibling notice
+            // convention (`emit_oauth_deprecation_notice` et al.).
+            if matches!(output, OutputFormat::Table) {
+                eprintln!("{msg}");
+                Some(msg)
+            } else {
+                None
+            }
         }
     }
 }
@@ -540,6 +574,7 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
             args.token,
             args.cloud_id.as_deref(),
             args.no_input,
+            args.output,
         )
         .await?;
     }
@@ -841,6 +876,7 @@ mod cloud_id_fallback_chain_tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    use crate::cli::OutputFormat;
     use crate::config::{Config, GlobalConfig, ProfileConfig, ProjectConfig};
 
     use super::resolve_and_apply_cloud_id;
@@ -899,7 +935,13 @@ mod cloud_id_fallback_chain_tests {
     async fn test_ac_001_explicit_override_takes_precedence_and_is_written() {
         let mut config = make_config("sandbox", Some("not-a-real-url"), None);
 
-        resolve_and_apply_cloud_id(&mut config, "sandbox", Some("override-uuid-123")).await;
+        resolve_and_apply_cloud_id(
+            &mut config,
+            "sandbox",
+            Some("override-uuid-123"),
+            OutputFormat::Table,
+        )
+        .await;
 
         assert_eq!(
             cloud_id_of(&config, "sandbox"),
@@ -956,7 +998,13 @@ mod cloud_id_fallback_chain_tests {
             active_profile_name: "prod".into(),
         };
 
-        resolve_and_apply_cloud_id(&mut config, "sandbox", Some("sandbox-override-uuid")).await;
+        resolve_and_apply_cloud_id(
+            &mut config,
+            "sandbox",
+            Some("sandbox-override-uuid"),
+            OutputFormat::Table,
+        )
+        .await;
 
         assert_eq!(
             cloud_id_of(&config, "sandbox"),
@@ -984,7 +1032,13 @@ mod cloud_id_fallback_chain_tests {
     async fn test_ac_001_explicit_override_replaces_existing_cloud_id() {
         let mut config = make_config("sandbox", Some("not-a-real-url"), Some("old-uuid"));
 
-        resolve_and_apply_cloud_id(&mut config, "sandbox", Some("override-uuid-456")).await;
+        resolve_and_apply_cloud_id(
+            &mut config,
+            "sandbox",
+            Some("override-uuid-456"),
+            OutputFormat::Table,
+        )
+        .await;
 
         assert_eq!(cloud_id_of(&config, "sandbox"), Some("override-uuid-456"));
     }
@@ -999,7 +1053,7 @@ mod cloud_id_fallback_chain_tests {
     async fn test_ac_003_soft_fail_leaves_new_profile_cloud_id_none() {
         let mut config = make_config("sandbox", Some("http://not-https.example.net"), None);
 
-        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
 
         assert_eq!(
             cloud_id_of(&config, "sandbox"),
@@ -1018,7 +1072,7 @@ mod cloud_id_fallback_chain_tests {
             Some("prior-uuid"),
         );
 
-        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
 
         assert_eq!(cloud_id_of(&config, "sandbox"), Some("prior-uuid"));
     }
@@ -1031,7 +1085,7 @@ mod cloud_id_fallback_chain_tests {
     async fn test_ec_1_2_053_1_preserve_none_on_failure_is_still_none() {
         let mut config = make_config("sandbox", Some("http://not-https.example.net"), None);
 
-        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
 
         assert_eq!(cloud_id_of(&config, "sandbox"), None);
     }
@@ -1062,7 +1116,7 @@ mod cloud_id_fallback_chain_tests {
         }
 
         let mut config = make_config("sandbox", Some("https://plausible-site.example"), None);
-        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
 
         unsafe {
             std::env::remove_var("JR_TENANT_INFO_URL");
@@ -1103,7 +1157,7 @@ mod cloud_id_fallback_chain_tests {
             Some("https://plausible-site.example"),
             Some("stale-oauth-era-uuid"),
         );
-        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
 
         unsafe {
             std::env::remove_var("JR_TENANT_INFO_URL");
@@ -1130,7 +1184,7 @@ mod cloud_id_fallback_chain_tests {
             Some("stale-oauth-era-uuid"),
         );
 
-        resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+        resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
 
         assert_eq!(
             cloud_id_of(&config, "sandbox"),
@@ -1163,7 +1217,8 @@ mod cloud_id_fallback_chain_tests {
             Some("prior-uuid"),
         );
 
-        let diagnostic = resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+        let diagnostic =
+            resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
 
         let msg =
             diagnostic.expect("ADV LOW-1: a fetch failure must emit a diagnostic and hand it back");
@@ -1198,7 +1253,8 @@ mod cloud_id_fallback_chain_tests {
     async fn test_adv_low4_absent_cloud_id_message_keeps_original_lookup_wording() {
         let mut config = make_config("sandbox", Some("http://not-https.example.net"), None);
 
-        let diagnostic = resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+        let diagnostic =
+            resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
 
         let msg =
             diagnostic.expect("ADV LOW-1: a fetch failure must emit a diagnostic and hand it back");
@@ -1222,8 +1278,13 @@ mod cloud_id_fallback_chain_tests {
     #[tokio::test]
     async fn test_adv_low1_no_diagnostic_returned_on_override_or_fetch_success() {
         let mut config = make_config("sandbox", Some("not-a-real-url"), None);
-        let diagnostic =
-            resolve_and_apply_cloud_id(&mut config, "sandbox", Some("override-uuid")).await;
+        let diagnostic = resolve_and_apply_cloud_id(
+            &mut config,
+            "sandbox",
+            Some("override-uuid"),
+            OutputFormat::Table,
+        )
+        .await;
         assert_eq!(
             diagnostic, None,
             "the explicit-override path prints nothing, so nothing should be returned"
@@ -1242,7 +1303,8 @@ mod cloud_id_fallback_chain_tests {
             std::env::set_var("JR_TENANT_INFO_URL", server.uri());
         }
         let mut config2 = make_config("sandbox", Some("https://plausible-site.example"), None);
-        let diagnostic2 = resolve_and_apply_cloud_id(&mut config2, "sandbox", None).await;
+        let diagnostic2 =
+            resolve_and_apply_cloud_id(&mut config2, "sandbox", None, OutputFormat::Table).await;
         unsafe {
             std::env::remove_var("JR_TENANT_INFO_URL");
         }
@@ -1250,6 +1312,101 @@ mod cloud_id_fallback_chain_tests {
             diagnostic2, None,
             "a successful fetch prints nothing, so nothing should be returned"
         );
+    }
+
+    /// ADV MED (S-cycle4-cloud-id-correctness fix burst, BC-1.2.052
+    /// Postcondition 3): pins the Table-mode HALF of the human-mode-only
+    /// contract explicitly and by name — a fetch failure under
+    /// `OutputFormat::Table` must both emit the diagnostic (`Some(..)`
+    /// returned, matching what a real invocation actually writes to
+    /// stderr) AND leave the prior `cloud_id` preserved untouched. This is
+    /// the positive control for
+    /// `test_adv_med_json_mode_fetch_failure_suppresses_diagnostic` below —
+    /// together the pair proves the gate actually branches on `output`
+    /// rather than always emitting or always suppressing.
+    #[tokio::test]
+    async fn test_adv_med_table_mode_fetch_failure_emits_diagnostic() {
+        let mut config = make_config(
+            "sandbox",
+            Some("http://not-https.example.net"),
+            Some("prior-uuid"),
+        );
+
+        let diagnostic =
+            resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
+
+        let msg = diagnostic.expect(
+            "ADV MED: Table mode must emit and return a soft-fail diagnostic \
+             on a fetch failure",
+        );
+        assert!(
+            msg.starts_with("warning: could not refresh cloud_id for profile \"sandbox\"")
+                && msg.contains("keeping the existing value"),
+            "ADV MED: Table-mode diagnostic must use the preserved-value \
+             wording (a prior cloud_id existed). Got: {msg}"
+        );
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            Some("prior-uuid"),
+            "the prior cloud_id must survive the fetch failure untouched"
+        );
+    }
+
+    /// ADV MED (S-cycle4-cloud-id-correctness fix burst, BC-1.2.052
+    /// Postcondition 3, VP-AUTHDX-019): the negative control — the SAME
+    /// fetch-failure scenario as
+    /// `test_adv_med_table_mode_fetch_failure_emits_diagnostic` above, but
+    /// under `OutputFormat::Json`. The diagnostic must be fully suppressed
+    /// (`None` returned — nothing was printed to stderr, matching the
+    /// sibling convention on `emit_oauth_deprecation_notice`/
+    /// `emit_api_token_inert_on_refresh_notice`), while login-level
+    /// behavior is completely unaffected: the function still soft-fails
+    /// rather than aborting, and the prior `cloud_id` still survives
+    /// untouched. Before this fix burst, `resolve_and_apply_cloud_id` had
+    /// no `output` parameter at all and always emitted — this test would
+    /// not have compiled, let alone passed.
+    #[tokio::test]
+    async fn test_adv_med_json_mode_fetch_failure_suppresses_diagnostic() {
+        let mut config = make_config(
+            "sandbox",
+            Some("http://not-https.example.net"),
+            Some("prior-uuid"),
+        );
+
+        let diagnostic =
+            resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Json).await;
+
+        assert_eq!(
+            diagnostic, None,
+            "ADV MED: JSON mode must suppress the soft-fail diagnostic \
+             entirely — nothing printed, so nothing returned"
+        );
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            Some("prior-uuid"),
+            "suppressing the diagnostic must not change the soft-fail \
+             preserve-on-failure behavior — the prior cloud_id still \
+             survives untouched"
+        );
+    }
+
+    /// ADV MED sibling: the no-URL-configured soft-fail branch (distinct
+    /// code path from the fetch-failure branch above) must ALSO suppress
+    /// its diagnostic under JSON mode, on a brand-new profile with no prior
+    /// `cloud_id` to preserve.
+    #[tokio::test]
+    async fn test_adv_med_json_mode_no_url_configured_suppresses_diagnostic() {
+        let mut config = make_config("sandbox", None, None);
+
+        let diagnostic =
+            resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Json).await;
+
+        assert_eq!(
+            diagnostic, None,
+            "ADV MED: JSON mode must suppress the no-URL-configured \
+             diagnostic too, not just the fetch-failure one"
+        );
+        assert_eq!(cloud_id_of(&config, "sandbox"), None);
     }
 
     /// Counts occurrences of `pattern` (e.g. `"println!("` or `"print!("`)

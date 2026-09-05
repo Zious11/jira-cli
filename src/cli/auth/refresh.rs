@@ -180,7 +180,17 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
         // `login_token`'s tenant_info fetch still fires on every such
         // `auth refresh` invocation (fetch-on-every-invocation, not
         // override-gated) — intentional, not an oversight (ADR-0022 §2).
-        AuthFlow::Token => login_token(&target, args.email, args.token, None, args.no_input).await,
+        AuthFlow::Token => {
+            login_token(
+                &target,
+                args.email,
+                args.token,
+                None,
+                args.no_input,
+                *args.output,
+            )
+            .await
+        }
         AuthFlow::OAuth => {
             login_oauth(
                 &target,

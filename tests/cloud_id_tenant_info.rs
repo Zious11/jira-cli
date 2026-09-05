@@ -471,6 +471,7 @@ async fn test_login_token_persists_explicit_cloud_id_override_e2e() {
         Some("override-e2e-token".to_string()),
         Some("override-e2e-uuid"),
         true,
+        jr::cli::OutputFormat::Table,
     )
     .await;
 
@@ -523,6 +524,7 @@ async fn test_login_token_soft_fails_and_still_succeeds_on_fetch_failure() {
         Some("soft-fail-token".to_string()),
         None,
         true,
+        jr::cli::OutputFormat::Table,
     )
     .await;
 

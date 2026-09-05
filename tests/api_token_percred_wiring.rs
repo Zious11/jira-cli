@@ -90,6 +90,7 @@ async fn test_login_token_writes_namespaced_pair_not_shared_flat() {
         Some("wired-token-123".to_string()),
         None,
         true,
+        jr::cli::OutputFormat::Table,
     )
     .await
     .map_err(|e| format!("{e:#}"));
