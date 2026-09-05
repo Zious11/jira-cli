@@ -386,6 +386,34 @@ When adding a new feature:
   print a readiness marker, and does not redirect I/O, auth, or any config/cache path. It
   is additionally narrowed by the `unix` conjunct on top of `debug_assertions`, unlike its
   siblings' bare `debug_assertions` gate.
+- `JR_FORCE_DPAPI_FALLBACK` env var (debug builds only; S-cycle4-dpapi-storage-fix, ADR-0021
+  §1) lets a Linux/macOS debug build exercise `store_oauth_tokens`'s `TooLong`-routing arms
+  for testing — `#[cfg(not(windows))] fn engage_dpapi_fallback` (`src/api/auth.rs`) returns
+  `auth_windows_store::should_fallback_to_dpapi(err)` instead of the hardcoded `false` every
+  release build (and every debug build with the env var unset) uses. Release binaries ignore
+  this env var entirely (compiled out via `#[cfg(debug_assertions)]`); production non-Windows
+  behavior is unaffected by the seam's mere existence. Pinned by
+  `tests/jr_force_dpapi_fallback_release_gate.rs`. Security-relevant in the same sense as
+  `JR_BASE_URL`: it gates a credential-storage routing decision, though only in debug builds.
+- `JR_S759_FORCE_TOOLONG` env var (debug builds only; S-cycle4-dpapi-storage-fix), values
+  `"access"`/`"refresh"` — models `JR_S303_PERSIST_FAIL`'s shape. When set to one of those
+  values, the corresponding `set_password` call inside `store_oauth_tokens` is skipped and a
+  synthetic `keyring::Error::TooLong` is returned instead, letting a non-Windows debug build
+  simulate the one `keyring::Error` variant no real macOS/Linux keyring backend can actually
+  produce — needed to exercise AC-001-006/AC-019's delete-keyring-first / rollback / DPAPI
+  routing behavior in keyring-gated tests off Windows. Gated via `#[cfg(debug_assertions)]` at
+  `src/api/auth.rs::forced_toolong()`. Pinned by
+  `tests/jr_s759_force_toolong_release_gate.rs`.
+- `JR_FORCE_DPAPI_LOAD_PAIR` env var (debug builds only; S-cycle4-dpapi-storage-fix), values
+  `"found"`/`"corrupt"`/`"backend_error"` — lets a non-Windows debug build exercise
+  `load_oauth_tokens`'s DPAPI-fallback read-path branches (AC-009/AC-010/AC-011, BC-1.4.036),
+  none of which are otherwise reachable off Windows in production
+  (`auth_windows_store::load_pair`'s `#[cfg(not(windows))]` arm is hardcoded `Ok(None)` once
+  the profile-name path-traversal guard passes). The guard call still runs FIRST, before the
+  seam is consulted, so a guard-rejecting profile name is rejected regardless of the seam's
+  value. Gated via `#[cfg(debug_assertions)]` at
+  `src/api/auth_windows_store.rs::load_pair()`'s `#[cfg(not(windows))]` arm. Pinned by
+  `tests/jr_force_dpapi_load_pair_release_gate.rs`.
 - **Release-ops repo-variable gates** — `SIGNING_ENABLED`, `HOMEBREW_TAP_REPO`, `RELEASE_GAP_FILL_ENABLED`, `SYNC_UPSTREAM_REPO` (all GitHub Actions repository variables, never read by `src/` code) gate the opt-in signing/backfill/gap-fill/fork-sync workflows. All unset in the canonical repo → those workflows are no-ops; downstream forks opt in. Same fail-safe pattern as `JR_E2E_ENABLED`. See `docs/specs/fork-friendly-release-ops.md`.
 - **When adding a new `JR_*` test-seam env var:** grep `CLAUDE.md` for existing `JR_*` entries and add a parallel line in the SAME commit as the code change. This is the codified doc-fallout pattern from #335/#357; first applied retroactively when `JR_BULK_UNKNOWN_GRACE_SECS` and `JR_BULK_AWAIT_TIMEOUT_SECS` shipped without documentation.
 - **Citation discipline for external-tracker IDs in user-facing strings:** before citing a JRACLOUD-*/GitHub/community ID in anything a user sees (stderr, errors, JSON, hints) or in literal rustdoc, Perplexity-validate the source actually documents the symptom — issue #361 had three misattributed JRACLOUD tickets survive multiple PRs. Also ensure the string is valid in the user's env (e.g. JQL allows one ORDER BY) and keep paraphrasing rustdoc in lockstep.
