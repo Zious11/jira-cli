@@ -909,6 +909,74 @@ mod cloud_id_fallback_chain_tests {
         );
     }
 
+    /// Multi-profile boundary pin (CLAUDE.md "Multi-profile boundary":
+    /// "Cross-profile cache leakage is a correctness bug, not a UX issue"
+    /// — the same principle applies to config writes, not just caches):
+    /// `resolve_and_apply_cloud_id` must write `cloud_id` onto the NAMED
+    /// `profile` argument it was called with, never onto
+    /// `config.active_profile_name`, when the two differ. Builds a config
+    /// with TWO distinct profiles — "prod" is the ACTIVE profile, "sandbox"
+    /// is the TARGET profile passed explicitly to the function (as
+    /// `jr auth login --profile sandbox` would do while some other profile
+    /// is active) — and asserts the write landed only on "sandbox" while
+    /// "prod" (including its own pre-existing `cloud_id`) is left
+    /// completely untouched. Uses the override path (no network/seam
+    /// needed) purely to isolate this from any fetch-success/failure
+    /// behavior already covered by the tests above.
+    #[tokio::test]
+    async fn test_resolve_cloud_id_writes_named_profile_not_active_profile() {
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "prod".to_string(),
+            ProfileConfig {
+                url: Some("https://prod.example.atlassian.net".to_string()),
+                cloud_id: Some("prod-untouched-uuid".to_string()),
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        profiles.insert(
+            "sandbox".to_string(),
+            ProfileConfig {
+                url: Some("not-a-real-url".to_string()),
+                cloud_id: None,
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        let mut config = Config {
+            global: GlobalConfig {
+                default_profile: Some("prod".to_string()),
+                profiles,
+                ..GlobalConfig::default()
+            },
+            project: ProjectConfig::default(),
+            // The ACTIVE profile is "prod" — deliberately different from
+            // the "sandbox" profile named in the call below.
+            active_profile_name: "prod".into(),
+        };
+
+        resolve_and_apply_cloud_id(&mut config, "sandbox", Some("sandbox-override-uuid")).await;
+
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            Some("sandbox-override-uuid"),
+            "the write must land on the NAMED profile argument (\"sandbox\"), \
+             regardless of which profile is active"
+        );
+        assert_eq!(
+            cloud_id_of(&config, "prod"),
+            Some("prod-untouched-uuid"),
+            "the ACTIVE profile (\"prod\") must be completely untouched — a \
+             write keyed on `active_profile_name` instead of the `profile` \
+             argument would corrupt it here"
+        );
+        assert_eq!(
+            config.active_profile_name, "prod",
+            "resolve_and_apply_cloud_id must not mutate active_profile_name itself"
+        );
+    }
+
     /// AC-001 (Pass-2 adversarial review Finding #8): the override REPLACES
     /// a pre-existing value too, not merely a brand-new-profile
     /// None -> Some transition.
@@ -1081,8 +1149,10 @@ mod cloud_id_fallback_chain_tests {
     /// no `Result::Err` bubbled to the caller) and hands the diagnostic
     /// back via its return value so this can be asserted without a real
     /// stderr-fd capture; production emits the identical text via
-    /// `eprintln!` (stderr only — this function contains no `println!`
-    /// call at all, verified by `test_adv_low1_no_stdout_writes_in_source`
+    /// `eprintln!` (stderr only — this function's body contains no bare
+    /// `print!`/`println!` macro call and no reference to `stdout`,
+    /// verified by
+    /// `test_adv_low1_resolve_cloud_id_source_has_no_stdout_macro_or_write`
     /// below), so the returned text and what a real invocation prints to
     /// stderr are one and the same string.
     #[tokio::test]
@@ -1182,18 +1252,55 @@ mod cloud_id_fallback_chain_tests {
         );
     }
 
-    /// ADV LOW-1 (stderr-only channel, structural proof): every diagnostic
-    /// this function can ever emit goes through `eprintln!` — grepping this
-    /// function's own source text for a bare `println!(` call (which would
-    /// leak a diagnostic onto stdout, violating the Output-channels
-    /// convention: `--output json` must stay pipe-clean) finds none. This
-    /// is a source-level structural pin, in the same spirit as this
-    /// repo's other reject-don't-parse text guards (see CLAUDE.md's CI
-    /// Gate history), chosen because `resolve_and_apply_cloud_id` is a
-    /// private fn with no in-process real-fd stderr capture available
-    /// without a new dependency or an unrelated refactor.
+    /// Counts occurrences of `pattern` (e.g. `"println!("` or `"print!("`)
+    /// in `body` that are NOT immediately preceded by the byte `'e'` — i.e.
+    /// occurrences that are not actually part of `eprintln!(`/`eprint!(`.
+    /// This lets a single scan tell a genuinely bare stdout macro call
+    /// apart from its `e`-prefixed stderr sibling, since (for example)
+    /// `"println!("` is a literal substring of `"eprintln!("` starting one
+    /// byte in.
+    fn count_bare_macro_calls(body: &str, pattern: &str) -> usize {
+        let bytes = body.as_bytes();
+        let mut count = 0;
+        let mut search_from = 0;
+        while let Some(rel) = body[search_from..].find(pattern) {
+            let abs = search_from + rel;
+            let preceded_by_e = abs > 0 && bytes[abs - 1] == b'e';
+            if !preceded_by_e {
+                count += 1;
+            }
+            search_from = abs + pattern.len();
+        }
+        count
+    }
+
+    /// ADV LOW-1 (stderr-only channel, structural proof); ADV MED-2
+    /// (strengthened, renamed from `test_adv_low1_no_stdout_writes_in_source`
+    /// — that name asserted a guarantee ("no stdout writes") the original
+    /// body did not actually check): every diagnostic this function can
+    /// ever emit goes through `eprintln!`. This scan of the function's own
+    /// source text rejects every stdout-writing shape this repo's
+    /// `println!(`-only original guard would have missed: a bare
+    /// `println!(` or `print!(` call (checked via `count_bare_macro_calls`,
+    /// which excludes matches that are actually part of `eprintln!(`/
+    /// `eprint!(`), AND any textual reference to `stdout` at all — which
+    /// additionally catches `write!(std::io::stdout(), …)`,
+    /// `writeln!(std::io::stdout(), …)`, and
+    /// `std::io::stdout().write_all(…)`, none of which contain a bare
+    /// `print!`/`println!` macro call for the first check to see. This is
+    /// a source-level structural pin, in the same spirit as this repo's
+    /// other reject-don't-parse text guards (see CLAUDE.md's CI Gate
+    /// history), chosen because `resolve_and_apply_cloud_id` is a private
+    /// fn with no in-process real-fd stderr capture available without a
+    /// new dependency or an unrelated refactor.
+    ///
+    /// Verified (locally, then reverted — not left in the tree) that this
+    /// guard actually fails on each of the vectors it claims to reject: a
+    /// temporary `print!("x");` or `writeln!(std::io::stdout(), "x").ok();`
+    /// inserted into `resolve_and_apply_cloud_id`'s body flips this test
+    /// from green to a failing assertion before the edit is reverted.
     #[test]
-    fn test_adv_low1_no_stdout_writes_in_source() {
+    fn test_adv_low1_resolve_cloud_id_source_has_no_stdout_macro_or_write() {
         let src = include_str!("login.rs");
         let start = src
             .find("async fn resolve_and_apply_cloud_id(")
@@ -1213,16 +1320,40 @@ mod cloud_id_fallback_chain_tests {
              (no-URL-configured, fetch-failure) in this function's body — \
              the test's start/end source markers may have drifted"
         );
-        // A bare `println!(` (stdout) must never appear inside this
-        // function's body — every occurrence of "println!(" here must be
-        // part of "eprintln!(", i.e. the two substring counts match.
-        let bare_println_count = body.matches("println!(").count();
+
+        // Neither a bare `println!(` nor a bare `print!(` (stdout) may
+        // appear inside this function's body — each must be zero, not
+        // merely "no more than the eprintln count" (that looser check is
+        // what ADV MED-2 is replacing).
+        let bare_println_count = count_bare_macro_calls(body, "println!(");
         assert_eq!(
-            bare_println_count, eprintln_count,
-            "every `println!(` occurrence in resolve_and_apply_cloud_id must \
-             be part of `eprintln!(` — a bare stdout `println!(` would leak \
-             this diagnostic onto stdout, breaking the Output-channels \
-             convention (stdout stays clean, including under --output json)"
+            bare_println_count, 0,
+            "a bare stdout `println!(` call was found in \
+             resolve_and_apply_cloud_id — this would leak a diagnostic onto \
+             stdout, breaking the Output-channels convention (stdout stays \
+             clean, including under --output json)"
+        );
+        let bare_print_count = count_bare_macro_calls(body, "print!(");
+        assert_eq!(
+            bare_print_count, 0,
+            "a bare stdout `print!(` call was found in \
+             resolve_and_apply_cloud_id — this would leak a diagnostic onto \
+             stdout, breaking the Output-channels convention (stdout stays \
+             clean, including under --output json)"
+        );
+
+        // No reference to `stdout` at all (case-sensitive) may appear in
+        // this function's body — this closes the ADV MED-2 gap left by the
+        // two macro-call checks above: `write!(std::io::stdout(), …)`,
+        // `writeln!(std::io::stdout(), …)`, and
+        // `std::io::stdout().write_all(…)` are all real stdout-leak shapes
+        // that contain no bare `print!`/`println!` macro invocation.
+        assert!(
+            !body.contains("stdout"),
+            "a reference to `stdout` was found in resolve_and_apply_cloud_id \
+             — this function must write diagnostics to stderr only (via \
+             `eprintln!`), never touch stdout by any mechanism (macro call, \
+             `write!`/`writeln!`, or `.write_all(…)`)"
         );
     }
 }

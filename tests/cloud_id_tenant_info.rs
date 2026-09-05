@@ -162,8 +162,28 @@ async fn test_fetch_cloud_id_makes_zero_requests_for_scheme_less_url() {
 /// soft-fail — `Err`, never a panic. Bounded by the documented 10s timeout
 /// (not separately asserted here to keep this test fast; DNS failure for
 /// `.invalid` resolves near-instantly on virtually all resolvers).
+///
+/// ADV MED-1 (test-isolation race → CI flakiness): this test's `https://`
+/// `site_url` reaches `fetch_cloud_id`'s debug-only `JR_TENANT_INFO_URL`
+/// read (see `tenant.rs::fetch_cloud_id`) even though it never sets that
+/// var itself. A concurrently-running seam test in this same file (e.g.
+/// `test_fetch_cloud_id_success_parses_cloud_id_and_ignores_unknown_fields`)
+/// sets `JR_TENANT_INFO_URL` to a live wiremock URI for the duration of its
+/// own `env_lock` critical section — without also holding `env_lock` here,
+/// this test's request could be retargeted mid-flight to that mock server,
+/// which responds `Ok`, flipping the `assert!(result.is_err())` below.
+/// Acquiring `env_lock` for this test's scope, and removing any stray
+/// `JR_TENANT_INFO_URL` before calling `fetch_cloud_id`, closes that race —
+/// this test then deterministically exercises the real DNS-failure path,
+/// exactly as intended.
 #[tokio::test]
 async fn test_fetch_cloud_id_soft_fails_on_unresolvable_host() {
+    let _guard = env_lock().lock().await;
+    // SAFETY: env_lock held for this whole scope.
+    unsafe {
+        std::env::remove_var("JR_TENANT_INFO_URL");
+    }
+
     let result = fetch_cloud_id("https://this-host-does-not-exist.invalid").await;
     assert!(
         result.is_err(),
@@ -174,8 +194,19 @@ async fn test_fetch_cloud_id_soft_fails_on_unresolvable_host() {
 /// EC-1.2.052-4: a connection-refused error (a closed local TCP port under
 /// an `https://` scheme, so the request also exercises a genuine TLS
 /// handshake attempt against nothing listening) is likewise a soft-fail.
+///
+/// ADV MED-1: see the sibling `test_fetch_cloud_id_soft_fails_on_unresolvable_host`
+/// doc comment above for why this test must hold `env_lock` and clear
+/// `JR_TENANT_INFO_URL` before calling `fetch_cloud_id` — the same seam-read
+/// race applies here.
 #[tokio::test]
 async fn test_fetch_cloud_id_soft_fails_on_connection_refused() {
+    let _guard = env_lock().lock().await;
+    // SAFETY: env_lock held for this whole scope.
+    unsafe {
+        std::env::remove_var("JR_TENANT_INFO_URL");
+    }
+
     // Port 0 binds to an ephemeral port and closes it, freeing a port
     // number that is (barring an extraordinarily unlucky race) not
     // listening for the immediately-following request.
