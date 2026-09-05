@@ -926,8 +926,12 @@ pub fn try_load_oauth_app_credentials() -> Result<Option<(String, String)>> {
 /// remove` (BC-1.2.014).
 ///
 /// `keyring::Error::NoEntry` on any step is success; any other keychain
-/// error propagates immediately via `?` (same tightening as
-/// [`clear_profile_creds`], applied consistently across both functions).
+/// error is captured (same tightening as [`clear_profile_creds`], applied
+/// consistently across both functions). Unlike a `?`-early-abort, every step
+/// below runs unconditionally via the `attempt` closure's accumulator —
+/// the FIRST genuine error encountered (in fixed attempt order) is what
+/// this function ultimately returns, but only after every attempt has
+/// completed, not as soon as it occurs.
 ///
 /// **DPAPI file cleanup (ADR-0021 §7, BC-1.4.038 Postcondition 4,
 /// S-cycle4-dpapi-storage-fix).** Also calls

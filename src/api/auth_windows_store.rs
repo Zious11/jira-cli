@@ -31,14 +31,19 @@
 //! `CryptUnprotectData` via `windows-sys`) and the `#[cfg(windows)]` arms of
 //! `store_pair`/`load_pair`/`remove_if_present` cannot be compiled or
 //! exercised on THIS (non-Windows) development host. Per the DEC-335-approved
-//! validation plan, this is not an open/unowned unverified risk: the real
-//! DPAPI FFI round-trip (`windows_only_tests::test_dpapi_protect_unprotect_real_round_trip`)
-//! and the LOCAL_MACHINE-bit-clear test are `#[cfg(windows)]`-gated (not
-//! `#[ignore]`d) so they compile AND execute automatically on the
-//! `test (windows-latest)` CI leg — a required merge-gate check — and are
-//! additionally covered by the F7 manual Windows smoke-test gate before
-//! release. VP-AUTHDX-010 sub-property (b) (the real DPAPI round-trip) is
-//! therefore verified on every PR via CI, not merely documented as a residual.
+//! validation plan, this is not an open/unowned unverified risk, but it is
+//! also not yet confirmed end-to-end: the real DPAPI FFI round-trip
+//! (`windows_only_tests::test_dpapi_protect_unprotect_real_round_trip`) and
+//! the LOCAL_MACHINE-bit-clear test are `#[cfg(windows)]`-gated (not
+//! `#[ignore]`d), so they WILL compile and execute automatically on the
+//! required `test (windows-latest)` CI leg — but whether headless GitHub
+//! Actions `windows-latest` can actually exercise `CryptProtectData`
+//! end-to-end is the OPEN F4 CI spike named in this story's Windows
+//! Validation §1, to be confirmed by the first green `windows-latest` run on
+//! this branch's PR, and is additionally backed by the required F7 manual
+//! Windows-11 smoke-test gate before release. VP-AUTHDX-010 sub-property (b)
+//! (the real DPAPI round-trip) is therefore a pending-verification plan as of
+//! this commit, not yet an already-verified, on-every-PR CI fact.
 
 use crate::profile::Profile;
 use std::path::PathBuf;
@@ -697,7 +702,7 @@ impl std::fmt::Display for DpapiFallbackFailed {
 impl std::error::Error for DpapiFallbackFailed {}
 
 // ============================================================================
-// Tests — S-cycle4-dpapi-storage-fix, Two-Step Red Gate, Step 2 (failing tests)
+// Tests — S-cycle4-dpapi-storage-fix (implemented story)
 // ============================================================================
 //
 // This module is `pub(crate)` (see `src/api/mod.rs`), and every marker type
@@ -714,10 +719,6 @@ impl std::error::Error for DpapiFallbackFailed {}
 // full rationale per VP):
 //   - HOST-PURE:      no `#[ignore]`, no env gate — runs in every `cargo test`.
 //   - WINDOWS-ONLY:   `#[cfg(windows)]` — compiles out entirely on this host.
-//   - loosely,        several HOST-PURE tests below are Red-Gate-failing via
-//                      a `todo!()` panic rather than an assertion mismatch —
-//                      both are valid Red Gate failure modes (compiles,
-//                      does not pass).
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1646,15 +1647,13 @@ mod tests {
         /// legitimately also set — ADR-0021 §8, Pass-5 adversarial review
         /// Finding #3).
         ///
-        /// References a `DPAPI_PROTECT_FLAGS: u32` constant this story's
-        /// Green step must add at `dpapi::protect`'s `dwFlags` call site
-        /// (VP-AUTHDX-010's own verification-method text names this
-        /// pattern: "a named `const DPAPI_PROTECT_FLAGS: u32` used as the
-        /// sole `dwFlags` argument"). This constant does not exist in the
-        /// stub as of this Red Gate commit, so this test will not compile
-        /// until the implementer adds it — acceptable because the whole
-        /// module is `#[cfg(windows)]`-gated and therefore not part of
-        /// this (non-Windows) host's build at all.
+        /// References `dpapi::DPAPI_PROTECT_FLAGS: u32`, the constant this
+        /// story's implementation uses as the sole `dwFlags` argument at
+        /// `dpapi::protect`'s call site (VP-AUTHDX-010's own
+        /// verification-method text names this pattern: "a named `const
+        /// DPAPI_PROTECT_FLAGS: u32` used as the sole `dwFlags` argument").
+        /// This test does not compile or run on this (non-Windows) host at
+        /// all — the whole module is `#[cfg(windows)]`-gated.
         const CRYPTPROTECT_LOCAL_MACHINE: u32 = 0x4;
 
         #[test]

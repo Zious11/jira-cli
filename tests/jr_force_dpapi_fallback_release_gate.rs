@@ -46,10 +46,10 @@ fn test_jr_force_dpapi_fallback_cfg_gate_present_in_auth_source() {
         .position(|l| l.contains("JR_FORCE_DPAPI_FALLBACK") && l.contains("std::env::var"))
         .expect(
             "Could not locate the JR_FORCE_DPAPI_FALLBACK env-var read (std::env::var(...)) in \
-             src/api/auth.rs. This is expected to FAIL before the S-cycle4-dpapi-storage-fix TDD \
-             Green step implements `engage_dpapi_fallback`'s #[cfg(not(windows))] seam — the \
-             stub commit's todo!() body does not read this env var yet. Once implemented, this \
-             test asserts the seam's #[cfg(debug_assertions)] gate is adjacent to the read.",
+             src/api/auth.rs. `engage_dpapi_fallback`'s #[cfg(not(windows))] seam is implemented \
+             as of S-cycle4-dpapi-storage-fix and is expected to read this env var — if this \
+             assertion fires, the seam has been removed or renamed. This test asserts the \
+             seam's #[cfg(debug_assertions)] gate is adjacent to the read.",
         );
 
     let window_start = env_read_line.saturating_sub(5);
@@ -79,8 +79,7 @@ fn test_jr_force_dpapi_fallback_read_is_inside_non_windows_engage_dpapi_fallback
 
     let not_windows_fn_start = src.find("#[cfg(not(windows))]\nfn engage_dpapi_fallback").expect(
         "Could not locate `#[cfg(not(windows))]\\nfn engage_dpapi_fallback` in src/api/auth.rs. \
-         Has the function been reformatted or moved? Update this test if the shape changed. \
-         This is expected to FAIL before the TDD Green step lands the real body.",
+         Has the function been reformatted or moved? Update this test if the shape changed.",
     );
 
     // Bound the search to a generous window after the fn signature (the
