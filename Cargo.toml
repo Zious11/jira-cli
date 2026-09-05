@@ -11,6 +11,15 @@ license = "MIT"
 name = "jr"
 path = "src/main.rs"
 
+[target.'cfg(windows)'.dependencies]
+# Already present transitively via keyring's `windows-native` feature at the
+# same 0.60 version (see deny.toml's windows-sys "0.60" [[bans.skip]] entry)
+# — promoting it to a direct dependency here adds ZERO new dependency-graph
+# nodes (ADR-0021 §5, AC-020, S-cycle4-dpapi-storage-fix). Used by
+# `src/api/auth_windows_store.rs`'s `#[cfg(windows)] mod dpapi` for the
+# CryptProtectData/CryptUnprotectData FFI wrapper.
+windows-sys = { version = "0.60", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

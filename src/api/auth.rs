@@ -4,6 +4,10 @@ use keyring::Entry;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 
+/// Windows DPAPI-encrypted-file OAuth-token fallback (ADR-0021, issue
+/// #759, S-cycle4-dpapi-storage-fix).
+use super::auth_windows_store;
+
 /// Default keychain service name for `jr` credentials. `JR_SERVICE_NAME`
 /// can override this at runtime; it is primarily used by tests to avoid
 /// touching a developer's real keychain.
@@ -260,15 +264,109 @@ pub fn load_legacy_flat_api_token() -> Result<(String, String)> {
     Ok((email, token))
 }
 
+/// Gate DPAPI-fallback engagement to `#[cfg(windows)]` in production
+/// (ADR-0021 §1 Pass-1 correction, BC-1.4.035 Invariant 3). `store_oauth_tokens`'s
+/// `TooLong` match arms call this — never
+/// [`auth_windows_store::should_fallback_to_dpapi`] directly — so a
+/// non-Windows release build can never reach
+/// [`auth_windows_store::store_pair`]/[`auth_windows_store::load_pair`]: the
+/// `#[cfg(not(windows))]` arm below is hardcoded `false` in a release build
+/// regardless of the error variant (AC-007).
+///
+/// `#[cfg(not(windows))]` additionally carries a `#[cfg(debug_assertions)]`-gated,
+/// opt-in test seam — `JR_FORCE_DPAPI_FALLBACK=1` — letting a Linux/macOS
+/// debug build exercise the DPAPI-routing branch for testing
+/// (AC-006/AC-008/AC-019; `tests/jr_force_dpapi_fallback_release_gate.rs`
+/// pins the release-mode compile-out). Production non-Windows behavior is
+/// unaffected by this seam's mere existence — absent an explicit opt-in it
+/// still returns `false` unconditionally.
+#[cfg(windows)]
+fn engage_dpapi_fallback(err: &keyring::Error) -> bool {
+    let _ = err;
+    todo!("ADR-0021 §1 — implemented in the TDD Green step (Windows)")
+}
+
+#[cfg(not(windows))]
+fn engage_dpapi_fallback(err: &keyring::Error) -> bool {
+    let _ = err;
+    todo!("ADR-0021 §1 / AC-007 / AC-008 — implemented in the TDD Green step")
+}
+
+/// Clear-path adapter over [`auth_windows_store::remove_if_present`], used
+/// ONLY by [`clear_profile_oauth_pair`]/[`clear_profile_creds`] (ADR-0021
+/// §7, BC-1.4.038 Postcondition 4). A `ProfilePathEscape` outcome from
+/// `remove_if_present` is TOLERATED here — treated identically to
+/// `NotFound`, never a genuine error for Postcondition 4's fan-out — on
+/// every OS, because the SAME guard is `remove_if_present`'s own mandatory
+/// first statement on every cfg arm: no profile name the guard rejects
+/// could ever have had a DPAPI file successfully written for it by any
+/// version of `jr` carrying this guard. Any OTHER error (permission
+/// denied, disk I/O failure) is NOT caught here and propagates unchanged
+/// (EC-1.4.038-3).
+///
+/// **Not yet wired into [`clear_profile_oauth_pair`]/[`clear_profile_creds`]
+/// as of this stub commit** — see this story's stub-commit report for why:
+/// `remove_if_present`'s body is still `todo!()`, and both callers' success
+/// paths are exercised by every currently-passing clear/logout/remove test.
+fn clear_dpapi_file_tolerating_path_escape(profile: &Profile) -> Result<()> {
+    let _ = profile;
+    todo!("BC-1.4.038 postcondition 4 — implemented in the TDD Green step")
+}
+
 /// Store OAuth 2.0 access and refresh tokens scoped to a profile.
 ///
 /// Tokens are written to the namespaced keys `<profile>:oauth-access-token`
 /// and `<profile>:oauth-refresh-token` so multiple Jira sites can coexist
 /// in a single keychain.
+///
+/// **Windows DPAPI-encrypted-file fallback (ADR-0021, BC-1.4.035,
+/// S-cycle4-dpapi-storage-fix).** When a `set_password` call returns
+/// `keyring::Error::TooLong` — routed through [`engage_dpapi_fallback`],
+/// which is a structural no-op on non-Windows release builds (AC-007) — the
+/// WHOLE pair is deleted from the keyring first (never the reverse; see
+/// ADR-0021 §2 "Ordering, and why," STALE-KEYRING-SHADOWS-DPAPI) and then
+/// written entirely to [`auth_windows_store::store_pair`]. The pair is
+/// therefore, at all times, either fully in the keyring or fully in one
+/// DPAPI file — never split across backends.
+///
+/// The best-effort post-success cleanup of a stale DPAPI file (ADR-0021 §2,
+/// EC-1.4.035-2 — "a previously-oversized refresh token shrinks below the
+/// keyring ceiling after rotation") is deferred past this stub commit: it
+/// would call [`auth_windows_store::remove_if_present`], whose body is
+/// still `todo!()`, from this function's success arm — the arm every
+/// currently-passing `store_oauth_tokens` test exercises. Wire
+/// `let _ = auth_windows_store::remove_if_present(profile);` into the
+/// success arm below in the same change that implements
+/// `remove_if_present`'s real body.
 pub fn store_oauth_tokens(profile: &Profile, access: &str, refresh: &str) -> Result<()> {
-    entry(&oauth_access_key(profile.as_ref()))?.set_password(access)?;
-    entry(&oauth_refresh_key(profile.as_ref()))?.set_password(refresh)?;
-    Ok(())
+    let access_key = oauth_access_key(profile.as_ref());
+    let refresh_key = oauth_refresh_key(profile.as_ref());
+
+    match entry(&access_key)?.set_password(access) {
+        Ok(()) => match entry(&refresh_key)?.set_password(refresh) {
+            Ok(()) => Ok(()),
+            Err(e) if engage_dpapi_fallback(&e) => {
+                // Refresh overflowed after access succeeded — delete the
+                // ENTIRE existing keyring pair (incl. the just-written
+                // access token) before routing the fresh pair to DPAPI
+                // (ADR-0021 §2 "Ordering, and why").
+                delete_credential_tolerating_no_entry(&access_key)?;
+                delete_credential_tolerating_no_entry(&refresh_key)?;
+                auth_windows_store::store_pair(profile, access, refresh)
+            }
+            Err(e) => Err(e.into()),
+        },
+        Err(e) if engage_dpapi_fallback(&e) => {
+            // Access overflowed; its set_password call never landed, so
+            // whatever is currently under either key can be a complete,
+            // stale pair from a prior fitting login. Delete both before
+            // routing the fresh pair to DPAPI (ADR-0021 §2, same ordering).
+            delete_credential_tolerating_no_entry(&access_key)?;
+            delete_credential_tolerating_no_entry(&refresh_key)?;
+            auth_windows_store::store_pair(profile, access, refresh)
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Load OAuth 2.0 access and refresh tokens for a profile.

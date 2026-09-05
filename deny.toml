@@ -150,7 +150,7 @@ reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires windows-sy
 [[bans.skip]]
 name = "windows-sys"
 version = "0.60"
-reason = "keyring v3.6.3 windows-native feature requires windows-sys 0.60 (Win32_Security_Credentials); jni requires 0.45, ring requires 0.52, and the broad graph (clap/tokio/reqwest) requires 0.61. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version. Unification blocked upstream until keyring bumps windows-sys."
+reason = "keyring v3.6.3 windows-native feature requires windows-sys 0.60 (Win32_Security_Credentials); jni requires 0.45, ring requires 0.52, and the broad graph (clap/tokio/reqwest) requires 0.61. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version. Unification blocked upstream until keyring bumps windows-sys. ALSO (ADR-0021, S-cycle4-dpapi-storage-fix): promoted to a direct [target.'cfg(windows)'.dependencies] entry at this same 0.60 version for src/api/auth_windows_store.rs's DPAPI (CryptProtectData/CryptUnprotectData, Win32_Security_Cryptography) FFI wrapper — this adds zero new dependency-graph nodes, since it is the same version keyring's windows-native feature already pulls transitively. Do NOT conclude removing keyring's windows-native feature would make this skip removable — jr's own DPAPI usage now also requires it."
 
 [[bans.skip]]
 name = "windows-sys"
