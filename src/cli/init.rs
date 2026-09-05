@@ -146,7 +146,14 @@ pub async fn handle() -> Result<()> {
         // [profiles.<name>] internally — no additional load+save needed
         // here. (Doing a redundant reload + write is also a last-writer-
         // wins race against any concurrent jr invocation.)
-        crate::cli::auth::login_token(&profile_name, None, None, false).await?;
+        //
+        // Task 1 verification (S-cycle4-cloud-id-correctness): `jr init`'s
+        // API-token branch calls this same `login_token` function directly
+        // — no second, independent tenant_info call site (BC-1.2.052
+        // Postcondition 4, AC-004). `jr init` has no `--cloud-id` flag, so
+        // the override is hardcoded `None`, mirroring the `login_oauth`
+        // call above.
+        crate::cli::auth::login_token(&profile_name, None, None, None, false).await?;
     }
 
     // Step 4: Per-project setup

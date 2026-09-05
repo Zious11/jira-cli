@@ -51,10 +51,28 @@ pub(crate) fn resolve_oauth_scopes(profile: &crate::config::ProfileConfig) -> Re
 /// email is namespaced per profile (`<profile>:email` / `<profile>:api-token`
 /// via [`auth::store_api_token`]) — symmetric with the existing per-profile
 /// OAuth token namespacing, not shared/flat across profiles.
+///
+/// `cloud_id_override` (S-cycle4-cloud-id-correctness, BC-1.2.052) is
+/// symmetric with [`login_oauth`]'s existing parameter of the same name.
+/// Ordered fallback chain (ADR-0022 §2), applied on EVERY invocation, not
+/// only brand-new-profile creation (BC-1.2.052 Invariant 3, BC-1.2.053):
+/// 1. `cloud_id_override` supplied → used directly, fetch skipped, value
+///    persisted (BC-1.2.052 Postcondition 1).
+/// 2. Otherwise, [`crate::api::jira::tenant::fetch_cloud_id`] is attempted
+///    against the profile's `url` (already resolved by
+///    `prepare_login_target` before this function runs).
+/// 3. On fetch failure, soft-fail: `p.cloud_id` is left untouched and a
+///    single `eprintln!` diagnostic is emitted (BC-1.2.052 Postcondition 3).
+///
+/// Call sites (BC-1.2.052 Invariant 3 — exactly three): `handle_login`
+/// (`auth login`), `jr init`'s API-token branch, and
+/// `refresh_credentials` (`jr auth refresh`, hardcoded `None` — no
+/// `--cloud-id` flag on `RefreshArgs`).
 pub async fn login_token(
     profile: &str,
     email: Option<String>,
     token: Option<String>,
+    cloud_id_override: Option<&str>,
     no_input: bool,
 ) -> Result<()> {
     let email = resolve_credential(
@@ -106,10 +124,43 @@ pub async fn login_token(
     if config.global.default_profile.is_none() {
         config.global.default_profile = Some(profile.to_string());
     }
+
+    resolve_and_apply_cloud_id(&mut config, profile, cloud_id_override).await;
+
     config.save_global()?;
 
     eprintln!("Credentials stored in keychain.");
     Ok(())
+}
+
+/// `cloud_id` acquisition fallback chain shared by every `login_token` call
+/// site (S-cycle4-cloud-id-correctness, BC-1.2.052/053, ADR-0022 §2/§3).
+///
+/// Mutates `config`'s entry for `profile` in place; does NOT call
+/// `config.save_global()` — the caller ([`login_token`]) persists once,
+/// alongside the `auth_method`/`default_profile` writes already made in the
+/// same load/save cycle.
+///
+/// Never returns an error — every failure mode (missing override, fetch
+/// failure of any shape, non-`https://` `site_url`) is a soft-fail per
+/// BC-1.2.052 Postcondition 3/Invariant 2: `p.cloud_id` is left as it
+/// already was, and a single human-mode-only `eprintln!` diagnostic is
+/// emitted. This is the single implementation both the override-precedence
+/// (AC-001), fetch-success-overwrite (AC-005), and mechanism-switch
+/// refresh-not-clear (AC-007, BC-1.2.053) acceptance criteria share — no
+/// separate "mechanism switch" detection code exists anywhere (BC-1.2.053
+/// Invariant 1).
+async fn resolve_and_apply_cloud_id(
+    config: &mut Config,
+    profile: &str,
+    cloud_id_override: Option<&str>,
+) {
+    let _ = (config, profile, cloud_id_override);
+    todo!(
+        "S-cycle4-cloud-id-correctness: implement override precedence / \
+         tenant_info fetch / soft-fail fallback chain per ADR-0022 §2/§3, \
+         BC-1.2.052 Postconditions 1/2/3/5, BC-1.2.053"
+    )
 }
 
 /// Run the OAuth 2.0 (3LO) login flow and persist site configuration.
@@ -250,7 +301,10 @@ pub struct LoginArgs {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     /// Cloud ID override for multi-org disambiguation (--cloud-id flag).
-    /// Only meaningful when `oauth` is true; passed through to `login_oauth`.
+    /// Passed through to `login_oauth` on the OAuth branch and, as of
+    /// S-cycle4-cloud-id-correctness (BC-1.2.052 Postcondition 1), to
+    /// `login_token` on the API-token branch too — previously silently
+    /// dropped there.
     pub cloud_id: Option<String>,
     pub no_input: bool,
     pub output: OutputFormat,
@@ -406,7 +460,17 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
         )
         .await?;
     } else {
-        login_token(&target, args.email, args.token, args.no_input).await?;
+        // BC-1.2.052 Postcondition 1: `--cloud-id` was previously silently
+        // dropped on the API-token branch (`login_oauth`'s sibling call
+        // above already threads it through). Symmetric fix.
+        login_token(
+            &target,
+            args.email,
+            args.token,
+            args.cloud_id.as_deref(),
+            args.no_input,
+        )
+        .await?;
     }
 
     // Reached only when the login above succeeded — a failed login returns

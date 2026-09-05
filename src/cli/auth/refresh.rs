@@ -174,7 +174,13 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
     // removes — it admitted deleting the working credential before a
     // replacement was confirmed obtainable.
     let login_result = match flow {
-        AuthFlow::Token => login_token(&target, args.email, args.token, args.no_input).await,
+        // S-cycle4-cloud-id-correctness (BC-1.2.052 Invariant 3, AC-006):
+        // `RefreshArgs` has no `--cloud-id` flag — hardcoded `None`, mirroring
+        // the existing sibling `login_oauth(..., None, ...)` call below.
+        // `login_token`'s tenant_info fetch still fires on every such
+        // `auth refresh` invocation (fetch-on-every-invocation, not
+        // override-gated) — intentional, not an oversight (ADR-0022 §2).
+        AuthFlow::Token => login_token(&target, args.email, args.token, None, args.no_input).await,
         AuthFlow::OAuth => {
             login_oauth(
                 &target,

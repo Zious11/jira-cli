@@ -10,5 +10,6 @@ pub mod resolutions;
 pub mod sprints;
 pub mod statuses;
 pub mod teams;
+pub mod tenant;
 pub mod users;
 pub mod worklogs;
