@@ -39,8 +39,40 @@ struct TenantInfo {
 /// Callers are expected to treat any `Err` as a soft-fail (BC-1.2.052
 /// Postcondition 3) — this function never panics and never blocks a login.
 pub async fn fetch_cloud_id(site_url: &str) -> anyhow::Result<String> {
-    let _ = site_url;
-    todo!(
-        "S-cycle4-cloud-id-correctness: implement https-only precondition + bare GET + bounded timeout + no-redirect + cloudId-only parse per ADR-0022 §1"
-    )
+    if !site_url.trim().to_ascii_lowercase().starts_with("https://") {
+        anyhow::bail!("tenant_info lookup skipped: site URL does not use https://");
+    }
+
+    // Debug-only test seam (S-cycle4-cloud-id-correctness): when set,
+    // redirects the ACTUAL GET request to `JR_TENANT_INFO_URL` while
+    // `site_url` itself remains what the `https://`-prefix precondition
+    // above validates. `wiremock` has no HTTPS/TLS support, so a genuine
+    // 200-plus-`cloudId` response can only be exercised in tests by
+    // pointing the real request elsewhere while a plausible `https://`
+    // `site_url` still satisfies the precondition check honestly.
+    //
+    // Gated behind `#[cfg(debug_assertions)]` exactly like the sibling
+    // `JR_BASE_URL` seam (`src/config.rs::Config::base_url`,
+    // `src/api/client.rs::JiraClient::from_config`) — release binaries
+    // never read this env var, so this cannot be used to redirect a real
+    // user's tenant_info lookup to an attacker-controlled host. See
+    // CLAUDE.md's "AI Agent Notes" `JR_TENANT_INFO_URL` entry and
+    // `tests/jr_tenant_info_url_release_gate.rs`.
+    #[cfg(debug_assertions)]
+    let base = std::env::var("JR_TENANT_INFO_URL")
+        .unwrap_or_else(|_| site_url.trim_end_matches('/').to_string());
+    #[cfg(not(debug_assertions))]
+    let base = site_url.trim_end_matches('/').to_string();
+
+    let url = format!("{}/_edge/tenant_info", base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let response = client.get(&url).send().await?;
+    if !response.status().is_success() {
+        anyhow::bail!("tenant_info lookup failed: HTTP {}", response.status());
+    }
+    let info: TenantInfo = response.json().await?;
+    Ok(info.cloud_id)
 }
