@@ -24,13 +24,15 @@
 //! recognizer, and the `CRYPTPROTECT_UI_FORBIDDEN`/USER-scope-only DPAPI flag
 //! decision).
 //!
-//! # STUB NOTICE (S-cycle4-dpapi-storage-fix, Two-Step Red Gate, BC-5.38.001)
+//! # TDD Green step (S-cycle4-dpapi-storage-fix)
 //!
-//! Every non-trivial function body in this module is `todo!()`. Real logic
-//! lands in this story's TDD implementation step, after test-writer's
-//! failing tests exist. Signatures, module structure, and the cfg(windows) /
-//! cfg(not(windows)) split are final per ADR-0021 — only the bodies are
-//! deferred.
+//! Every function body is implemented per ADR-0021. The
+//! `#[cfg(windows)] mod dpapi` FFI wrapper (`CryptProtectData`/
+//! `CryptUnprotectData` via `windows-sys`) and the `#[cfg(windows)]` arms of
+//! `store_pair`/`load_pair`/`remove_if_present` cannot be compiled or
+//! exercised on a non-Windows host — see this story's delivery report for
+//! the F4 CI-spike / F7 manual-Windows-smoke-test residuals (VP-AUTHDX-010
+//! sub-property (b), the real DPAPI round-trip).
 
 use crate::profile::Profile;
 use std::path::PathBuf;
@@ -38,34 +40,100 @@ use std::path::PathBuf;
 /// Pure, cross-platform-testable envelope encode/decode + on-disk framing
 /// (ADR-0021 §3). No I/O — operates entirely on in-memory byte buffers, so
 /// it is unit-testable on any OS/CI runner.
+///
+/// `#[cfg(any(windows, test))]`: this module's only PRODUCTION caller is
+/// `store_pair`'s `#[cfg(windows)]` arm, so on a non-Windows, non-test
+/// build it would be genuinely unreachable dead code — compiling it out
+/// entirely there (rather than leaving it in as unreachable code, or
+/// suppressing the lint) keeps the compiled artifact honest about what it
+/// actually uses on that platform, while `cargo test` on ANY OS still
+/// compiles and exercises this module in full (`cfg(test)` is active),
+/// preserving the "unit-testable on any OS/CI runner" property the doc
+/// comment above promises.
+#[cfg(any(windows, test))]
 pub(crate) mod envelope {
+    use serde::{Deserialize, Serialize};
+
+    /// Inner JSON schema version (ADR-0021 §3, "Version-field relationship")
+    /// — governs the DECRYPTED plaintext schema, independent of the outer
+    /// wrap-header version below (which governs ciphertext framing).
+    const INNER_VERSION: u8 = 1;
+
+    #[derive(Serialize)]
+    struct EncodePayload<'a> {
+        version: u8,
+        access: &'a str,
+        refresh: &'a str,
+    }
+
+    #[derive(Deserialize)]
+    struct DecodePayload {
+        version: u8,
+        access: String,
+        refresh: String,
+    }
+
     /// JSON-serialize `{version, access, refresh}` to plaintext bytes.
     pub fn encode(access: &str, refresh: &str) -> Vec<u8> {
-        let _ = (access, refresh);
-        todo!("BC-1.4.037 postcondition 1 — implemented in the TDD Green step")
+        serde_json::to_vec(&EncodePayload {
+            version: INNER_VERSION,
+            access,
+            refresh,
+        })
+        .expect("serializing a plain string pair to JSON cannot fail")
     }
 
     /// Parse plaintext bytes back to `(access, refresh)`. A structurally
-    /// malformed payload (bad JSON, missing field) must be a distinct
-    /// `Err`, never silently coerced into an absent/empty pair.
+    /// malformed payload (bad JSON, missing field, unrecognized inner
+    /// version) is a distinct `Err`, never silently coerced into an
+    /// absent/empty pair.
     pub fn decode(bytes: &[u8]) -> anyhow::Result<(String, String)> {
-        let _ = bytes;
-        todo!("BC-1.4.037 postcondition 1 — implemented in the TDD Green step")
+        let payload: DecodePayload = serde_json::from_slice(bytes)
+            .map_err(|e| anyhow::anyhow!("malformed OAuth-token envelope JSON: {e}"))?;
+        if payload.version != INNER_VERSION {
+            anyhow::bail!(
+                "unrecognized OAuth-token envelope schema version: {}",
+                payload.version
+            );
+        }
+        Ok((payload.access, payload.refresh))
     }
+
+    /// Outer wrap-header magic + version (ADR-0021 §3, "ciphertext framing")
+    /// — read BEFORE any decryption is attempted.
+    const MAGIC: &[u8; 4] = b"JROD";
+    const OUTER_VERSION: u8 = 1;
 
     /// Prepend the 4-byte magic (`b"JROD"`) + 1-byte outer version to the
     /// DPAPI-protected ciphertext, producing the on-disk file contents.
     pub fn wrap(protected: Vec<u8>) -> Vec<u8> {
-        let _ = protected;
-        todo!("BC-1.4.037 postcondition 2 — implemented in the TDD Green step")
+        let mut out = Vec::with_capacity(5 + protected.len());
+        out.extend_from_slice(MAGIC);
+        out.push(OUTER_VERSION);
+        out.extend_from_slice(&protected);
+        out
     }
 
     /// Validate the 5-byte header and return the remaining protected bytes.
     /// An unrecognized magic/version must be a distinct `Err`, never
     /// silently coerced into "no token."
     pub fn unwrap(file_bytes: &[u8]) -> anyhow::Result<&[u8]> {
-        let _ = file_bytes;
-        todo!("BC-1.4.037 postcondition 2 — implemented in the TDD Green step")
+        if file_bytes.len() < 5 {
+            anyhow::bail!(
+                "OAuth-token secret file header is truncated ({} bytes, need at least 5)",
+                file_bytes.len()
+            );
+        }
+        if &file_bytes[0..4] != MAGIC {
+            anyhow::bail!("OAuth-token secret file has an unrecognized magic header");
+        }
+        if file_bytes[4] != OUTER_VERSION {
+            anyhow::bail!(
+                "OAuth-token secret file has an unrecognized format version ({})",
+                file_bytes[4]
+            );
+        }
+        Ok(&file_bytes[5..])
     }
 }
 
@@ -77,8 +145,7 @@ pub(crate) mod envelope {
 /// `src/api/auth.rs`) is what gates DPAPI engagement to `#[cfg(windows)]`
 /// in production (BC-1.4.035 Invariant 3).
 pub(crate) fn should_fallback_to_dpapi(err: &keyring::Error) -> bool {
-    let _ = err;
-    todo!("BC-1.4.035 invariant 2 — implemented in the TDD Green step")
+    matches!(err, keyring::Error::TooLong(_, _))
 }
 
 /// Host-independent guard for a profile-derived path COMPONENT (never a
@@ -90,16 +157,84 @@ pub(crate) fn should_fallback_to_dpapi(err: &keyring::Error) -> bool {
 /// happens to run on. This is defense-in-depth behind the PRIMARY, live
 /// `validate_profile_name` gate (BC-6.1.004/BC-6.1.005, `src/config.rs`).
 pub(crate) fn reject_unsafe_profile_component(profile: &str) -> Result<(), ProfilePathEscape> {
-    let _ = profile;
-    todo!("BC-1.4.040 postconditions 1-7 — implemented in the TDD Green step")
+    use ProfilePathEscape::*;
+    if profile.is_empty() {
+        return Err(Empty);
+    }
+    if profile == "." || profile == ".." {
+        return Err(DotSegment);
+    }
+    if profile.contains('\0') {
+        return Err(NulByte);
+    }
+    // Drive letters ("C:") and NTFS Alternate Data Streams ("name:$DATA")
+    // both use ':' — reject unconditionally rather than trying to
+    // distinguish the two shapes; a profile name has no legitimate use
+    // for a colon. Checked BEFORE the separator scan below (test-suite
+    // precedence, AC-017: e.g. "C:\evil" carries both a colon AND a
+    // backslash — Colon is the reported reason for any string containing
+    // both hazards).
+    if profile.contains(':') {
+        return Err(Colon);
+    }
+    // Reject BOTH separators on EVERY host, not just the host's own
+    // convention. This alone rejects UNC (`\\server\share`,
+    // `//server/share`) and any embedded traversal attempt identically on
+    // Linux, macOS, and Windows CI.
+    if profile.contains('/') || profile.contains('\\') {
+        return Err(Separator);
+    }
+    // A trailing '.' or space is silently stripped by the Windows shell
+    // and several Win32 APIs, which could make a name that LOOKS distinct
+    // from an existing one collide with it on disk.
+    if profile.ends_with('.') || profile.ends_with(' ') {
+        return Err(TrailingDotOrSpace);
+    }
+    if is_reserved_windows_device_name(profile) {
+        return Err(ReservedDeviceName);
+    }
+    Ok(())
 }
 
 /// Case-insensitive match against the 30-name Windows reserved device-name
 /// set (ADR-0021 §9), evaluated against the profile's leading-space-trimmed
 /// stem (the part before the first `.`, if any).
 fn is_reserved_windows_device_name(profile: &str) -> bool {
-    let _ = profile;
-    todo!("BC-1.4.040 postconditions 5-7 — implemented in the TDD Green step")
+    let trimmed = profile.trim_start_matches(' ');
+    let stem = trimmed.split('.').next().unwrap_or(trimmed);
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "CONIN$"
+            | "CONOUT$"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+            | "COM\u{b9}"
+            | "COM\u{b2}"
+            | "COM\u{b3}"
+            | "LPT\u{b9}"
+            | "LPT\u{b2}"
+            | "LPT\u{b3}"
+    )
 }
 
 /// Resolve the on-disk path for a profile's DPAPI-encrypted secret file.
@@ -109,8 +244,130 @@ fn is_reserved_windows_device_name(profile: &str) -> bool {
 /// regression-catchable, on an ordinary Linux/macOS CI runner, not only on a
 /// real Windows machine.
 fn file_path(profile: &Profile) -> Result<PathBuf, ProfilePathEscape> {
-    let _ = profile;
-    todo!("ADR-0021 §3/§9 — implemented in the TDD Green step")
+    reject_unsafe_profile_component(profile.as_ref())?;
+    Ok(crate::cache::cache_root()
+        .join("secrets")
+        .join(profile.as_ref())
+        .join("oauth-tokens.dat"))
+}
+
+/// Age threshold (ADR-0021 §3, Pass-2 adversarial review Finding #6) beyond
+/// which a pre-existing `*.tmp-*` sibling of the final secret-file path is
+/// assumed abandoned (a crashed prior write) rather than another process's
+/// legitimate in-flight write, and is best-effort removed before a new
+/// write begins. A sibling younger than this threshold is left untouched.
+///
+/// `#[cfg(any(windows, test))]` — see [`cleanup_stale_tmp_siblings`]'s doc
+/// comment for why this whole cluster (this constant plus
+/// `cleanup_stale_tmp_siblings`/`atomic_write`) is gated this way.
+#[cfg(any(windows, test))]
+const STALE_TMP_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Best-effort, age-gated removal of `*.tmp-*` siblings of `final_path`'s
+/// file name, in `final_path`'s parent directory (ADR-0021 §3, AC-013).
+/// Never errors — a missing directory, an unreadable entry, or a failed
+/// removal are all silently tolerated, mirroring [`remove_if_present`]'s
+/// `NotFound`-is-success tolerance; this is disk hygiene, not a security
+/// boundary (an orphaned `.tmp-*` file carries the same DPAPI-protected
+/// ciphertext, and the same same-user trust boundary, as the final file).
+///
+/// Plain filesystem work with no DPAPI/Windows dependency — deliberately
+/// factored out of [`store_pair`] (alongside [`atomic_write`]) so this
+/// logic is host-testable on any OS/CI runner (AC-013), even though its
+/// only PRODUCTION caller is `store_pair`'s `#[cfg(windows)]` arm.
+///
+/// `#[cfg(any(windows, test))]`: on a non-Windows, non-test build this
+/// function has no production caller at all (`store_pair`'s
+/// `#[cfg(not(windows))]` arm never calls it), so it would be genuinely
+/// unreachable dead code there — compiling it out entirely on that
+/// platform/profile combination (rather than leaving it in as unreachable
+/// code, or suppressing the lint) keeps the compiled artifact honest,
+/// while `cargo test` on ANY OS still compiles and exercises it in full
+/// (`cfg(test)` is active), preserving the "host-testable on any OS/CI
+/// runner" property this function exists for.
+#[cfg(any(windows, test))]
+fn cleanup_stale_tmp_siblings(final_path: &std::path::Path) {
+    let Some(parent) = final_path.parent() else {
+        return;
+    };
+    let Some(final_name) = final_path.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let prefix = format!("{final_name}.tmp-");
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        let Ok(age) = std::time::SystemTime::now().duration_since(modified) else {
+            continue;
+        };
+        if age >= STALE_TMP_THRESHOLD {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Atomically write `contents` to `final_path` (ADR-0021 §3, AC-013):
+/// best-effort age-gated stale-temp cleanup first (see
+/// [`cleanup_stale_tmp_siblings`]), then write to a `.tmp-<suffix>` sibling
+/// in the SAME directory, `fsync` it (`File::sync_all`, so a crash
+/// immediately after `rename` cannot leave a truncated file visible under
+/// the final name), then `rename` over `final_path`. `rename` within one
+/// filesystem volume is atomic; the parent directory is created
+/// (`create_dir_all`) if absent.
+///
+/// Plain filesystem work with no DPAPI/Windows dependency — see
+/// [`cleanup_stale_tmp_siblings`]'s doc comment for why this is factored
+/// out and host-testable despite its only production caller
+/// (`store_pair`'s `#[cfg(windows)]` arm) never running off Windows, and
+/// for why it (and [`STALE_TMP_THRESHOLD`]) carry the same
+/// `#[cfg(any(windows, test))]` gate.
+#[cfg(any(windows, test))]
+fn atomic_write(final_path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = final_path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "secret file path has no parent directory",
+        )
+    })?;
+    std::fs::create_dir_all(parent)?;
+    cleanup_stale_tmp_siblings(final_path);
+
+    let suffix: u64 = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        nanos ^ (std::process::id() as u64)
+    };
+    let final_name = final_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("oauth-tokens.dat");
+    let tmp_path = parent.join(format!("{final_name}.tmp-{suffix}"));
+
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp_path)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp_path, final_path)?;
+    Ok(())
 }
 
 /// Windows-only, thin `unsafe` FFI wrapper around `CryptProtectData`/
@@ -124,16 +381,88 @@ fn file_path(profile: &Profile) -> Result<PathBuf, ProfilePathEscape> {
 /// this is a compiled-in invariant asserted by AC-014, not a runtime choice.
 #[cfg(windows)]
 mod dpapi {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
+    };
+
+    /// `dwFlags` for `CryptProtectData`/`CryptUnprotectData` (ADR-0021 §8):
+    /// `CRYPTPROTECT_UI_FORBIDDEN` only — `CRYPTPROTECT_LOCAL_MACHINE`
+    /// (0x4) is NEVER set (user scope only). `pub(crate)` so the
+    /// Windows-only test suite (VP-AUTHDX-010(a)) can assert the
+    /// `LOCAL_MACHINE` bit is clear without duplicating the flag literal.
+    pub(crate) const DPAPI_PROTECT_FLAGS: u32 = CRYPTPROTECT_UI_FORBIDDEN;
+
     /// DPAPI-protect `plaintext` (USER scope, UI-forbidden).
+    ///
+    /// # Safety justification (CLAUDE.md: "No unsafe code without explicit
+    /// justification")
+    ///
+    /// This is one of the two sole `unsafe` blocks in this module tree.
+    /// Builds an input [`CRYPT_INTEGER_BLOB`] view over `plaintext` (never
+    /// mutated by `CryptProtectData`, which only writes through
+    /// `pDataOut`), calls `CryptProtectData` with `pOptionalEntropy = NULL`
+    /// (ADR-0021 §8 — no additional entropy) and `dwFlags =
+    /// DPAPI_PROTECT_FLAGS`, copies the output blob into an owned
+    /// `Vec<u8>`, then frees the output buffer via `LocalFree` — the exact
+    /// contract Win32 documents for this API.
     pub fn protect(plaintext: &[u8]) -> std::io::Result<Vec<u8>> {
-        let _ = plaintext;
-        todo!("BC-1.4.037 postcondition 4 — implemented in the TDD Green step (Windows-only)")
+        unsafe {
+            let mut input = CRYPT_INTEGER_BLOB {
+                cbData: plaintext.len() as u32,
+                pbData: plaintext.as_ptr() as *mut u8,
+            };
+            let mut output = CRYPT_INTEGER_BLOB {
+                cbData: 0,
+                pbData: std::ptr::null_mut(),
+            };
+            let ok = CryptProtectData(
+                &mut input,
+                std::ptr::null(),
+                std::ptr::null(), // pOptionalEntropy = NULL (ADR-0021 §8)
+                std::ptr::null(),
+                std::ptr::null(),
+                DPAPI_PROTECT_FLAGS,
+                &mut output,
+            );
+            if ok == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let out = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+            LocalFree(output.pbData as *mut core::ffi::c_void);
+            Ok(out)
+        }
     }
 
-    /// Inverse of [`protect`].
+    /// Inverse of [`protect`]. Same safety justification as `protect`
+    /// above — `CryptUnprotectData` follows the identical
+    /// build-call-copy-free contract.
     pub fn unprotect(blob: &[u8]) -> std::io::Result<Vec<u8>> {
-        let _ = blob;
-        todo!("BC-1.4.037 postcondition 4 — implemented in the TDD Green step (Windows-only)")
+        unsafe {
+            let mut input = CRYPT_INTEGER_BLOB {
+                cbData: blob.len() as u32,
+                pbData: blob.as_ptr() as *mut u8,
+            };
+            let mut output = CRYPT_INTEGER_BLOB {
+                cbData: 0,
+                pbData: std::ptr::null_mut(),
+            };
+            let ok = CryptUnprotectData(
+                &mut input,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                DPAPI_PROTECT_FLAGS,
+                &mut output,
+            );
+            if ok == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let out = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+            LocalFree(output.pbData as *mut core::ffi::c_void);
+            Ok(out)
+        }
     }
 }
 
@@ -148,9 +477,28 @@ mod dpapi {
 /// guard passes, always returns the honest-fail error immediately (DPAPI is
 /// categorically unavailable; this path exists only so the cross-platform
 /// call site in `store_oauth_tokens` compiles uniformly).
+#[cfg(windows)]
 pub fn store_pair(profile: &Profile, access: &str, refresh: &str) -> anyhow::Result<()> {
-    let _ = (profile, access, refresh);
-    todo!("BC-1.4.035/BC-1.4.037 — implemented in the TDD Green step")
+    let path = file_path(profile)?;
+    let plaintext = envelope::encode(access, refresh);
+    let protected = dpapi::protect(&plaintext)
+        .map_err(|e| DpapiFallbackFailed(format!("DPAPI protect failed: {e}")))?;
+    let wrapped = envelope::wrap(protected);
+    atomic_write(&path, &wrapped)
+        .map_err(|e| DpapiFallbackFailed(format!("failed to write secret file: {e}")))?;
+    Ok(())
+}
+
+/// `#[cfg(not(windows))]`: DPAPI is categorically unavailable — this path
+/// exists only so the cross-platform call site in `store_oauth_tokens`
+/// compiles uniformly. The guard call (`file_path`) still runs first on
+/// this arm too (Architecture Compliance Rule; AC-018): it is what makes
+/// the guard's wiring at this entry point exercised, and
+/// regression-catchable, on an ordinary Linux/macOS CI runner.
+#[cfg(not(windows))]
+pub fn store_pair(profile: &Profile, _access: &str, _refresh: &str) -> anyhow::Result<()> {
+    file_path(profile)?; // guard-only call; the returned path is never used here
+    Err(DpapiFallbackFailed("DPAPI is not available on this platform".into()).into())
 }
 
 /// Load a pair from the DPAPI-encrypted file, if present. On EVERY
@@ -162,9 +510,69 @@ pub fn store_pair(profile: &Profile, access: &str, refresh: &str) -> anyhow::Res
 /// content is corrupt" and "this is a genuine backend/IO error," which the
 /// caller (`load_oauth_tokens`, `src/api/auth.rs`) must never silently
 /// coerce into "no token."
+#[cfg(windows)]
 pub fn load_pair(profile: &Profile) -> anyhow::Result<Option<(String, String)>> {
-    let _ = profile;
-    todo!("BC-1.4.036 — implemented in the TDD Green step")
+    let path = file_path(profile)?;
+    let file_bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let protected = match envelope::unwrap(&file_bytes) {
+        Ok(p) => p,
+        Err(e) => return Err(CorruptSecretFile(format!("{profile}: {e}")).into()),
+    };
+    let plaintext = match dpapi::unprotect(protected) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(
+                CorruptSecretFile(format!("{profile}: DPAPI unprotect failed: {e}")).into(),
+            );
+        }
+    };
+    match envelope::decode(&plaintext) {
+        Ok((access, refresh)) => Ok(Some((access, refresh))),
+        Err(e) => Err(CorruptSecretFile(format!("{profile}: {e}")).into()),
+    }
+}
+
+/// `#[cfg(not(windows))]`: once the guard passes, always returns `Ok(None)`
+/// — the resulting `PathBuf` is discarded, nothing is read from disk —
+/// UNLESS the `JR_FORCE_DPAPI_LOAD_PAIR` debug-only test seam is engaged
+/// (S-cycle4-dpapi-storage-fix, AC-009/AC-010/AC-011, BC-1.4.036). That
+/// seam lets a Linux/macOS debug build exercise `load_oauth_tokens`'s
+/// DPAPI-fallback read-path branches, none of which are otherwise
+/// reachable off Windows in production (`load_pair` is hardcoded `Ok(None)`
+/// once the guard passes). Mirrors `JR_FORCE_DPAPI_FALLBACK`/
+/// `JR_S759_FORCE_TOOLONG`'s established shape byte-for-byte — gated
+/// `#[cfg(debug_assertions)]`, compiled out of release builds entirely.
+/// The guard call above still runs FIRST, before the seam is even
+/// consulted, so a guard-rejecting profile name is rejected regardless of
+/// the seam's value (AC-010's "ProfilePathEscape checked first" ordering).
+#[cfg(not(windows))]
+pub fn load_pair(profile: &Profile) -> anyhow::Result<Option<(String, String)>> {
+    file_path(profile)?; // guard-only call; the returned path is never used here
+    #[cfg(debug_assertions)]
+    {
+        match std::env::var("JR_FORCE_DPAPI_LOAD_PAIR").ok().as_deref() {
+            Some("found") => {
+                return Ok(Some((
+                    "forced-dpapi-access".to_string(),
+                    "forced-dpapi-refresh".to_string(),
+                )));
+            }
+            Some("corrupt") => {
+                return Err(CorruptSecretFile(profile.as_ref().to_string()).into());
+            }
+            Some("backend_error") => {
+                return Err(anyhow::anyhow!(
+                    "JR_FORCE_DPAPI_LOAD_PAIR: forced backend/IO error for testing"
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
 }
 
 /// Remove the DPAPI file for `profile` if present. On EVERY platform, the
@@ -173,9 +581,20 @@ pub fn load_pair(profile: &Profile) -> anyhow::Result<Option<(String, String)>> 
 /// immediately — no filesystem call is made. `#[cfg(windows)]`: once the
 /// guard passes, delete the file if present; `NotFound` is success (mirrors
 /// `delete_credential_tolerating_no_entry`'s `NoEntry`-is-success shape).
+#[cfg(windows)]
 pub fn remove_if_present(profile: &Profile) -> anyhow::Result<()> {
-    let _ = profile;
-    todo!("BC-1.4.038 — implemented in the TDD Green step")
+    let path = file_path(profile)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn remove_if_present(profile: &Profile) -> anyhow::Result<()> {
+    file_path(profile)?; // guard-only call; the returned path is never used here
+    Ok(())
 }
 
 /// Host-independent rejection reasons for a profile-derived path component
@@ -200,8 +619,16 @@ pub(crate) enum ProfilePathEscape {
 /// invented here.
 impl std::fmt::Display for ProfilePathEscape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let _ = f;
-        todo!("BC-1.4.040 postcondition 6 — implemented in the TDD Green step")
+        let reason = match self {
+            ProfilePathEscape::Empty => "is empty",
+            ProfilePathEscape::DotSegment => "is \".\" or \"..\"",
+            ProfilePathEscape::NulByte => "contains a NUL byte",
+            ProfilePathEscape::Separator => "contains a path separator",
+            ProfilePathEscape::Colon => "contains a colon",
+            ProfilePathEscape::TrailingDotOrSpace => "ends with a trailing dot or space",
+            ProfilePathEscape::ReservedDeviceName => "is a reserved Windows device name",
+        };
+        f.write_str(reason)
     }
 }
 
@@ -219,8 +646,11 @@ pub(crate) struct CorruptSecretFile(pub String);
 
 impl std::fmt::Display for CorruptSecretFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let _ = f;
-        todo!("ADR-0021 §4 message text — implemented in the TDD Green step")
+        write!(
+            f,
+            "OAuth secret file for profile {} could not be decrypted or parsed",
+            self.0
+        )
     }
 }
 
@@ -239,8 +669,11 @@ pub(crate) struct DpapiFallbackFailed(pub String);
 
 impl std::fmt::Display for DpapiFallbackFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let _ = f;
-        todo!("ADR-0021 §6 message text — implemented in the TDD Green step")
+        write!(
+            f,
+            "Windows DPAPI-encrypted-file fallback failed: {}",
+            self.0
+        )
     }
 }
 

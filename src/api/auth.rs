@@ -282,14 +282,38 @@ pub fn load_legacy_flat_api_token() -> Result<(String, String)> {
 /// still returns `false` unconditionally.
 #[cfg(windows)]
 fn engage_dpapi_fallback(err: &keyring::Error) -> bool {
-    let _ = err;
-    todo!("ADR-0021 §1 — implemented in the TDD Green step (Windows)")
+    auth_windows_store::should_fallback_to_dpapi(err)
 }
 
+/// `#[cfg(not(windows))]`: hardcoded `false` in a release build regardless
+/// of the error variant (AC-007, BC-1.4.035 Invariant 3) — `store_pair`/
+/// `load_pair` are never reached from `store_oauth_tokens` on a non-Windows
+/// release build.
+///
+/// `JR_FORCE_DPAPI_FALLBACK=1` (debug builds only, ADR-0021 §1 Pass-5
+/// correction): lets a Linux/macOS debug build exercise the
+/// `TooLong`-routing arms in [`store_oauth_tokens`] for testing (AC-006/
+/// AC-008/AC-019) — see `tests/jr_force_dpapi_fallback_release_gate.rs` for
+/// the release-mode compile-out pin. Absent an explicit opt-in (env var
+/// unset, or a release build), this function still returns `false`
+/// unconditionally — production non-Windows behavior is unaffected by the
+/// seam's mere existence.
 #[cfg(not(windows))]
 fn engage_dpapi_fallback(err: &keyring::Error) -> bool {
+    #[cfg(debug_assertions)]
+    {
+        if std::env::var("JR_FORCE_DPAPI_FALLBACK").as_deref() == Ok("1") {
+            return auth_windows_store::should_fallback_to_dpapi(err);
+        }
+    }
+    // Release builds compile the block above out entirely (the
+    // #[cfg(debug_assertions)] gate), which would otherwise leave `err`
+    // unused under `-D warnings` in that configuration alone — this
+    // discard is the exact mirror-image cfg of that block, so exactly one
+    // of the two `err` uses is compiled in for any given profile.
+    #[cfg(not(debug_assertions))]
     let _ = err;
-    todo!("ADR-0021 §1 / AC-007 / AC-008 — implemented in the TDD Green step")
+    false
 }
 
 /// Clear-path adapter over [`auth_windows_store::remove_if_present`], used
@@ -304,13 +328,28 @@ fn engage_dpapi_fallback(err: &keyring::Error) -> bool {
 /// denied, disk I/O failure) is NOT caught here and propagates unchanged
 /// (EC-1.4.038-3).
 ///
-/// **Not yet wired into [`clear_profile_oauth_pair`]/[`clear_profile_creds`]
-/// as of this stub commit** — see this story's stub-commit report for why:
-/// `remove_if_present`'s body is still `todo!()`, and both callers' success
-/// paths are exercised by every currently-passing clear/logout/remove test.
 fn clear_dpapi_file_tolerating_path_escape(profile: &Profile) -> Result<()> {
-    let _ = profile;
-    todo!("BC-1.4.038 postcondition 4 — implemented in the TDD Green step")
+    classify_dpapi_removal_result(auth_windows_store::remove_if_present(profile))
+}
+
+/// Pure classification helper factored out of
+/// [`clear_dpapi_file_tolerating_path_escape`] (ADR-0021 §7) so the
+/// "genuine error propagates unchanged" half of AC-015 is host-testable
+/// with a synthetic `anyhow::Result` input, independent of
+/// `auth_windows_store::remove_if_present`'s own `#[cfg(windows)]`/
+/// `#[cfg(not(windows))]` split (a genuine filesystem error can only be
+/// synthesized by the real, Windows-only deletion call).
+fn classify_dpapi_removal_result(result: Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(e)
+            if e.downcast_ref::<auth_windows_store::ProfilePathEscape>()
+                .is_some() =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Store OAuth 2.0 access and refresh tokens scoped to a profile.
@@ -331,31 +370,50 @@ fn clear_dpapi_file_tolerating_path_escape(profile: &Profile) -> Result<()> {
 ///
 /// The best-effort post-success cleanup of a stale DPAPI file (ADR-0021 §2,
 /// EC-1.4.035-2 — "a previously-oversized refresh token shrinks below the
-/// keyring ceiling after rotation") is deferred past this stub commit: it
-/// would call [`auth_windows_store::remove_if_present`], whose body is
-/// still `todo!()`, from this function's success arm — the arm every
-/// currently-passing `store_oauth_tokens` test exercises. Wire
-/// `let _ = auth_windows_store::remove_if_present(profile);` into the
-/// success arm below in the same change that implements
-/// `remove_if_present`'s real body.
+/// keyring ceiling after rotation") runs in the both-fit success arm below:
+/// a failure to remove a stale file never fails the call (`let _ = ...`).
 pub fn store_oauth_tokens(profile: &Profile, access: &str, refresh: &str) -> Result<()> {
     let access_key = oauth_access_key(profile.as_ref());
     let refresh_key = oauth_refresh_key(profile.as_ref());
 
-    match entry(&access_key)?.set_password(access) {
-        Ok(()) => match entry(&refresh_key)?.set_password(refresh) {
-            Ok(()) => Ok(()),
-            Err(e) if engage_dpapi_fallback(&e) => {
-                // Refresh overflowed after access succeeded — delete the
-                // ENTIRE existing keyring pair (incl. the just-written
-                // access token) before routing the fresh pair to DPAPI
-                // (ADR-0021 §2 "Ordering, and why").
-                delete_credential_tolerating_no_entry(&access_key)?;
-                delete_credential_tolerating_no_entry(&refresh_key)?;
-                auth_windows_store::store_pair(profile, access, refresh)
+    // JR_S759_FORCE_TOOLONG debug-only fault-injection seam (models
+    // JR_S303_PERSIST_FAIL's shape): lets a non-Windows debug build
+    // simulate a keyring::Error::TooLong on the access or refresh
+    // set_password call, since no real keyring backend on macOS/Linux can
+    // actually produce this error (AC-001-006/AC-019 keyring-gated tests).
+    // Compiled out of release builds entirely.
+    let access_result: std::result::Result<(), keyring::Error> = match forced_toolong("access") {
+        Some(e) => Err(e),
+        None => entry(&access_key)?.set_password(access),
+    };
+
+    match access_result {
+        Ok(()) => {
+            let refresh_result: std::result::Result<(), keyring::Error> =
+                match forced_toolong("refresh") {
+                    Some(e) => Err(e),
+                    None => entry(&refresh_key)?.set_password(refresh),
+                };
+            match refresh_result {
+                Ok(()) => {
+                    // AC-001/EC-1.4.035-2: best-effort removal of a stale
+                    // DPAPI file from a prior oversized-token generation for
+                    // this profile — never fails the call.
+                    let _ = auth_windows_store::remove_if_present(profile);
+                    Ok(())
+                }
+                Err(e) if engage_dpapi_fallback(&e) => {
+                    // Refresh overflowed after access succeeded — delete the
+                    // ENTIRE existing keyring pair (incl. the just-written
+                    // access token) before routing the fresh pair to DPAPI
+                    // (ADR-0021 §2 "Ordering, and why").
+                    delete_credential_tolerating_no_entry(&access_key)?;
+                    delete_credential_tolerating_no_entry(&refresh_key)?;
+                    auth_windows_store::store_pair(profile, access, refresh)
+                }
+                Err(e) => Err(e.into()),
             }
-            Err(e) => Err(e.into()),
-        },
+        }
         Err(e) if engage_dpapi_fallback(&e) => {
             // Access overflowed; its set_password call never landed, so
             // whatever is currently under either key can be a complete,
@@ -367,6 +425,139 @@ pub fn store_oauth_tokens(profile: &Profile, access: &str, refresh: &str) -> Res
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// `JR_S759_FORCE_TOOLONG` debug-only fault-injection seam
+/// (S-cycle4-dpapi-storage-fix, AC-001-006/AC-019) — models
+/// `JR_S303_PERSIST_FAIL`'s shape byte-for-byte. `which` is `"access"` or
+/// `"refresh"`; when `JR_S759_FORCE_TOOLONG` is set to the same value, the
+/// corresponding [`store_oauth_tokens`] `set_password` call is skipped
+/// entirely and a synthetic `keyring::Error::TooLong` is returned instead —
+/// letting a non-Windows debug build exercise the `TooLong`-routing arms
+/// without a keyring backend that can actually produce this error.
+/// `#[cfg(debug_assertions)]`-gated: release builds never read this env var
+/// (pinned by `tests/jr_s759_force_toolong_release_gate.rs`).
+fn forced_toolong(which: &str) -> Option<keyring::Error> {
+    #[cfg(debug_assertions)]
+    {
+        if std::env::var("JR_S759_FORCE_TOOLONG").as_deref() == Ok(which) {
+            return Some(keyring::Error::TooLong(which.to_string(), 2560));
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = which;
+    None
+}
+
+/// BC-1.4.036 read-path four-way discrimination outcome over
+/// [`auth_windows_store::load_pair`]'s result. Message rendering is
+/// deferred to [`load_oauth_tokens`]'s call sites (via
+/// [`invalid_profile_name_error`]/[`corrupt_secret_file_error`]/
+/// [`backend_io_error`]), which have the `&Profile` needed to interpolate
+/// into the exact ADR-0021 §4 wording — this type itself carries only the
+/// classification, not a rendered message.
+enum LoadPairOutcome {
+    /// `Ok(Some((access, refresh)))` — the DPAPI file holds a usable pair.
+    Found(String, String),
+    /// `ProfilePathEscape` — checked FIRST, before any other discrimination
+    /// (ADR-0021 §4 Pass-5 correction): the profile name itself fails
+    /// `reject_unsafe_profile_component`.
+    InvalidProfileName(auth_windows_store::ProfilePathEscape),
+    /// `CorruptSecretFile` — the file exists but its content could not be
+    /// turned into a usable pair (DPAPI unprotect failed, unrecognized wrap
+    /// header, or malformed decrypted JSON).
+    Corrupt,
+    /// Any other `Err` — a genuine backend/IO error reading an existing
+    /// file (permission denied, disk I/O failure).
+    BackendError(anyhow::Error),
+    /// `Ok(None)` — no DPAPI file exists for this profile.
+    Absent,
+}
+
+/// Pure discrimination over an ALREADY-OBTAINED
+/// `auth_windows_store::load_pair` result (ADR-0021 §4, BC-1.4.036
+/// postconditions 2/3, invariants 1/3). Factored out from
+/// [`discriminate_load_pair`]'s call to the real `load_pair(profile)` so
+/// this discrimination LOGIC is host-testable with a synthetic
+/// `anyhow::Result` input, independent of `load_pair`'s own
+/// `#[cfg(windows)]`/`#[cfg(not(windows))]` split.
+///
+/// Discrimination order (applies identically at every call site this
+/// module renders a message for): `ProfilePathEscape` first — it is the
+/// only one of the three that signals a problem with the CALLER's input
+/// (the profile name), not with the credential or the storage backend —
+/// then `CorruptSecretFile`, then any other genuine backend/IO error, then
+/// genuine absence.
+fn classify_load_pair_result(result: anyhow::Result<Option<(String, String)>>) -> LoadPairOutcome {
+    match result {
+        Ok(Some((a, r))) => LoadPairOutcome::Found(a, r),
+        Ok(None) => LoadPairOutcome::Absent,
+        Err(e) => {
+            if let Some(escape) = e.downcast_ref::<auth_windows_store::ProfilePathEscape>() {
+                LoadPairOutcome::InvalidProfileName(*escape)
+            } else if e
+                .downcast_ref::<auth_windows_store::CorruptSecretFile>()
+                .is_some()
+            {
+                LoadPairOutcome::Corrupt
+            } else {
+                LoadPairOutcome::BackendError(e)
+            }
+        }
+    }
+}
+
+/// Calls [`auth_windows_store::load_pair`] for `profile` and discriminates
+/// its result via [`classify_load_pair_result`]. Kept as a thin, separate
+/// function so [`load_oauth_tokens`]'s call sites read naturally while
+/// `classify_load_pair_result` itself stays independently unit-testable.
+fn discriminate_load_pair(profile: &Profile) -> LoadPairOutcome {
+    classify_load_pair_result(auth_windows_store::load_pair(profile))
+}
+
+/// Exact message text for a `ProfilePathEscape` on the DPAPI read path
+/// (ADR-0021 §4, Pass-11 adversarial-review correction) — scoped to the
+/// DPAPI-encrypted-file fallback specifically, never framed as "credential
+/// storage in general" (a guard-colliding name's keyring path is untouched
+/// by this guard and works normally for a token that fits).
+fn invalid_profile_name_error(
+    profile: &Profile,
+    escape: auth_windows_store::ProfilePathEscape,
+) -> anyhow::Error {
+    // ADR-0021 §4: propagated as a distinct exit-64 JrError::UserError
+    // naming the invalid profile — never coerced into a generic backend
+    // error's default (non-64) exit code.
+    crate::error::JrError::UserError(format!(
+        "Profile name {profile:?} is not valid for jr's Windows encrypted-file OAuth-token \
+         fallback storage ({escape}) — this restriction applies only to that fallback (used \
+         when an OAuth token is too large for Windows Credential Manager), not to \
+         keyring-based credential storage in general. If your OAuth token is, or was, too \
+         large for the keyring, re-authenticate under a different profile name: \
+         \"jr auth login --oauth --profile <new-name>\"."
+    ))
+    .into()
+}
+
+/// Exact message text for a `CorruptSecretFile` on the DPAPI read path
+/// (ADR-0021 §4) — a distinct, force-re-login error, never coerced into
+/// "no token."
+fn corrupt_secret_file_error(profile: &Profile) -> anyhow::Error {
+    anyhow::anyhow!(
+        "OAuth credentials for profile {profile:?} could not be decrypted (the file may be \
+         corrupted, or was created by a different Windows user account). Run \"jr auth login \
+         --oauth --profile {profile}\" to re-authenticate."
+    )
+}
+
+/// Exact message text for a genuine backend/IO error reading an existing
+/// DPAPI file (ADR-0021 §4) — never the corruption message, and never
+/// suggests re-login (which would not fix a filesystem permission or I/O
+/// problem and would needlessly mint a new, unrevoked Atlassian grant).
+fn backend_io_error(profile: &Profile, e: &anyhow::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Could not read stored OAuth credentials for profile {profile:?}: {e}. Check file \
+         permissions under %LOCALAPPDATA%\\jr\\secrets\\{profile}\\ and try again."
+    )
 }
 
 /// Load OAuth 2.0 access and refresh tokens for a profile.
@@ -381,6 +572,18 @@ pub fn store_oauth_tokens(profile: &Profile, access: &str, refresh: &str) -> Res
 /// upgrade without re-authenticating. Non-`"default"` profiles never
 /// inherit legacy keys — that would silently cross-pollinate credentials
 /// across distinct Jira sites.
+///
+/// **Windows DPAPI-encrypted-file fallback read path (ADR-0021 §4,
+/// BC-1.4.036, BC-1.4.028 amended, S-cycle4-dpapi-storage-fix).** Both
+/// branches below additionally consult [`auth_windows_store::load_pair`]
+/// via [`discriminate_load_pair`]'s four-way discrimination
+/// (`ProfilePathEscape` checked first, then `CorruptSecretFile`, then any
+/// other backend/IO error, then genuine absence) — see that function's doc
+/// comment for the exact ordering and message texts. The two branches
+/// deliberately check the DPAPI file at DIFFERENT points relative to the
+/// legacy-flat-key recovery (AC-011): both-absent checks the DPAPI file
+/// BEFORE the legacy fallback; the partial branch checks legacy recovery
+/// FIRST, with the DPAPI file only as an additional fallback.
 pub fn load_oauth_tokens(profile: &Profile) -> Result<(String, String)> {
     let access_key = oauth_access_key(profile.as_ref());
     let refresh_key = oauth_refresh_key(profile.as_ref());
@@ -390,6 +593,17 @@ pub fn load_oauth_tokens(profile: &Profile) -> Result<(String, String)> {
     match (access, refresh) {
         (Some(a), Some(r)) => Ok((a, r)),
         (None, None) => {
+            // BC-1.4.036 postcondition 2 / AC-009/010/011: check the DPAPI
+            // file BEFORE the legacy-flat-key fallback.
+            match discriminate_load_pair(profile) {
+                LoadPairOutcome::Found(a, r) => return Ok((a, r)),
+                LoadPairOutcome::InvalidProfileName(escape) => {
+                    return Err(invalid_profile_name_error(profile, escape));
+                }
+                LoadPairOutcome::Corrupt => return Err(corrupt_secret_file_error(profile)),
+                LoadPairOutcome::BackendError(e) => return Err(backend_io_error(profile, &e)),
+                LoadPairOutcome::Absent => {}
+            }
             // Both namespaced keys absent — try legacy fallback for the
             // "default" profile (lazy-migration path). Non-default
             // profiles never inherit legacy keys; that would silently
@@ -417,9 +631,11 @@ pub fn load_oauth_tokens(profile: &Profile) -> Result<(String, String)> {
         // tokens. Non-default profiles must NEVER inherit legacy keys
         // (that would cross-pollinate credentials across Jira sites).
         //
-        // If the legacy pair isn't complete either, surface the partial
-        // state with explicit recovery instructions rather than masking
-        // the corruption with a generic "no token" message.
+        // If the legacy pair isn't complete either, additionally check the
+        // DPAPI file (BC-1.4.028 amended, AC-011: legacy recovery FIRST,
+        // DPAPI only as an additional fallback here — the opposite order
+        // from the both-absent branch above) before surfacing the partial
+        // state with explicit recovery instructions.
         _ => {
             if profile.as_ref() == "default" {
                 let legacy_access = read_keyring_optional(KEY_OAUTH_ACCESS_LEGACY)?;
@@ -430,6 +646,26 @@ pub fn load_oauth_tokens(profile: &Profile) -> Result<(String, String)> {
                     let _ = entry(KEY_OAUTH_REFRESH_LEGACY)?.delete_credential();
                     return Ok((a, r));
                 }
+            }
+            match discriminate_load_pair(profile) {
+                LoadPairOutcome::Found(a, r) => {
+                    // EC-1.4.036-2: namespaced-partial keyring state AND a
+                    // complete valid DPAPI file coexist — prefer the DPAPI
+                    // file, warn via stderr, don't error outright.
+                    eprintln!(
+                        "warning: profile {profile:?} has a partial keyring OAuth-token \
+                         remnant (one of access/refresh present, the other missing); using \
+                         the DPAPI-encrypted-file fallback pair instead. Run \"jr auth \
+                         logout --profile {profile}\" to clear the stale keyring remnant."
+                    );
+                    return Ok((a, r));
+                }
+                LoadPairOutcome::InvalidProfileName(escape) => {
+                    return Err(invalid_profile_name_error(profile, escape));
+                }
+                LoadPairOutcome::Corrupt => return Err(corrupt_secret_file_error(profile)),
+                LoadPairOutcome::BackendError(e) => return Err(backend_io_error(profile, &e)),
+                LoadPairOutcome::Absent => {}
             }
             Err(anyhow::anyhow!(
                 "OAuth keychain entries for profile {profile:?} are partial \
@@ -684,14 +920,44 @@ pub fn try_load_oauth_app_credentials() -> Result<Option<(String, String)>> {
 /// `keyring::Error::NoEntry` on any step is success; any other keychain
 /// error propagates immediately via `?` (same tightening as
 /// [`clear_profile_creds`], applied consistently across both functions).
+///
+/// **DPAPI file cleanup (ADR-0021 §7, BC-1.4.038 Postcondition 4,
+/// S-cycle4-dpapi-storage-fix).** Also calls
+/// [`clear_dpapi_file_tolerating_path_escape`] as one more attempt-all fan-out
+/// step, alongside the keyring deletes above — every step is attempted
+/// unconditionally regardless of an earlier step's failure, and the FIRST
+/// genuine error encountered (in the fixed attempt order below) is the one
+/// propagated, after every attempt has completed. A `ProfilePathEscape`
+/// from the DPAPI step is tolerated (mapped to `Ok(())`) on every OS — see
+/// `clear_dpapi_file_tolerating_path_escape`'s doc comment.
 pub fn clear_profile_oauth_pair(profile: &Profile) -> Result<()> {
-    delete_credential_tolerating_no_entry(&oauth_access_key(profile.as_ref()))?;
-    delete_credential_tolerating_no_entry(&oauth_refresh_key(profile.as_ref()))?;
+    let mut first_error: Option<anyhow::Error> = None;
+    let mut attempt = |result: Result<()>| {
+        if let Err(e) = result {
+            if first_error.is_none() {
+                first_error = Some(e);
+            }
+        }
+    };
+    attempt(delete_credential_tolerating_no_entry(&oauth_access_key(
+        profile.as_ref(),
+    )));
+    attempt(delete_credential_tolerating_no_entry(&oauth_refresh_key(
+        profile.as_ref(),
+    )));
     if profile.as_ref() == "default" {
-        delete_credential_tolerating_no_entry(KEY_OAUTH_ACCESS_LEGACY)?;
-        delete_credential_tolerating_no_entry(KEY_OAUTH_REFRESH_LEGACY)?;
+        attempt(delete_credential_tolerating_no_entry(
+            KEY_OAUTH_ACCESS_LEGACY,
+        ));
+        attempt(delete_credential_tolerating_no_entry(
+            KEY_OAUTH_REFRESH_LEGACY,
+        ));
     }
-    Ok(())
+    attempt(clear_dpapi_file_tolerating_path_escape(profile));
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Clear ONLY a single profile's namespaced API-token-pair credentials
@@ -768,18 +1034,46 @@ pub fn clear_profile_api_token_pair(profile: &Profile) -> Result<()> {
 /// pair (that is `S-cycle3-credential-absence-guard`'s no-touch invariant,
 /// BC-1.4.032).
 pub fn clear_profile_creds(profile: &Profile) -> Result<()> {
-    delete_credential_tolerating_no_entry(&oauth_access_key(profile.as_ref()))?;
-    delete_credential_tolerating_no_entry(&oauth_refresh_key(profile.as_ref()))?;
-    delete_credential_tolerating_no_entry(&api_token_email_key(profile.as_ref()))?;
-    delete_credential_tolerating_no_entry(&api_token_key(profile.as_ref()))?;
+    let mut first_error: Option<anyhow::Error> = None;
+    let mut attempt = |result: Result<()>| {
+        if let Err(e) = result {
+            if first_error.is_none() {
+                first_error = Some(e);
+            }
+        }
+    };
+    attempt(delete_credential_tolerating_no_entry(&oauth_access_key(
+        profile.as_ref(),
+    )));
+    attempt(delete_credential_tolerating_no_entry(&oauth_refresh_key(
+        profile.as_ref(),
+    )));
+    attempt(delete_credential_tolerating_no_entry(&api_token_email_key(
+        profile.as_ref(),
+    )));
+    attempt(delete_credential_tolerating_no_entry(&api_token_key(
+        profile.as_ref(),
+    )));
     // For the "default" profile, also clear the legacy flat OAuth keys
     // that load_oauth_tokens(&Profile::from("default")) would otherwise lazy-migrate
     // back into existence on the next read — defeating logout.
     if profile.as_ref() == "default" {
-        delete_credential_tolerating_no_entry(KEY_OAUTH_ACCESS_LEGACY)?;
-        delete_credential_tolerating_no_entry(KEY_OAUTH_REFRESH_LEGACY)?;
+        attempt(delete_credential_tolerating_no_entry(
+            KEY_OAUTH_ACCESS_LEGACY,
+        ));
+        attempt(delete_credential_tolerating_no_entry(
+            KEY_OAUTH_REFRESH_LEGACY,
+        ));
     }
-    Ok(())
+    // ADR-0021 §7, BC-1.4.038 Postcondition 4 (S-cycle4-dpapi-storage-fix):
+    // one more attempt-all fan-out step, alongside the keyring deletes
+    // above — see clear_profile_oauth_pair's doc comment for the full
+    // attempt-all/first-error-propagated contract.
+    attempt(clear_dpapi_file_tolerating_path_escape(profile));
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Delete a single keychain entry, treating `keyring::Error::NoEntry` as
