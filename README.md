@@ -150,7 +150,7 @@ longer-term fix (Developer ID signing) is tracked as a separate issue.
 # Set up your Jira instance and authenticate
 jr init
 
-# Authenticate with API token (default)
+# Authenticate — interactive picker defaults to OAuth 2.0 (choose API Token if prompted)
 jr auth login
 
 # Non-interactive API token (CI / agents): flags or env vars, no TTY required.
@@ -258,12 +258,12 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | Command | Description |
 |---------|-------------|
 | `jr init` | Configure Jira instance and authenticate (prompts to add another profile if any are already configured) |
-| `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0. `--profile NAME` targets a specific profile (creates if absent); `--url URL` sets the Jira instance URL when creating. Non-interactive: `--email`/`--token` or `JR_EMAIL`/`JR_API_TOKEN`; `--client-id`/`--client-secret` or `JR_OAUTH_CLIENT_ID`/`JR_OAUTH_CLIENT_SECRET` for OAuth |
+| `jr auth login` | Interactive: shows an OAuth-first picker (`OAuth 2.0 (recommended)` / `API Token`, OAuth pre-selected); non-interactive (`--no-input` or non-TTY stdin) defaults to API token. `--api-token` selects API token directly, skipping the picker; `--oauth` also selects OAuth but is deprecated in favor of the picker or `--api-token`. `--profile NAME` targets a specific profile (creates if absent); `--url URL` sets the Jira instance URL when creating. Non-interactive: `--email`/`--token` or `JR_EMAIL`/`JR_API_TOKEN`; `--client-id`/`--client-secret` or `JR_OAUTH_CLIENT_ID`/`JR_OAUTH_CLIENT_SECRET` for OAuth |
 | `jr auth switch <NAME>` | Set the default profile in `config.toml`. Errors if `NAME` doesn't exist. The global `--profile` flag is rejected on this subcommand (exit 64) — `NAME` is always the switch target, so use `jr auth switch <NAME>` alone |
 | `jr auth list` | List configured profiles (table or JSON via `--output`); active profile marked with `*` |
 | `jr auth status` | Show authentication status for the active profile, or `--profile NAME` for another |
 | `jr auth refresh` | Refresh credentials for the active profile (or `--profile NAME`); same flags/env vars as `auth login` |
-| `jr auth logout` | Clear OAuth tokens for the active profile (or `--profile NAME`); shared API token NOT touched |
+| `jr auth logout` | Clear OAuth tokens for the active profile (or `--profile NAME`); that profile's API token (stored per-profile, not shared) is NOT touched |
 | `jr auth remove <NAME>` | Permanently delete a profile (config entry + cache + per-profile OAuth tokens). Cannot remove the active profile |
 | `jr me` | Show current user info |
 | `jr issue list` | List issues (`--assignee`, `--reporter`, `--recent`, `--updated-recent <duration>`, `--status`, `--open`, `--team`, `--asset KEY`, `--component NAME`, `--created-after`/`--created-before`/`--updated-after`/`--updated-before` (`YYYY-MM-DD`), `--jql`, `--limit`/`--all`, `--points`, `--assets`, `--duedate`, `--fields <CSV>` (requires `--output json`), `--sort <field>:asc\|desc`) |
@@ -341,6 +341,13 @@ disposable and shouldn't sync. If a command reports "No profiles
 configured" on Windows even though you're sure you've run `jr init`,
 check `%APPDATA%\jr\config.toml` — the Windows equivalent of `~/.config/jr/`.
 
+Credentials (OAuth tokens, API tokens) are stored in Windows Credential
+Manager. Windows Credential Manager caps a single credential blob at
+~2560 bytes, which some Atlassian OAuth refresh tokens exceed; when that
+happens, `jr` automatically falls back to a user-scoped, DPAPI-encrypted
+file at `%LOCALAPPDATA%\jr\secrets\<profile>\oauth-tokens.dat` instead of
+failing the login.
+
 Per-project config is the same on every platform:
 
 ```bash
@@ -385,10 +392,10 @@ JR_PROFILE=sandbox jr issue list # session-scoped (works well with direnv)
 Note: `--profile` and `auth switch` don't combine — `jr auth switch --profile X Y` exits
 64. `auth switch`'s target is always its positional `NAME` argument.
 
-A single classic Atlassian API token authenticates the same user against
-any Atlassian Cloud site, so `email` + `api-token` are stored once in the
-OS keychain and shared by all `api_token` profiles. OAuth tokens are
-cloudId-scoped and stored per profile.
+`email` + `api-token` are stored per profile in the OS keychain
+(namespaced as `<profile>:email`/`<profile>:api-token`), symmetric with
+OAuth tokens, which are also stored per profile (namespaced as
+`<profile>:oauth-access-token`/`<profile>:oauth-refresh-token`).
 
 **`cloud_id` auto-discovery.** `cloud_id` (Atlassian's internal tenant
 identifier, required by Assets/CMDB commands) is auto-discovered for

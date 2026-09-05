@@ -16,6 +16,30 @@ All notable changes to jr will be documented here.
   and rewrote the `cloud_id` caveat to describe the corrected, both-auth-methods
   auto-discovery behavior shipped by `S-cycle4-cloud-id-correctness` rather than
   the pre-fix OAuth-only limitation. Doc-only; no `src/` changes.
+- **README: corrected 3 credential-storage/auth-default consistency defects**
+  (FIX-W2-INT-README, cycle-004, F4 Wave 2 integration gate findings
+  W2-INT-MED-001/W2-INT-LOW-001/W2-INT-LOW-002). (1) W2-INT-MED-001: the
+  claim that a classic API token's `email`/`api-token` pair is "stored once
+  ... and shared by all `api_token` profiles" was false — `store_api_token`
+  (`src/api/auth.rs`) writes per-profile namespaced keychain keys
+  (`<profile>:email`/`<profile>:api-token`, S-cycle3-percred-storage,
+  BC-1.4.031), confirmed isolated by `load_api_token_cross_profile_isolation`
+  and `load_api_token_default_profile_has_no_legacy_fallback`; corrected to
+  state per-profile storage, symmetric with the adjacent OAuth-per-profile
+  sentence (also fixed the same false "shared API token" phrasing in the
+  `jr auth logout` command-table row). (2) W2-INT-LOW-001: the Windows
+  storage narrative omitted the DPAPI-encrypted-file fallback
+  (`%LOCALAPPDATA%\jr\secrets\<profile>\oauth-tokens.dat`) that oversized
+  OAuth tokens exceeding Windows Credential Manager's ~2560-byte cap engage
+  (ADR-0021, `src/api/auth_windows_store.rs`); added a short note describing
+  the fallback location and trigger condition. (3) W2-INT-LOW-002: "Authenticate
+  with API token (default) or `--oauth` for OAuth 2.0" was stale as of
+  [0.7.0-dev.4]'s S-cycle3-oauth-default-creation/BC-1.1.013 — bare
+  interactive `jr auth login` now shows an OAuth-first picker (OAuth
+  pre-selected), non-interactive invocations default to API token, and
+  `--oauth` is deprecated in favor of the picker or the new `--api-token`
+  flag; corrected the `jr auth login` command-table row and the Quick Start
+  comment to match. Doc-only; no `src/` changes.
 
 ### Fixed
 
