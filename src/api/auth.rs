@@ -1363,12 +1363,27 @@ impl RedirectUriStrategy {
 /// ADR-0021 §6, BC-1.4.039 Invariant 4) is `ProfilePathEscape` FIRST — AC-001,
 /// rendering the SAME distinct exit-64 invalid-profile-name error the read
 /// path uses (see [`invalid_profile_name_error`]) — then `DpapiFallbackFailed`
-/// — AC-002, whose message MUST name the 2560-byte Credential Manager limit,
-/// the fallback failure, and state the Atlassian grant revoke
-/// (`https://id.atlassian.com/manage-profile/apps`) as a REQUIRED step, since
-/// the grant this failed login attempt just created has no other consumer —
-/// then, when neither marker matches, the existing legacy "Unlock your
-/// keychain" message, UNCHANGED (AC-004, EC-1.4.039-1).
+/// — AC-002, whose message MUST name the 2560-byte Credential Manager limit
+/// and the fallback failure, recommend jr's own scoped cleanup (`jr auth
+/// logout --profile <profile>` / `jr auth remove <profile>`) as the DEFAULT
+/// remediation, and present revoking jr's Atlassian OAuth grant
+/// (`https://id.atlassian.com/manage-profile/apps`) as an OPTIONAL extra
+/// step carrying an explicit ACCOUNT-WIDE warning — then, when neither
+/// marker matches, the legacy "Unlock your keychain" message with its final
+/// sentence CORRECTED the same way (AC-004, EC-1.4.039-1).
+///
+/// **DEC-334 (corrected 2026-09-05, F1 adversarial finding):** the original
+/// wording instructed the Atlassian grant revoke as a REQUIRED step, framed
+/// as safe because "the grant this failed login attempt just created has no
+/// other consumer." Perplexity-validated research confirmed this is false
+/// and harmful: `jr` uses one shared embedded OAuth app, so revoking the
+/// grant is ACCOUNT-WIDE and signs out every `jr` profile on that Atlassian
+/// account, not just this one. See
+/// `.factory/research/atlassian-3lo-revoke-granularity-2026-09-05.md`. Site
+/// 1's legacy (`None`-matched) arm is therefore CORRECTED, not
+/// byte-for-byte unchanged — only [`site3_refresh_store_failure_message`]'s
+/// legacy arm is byte-for-byte unchanged, since Site 3 never instructed a
+/// revoke in the first place.
 ///
 /// Factored out from the `oauth_login` call site so this branching is
 /// host-testable with constructed `anyhow::Error` values, independent of any
@@ -5001,8 +5016,10 @@ mod tests {
             assert!(
                 msg.contains("Unlock your keychain"),
                 "AC-007 VIOLATION: a plain (unwrapped) TooLong error — never routed through \
-                 auth_windows_store::store_pair — must render the UNCHANGED legacy message. \
-                 Got: {msg}"
+                 auth_windows_store::store_pair — must fall through to Site 1's legacy \
+                 (non-DpapiFallbackFailed) branch, not the honest-fail branch. (Site 1's \
+                 legacy branch text was itself CORRECTED by DEC-334 — this assertion checks \
+                 branch selection, not byte-identity with the pre-DEC-334 text.) Got: {msg}"
             );
             assert!(
                 !msg.contains("2560-byte"),
@@ -5013,6 +5030,65 @@ mod tests {
                 msg.contains(&inner_display),
                 "AC-007: the plain TooLong's own detail must still be interpolated into the \
                  legacy message exactly as before this cycle. Got: {msg}"
+            );
+        }
+    }
+
+    /// Source-scan guard (DEC-334, adversarial-review finding, closes the
+    /// [process-gap] partial-fix-regression class): asserts the
+    /// CONFIRMED-harmful account-wide-revoke framing superseded by DEC-334
+    /// never reappears anywhere in this file's PRODUCTION code — message
+    /// strings AND rustdoc alike — not just in the two `store_oauth_tokens`
+    /// failure-message call sites the original fix touched. Mirrors the
+    /// repo's `include_str!`-based structural-guard convention (see
+    /// `src/cli/auth/login.rs::include_str!("login.rs")`,
+    /// `src/cli/issue/edit.rs::include_str!("edit.rs")`).
+    ///
+    /// Scoped to everything BEFORE the `mod tests {` boundary, not the
+    /// whole file: several test assertions in `honest_fail_message_tests`
+    /// above legitimately mention these exact phrases INSIDE their own
+    /// panic messages (e.g. "must not repeat the CONFIRMED-harmful 'no
+    /// other consumer' framing") in order to check for the phrases'
+    /// ABSENCE in the messages under test — scanning those panic-message
+    /// strings verbatim would make this guard fail on the very tests that
+    /// enforce DEC-334. Splitting at `mod tests {` excludes them precisely
+    /// because Rust's own module structure places all test code inside that
+    /// block; production message-construction functions and their rustdoc
+    /// (e.g. [`site1_login_store_failure_message`],
+    /// [`site3_refresh_store_failure_message`]) live entirely before it.
+    ///
+    /// **Not covered by this guard:** `CHANGELOG.md`'s DEC-334 entry
+    /// legitimately quotes the retired phrases in scare-quotes to describe
+    /// what was wrong and corrected — CHANGELOG.md prose is human
+    /// review-guarded (PR review), not machine-guarded here.
+    ///
+    /// Research: `.factory/research/atlassian-3lo-revoke-granularity-2026-09-05.md`.
+    #[test]
+    fn test_no_account_wide_harmful_revoke_framing_in_auth_source() {
+        let full_source = include_str!("auth.rs");
+        let production_code = full_source
+            .split_once("\nmod tests {")
+            .expect(
+                "test setup: could not locate the `mod tests {` boundary in auth.rs -- this \
+                 guard's split marker may have drifted (e.g. the module was renamed or \
+                 reformatted); update the split marker to match.",
+            )
+            .0;
+        let production_code_lower = production_code.to_lowercase();
+
+        const FORBIDDEN_PHRASES: &[&str] =
+            &["no other consumer", "must first revoke", "safe cleanup"];
+
+        for phrase in FORBIDDEN_PHRASES {
+            assert!(
+                !production_code_lower.contains(phrase),
+                "DEC-334 VIOLATION: the CONFIRMED-harmful phrase '{phrase}' has reappeared in \
+                 src/api/auth.rs's production code (a message string or rustdoc comment before \
+                 the `mod tests {{` boundary). This framing was Perplexity-validated as false \
+                 and harmful: jr's shared embedded OAuth app means revoking its Atlassian grant \
+                 is ACCOUNT-WIDE (signs out every jr profile on the account), not scoped to one \
+                 profile. See \
+                 .factory/research/atlassian-3lo-revoke-granularity-2026-09-05.md."
             );
         }
     }

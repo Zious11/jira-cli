@@ -1480,20 +1480,45 @@ async fn test_persist_before_publish_fault_injection() {
 ///       typically already achieves this; the oracle asserts the resulting
 ///       STATE, not a call count, per BC-1.4.039 Postcondition 4's own
 ///       "typically redundant, retained as defense-in-depth" framing);
-///   (c) (MED-1, adversarial convergence) `clear_profile_oauth_pair` — the
-///       ONLY code path that touches the LEGACY flat `oauth-access-token`/
-///       `oauth-refresh-token` keys for the `"default"` profile
-///       (`store_oauth_tokens`'s delete-first step, BC-1.4.035, only ever
-///       touches the NAMESPACED `<profile>:oauth-*` keys) — was actually
-///       invoked. Without this, assertion (b) alone is satisfied whenever
-///       `store_oauth_tokens`'s own delete-first already removed the
-///       NAMESPACED pair, even if Site 3's proactive clear call were deleted
-///       entirely: `load_oauth_tokens` would still observe "no stored pair"
-///       for the namespaced keys, silently passing regardless of whether
-///       `clear_profile_oauth_pair` ran. Pre-seeding the legacy flat pair,
-///       untouched by delete-first, and asserting its absence afterward
-///       makes an accidentally-deleted proactive-clear call a genuinely
-///       detectable test failure.
+///   (c) (MED-1, adversarial convergence; corrected 2026-09-05, second-pass
+///       finding) `clear_profile_oauth_pair` — the ONLY code path that
+///       touches the LEGACY flat `oauth-access-token`/`oauth-refresh-token`
+///       keys for the `"default"` profile (`store_oauth_tokens`'s
+///       delete-first step, BC-1.4.035, only ever touches the NAMESPACED
+///       `<profile>:oauth-*` keys) — was actually invoked. Without this,
+///       assertion (b) alone is satisfied whenever `store_oauth_tokens`'s
+///       own delete-first already removed the NAMESPACED pair, even if Site
+///       3's proactive clear call were deleted entirely: `load_oauth_tokens`
+///       would still observe "no stored pair" for the namespaced keys,
+///       silently passing regardless of whether `clear_profile_oauth_pair`
+///       ran.
+///
+///       **What actually kills the mutation, and why the read ordering
+///       matters:** pre-seeding the legacy flat pair is necessary but not
+///       sufficient — `load_oauth_tokens` ITSELF lazily migrates a
+///       still-intact legacy flat pair for the `"default"` profile when both
+///       namespaced keys are absent (see `load_oauth_tokens`'s
+///       `(None, None)` branch): it copies the legacy pair into the
+///       namespaced keys and DELETES the legacy flat keys as a side effect
+///       of a successful migration. If the legacy-pair reads below were
+///       taken AFTER calling `load_oauth_tokens` (as an earlier revision of
+///       this test did), a mutant that deletes Site 3's
+///       `clear_profile_oauth_pair` call would leave the legacy pair intact
+///       going into `load_oauth_tokens` — which would then lazily MIGRATE
+///       it (returning `Ok`, deleting the legacy keys as a side effect of
+///       migrating them) rather than erroring. In that mutant run, the
+///       legacy-key-absence assertions below would still pass — vacuously,
+///       because migration deleted the keys, not because
+///       `clear_profile_oauth_pair` did — and the mutation would only be
+///       caught by the separate `load_result.expect_err(...)` assertion
+///       (b) actually panicking (since migration returns `Ok`, not the
+///       expected error). To make the legacy-key assertions independently
+///       load-bearing rather than redundant with (b), they read the legacy
+///       pair's post-Site-3-clear state IMMEDIATELY after the
+///       `refresh_oauth_token` call returns — before `load_oauth_tokens` is
+///       ever invoked and before its lazy-migration side effect can touch
+///       these keys. Their absence at that point is attributable ONLY to
+///       `clear_profile_oauth_pair`.
 ///
 /// KEYRING-GATED: requires `JR_RUN_KEYRING_TESTS=1`.
 #[tokio::test]
@@ -1561,6 +1586,22 @@ async fn test_bc_1_4_039_site3_dpapi_fallback_failed_message_and_clear_profile_o
     remove_env("JR_FORCE_DPAPI_FALLBACK");
     remove_env("JR_S759_FORCE_TOOLONG");
 
+    // MED-1 (load-bearing ordering, see the rustdoc above): read the LEGACY
+    // flat pair's post-Site-3-clear state HERE, immediately after
+    // `refresh_oauth_token` returns and BEFORE `load_oauth_tokens` is called
+    // anywhere below. `load_oauth_tokens` lazily migrates (and deletes) a
+    // still-intact legacy flat pair for the "default" profile as a SIDE
+    // EFFECT when both namespaced keys are absent — reading after that call
+    // would attribute the legacy pair's absence to migration rather than to
+    // `clear_profile_oauth_pair`, making these assertions non-discriminating
+    // against a mutant that deletes Site 3's proactive-clear call.
+    let legacy_access_after = keyring::Entry::new("jr-s303-test", "oauth-access-token")
+        .expect("legacy access entry construction must succeed")
+        .get_password();
+    let legacy_refresh_after = keyring::Entry::new("jr-s303-test", "oauth-refresh-token")
+        .expect("legacy refresh entry construction must succeed")
+        .get_password();
+
     let err = result.expect_err(
         "AC-001/AC-003: once Site 3's post-refresh store_oauth_tokens fails with \
          DpapiFallbackFailed, refresh_oauth_token must propagate an error, not succeed.",
@@ -1594,16 +1635,13 @@ async fn test_bc_1_4_039_site3_dpapi_fallback_failed_message_and_clear_profile_o
 
     // AC-005: the profile's stored OAuth pair must be a clean "no stored
     // token" state afterward — never the stale, already-consumed pair.
+    //
+    // NOTE: this call itself can lazily migrate a still-intact legacy flat
+    // pair for the "default" profile (deleting the legacy keys as a side
+    // effect of migrating them) — which is exactly why the legacy-pair
+    // reads above were captured BEFORE this call, not after. See the MED-1
+    // rustdoc note above this test for the full reasoning.
     let load_result = auth::load_oauth_tokens(&jr::profile::Profile::from(harness::TEST_PROFILE));
-
-    // MED-1: read back the LEGACY flat pair BEFORE cleanup runs (cleanup
-    // itself would also remove these, masking the signal we're isolating).
-    let legacy_access_after = keyring::Entry::new("jr-s303-test", "oauth-access-token")
-        .expect("legacy access entry construction must succeed")
-        .get_password();
-    let legacy_refresh_after = keyring::Entry::new("jr-s303-test", "oauth-refresh-token")
-        .expect("legacy refresh entry construction must succeed")
-        .get_password();
 
     harness::cleanup_oauth_tokens();
 
@@ -1618,12 +1656,16 @@ async fn test_bc_1_4_039_site3_dpapi_fallback_failed_message_and_clear_profile_o
          some other failure shape. Got: {load_err:#}"
     );
 
-    // MED-1: the LEGACY flat pair must ALSO be gone — this is the signal
+    // MED-1: the LEGACY flat pair must ALSO have been gone at the point
+    // captured above (immediately after `refresh_oauth_token` returned,
+    // before `load_oauth_tokens` ran) — this is the signal
     // `store_oauth_tokens`'s delete-first step (BC-1.4.035) cannot produce
     // on its own (it only ever touches the namespaced `<profile>:oauth-*`
-    // keys), so its absence here proves `clear_profile_oauth_pair` was
-    // actually invoked at Site 3, not merely that the namespaced pair
-    // happened to already be gone.
+    // keys), and — because the read happened before `load_oauth_tokens`'s
+    // own lazy-migration could touch these keys — its absence here proves
+    // `clear_profile_oauth_pair` was actually invoked at Site 3, not merely
+    // that the namespaced pair happened to already be gone, and not that
+    // migration deleted it out from under us afterward.
     assert!(
         legacy_access_after.is_err(),
         "MED-1 VIOLATION: the LEGACY flat oauth-access-token must be gone after a Site-3 \

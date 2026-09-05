@@ -62,17 +62,24 @@ All notable changes to jr will be documented here.
   message — they now name the 2560-byte Credential Manager limit and the
   fallback failure detail, and instruct the user to check disk space/file
   permissions and re-authenticate. The two sites' messages are intentionally
-  distinct: `jr auth login`'s message additionally instructs revoking the
-  now-unused Atlassian grant created by the same failed attempt (safe
-  cleanup, no other consumer), while the internal refresh path's message
-  omits any grant-revoke instruction (the grant may still back other active
-  sessions for the profile) and proactively clears the profile's now-stale
-  stored OAuth pair so the next command sees a clean "no stored OAuth token"
-  state instead of a confusing `invalid_grant`. An invalid profile name
-  (rejected by the DPAPI-fallback's path-traversal guard) continues to
-  render as its own distinct, actionable error at both sites. macOS/Linux
-  behavior is unaffected — this failure mode is unreachable there by
-  construction.
+  distinct: `jr auth login`'s message recommends jr's own scoped cleanup
+  (`jr auth logout --profile <profile>` / `jr auth remove <profile>`) as the
+  default remediation, and presents revoking jr's Atlassian OAuth grant at
+  `https://id.atlassian.com/manage-profile/apps` as an OPTIONAL extra step
+  carrying an explicit warning that it is ACCOUNT-WIDE — jr uses one shared
+  embedded OAuth app, so revoking the grant signs out every `jr` profile on
+  that Atlassian account, not just this one (DEC-334; corrected 2026-09-05
+  after Perplexity-validated research showed the original "safe cleanup, no
+  other consumer" framing was false and harmful — see
+  `.factory/research/atlassian-3lo-revoke-granularity-2026-09-05.md`). The
+  internal refresh path's message omits any grant-revoke instruction
+  entirely (the grant may still back other active sessions for the profile)
+  and proactively clears the profile's now-stale stored OAuth pair so the
+  next command sees a clean "no stored OAuth token" state instead of a
+  confusing `invalid_grant`. An invalid profile name (rejected by the
+  DPAPI-fallback's path-traversal guard) continues to render as its own
+  distinct, actionable error at both sites. macOS/Linux behavior is
+  unaffected — this failure mode is unreachable there by construction.
 
 ## [0.7.0-dev.4] - 2026-09-03
 
