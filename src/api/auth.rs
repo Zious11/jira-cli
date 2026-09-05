@@ -1355,6 +1355,61 @@ impl RedirectUriStrategy {
     }
 }
 
+/// BC-1.4.039 Postcondition 1 — Site 1 (`oauth_login`'s post-authorization
+/// `store_oauth_tokens` failure `map_err`) message selection.
+///
+/// Pure function over an already-obtained `store_oauth_tokens` error `e`:
+/// intended discrimination order (checked in this order at the call site,
+/// ADR-0021 §6, BC-1.4.039 Invariant 4) is `ProfilePathEscape` FIRST — AC-001,
+/// rendering the SAME distinct exit-64 invalid-profile-name error the read
+/// path uses (see [`invalid_profile_name_error`]) — then `DpapiFallbackFailed`
+/// — AC-002, whose message MUST name the 2560-byte Credential Manager limit,
+/// the fallback failure, and state the Atlassian grant revoke
+/// (`https://id.atlassian.com/manage-profile/apps`) as a REQUIRED step, since
+/// the grant this failed login attempt just created has no other consumer —
+/// then, when neither marker matches, the existing legacy "Unlock your
+/// keychain" message, UNCHANGED (AC-004, EC-1.4.039-1).
+///
+/// Factored out from the `oauth_login` call site so this branching is
+/// host-testable with constructed `anyhow::Error` values, independent of any
+/// I/O (Architecture Mapping "Message-selection logic itself" row; Purity
+/// Classification table, Pure Core).
+///
+/// STUB (S-cycle4-honest-fail-message): body intentionally `todo!()` per
+/// BC-5.38.001 — implemented by the following TDD story stage against
+/// AC-001/AC-002/AC-004.
+#[allow(dead_code)]
+fn site1_login_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow::Error {
+    let _ = (profile, e);
+    todo!("BC-1.4.039 AC-001/AC-002/AC-004: Site 1 ProfilePathEscape/DpapiFallbackFailed/legacy message-selection branch")
+}
+
+/// BC-1.4.039 Postcondition 1 — Site 3 (`refresh_oauth_token_with_url`'s
+/// post-refresh `store_oauth_tokens` failure `map_err`) message selection.
+///
+/// Mirrors [`site1_login_store_failure_message`]'s `ProfilePathEscape` /
+/// `DpapiFallbackFailed` / legacy three-way branch (AC-001, AC-004), but the
+/// `DpapiFallbackFailed` arm's message text is DISTINCT (AC-003) — it MUST
+/// NOT contain any grant-revoke instruction, since the OAuth grant behind a
+/// refresh may still back other active sessions for this profile and
+/// revoking it would destroy working auth. Per the Architecture Compliance
+/// Rules table, this function's `DpapiFallbackFailed` text must never share a
+/// verbatim template with [`site1_login_store_failure_message`]'s.
+///
+/// Note: AC-005's proactive stale-pair clear (`clear_profile_oauth_pair`) is
+/// an EFFECTFUL step that belongs in `refresh_oauth_token_with_url` itself
+/// when this function's `DpapiFallbackFailed` arm fires — not inside this
+/// pure message-selection function.
+///
+/// STUB (S-cycle4-honest-fail-message): body intentionally `todo!()` per
+/// BC-5.38.001 — implemented by the following TDD story stage against
+/// AC-001/AC-003/AC-004.
+#[allow(dead_code)]
+fn site3_refresh_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow::Error {
+    let _ = (profile, e);
+    todo!("BC-1.4.039 AC-001/AC-003/AC-004: Site 3 ProfilePathEscape/DpapiFallbackFailed/legacy message-selection branch, grant-revoke-free")
+}
+
 /// Run the full OAuth 2.0 (3LO) authorization code flow:
 /// 1. Open browser to Atlassian authorization page requesting `scopes`
 /// 2. Listen on a local port for the callback
