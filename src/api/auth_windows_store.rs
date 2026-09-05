@@ -1301,6 +1301,229 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // atomic_write / cleanup_stale_tmp_siblings — AC-013, VP-AUTHDX-012.
+    // HOST-PURE (plain filesystem work, no DPAPI/Windows dependency —
+    // #[cfg(any(windows, test))]-gated so this module is host-testable on
+    // any OS via `cargo test` while staying out of a non-Windows release
+    // binary entirely). Implementer-added per this story's dispatch
+    // instructions: the test-writer flagged AC-013's non-syscall logic as
+    // un-writable until `atomic_write`/tmp-cleanup were factored into a
+    // callable helper.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_atomic_write_creates_final_file_with_exact_contents() {
+        let dir = std::env::temp_dir().join(format!("jr-awt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let final_path = dir.join("oauth-tokens.dat");
+
+        atomic_write(&final_path, b"hello world").expect("AC-013: atomic_write must succeed");
+        let contents = std::fs::read(&final_path).unwrap();
+        assert_eq!(contents, b"hello world");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_atomic_write_no_tmp_file_left_behind_on_success() {
+        let dir = std::env::temp_dir().join(format!("jr-awt2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let final_path = dir.join("oauth-tokens.dat");
+
+        atomic_write(&final_path, b"payload").expect("atomic_write must succeed");
+
+        let leftover_tmp = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().contains(".tmp-"));
+        assert!(
+            !leftover_tmp,
+            "AC-013 VIOLATION: a successful atomic_write must not leave a *.tmp-* sibling behind"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_atomic_write_creates_parent_directory_if_absent() {
+        let dir = std::env::temp_dir().join(format!("jr-awt3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Deliberately do NOT create `dir` — atomic_write must create it.
+        let final_path = dir.join("nested").join("oauth-tokens.dat");
+
+        atomic_write(&final_path, b"x").expect("atomic_write must create missing parent dirs");
+        assert!(final_path.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// AC-013 (age-gated cleanup, ADR-0021 §3 Pass-2 Finding #6): a `*.tmp-*`
+    /// sibling OLDER than `STALE_TMP_THRESHOLD` is removed by a subsequent
+    /// `atomic_write` call for the same final path; a FRESH one is left
+    /// untouched (assumed another process's in-flight write).
+    #[test]
+    fn test_cleanup_stale_tmp_siblings_removes_only_stale_entries() {
+        let dir = std::env::temp_dir().join(format!("jr-cleanup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let final_path = dir.join("oauth-tokens.dat");
+
+        let stale_tmp = dir.join("oauth-tokens.dat.tmp-stale");
+        let fresh_tmp = dir.join("oauth-tokens.dat.tmp-fresh");
+        std::fs::write(&stale_tmp, b"old").unwrap();
+        std::fs::write(&fresh_tmp, b"new").unwrap();
+
+        // Backdate the "stale" sibling's mtime well past STALE_TMP_THRESHOLD
+        // (30s) without sleeping in the test.
+        let old_time = std::time::SystemTime::now() - std::time::Duration::from_secs(120);
+        set_file_mtime_best_effort(&stale_tmp, old_time);
+
+        cleanup_stale_tmp_siblings(&final_path);
+
+        assert!(
+            !stale_tmp.exists(),
+            "AC-013 VIOLATION: a *.tmp-* sibling older than STALE_TMP_THRESHOLD must be removed"
+        );
+        assert!(
+            fresh_tmp.exists(),
+            "AC-013 VIOLATION: a *.tmp-* sibling younger than STALE_TMP_THRESHOLD must be \
+             left untouched (assumed another process's in-flight write)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Minimal, dependency-free mtime-setting helper for the test above —
+    /// avoids pulling in the `filetime` crate for one test. Best-effort:
+    /// if setting mtime fails on this platform/filesystem, the test's own
+    /// assertions will simply fail loudly rather than this helper panicking
+    /// silently.
+    fn set_file_mtime_best_effort(path: &std::path::Path, mtime: std::time::SystemTime) {
+        if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
+            let _ = file.set_modified(mtime);
+        }
+    }
+
+    #[test]
+    fn test_cleanup_stale_tmp_siblings_tolerates_missing_directory() {
+        // Plain filesystem work with no DPAPI/Windows dependency — must not
+        // panic when the parent directory doesn't exist at all.
+        let missing = std::path::PathBuf::from("/nonexistent-jr-test-dir-xyz/oauth-tokens.dat");
+        cleanup_stale_tmp_siblings(&missing); // must not panic
+    }
+
+    // ------------------------------------------------------------------
+    // classify_load_pair_result / LoadPairOutcome-shaped discrimination —
+    // AC-009/AC-010/AC-011, VP-AUTHDX-015. HOST-PURE: exercises the
+    // envelope-level round-trip (this module) and, for the full
+    // load_oauth_tokens integration, see the mirrored
+    // classify_load_pair_result-equivalent coverage in
+    // `src/api/auth.rs`'s test module (which owns `load_oauth_tokens`).
+    // This module's own contribution is confirming `load_pair`'s guard
+    // ordering and cfg-arm shapes directly (already covered above by the
+    // guard-wiring and cross-platform non-engagement test sections) plus
+    // the `JR_FORCE_DPAPI_LOAD_PAIR` seam's three forced outcomes below.
+    // ------------------------------------------------------------------
+
+    #[cfg(not(windows))]
+    mod force_dpapi_load_pair_seam_tests {
+        use super::*;
+
+        /// Serializes `JR_FORCE_DPAPI_LOAD_PAIR` mutation across this
+        /// module's tests (mirrors `dpapi_seam_tests::seam_lock` in
+        /// `src/api/auth.rs` — a LOCAL mutex here since this module has no
+        /// shared static with that file).
+        static LOAD_PAIR_SEAM_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        #[test]
+        fn test_seam_disabled_returns_ok_none_for_valid_name() {
+            let _guard = LOAD_PAIR_SEAM_MUTEX
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            // SAFETY: held under LOAD_PAIR_SEAM_MUTEX for this test's whole duration.
+            unsafe { std::env::remove_var("JR_FORCE_DPAPI_LOAD_PAIR") };
+            let p = profile("default");
+            assert_eq!(load_pair(&p).unwrap(), None);
+        }
+
+        #[test]
+        fn test_seam_found_returns_forced_pair() {
+            let _guard = LOAD_PAIR_SEAM_MUTEX
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            // SAFETY: held under LOAD_PAIR_SEAM_MUTEX for this test's whole duration.
+            unsafe { std::env::set_var("JR_FORCE_DPAPI_LOAD_PAIR", "found") };
+            let p = profile("default");
+            let result = load_pair(&p);
+            // SAFETY: still under LOAD_PAIR_SEAM_MUTEX.
+            unsafe { std::env::remove_var("JR_FORCE_DPAPI_LOAD_PAIR") };
+            assert_eq!(
+                result.unwrap(),
+                Some((
+                    "forced-dpapi-access".to_string(),
+                    "forced-dpapi-refresh".to_string()
+                ))
+            );
+        }
+
+        #[test]
+        fn test_seam_corrupt_returns_corrupt_secret_file_marker() {
+            let _guard = LOAD_PAIR_SEAM_MUTEX
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            // SAFETY: held under LOAD_PAIR_SEAM_MUTEX for this test's whole duration.
+            unsafe { std::env::set_var("JR_FORCE_DPAPI_LOAD_PAIR", "corrupt") };
+            let p = profile("default");
+            let err = load_pair(&p).expect_err("forced corrupt must be Err");
+            // SAFETY: still under LOAD_PAIR_SEAM_MUTEX.
+            unsafe { std::env::remove_var("JR_FORCE_DPAPI_LOAD_PAIR") };
+            assert!(err.downcast_ref::<CorruptSecretFile>().is_some());
+        }
+
+        #[test]
+        fn test_seam_backend_error_returns_generic_err() {
+            let _guard = LOAD_PAIR_SEAM_MUTEX
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            // SAFETY: held under LOAD_PAIR_SEAM_MUTEX for this test's whole duration.
+            unsafe { std::env::set_var("JR_FORCE_DPAPI_LOAD_PAIR", "backend_error") };
+            let p = profile("default");
+            let err = load_pair(&p).expect_err("forced backend_error must be Err");
+            // SAFETY: still under LOAD_PAIR_SEAM_MUTEX.
+            unsafe { std::env::remove_var("JR_FORCE_DPAPI_LOAD_PAIR") };
+            assert!(
+                err.downcast_ref::<CorruptSecretFile>().is_none(),
+                "backend_error must NOT carry the CorruptSecretFile marker"
+            );
+            assert!(err.downcast_ref::<ProfilePathEscape>().is_none());
+        }
+
+        /// AC-010: the guard runs BEFORE the seam is consulted — a
+        /// guard-rejecting profile name is rejected regardless of the
+        /// seam's forced value.
+        #[test]
+        fn test_guard_checked_before_seam_value() {
+            let _guard = LOAD_PAIR_SEAM_MUTEX
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            // SAFETY: held under LOAD_PAIR_SEAM_MUTEX for this test's whole duration.
+            unsafe { std::env::set_var("JR_FORCE_DPAPI_LOAD_PAIR", "found") };
+            let p = profile("con"); // guard-rejecting name
+            let err = load_pair(&p).expect_err("a guard-rejecting name must still be Err");
+            // SAFETY: still under LOAD_PAIR_SEAM_MUTEX.
+            unsafe { std::env::remove_var("JR_FORCE_DPAPI_LOAD_PAIR") };
+            assert!(
+                err.downcast_ref::<ProfilePathEscape>().is_some(),
+                "AC-010 VIOLATION: the guard must be checked BEFORE the seam is consulted — \
+                 a guard-rejecting profile name must yield ProfilePathEscape even when the \
+                 seam requests \"found\". Got: {err:#}"
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Property-based tests — AC-012/VP-AUTHDX-014 (envelope round-trip)
     // and AC-017/VP-AUTHDX-016 (guard exhaustive rejection). HOST-PURE.
     // ------------------------------------------------------------------

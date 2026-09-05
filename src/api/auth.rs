@@ -3885,6 +3885,180 @@ mod tests {
     // `JR_S759_FORCE_TOOLONG` observes NO EFFECT (the real `set_password`
     // succeeds normally for the small test values used here) — this is a
     // genuine RED failure (assertion mismatch), not a compile error.
+    // ------------------------------------------------------------------
+    // classify_load_pair_result / classify_dpapi_removal_result —
+    // AC-009/AC-010/AC-011 (BC-1.4.036, VP-AUTHDX-015) and AC-015
+    // (BC-1.4.038, VP-AUTHDX-018). HOST-PURE: these two functions are
+    // factored out specifically so this discrimination/classification
+    // LOGIC is host-testable with a synthetic input, independent of the
+    // real `auth_windows_store::load_pair`/`remove_if_present` calls'
+    // own `#[cfg(windows)]`/`#[cfg(not(windows))]` split — see each
+    // function's doc comment. Implementer-added per this story's dispatch
+    // instructions (the test-writer flagged these as un-writable until the
+    // seam/factoring existed).
+    // ------------------------------------------------------------------
+
+    mod load_pair_discrimination_tests {
+        use super::*;
+
+        /// AC-009/VP-AUTHDX-015: `Ok(Some(pair))` -> `LoadPairOutcome::Found`,
+        /// indistinguishable in shape from a keyring-backed load.
+        #[test]
+        fn test_classify_found() {
+            let outcome = classify_load_pair_result(Ok(Some(("a".to_string(), "r".to_string()))));
+            match outcome {
+                LoadPairOutcome::Found(a, r) => {
+                    assert_eq!((a.as_str(), r.as_str()), ("a", "r"));
+                }
+                _ => panic!("AC-009 VIOLATION: Ok(Some(_)) must classify as Found"),
+            }
+        }
+
+        /// AC-011 both-absent-branch precondition: `Ok(None)` -> `Absent`.
+        #[test]
+        fn test_classify_absent() {
+            assert!(matches!(
+                classify_load_pair_result(Ok(None)),
+                LoadPairOutcome::Absent
+            ));
+        }
+
+        /// AC-010: `ProfilePathEscape` is discriminated as `InvalidProfileName`
+        /// — checked FIRST, ahead of `CorruptSecretFile`/backend errors (the
+        /// `if`/`else if`/`else` chain in `classify_load_pair_result` encodes
+        /// this ordering structurally; this test pins the outcome for each
+        /// variant individually).
+        #[test]
+        fn test_classify_invalid_profile_name_for_every_escape_variant() {
+            for escape in [
+                auth_windows_store::ProfilePathEscape::Empty,
+                auth_windows_store::ProfilePathEscape::DotSegment,
+                auth_windows_store::ProfilePathEscape::NulByte,
+                auth_windows_store::ProfilePathEscape::Separator,
+                auth_windows_store::ProfilePathEscape::Colon,
+                auth_windows_store::ProfilePathEscape::TrailingDotOrSpace,
+                auth_windows_store::ProfilePathEscape::ReservedDeviceName,
+            ] {
+                let outcome = classify_load_pair_result(Err(escape.into()));
+                match outcome {
+                    LoadPairOutcome::InvalidProfileName(got) => assert_eq!(got, escape),
+                    _ => panic!(
+                        "AC-010 VIOLATION: ProfilePathEscape::{escape:?} must classify as \
+                         InvalidProfileName"
+                    ),
+                }
+            }
+        }
+
+        /// AC-010: `CorruptSecretFile` -> `Corrupt`.
+        #[test]
+        fn test_classify_corrupt() {
+            let err = auth_windows_store::CorruptSecretFile("default".to_string());
+            assert!(matches!(
+                classify_load_pair_result(Err(err.into())),
+                LoadPairOutcome::Corrupt
+            ));
+        }
+
+        /// AC-010: any other `Err` (no downcastable marker) -> `BackendError`,
+        /// carrying the original error through unchanged.
+        #[test]
+        fn test_classify_backend_error_for_unmarked_err() {
+            let outcome = classify_load_pair_result(Err(anyhow::anyhow!("disk full")));
+            match outcome {
+                LoadPairOutcome::BackendError(e) => {
+                    assert!(format!("{e}").contains("disk full"));
+                }
+                _ => panic!("AC-010 VIOLATION: an unmarked Err must classify as BackendError"),
+            }
+        }
+
+        /// AC-010 ordering: a value that carries BOTH markers is impossible
+        /// by construction (each marker type is the SOLE error object via
+        /// `From`/`.into()` in `auth_windows_store`), but the discrimination
+        /// chain itself must check `ProfilePathEscape` before
+        /// `CorruptSecretFile` — this is pinned structurally by
+        /// `classify_load_pair_result`'s `if`/`else if` order, and exercised
+        /// end-to-end via the two single-marker tests above testing distinct
+        /// error VALUES rather than a single ambiguous one (no ambiguous
+        /// case exists to construct).
+        #[test]
+        fn test_invalid_profile_name_error_message_names_reason() {
+            let e = invalid_profile_name_error(
+                &Profile::from("con"),
+                auth_windows_store::ProfilePathEscape::ReservedDeviceName,
+            );
+            let text = format!("{e}");
+            assert!(
+                text.contains("con"),
+                "message must name the profile: {text}"
+            );
+            assert!(
+                text.contains("reserved Windows device name"),
+                "message must include the {{reason}} phrase: {text}"
+            );
+            assert!(
+                !text.contains("credential storage on this platform"),
+                "message must NOT use the retired, over-scoped Pass-11 wording: {text}"
+            );
+        }
+
+        #[test]
+        fn test_corrupt_secret_file_error_message_names_profile() {
+            let e = corrupt_secret_file_error(&Profile::from("sandbox"));
+            let text = format!("{e}");
+            assert!(text.contains("sandbox"));
+            assert!(text.to_lowercase().contains("re-authenticate") || text.contains("login"));
+        }
+
+        #[test]
+        fn test_backend_io_error_message_never_suggests_relogin() {
+            let underlying = anyhow::anyhow!("permission denied");
+            let e = backend_io_error(&Profile::from("sandbox"), &underlying);
+            let text = format!("{e}");
+            assert!(text.contains("sandbox"));
+            assert!(text.contains("permission denied"));
+            assert!(
+                !text.to_lowercase().contains("login"),
+                "AC-010 VIOLATION: a genuine backend/IO error must never suggest re-login \
+                 (re-authenticating would not fix a filesystem problem). Got: {text}"
+            );
+        }
+    }
+
+    mod dpapi_removal_classification_tests {
+        use super::*;
+
+        /// AC-015 (tolerated half): `ProfilePathEscape` maps to `Ok(())`.
+        #[test]
+        fn test_classify_dpapi_removal_tolerates_profile_path_escape() {
+            let err: anyhow::Error = auth_windows_store::ProfilePathEscape::Colon.into();
+            assert!(classify_dpapi_removal_result(Err(err)).is_ok());
+        }
+
+        /// AC-015 (genuine-error half): any other `Err` propagates unchanged
+        /// — host-testable with a synthetic input, independent of
+        /// `auth_windows_store::remove_if_present`'s own cfg split (a
+        /// genuine filesystem error can only be synthesized by the real,
+        /// Windows-only deletion call).
+        #[test]
+        fn test_classify_dpapi_removal_propagates_genuine_errors_unchanged() {
+            let err = anyhow::anyhow!("disk full");
+            let result = classify_dpapi_removal_result(Err(err));
+            let e = result.expect_err("a genuine error must propagate, not be swallowed");
+            assert!(
+                e.downcast_ref::<auth_windows_store::ProfilePathEscape>()
+                    .is_none()
+            );
+            assert!(format!("{e}").contains("disk full"));
+        }
+
+        #[test]
+        fn test_classify_dpapi_removal_passes_through_ok() {
+            assert!(classify_dpapi_removal_result(Ok(())).is_ok());
+        }
+    }
+
     #[cfg(not(windows))]
     mod dpapi_seam_tests {
         use super::*;
