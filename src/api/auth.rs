@@ -1381,7 +1381,9 @@ impl RedirectUriStrategy {
 #[allow(dead_code)]
 fn site1_login_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow::Error {
     let _ = (profile, e);
-    todo!("BC-1.4.039 AC-001/AC-002/AC-004: Site 1 ProfilePathEscape/DpapiFallbackFailed/legacy message-selection branch")
+    todo!(
+        "BC-1.4.039 AC-001/AC-002/AC-004: Site 1 ProfilePathEscape/DpapiFallbackFailed/legacy message-selection branch"
+    )
 }
 
 /// BC-1.4.039 Postcondition 1 — Site 3 (`refresh_oauth_token_with_url`'s
@@ -1407,7 +1409,9 @@ fn site1_login_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow:
 #[allow(dead_code)]
 fn site3_refresh_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow::Error {
     let _ = (profile, e);
-    todo!("BC-1.4.039 AC-001/AC-003/AC-004: Site 3 ProfilePathEscape/DpapiFallbackFailed/legacy message-selection branch, grant-revoke-free")
+    todo!(
+        "BC-1.4.039 AC-001/AC-003/AC-004: Site 3 ProfilePathEscape/DpapiFallbackFailed/legacy message-selection branch, grant-revoke-free"
+    )
 }
 
 /// Run the full OAuth 2.0 (3LO) authorization code flow:
@@ -4518,6 +4522,478 @@ mod tests {
                     clear_profile_creds(&profile).is_ok(),
                     "AC-016 VIOLATION: clear_profile_creds must succeed (Ok(())) for a \
                      reserved-device-name profile on every OS."
+                );
+            });
+        }
+    }
+
+    /// BC-1.4.039 / VP-AUTHDX-017 — S-cycle4-honest-fail-message (Red Gate
+    /// step 2). Pure, host-only tests for the two message-selection stub
+    /// functions `site1_login_store_failure_message` and
+    /// `site3_refresh_store_failure_message` (currently `todo!()`). No
+    /// keychain, no network — these run in default CI, matching
+    /// VP-AUTHDX-017's own documented Verification Method ("unit test
+    /// constructing a `DpapiFallbackFailed`-wrapped error vs. an ordinary
+    /// `keyring::Error` vs. a `ProfilePathEscape`-wrapped error").
+    ///
+    /// RED GATE: every test in this module currently panics via `todo!()` —
+    /// neither stub function has a real body yet.
+    mod honest_fail_message_tests {
+        use super::*;
+
+        const TEST_PROFILE_NAME: &str = "s759-test-profile";
+
+        fn dpapi_failed_error(detail: &str) -> anyhow::Error {
+            auth_windows_store::DpapiFallbackFailed(detail.to_string()).into()
+        }
+
+        fn profile_path_escape_error(
+            escape: auth_windows_store::ProfilePathEscape,
+        ) -> anyhow::Error {
+            escape.into()
+        }
+
+        // --- AC-001 (+ VP-AUTHDX-017): ProfilePathEscape renders the SAME
+        // distinct invalid-profile-name error as the read path, at BOTH
+        // sites, never the honest-fail message and never the legacy one. ---
+
+        #[test]
+        fn test_bc_1_4_039_site1_profile_path_escape_renders_invalid_profile_name() {
+            let escape = auth_windows_store::ProfilePathEscape::Colon;
+            let expected = format!(
+                "{:#}",
+                invalid_profile_name_error(&Profile::from(TEST_PROFILE_NAME), escape)
+            );
+            let actual = format!(
+                "{:#}",
+                site1_login_store_failure_message(
+                    TEST_PROFILE_NAME,
+                    profile_path_escape_error(escape)
+                )
+            );
+            assert_eq!(
+                actual, expected,
+                "AC-001 VIOLATION: Site 1 must render the SAME distinct invalid-profile-name \
+                 error the read path (BC-1.4.036) uses for a ProfilePathEscape store error."
+            );
+            assert!(
+                !actual.contains("2560-byte"),
+                "AC-001 VIOLATION: a ProfilePathEscape error must never render as the \
+                 DpapiFallbackFailed honest-fail message. Got: {actual}"
+            );
+            assert!(
+                !actual.contains("Unlock your keychain"),
+                "AC-001 VIOLATION: a ProfilePathEscape error must never render as the generic \
+                 keychain-lock fallback message. Got: {actual}"
+            );
+        }
+
+        #[test]
+        fn test_bc_1_4_039_site3_profile_path_escape_renders_invalid_profile_name() {
+            let escape = auth_windows_store::ProfilePathEscape::ReservedDeviceName;
+            let expected = format!(
+                "{:#}",
+                invalid_profile_name_error(&Profile::from(TEST_PROFILE_NAME), escape)
+            );
+            let actual = format!(
+                "{:#}",
+                site3_refresh_store_failure_message(
+                    TEST_PROFILE_NAME,
+                    profile_path_escape_error(escape)
+                )
+            );
+            assert_eq!(
+                actual, expected,
+                "AC-001 VIOLATION: Site 3 must render the SAME distinct invalid-profile-name \
+                 error the read path (BC-1.4.036) uses for a ProfilePathEscape store error."
+            );
+            assert!(!actual.contains("2560-byte"), "Got: {actual}");
+            assert!(!actual.contains("Unlock your keychain"), "Got: {actual}");
+        }
+
+        #[test]
+        fn test_bc_1_4_039_profile_path_escape_yields_exit_64_user_error() {
+            let actual = site1_login_store_failure_message(
+                TEST_PROFILE_NAME,
+                profile_path_escape_error(auth_windows_store::ProfilePathEscape::Empty),
+            );
+            let jr_err = actual.downcast_ref::<JrError>().unwrap_or_else(|| {
+                panic!(
+                    "AC-001 VIOLATION: a ProfilePathEscape rendering must be a JrError so it \
+                     carries the distinct exit-64 code. Got: {actual:#}"
+                )
+            });
+            assert_eq!(
+                jr_err.exit_code(),
+                64,
+                "AC-001 VIOLATION: a ProfilePathEscape rendering must exit 64, matching the \
+                 read path (BC-1.4.036)."
+            );
+        }
+
+        // --- AC-002: Site 1 (login) honest-fail message REQUIRES the
+        // grant-revoke step. ---
+
+        #[test]
+        fn test_bc_1_4_039_site1_dpapi_fallback_failed_requires_grant_revoke() {
+            let msg = format!(
+                "{:#}",
+                site1_login_store_failure_message(
+                    TEST_PROFILE_NAME,
+                    dpapi_failed_error("disk full during DPAPI write")
+                )
+            );
+            assert!(
+                msg.contains("2560-byte"),
+                "AC-002 VIOLATION: must name the 2560-byte Credential Manager limit. Got: {msg}"
+            );
+            assert!(
+                msg.contains("disk full during DPAPI write"),
+                "AC-002 VIOLATION: must interpolate the DPAPI fallback failure detail. \
+                 Got: {msg}"
+            );
+            assert!(
+                msg.contains(&format!(
+                    "jr auth login --oauth --profile {TEST_PROFILE_NAME}"
+                )),
+                "AC-002 VIOLATION: must instruct re-running the login command for this \
+                 profile. Got: {msg}"
+            );
+            assert!(
+                msg.to_lowercase().contains("revoke"),
+                "AC-002 VIOLATION: Site 1's honest-fail message must state the Atlassian \
+                 grant-revoke step as a REQUIRED action (this grant was created by the same \
+                 failed attempt and has no other consumer). Got: {msg}"
+            );
+            assert!(
+                msg.contains("https://id.atlassian.com/manage-profile/apps"),
+                "AC-002 VIOLATION: must link to the Atlassian grant-management page. Got: {msg}"
+            );
+            assert!(
+                !msg.contains("Unlock your keychain"),
+                "AC-002 VIOLATION: the honest-fail message must not be confused with the \
+                 generic keychain-lock fallback. Got: {msg}"
+            );
+        }
+
+        // --- AC-003: Site 3 (refresh) honest-fail message MUST NOT
+        // instruct grant-revoke. ---
+
+        #[test]
+        fn test_bc_1_4_039_site3_dpapi_fallback_failed_omits_grant_revoke() {
+            let msg = format!(
+                "{:#}",
+                site3_refresh_store_failure_message(
+                    TEST_PROFILE_NAME,
+                    dpapi_failed_error("disk full during DPAPI write")
+                )
+            );
+            assert!(
+                msg.contains("2560-byte"),
+                "AC-003 VIOLATION: must name the 2560-byte Credential Manager limit. Got: {msg}"
+            );
+            assert!(
+                msg.contains("disk full during DPAPI write"),
+                "AC-003 VIOLATION: must interpolate the DPAPI fallback failure detail. \
+                 Got: {msg}"
+            );
+            assert!(
+                msg.contains(&format!(
+                    "jr auth login --oauth --profile {TEST_PROFILE_NAME}"
+                )),
+                "AC-003 VIOLATION: must instruct a FRESH login (the consumed refresh token \
+                 cannot simply be retried). Got: {msg}"
+            );
+            assert!(
+                !msg.to_lowercase().contains("revoke"),
+                "AC-003 VIOLATION: Site 3 (a REFRESH of an existing session) MUST NOT instruct \
+                 the user to revoke the Atlassian grant — it may still back other active \
+                 sessions for this profile; revoking it would destroy working auth. Got: {msg}"
+            );
+            assert!(
+                !msg.contains("id.atlassian.com/manage-profile/apps"),
+                "AC-003 VIOLATION: Site 3's message must not link to the grant-management \
+                 page. Got: {msg}"
+            );
+            assert!(
+                !msg.contains("Unlock your keychain"),
+                "AC-003 VIOLATION: the honest-fail message must not be confused with the \
+                 generic keychain-lock fallback. Got: {msg}"
+            );
+        }
+
+        // --- Pass-2 adversarial review Finding #3: Site 1 and Site 3 must
+        // NOT share one verbatim honest-fail template. ---
+
+        #[test]
+        fn test_bc_1_4_039_site1_and_site3_dpapi_messages_are_textually_distinct() {
+            let site1 = format!(
+                "{:#}",
+                site1_login_store_failure_message(TEST_PROFILE_NAME, dpapi_failed_error("boom"))
+            );
+            let site3 = format!(
+                "{:#}",
+                site3_refresh_store_failure_message(TEST_PROFILE_NAME, dpapi_failed_error("boom"))
+            );
+            assert_ne!(
+                site1, site3,
+                "Pass-2 adversarial review Finding #3 VIOLATION: Site 1 and Site 3 must NOT \
+                 share one verbatim honest-fail message template — a fresh login's grant \
+                 state differs materially from a refresh of an existing session's."
+            );
+        }
+
+        // --- AC-004: neither marker matched -> the existing "Unlock your
+        // keychain" message, UNCHANGED, at both sites. ---
+
+        #[test]
+        fn test_bc_1_4_039_site1_none_matched_legacy_message_unchanged() {
+            let anyhow_err: anyhow::Error = keyring::Error::NoStorageAccess(Box::new(
+                std::io::Error::other("keychain is locked"),
+            ))
+            .into();
+            let inner_display = format!("{anyhow_err:#}");
+            let expected = format!(
+                "Authorization succeeded with Atlassian, but jr could not save the OAuth \
+                 tokens to the system keychain ({inner_display}). Unlock your keychain (or grant \
+                 access to jr) and run `jr auth login --oauth --profile {TEST_PROFILE_NAME}` again. \
+                 To fully revoke the active grant first, visit \
+                 https://id.atlassian.com/manage-profile/apps."
+            );
+            let actual = format!(
+                "{:#}",
+                site1_login_store_failure_message(TEST_PROFILE_NAME, anyhow_err)
+            );
+            assert_eq!(
+                actual, expected,
+                "AC-004 VIOLATION: with neither marker present (a genuine lock/permission \
+                 error), Site 1's message must be byte-identical to the pre-existing 'Unlock \
+                 your keychain' text — EC-1.4.039-1."
+            );
+        }
+
+        #[test]
+        fn test_bc_1_4_039_site3_none_matched_legacy_message_unchanged() {
+            let anyhow_err: anyhow::Error = keyring::Error::NoStorageAccess(Box::new(
+                std::io::Error::other("keychain is locked"),
+            ))
+            .into();
+            let inner_display = format!("{anyhow_err:#}");
+            let expected = format!(
+                "Token refresh succeeded with Atlassian, but jr could not save the new \
+                 OAuth tokens to the system keychain ({inner_display}). Unlock your keychain (or \
+                 grant access to jr) and run `jr auth refresh --profile {TEST_PROFILE_NAME}` again. \
+                 If the problem persists, run `jr auth login --oauth --profile {TEST_PROFILE_NAME}` \
+                 to start fresh."
+            );
+            let actual = format!(
+                "{:#}",
+                site3_refresh_store_failure_message(TEST_PROFILE_NAME, anyhow_err)
+            );
+            assert_eq!(
+                actual, expected,
+                "AC-004 VIOLATION: with neither marker present (a genuine lock/permission \
+                 error), Site 3's message must be byte-identical to the pre-existing 'Unlock \
+                 your keychain' text — EC-1.4.039-1."
+            );
+        }
+
+        // --- AC-007: a PLAIN (unwrapped) keyring::Error::TooLong — the
+        // shape store_oauth_tokens propagates when engage_dpapi_fallback
+        // returns false (seam unset, or any non-Windows release build) —
+        // carries no DpapiFallbackFailed marker, so both sites must render
+        // the legacy message, never the honest-fail text. This is the
+        // structural half of BC-1.4.039 Invariant 3 / VP-AUTHDX-017's
+        // non-Windows-unreachability proof, expressed at the pure
+        // message-selection layer (the wired half — that
+        // engage_dpapi_fallback itself returns false — is already covered
+        // by `dpapi_seam_tests` for BC-1.4.035 Invariant 3). ---
+
+        #[test]
+        fn test_bc_1_4_039_ac_007_plain_toolong_without_marker_uses_legacy_message() {
+            let anyhow_err: anyhow::Error =
+                keyring::Error::TooLong("password".to_string(), 2560).into();
+            let inner_display = format!("{anyhow_err:#}");
+            let msg = format!(
+                "{:#}",
+                site1_login_store_failure_message(TEST_PROFILE_NAME, anyhow_err)
+            );
+            assert!(
+                msg.contains("Unlock your keychain"),
+                "AC-007 VIOLATION: a plain (unwrapped) TooLong error — never routed through \
+                 auth_windows_store::store_pair — must render the UNCHANGED legacy message. \
+                 Got: {msg}"
+            );
+            assert!(
+                !msg.contains("2560-byte"),
+                "AC-007 VIOLATION: the honest-fail message must be unreachable for a plain \
+                 TooLong that never produced a DpapiFallbackFailed marker. Got: {msg}"
+            );
+            assert!(
+                msg.contains(&inner_display),
+                "AC-007: the plain TooLong's own detail must still be interpolated into the \
+                 legacy message exactly as before this cycle. Got: {msg}"
+            );
+        }
+    }
+
+    /// BC-1.4.039 (AC-005, negative half) — Site 1's `DpapiFallbackFailed`
+    /// branch must NOT call `clear_profile_oauth_pair` (Postcondition 4 is
+    /// Site-3-SPECIFIC — a brand-new login failure has no meaningfully
+    /// stale prior pair to clean up).
+    ///
+    /// Distinguishing signal: `store_oauth_tokens`'s own delete-first step
+    /// (BC-1.4.035) only ever touches the NAMESPACED `<profile>:oauth-*`
+    /// keys for the profile being written — it never touches the LEGACY
+    /// flat `oauth-access-token`/`oauth-refresh-token` keys.
+    /// `clear_profile_oauth_pair`, however, DOES delete those legacy keys
+    /// for the `"default"` profile (BC-1.2.014/BC-1.4.038). Pre-seeding the
+    /// legacy pair therefore distinguishes the two: if Site 1's wiring
+    /// incorrectly called `clear_profile_oauth_pair` after a
+    /// `DpapiFallbackFailed`, the legacy pair would be gone; if Site 1
+    /// correctly clears nothing, it survives untouched.
+    ///
+    /// Exercises the REAL `oauth_login` call site end-to-end (via the
+    /// `JR_OAUTH_CODE`/`JR_OAUTH_TOKEN_URL`/`JR_ACCESSIBLE_RESOURCES_URL`
+    /// test-only seams already used by `tests/multi_cloudid_disambiguation.rs`)
+    /// rather than only the pure `site1_login_store_failure_message`
+    /// function, so it also pins that Site 1 is actually WIRED to select
+    /// the honest-fail message (not merely that the pure function would, if
+    /// called).
+    ///
+    /// Written as a plain (synchronous) `#[test]` — not `#[tokio::test]` —
+    /// so the whole body, including the async `oauth_login` call, runs
+    /// inside `with_test_keyring`'s closure while holding
+    /// `KEYRING_TEST_ENV_MUTEX` (a `std::sync::Mutex`) for its entire
+    /// duration via a dedicated single-threaded Tokio runtime's `block_on`.
+    /// `block_on` blocks the current OS thread synchronously — the guard is
+    /// never suspended across a real `.await` yield point from this
+    /// function's own perspective, so holding a `std::sync::MutexGuard`
+    /// here carries none of the `Send`/deadlock hazards that motivate this
+    /// file's sibling `tests/oauth_refresh_integration.rs` to use
+    /// `tokio::sync::Mutex` instead for its native `#[tokio::test]` bodies.
+    mod site1_no_clear_keyring_gated_tests {
+        use super::*;
+
+        #[test]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+        fn test_bc_1_4_039_site1_dpapi_fallback_failed_clears_nothing() {
+            with_test_keyring(|| {
+                use wiremock::matchers::{method, path};
+                use wiremock::{Mock, MockServer, ResponseTemplate};
+
+                // Pre-seed the LEGACY flat OAuth pair -- the distinguishing
+                // signal described above. `entry()` resolves against the
+                // unique JR_SERVICE_NAME with_test_keyring just set.
+                entry(KEY_OAUTH_ACCESS_LEGACY)
+                    .unwrap()
+                    .set_password("legacy-access")
+                    .unwrap();
+                entry(KEY_OAUTH_REFRESH_LEGACY)
+                    .unwrap()
+                    .set_password("legacy-refresh")
+                    .unwrap();
+
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                let result = rt.block_on(async {
+                    let server = MockServer::start().await;
+                    Mock::given(method("POST"))
+                        .and(path("/oauth/token"))
+                        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                            "access_token": "new-access-token",
+                            "refresh_token": "new-refresh-token",
+                        })))
+                        .mount(&server)
+                        .await;
+                    Mock::given(method("GET"))
+                        .and(path("/accessible-resources"))
+                        .respond_with(ResponseTemplate::new(200).set_body_json(
+                            serde_json::json!([{
+                                "id": "cloud-1",
+                                "name": "Test Co",
+                                "url": "https://test.atlassian.net",
+                                "scopes": [],
+                                "avatarUrl": ""
+                            }]),
+                        ))
+                        .mount(&server)
+                        .await;
+
+                    // SAFETY: held under with_test_keyring's
+                    // KEYRING_TEST_ENV_MUTEX for this whole synchronous
+                    // (block_on) call.
+                    unsafe {
+                        std::env::set_var(
+                            "JR_OAUTH_TOKEN_URL",
+                            format!("{}/oauth/token", server.uri()),
+                        );
+                        std::env::set_var(
+                            "JR_ACCESSIBLE_RESOURCES_URL",
+                            format!("{}/accessible-resources", server.uri()),
+                        );
+                        std::env::set_var("JR_OAUTH_CODE", "test-code-bc-1-4-039");
+                        std::env::set_var("JR_FORCE_DPAPI_FALLBACK", "1");
+                        std::env::set_var("JR_S759_FORCE_TOOLONG", "access");
+                    }
+
+                    let login_result = oauth_login(
+                        "default",
+                        "test-client-id",
+                        "test-client-secret",
+                        "read:jira-work",
+                        RedirectUriStrategyRequest::Dynamic,
+                        None,
+                        true,
+                    )
+                    .await;
+
+                    // SAFETY: still held under KEYRING_TEST_ENV_MUTEX.
+                    unsafe {
+                        std::env::remove_var("JR_OAUTH_TOKEN_URL");
+                        std::env::remove_var("JR_ACCESSIBLE_RESOURCES_URL");
+                        std::env::remove_var("JR_OAUTH_CODE");
+                        std::env::remove_var("JR_FORCE_DPAPI_FALLBACK");
+                        std::env::remove_var("JR_S759_FORCE_TOOLONG");
+                    }
+
+                    login_result
+                });
+
+                // `OAuthResult` (the `Ok` type) doesn't implement `Debug`,
+                // so `expect_err`/`unwrap_err` (both bound on `T: Debug`)
+                // aren't usable here — match manually instead.
+                let err = match result {
+                    Err(e) => e,
+                    Ok(_) => panic!(
+                        "setup: a DpapiFallbackFailed store error at Site 1 must propagate as \
+                         Err, not succeed."
+                    ),
+                };
+                let msg = format!("{err:#}");
+                assert!(
+                    msg.contains("2560-byte"),
+                    "setup sanity: expected Site 1's honest-fail message once wired. \
+                     Got: {msg}"
+                );
+
+                // AC-005 negative half: the legacy pair must survive
+                // untouched -- Site 1 must not have called
+                // clear_profile_oauth_pair. `keyring::Error` doesn't
+                // implement `PartialEq`, so compare via `.ok()` (dropping
+                // any `Err` detail, which isn't needed for this assertion).
+                let legacy_access = entry(KEY_OAUTH_ACCESS_LEGACY).unwrap().get_password().ok();
+                let legacy_refresh = entry(KEY_OAUTH_REFRESH_LEGACY).unwrap().get_password().ok();
+                assert_eq!(
+                    legacy_access.as_deref(),
+                    Some("legacy-access"),
+                    "AC-005 VIOLATION: Site 1 must not clear ANY stored pair (including the \
+                     legacy one) after a DpapiFallbackFailed -- Postcondition 4's proactive \
+                     clear is Site-3-ONLY."
+                );
+                assert_eq!(
+                    legacy_refresh.as_deref(),
+                    Some("legacy-refresh"),
+                    "AC-005 VIOLATION: Site 1 must not clear the legacy OAuth pair."
                 );
             });
         }

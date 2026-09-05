@@ -134,6 +134,21 @@ fn set_env(key: &str, val: &str) {
     }
 }
 
+/// Remove an environment variable. Symmetric counterpart to [`set_env`], used
+/// by the BC-1.4.039 honest-fail tests to explicitly UNSET
+/// `JR_FORCE_DPAPI_FALLBACK`/`JR_S759_FORCE_TOOLONG` after use (and, for
+/// AC-007, to guarantee the seam is unset before the call under test) so no
+/// state leaks to a later test in this same process.
+///
+/// Safety: same discipline as `set_env` — callers hold `harness::env_lock()`
+/// for the whole mutation + call-under-test + cleanup sequence.
+fn remove_env(key: &str) {
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var(key);
+    }
+}
+
 mod harness {
     //! Test infrastructure shared across S-3.03 tests.
 
@@ -1424,3 +1439,155 @@ async fn test_persist_before_publish_fault_injection() {
          Got: {stored_refresh}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BC-1.4.039 / VP-AUTHDX-017 — S-cycle4-honest-fail-message
+//
+// Site 3 (`refresh_oauth_token_with_url`'s post-refresh store-failure
+// `map_err`) WIRED-behavior test: exercises the REAL call site (via the
+// public `auth::refresh_oauth_token` wrapper), not the pure
+// `site3_refresh_store_failure_message` helper directly (which is private to
+// `src/api/auth.rs` and covered by inline unit tests there). Mutates the
+// process-global `JR_FORCE_DPAPI_FALLBACK` / `JR_S759_FORCE_TOOLONG`
+// debug-only seams (S-cycle4-dpapi-storage-fix) and so MUST serialize via
+// `harness::env_lock()` — the same requirement BC-1.4.039's VP-AUTHDX-017
+// documents for the env-UNSET vs. env-SET assertion classes (Pass-6
+// adversarial review Finding #4).
+//
+// RED GATE: the test below currently fails because Site 3's `map_err`
+// closure is not yet wired to `site3_refresh_store_failure_message` —
+// today's code always renders the pre-existing "Unlock your keychain" text
+// regardless of whether the underlying error carries a `DpapiFallbackFailed`
+// marker, so the assertions below (2560-byte wording, no "Unlock your
+// keychain") fail.
+// ---------------------------------------------------------------------------
+
+/// AC-001 (DpapiFallbackFailed rendering, wired), AC-003 (Site 3 omits
+/// grant-revoke), AC-005 (Site 3 proactive stale-pair clear) — traces to
+/// BC-1.4.039, VP-AUTHDX-017.
+///
+/// Seeds a real OAuth pair, then forces the POST-refresh `store_oauth_tokens`
+/// call to fail with `DpapiFallbackFailed` via the `JR_FORCE_DPAPI_FALLBACK=1`
+/// + `JR_S759_FORCE_TOOLONG=access` seam combination
+/// (S-cycle4-dpapi-storage-fix). Asserts:
+///   (a) the propagated error is Site 3's DISTINCT honest-fail message (names
+///       the 2560-byte limit and the fallback failure detail, instructs a
+///       fresh login) and does NOT contain any grant-revoke instruction
+///       (AC-003) and is not the generic "Unlock your keychain" text;
+///   (b) afterward, `load_oauth_tokens` for the SAME profile observes NO
+///       stored pair (VP-AUTHDX-017's Site-3 clear oracle — tolerant of the
+///       fact that `store_oauth_tokens`'s own delete-first step, BC-1.4.035,
+///       typically already achieves this; the oracle asserts the resulting
+///       STATE, not a call count, per BC-1.4.039 Postcondition 4's own
+///       "typically redundant, retained as defense-in-depth" framing).
+///
+/// KEYRING-GATED: requires `JR_RUN_KEYRING_TESTS=1`.
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_bc_1_4_039_site3_dpapi_fallback_failed_message_and_proactive_clear() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
+    let _env_guard = harness::env_lock().lock().await;
+
+    use jr::api::auth;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    set_env("JR_SERVICE_NAME", "jr-s303-test");
+
+    // Seed a real, fitting pair under the shared "default" test profile.
+    harness::seed_oauth_tokens();
+
+    let server = MockServer::start().await;
+    set_env(
+        "JR_OAUTH_TOKEN_URL",
+        &format!("{}/oauth/token/bc1_4_039_ac005", server.uri()),
+    );
+
+    // The Atlassian exchange itself succeeds — only the SUBSEQUENT
+    // store_oauth_tokens call (Site 3) is fault-injected to fail.
+    Mock::given(method("POST"))
+        .and(path("/oauth/token/bc1_4_039_ac005"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(harness::refresh_ok_body()))
+        .mount(&server)
+        .await;
+
+    // Engage the DPAPI-fallback seam AND force the access set_password call
+    // to fail with keyring::Error::TooLong — on a non-Windows debug build
+    // this deterministically routes to auth_windows_store::store_pair,
+    // whose #[cfg(not(windows))] arm always returns DpapiFallbackFailed
+    // (BC-1.4.037 Precondition 2).
+    set_env("JR_FORCE_DPAPI_FALLBACK", "1");
+    set_env("JR_S759_FORCE_TOOLONG", "access");
+
+    let result = auth::refresh_oauth_token(harness::TEST_PROFILE).await;
+
+    // Unset the seams immediately after the call under test, before any
+    // further keychain interaction (cleanup, the follow-up load), so no
+    // state leaks into `harness::cleanup_oauth_tokens()` or another test.
+    remove_env("JR_FORCE_DPAPI_FALLBACK");
+    remove_env("JR_S759_FORCE_TOOLONG");
+
+    let err = result.expect_err(
+        "AC-001/AC-003: once Site 3's post-refresh store_oauth_tokens fails with \
+         DpapiFallbackFailed, refresh_oauth_token must propagate an error, not succeed.",
+    );
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("2560-byte"),
+        "AC-003 VIOLATION: Site 3's honest-fail message must name the 2560-byte Credential \
+         Manager limit. Got: {msg}"
+    );
+    assert!(
+        !msg.to_lowercase().contains("revoke"),
+        "AC-003 VIOLATION: Site 3 (a REFRESH) must NEVER instruct the user to revoke the \
+         Atlassian grant — it may still back other active sessions for this profile. Got: {msg}"
+    );
+    assert!(
+        !msg.contains("id.atlassian.com/manage-profile/apps"),
+        "AC-003 VIOLATION: Site 3's message must not link to the grant-management page. \
+         Got: {msg}"
+    );
+    assert!(
+        !msg.contains("Unlock your keychain"),
+        "AC-001/AC-003 VIOLATION: a DpapiFallbackFailed store error must render the NEW \
+         honest-fail message, not the generic keychain-lock fallback. Got: {msg}"
+    );
+    assert!(
+        msg.contains("jr auth login --oauth --profile"),
+        "AC-003: Site 3's message must instruct a fresh login (not merely a retry/refresh). \
+         Got: {msg}"
+    );
+
+    // AC-005: the profile's stored OAuth pair must be a clean "no stored
+    // token" state afterward — never the stale, already-consumed pair.
+    let load_result = auth::load_oauth_tokens(&jr::profile::Profile::from(harness::TEST_PROFILE));
+
+    harness::cleanup_oauth_tokens();
+
+    let load_err = load_result.expect_err(
+        "AC-005 VIOLATION: after a Site-3 DpapiFallbackFailed, the profile must show NO \
+         stored OAuth pair (a clean 'no stored OAuth token' state) — never a usable stale \
+         pair left over from before the failed refresh.",
+    );
+    assert!(
+        format!("{load_err:#}").contains("No stored OAuth token"),
+        "AC-005 VIOLATION: expected the standard 'no stored OAuth token' absence error, not \
+         some other failure shape. Got: {load_err:#}"
+    );
+}
+
+// NOTE: AC-007 (non-Windows unreachability with the JR_FORCE_DPAPI_FALLBACK
+// seam UNSET) is deliberately NOT duplicated here as a wired integration
+// test. With the seam unset, TODAY's (unwired) Site 3 closure and the
+// POST-wiring closure produce byte-identical output — a wired-level
+// assertion for this specific scenario would pass unchanged before AND
+// after implementation (a vacuously-true, non-Red test). AC-007 is instead
+// covered where it CAN genuinely fail pre-implementation:
+// `src/api/auth.rs::tests::honest_fail_message_tests::
+// test_bc_1_4_039_ac_007_plain_toolong_without_marker_uses_legacy_message`,
+// which calls the `todo!()` message-selection stub directly and therefore
+// panics today.
