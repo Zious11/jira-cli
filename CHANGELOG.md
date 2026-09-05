@@ -23,6 +23,23 @@ All notable changes to jr will be documented here.
   behavior is unchanged. (Message-text differentiation for the two new
   failure modes — DPAPI-fallback failure and rejected profile names — ships
   separately in a fast-follow story.)
+- **API-token profiles now acquire a `cloud_id` at login/init/refresh time**
+  (S-cycle4-cloud-id-correctness, ADR-0022, BC-1.2.052/053/054,
+  A-PA-LOW-001). Previously, `jr auth login`'s API-token branch (and `jr
+  init`'s API-token picker choice) never obtained a `cloud_id`, so
+  Assets/CMDB commands against an API-token profile always failed with
+  "Cloud ID not configured" even immediately after a successful login. `jr
+  auth login`, `jr init`, and `jr auth refresh` (whenever they resolve to
+  the API-token flow) now attempt to discover the site's `cloud_id` via the
+  unauthenticated `GET {site}/_edge/tenant_info` endpoint, with an ordered
+  fallback chain: an explicit `--cloud-id` override (highest precedence,
+  persisted immediately) → the `tenant_info` fetch → a soft-fail that never
+  blocks login and leaves any existing `cloud_id` untouched. An
+  oauth→api_token mechanism switch now refreshes (rather than leaves stale)
+  a previously-acquired `cloud_id` on fetch success, and preserves it
+  (never bare-clears it) on fetch failure. `Config::base_url()`'s existing
+  `auth_method == "oauth"` gateway guard is unchanged — core Jira REST v3
+  requests remain unaffected either way.
 
 ## [0.7.0-dev.4] - 2026-09-03
 
