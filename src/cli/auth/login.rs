@@ -150,11 +150,19 @@ pub async fn login_token(
 /// refresh-not-clear (AC-007, BC-1.2.053) acceptance criteria share — no
 /// separate "mechanism switch" detection code exists anywhere (BC-1.2.053
 /// Invariant 1).
+///
+/// Returns the exact text of the `eprintln!` diagnostic when one was
+/// emitted (`None` on the override and fetch-success paths, which print
+/// nothing) — a testability seam only (ADV LOW-1): production callers
+/// ([`login_token`]) ignore it, since the diagnostic has already reached
+/// stderr as a side effect by the time this returns. This lets tests assert
+/// on the exact soft-fail wording (preserved-vs-none, ADV LOW-4) without
+/// needing to capture the real stderr file descriptor.
 async fn resolve_and_apply_cloud_id(
     config: &mut Config,
     profile: &str,
     cloud_id_override: Option<&str>,
-) {
+) -> Option<String> {
     if let Some(override_value) = cloud_id_override {
         // AC-001 (BC-1.2.052 Postcondition 1): explicit override takes
         // precedence — the fetch is never attempted — and is written,
@@ -165,7 +173,7 @@ async fn resolve_and_apply_cloud_id(
             .entry(profile.to_string())
             .or_default();
         p.cloud_id = Some(override_value.to_string());
-        return;
+        return None;
     }
 
     let site_url = config
@@ -176,11 +184,24 @@ async fn resolve_and_apply_cloud_id(
 
     let Some(site_url) = site_url else {
         // No URL to fetch against at all — soft-fail, leave cloud_id as-is.
-        eprintln!(
+        let msg = format!(
             "warning: could not look up cloud_id for profile {profile:?} — no URL configured."
         );
-        return;
+        eprintln!("{msg}");
+        return Some(msg);
     };
+
+    // Captured before the fetch so the soft-fail diagnostic (below) can
+    // distinguish "a prior value survives untouched" from "there was
+    // never one to begin with" (ADV LOW-4) — BC-1.2.053 Invariant 3: on
+    // `auth refresh` this fetch fires on every invocation, so a
+    // transient failure must not read as an error when the existing
+    // value is in fact preserved intact.
+    let had_existing_cloud_id = config
+        .global
+        .profiles
+        .get(profile)
+        .is_some_and(|p| p.cloud_id.is_some());
 
     match crate::api::jira::tenant::fetch_cloud_id(&site_url).await {
         Ok(cloud_id) => {
@@ -193,13 +214,22 @@ async fn resolve_and_apply_cloud_id(
                 .entry(profile.to_string())
                 .or_default();
             p.cloud_id = Some(cloud_id);
+            None
         }
         Err(err) => {
             // AC-003 / AC-007 (BC-1.2.052 Postcondition 3, BC-1.2.053
             // Postcondition 2): soft-fail — p.cloud_id is left as it
             // already was (None stays None; a prior value survives
             // untouched). Never abort login_token.
-            eprintln!("warning: could not look up cloud_id for profile {profile:?}: {err}");
+            let msg = if had_existing_cloud_id {
+                format!(
+                    "warning: could not refresh cloud_id for profile {profile:?} ({err}); keeping the existing value."
+                )
+            } else {
+                format!("warning: could not look up cloud_id for profile {profile:?}: {err}")
+            };
+            eprintln!("{msg}");
+            Some(msg)
         }
     }
 }
@@ -1039,6 +1069,160 @@ mod cloud_id_fallback_chain_tests {
             Some("stale-oauth-era-uuid"),
             "AC-007/BC-1.2.053 Postcondition 2: a stale value must be \
              preserved on fetch failure, never bare-cleared"
+        );
+    }
+
+    /// ADV LOW-1 / LOW-4: pins the soft-fail OBSERVABLE that no prior test
+    /// asserted — the exact wording of the diagnostic when a PRIOR
+    /// `cloud_id` survives a fetch failure untouched (BC-1.2.053 Invariant
+    /// 3, the `auth refresh` fetch-every-invocation case where a
+    /// transient failure must read as "kept", not as a bare error).
+    /// `resolve_and_apply_cloud_id` still succeeds (soft-fail — no panic,
+    /// no `Result::Err` bubbled to the caller) and hands the diagnostic
+    /// back via its return value so this can be asserted without a real
+    /// stderr-fd capture; production emits the identical text via
+    /// `eprintln!` (stderr only — this function contains no `println!`
+    /// call at all, verified by `test_adv_low1_no_stdout_writes_in_source`
+    /// below), so the returned text and what a real invocation prints to
+    /// stderr are one and the same string.
+    #[tokio::test]
+    async fn test_adv_low4_preserved_cloud_id_message_names_existing_value_kept() {
+        let mut config = make_config(
+            "sandbox",
+            Some("http://not-https.example.net"),
+            Some("prior-uuid"),
+        );
+
+        let diagnostic = resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+
+        let msg =
+            diagnostic.expect("ADV LOW-1: a fetch failure must emit a diagnostic and hand it back");
+        assert!(
+            msg.contains("keeping the existing value"),
+            "ADV LOW-4: the message must convey the prior cloud_id was KEPT, \
+             not read as a bare error, when a value already existed. Got: {msg}"
+        );
+        assert!(
+            msg.contains("\"sandbox\""),
+            "the message must name the affected profile. Got: {msg}"
+        );
+        assert!(
+            !msg.contains("no URL configured"),
+            "the no-URL-configured wording must not appear here — a URL WAS \
+             configured, just non-https. Got: {msg}"
+        );
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            Some("prior-uuid"),
+            "the prior value must actually survive untouched, matching the \
+             message's claim"
+        );
+    }
+
+    /// ADV LOW-1 / LOW-4 sibling: when there was NEVER a prior `cloud_id`,
+    /// the ORIGINAL "could not look up" wording is correct as-is (there is
+    /// nothing to report as "kept") and must be left unchanged — this test
+    /// guards against the preserved-value wording bleeding into the
+    /// absent-value case.
+    #[tokio::test]
+    async fn test_adv_low4_absent_cloud_id_message_keeps_original_lookup_wording() {
+        let mut config = make_config("sandbox", Some("http://not-https.example.net"), None);
+
+        let diagnostic = resolve_and_apply_cloud_id(&mut config, "sandbox", None).await;
+
+        let msg =
+            diagnostic.expect("ADV LOW-1: a fetch failure must emit a diagnostic and hand it back");
+        assert!(
+            msg.starts_with("warning: could not look up cloud_id for profile \"sandbox\":"),
+            "ADV LOW-4: with no prior value, the original (non-'kept') \
+             wording is correct and must be preserved verbatim. Got: {msg}"
+        );
+        assert!(
+            !msg.contains("keeping the existing value"),
+            "there is no existing value to keep — this phrasing must not \
+             appear. Got: {msg}"
+        );
+        assert_eq!(cloud_id_of(&config, "sandbox"), None);
+    }
+
+    /// AC-001 / fetch-success: the return-value seam (added for ADV LOW-1)
+    /// must stay `None` on the two paths that print nothing, so a future
+    /// caller can't mistake "printed nothing" for "printed an empty
+    /// string".
+    #[tokio::test]
+    async fn test_adv_low1_no_diagnostic_returned_on_override_or_fetch_success() {
+        let mut config = make_config("sandbox", Some("not-a-real-url"), None);
+        let diagnostic =
+            resolve_and_apply_cloud_id(&mut config, "sandbox", Some("override-uuid")).await;
+        assert_eq!(
+            diagnostic, None,
+            "the explicit-override path prints nothing, so nothing should be returned"
+        );
+
+        let _guard = env_mutex().lock().await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/_edge/tenant_info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudId": "fetched-uuid"
+            })))
+            .mount(&server)
+            .await;
+        unsafe {
+            std::env::set_var("JR_TENANT_INFO_URL", server.uri());
+        }
+        let mut config2 = make_config("sandbox", Some("https://plausible-site.example"), None);
+        let diagnostic2 = resolve_and_apply_cloud_id(&mut config2, "sandbox", None).await;
+        unsafe {
+            std::env::remove_var("JR_TENANT_INFO_URL");
+        }
+        assert_eq!(
+            diagnostic2, None,
+            "a successful fetch prints nothing, so nothing should be returned"
+        );
+    }
+
+    /// ADV LOW-1 (stderr-only channel, structural proof): every diagnostic
+    /// this function can ever emit goes through `eprintln!` — grepping this
+    /// function's own source text for a bare `println!(` call (which would
+    /// leak a diagnostic onto stdout, violating the Output-channels
+    /// convention: `--output json` must stay pipe-clean) finds none. This
+    /// is a source-level structural pin, in the same spirit as this
+    /// repo's other reject-don't-parse text guards (see CLAUDE.md's CI
+    /// Gate history), chosen because `resolve_and_apply_cloud_id` is a
+    /// private fn with no in-process real-fd stderr capture available
+    /// without a new dependency or an unrelated refactor.
+    #[test]
+    fn test_adv_low1_no_stdout_writes_in_source() {
+        let src = include_str!("login.rs");
+        let start = src
+            .find("async fn resolve_and_apply_cloud_id(")
+            .expect("resolve_and_apply_cloud_id must exist in this file");
+        // The function ends at the first top-level `\n}\n` after its start;
+        // scanning to the next `\n/// Run the OAuth 2.0` doc comment (the
+        // next item in this file) is a safe, simple bound.
+        let end = src[start..]
+            .find("/// Run the OAuth 2.0 (3LO) login flow")
+            .map(|i| start + i)
+            .expect("the next item after resolve_and_apply_cloud_id must exist");
+        let body = &src[start..end];
+        let eprintln_count = body.matches("eprintln!(").count();
+        assert!(
+            eprintln_count >= 2,
+            "sanity: expected at least the two soft-fail eprintln! calls \
+             (no-URL-configured, fetch-failure) in this function's body — \
+             the test's start/end source markers may have drifted"
+        );
+        // A bare `println!(` (stdout) must never appear inside this
+        // function's body — every occurrence of "println!(" here must be
+        // part of "eprintln!(", i.e. the two substring counts match.
+        let bare_println_count = body.matches("println!(").count();
+        assert_eq!(
+            bare_println_count, eprintln_count,
+            "every `println!(` occurrence in resolve_and_apply_cloud_id must \
+             be part of `eprintln!(` — a bare stdout `println!(` would leak \
+             this diagnostic onto stdout, breaking the Output-channels \
+             convention (stdout stays clean, including under --output json)"
         );
     }
 }
