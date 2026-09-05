@@ -1386,6 +1386,27 @@ impl RedirectUriStrategy {
 /// legacy arm is byte-for-byte unchanged, since Site 3 never instructed a
 /// revoke in the first place.
 ///
+/// **PR #771 review Finding B-1 (fixed):** `jr auth remove <profile>`
+/// refuses to delete a profile that is the active profile OR the persisted
+/// `default_profile` (`handle_remove_in_memory`, `src/cli/auth/remove.rs`)
+/// — both are true for a bare `jr auth login --oauth` on a brand-new
+/// profile, the exact scenario this message targets. Both the
+/// `DpapiFallbackFailed` and legacy arms below therefore note that `jr auth
+/// remove` only applies once the profile is no longer active/default,
+/// rather than recommending it unconditionally. Separately,
+/// `src/cli/auth/login.rs::handle_login` now records the target profile's
+/// `auth_method` BEFORE attempting the login flow (previously only after
+/// `oauth_login` returned `Ok`) whenever the profile has no `auth_method`
+/// on record yet — otherwise `jr auth logout`, the OTHER recommended
+/// command, would misclassify a brand-new profile whose login failed here
+/// as an api-token profile (`auth_method: None` reads as "not oauth") and
+/// report "nothing to log out" instead of clearing the (already-deleted or
+/// never-written) OAuth pair. See
+/// `src/cli/auth/login.rs::should_mark_auth_method_before_attempt` and
+/// `mark_auth_method_if_new` for that fix, which is scoped to the
+/// no-prior-method case only — a mechanism SWITCH away from an existing,
+/// working method is unaffected.
+///
 /// Factored out from the `oauth_login` call site so this branching is
 /// host-testable with constructed `anyhow::Error` values, independent of any
 /// I/O (Architecture Mapping "Message-selection logic itself" row; Purity
@@ -1401,8 +1422,9 @@ fn site1_login_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow:
              Windows Credential Manager's 2560-byte limit AND jr's encrypted-file fallback \
              also failed ({inner}). Check available disk space and file permissions, then run \
              \"jr auth login --oauth --profile {profile}\" again. To clean up this profile's \
-             stale credentials, run \"jr auth logout --profile {profile}\" or \"jr auth remove \
-             {profile}\". Optionally, you can revoke jr's access at \
+             stale credentials, run \"jr auth logout --profile {profile}\"; if {profile} is not \
+             your active profile, \"jr auth remove {profile}\" deletes it entirely. \
+             Optionally, you can revoke jr's access at \
              https://id.atlassian.com/manage-profile/apps — this is ACCOUNT-WIDE and will sign \
              out every jr profile on this Atlassian account, each needing \"jr auth login\" \
              again."
@@ -1413,7 +1435,8 @@ fn site1_login_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow:
          tokens to the system keychain ({e:#}). Unlock your keychain (or grant \
          access to jr) and run `jr auth login --oauth --profile {profile}` again. \
          To clean up this profile's stored credentials, run `jr auth logout --profile \
-         {profile}` or `jr auth remove {profile}`. Optionally, you can revoke jr's access at \
+         {profile}`; if {profile} is not your active profile, `jr auth remove {profile}` \
+         deletes it entirely. Optionally, you can revoke jr's access at \
          https://id.atlassian.com/manage-profile/apps — this is ACCOUNT-WIDE and will sign out \
          every jr profile on this Atlassian account, each needing `jr auth login` again."
     )
@@ -4820,6 +4843,19 @@ mod tests {
                  `jr auth remove`), scoped to this one profile, as the DEFAULT remediation. \
                  Got: {msg}"
             );
+            // PR #771 review Finding B-1: `jr auth remove` refuses to delete a
+            // profile that is the active profile OR the persisted
+            // default_profile (`handle_remove_in_memory`) -- both are true for
+            // a bare `jr auth login --oauth` on a brand-new profile, the exact
+            // scenario this message targets. The message must not recommend
+            // `jr auth remove` unconditionally as though it always works here.
+            assert!(
+                msg.to_lowercase().contains("not your active profile"),
+                "B-1 VIOLATION: `jr auth remove` is refused for the active/default profile \
+                 (which a brand-new profile always is) -- the message must note that \
+                 `jr auth remove` only applies once {TEST_PROFILE_NAME} is not the active \
+                 profile, rather than recommending it unconditionally. Got: {msg}"
+            );
             assert!(
                 msg.to_lowercase().contains("optionally") && msg.to_lowercase().contains("revoke"),
                 "AC-002 VIOLATION: the Atlassian grant-revoke step must be presented as \
@@ -4942,7 +4978,8 @@ mod tests {
                  tokens to the system keychain ({inner_display}). Unlock your keychain (or grant \
                  access to jr) and run `jr auth login --oauth --profile {TEST_PROFILE_NAME}` again. \
                  To clean up this profile's stored credentials, run `jr auth logout --profile \
-                 {TEST_PROFILE_NAME}` or `jr auth remove {TEST_PROFILE_NAME}`. Optionally, you \
+                 {TEST_PROFILE_NAME}`; if {TEST_PROFILE_NAME} is not your active profile, `jr \
+                 auth remove {TEST_PROFILE_NAME}` deletes it entirely. Optionally, you \
                  can revoke jr's access at https://id.atlassian.com/manage-profile/apps — this is \
                  ACCOUNT-WIDE and will sign out every jr profile on this Atlassian account, each \
                  needing `jr auth login` again."

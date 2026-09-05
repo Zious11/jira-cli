@@ -15,6 +15,30 @@ pub(crate) fn resolve_logout_target(
     profile_arg.unwrap_or(active).to_string()
 }
 
+/// BC-1.1.015 pure predicate, extracted (PR #771 review Finding B-1) so the
+/// exact routing decision `jr auth logout` makes is directly unit-testable
+/// against `Option<&str>` shapes, without a live config file or keychain.
+///
+/// An unset `auth_method` behaves as `"api_token"` here (BC-1.1.015): a
+/// profile with no `auth_method` recorded is a de-facto api-token profile.
+/// `"oauth"` is the ONLY value this function treats as having an OAuth
+/// session to clear — see [`handle_logout`]'s call site for why ("not
+/// oauth" rather than "is api_token" so any unset/unrecognized value falls
+/// into the informational-notice branch).
+///
+/// This is also the exact decision point PR #771 review Finding B-1
+/// (BC-1.4.039) traced: before `src/cli/auth/login.rs`'s
+/// `should_mark_auth_method_before_attempt`/`mark_auth_method_if_new` fix,
+/// a brand-new profile whose OAuth login failed at the credential-store
+/// step was left with `auth_method: None`, which this predicate (correctly,
+/// per BC-1.1.015) treats as an api-token profile — misrouting `jr auth
+/// logout` to the "nothing to log out" branch instead of clearing the OAuth
+/// pair. The fix for that bug lives at the `login.rs` call site, not here —
+/// this predicate's behavior is correct and unchanged.
+pub(crate) fn auth_method_is_api_token(auth_method: Option<&str>) -> bool {
+    auth_method != Some("oauth")
+}
+
 /// `jr auth logout [--profile <name>]` — clear OAuth tokens for the target
 /// profile. The profile entry in `config.toml` is left in place so a follow-up
 /// `jr auth login --profile <name>` re-authenticates without losing site
@@ -82,7 +106,7 @@ pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> 
         .global
         .profiles
         .get(&target)
-        .is_some_and(|p| p.auth_method.as_deref() != Some("oauth"));
+        .is_some_and(|p| auth_method_is_api_token(p.auth_method.as_deref()));
 
     if is_api_token_profile {
         // BC-1.2.013 amended (DEC-322): api-token profiles have no OAuth

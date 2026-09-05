@@ -1244,3 +1244,151 @@ fn test_auth_remove_json_shape() {
     });
     insta::assert_json_snapshot!("auth_remove_json_shape", value);
 }
+
+// ---------------------------------------------------------------------------
+// PR #771 review Finding B-1 (BC-1.4.039): Site 1's honest-fail message
+// recommends `jr auth logout`/`jr auth remove` as the DEFAULT cleanup for a
+// brand-new profile's failed OAuth login -- but before this fix,
+// `auth_method` was written only on a SUCCESSFUL `oauth_login`, so a
+// profile whose login failed at the credential-store step was left with
+// `auth_method: None`, which `jr auth logout` (via `auth_method_is_api_token`)
+// treats as an api-token profile. These tests exercise the RECOMMENDED
+// COMMANDS' ACTUAL ROUTING DECISIONS for that exact scenario, not merely
+// string presence in the error message (the gap the PR #771 review found in
+// `src/api/auth.rs::honest_fail_message_tests::
+// test_bc_1_4_039_site1_dpapi_fallback_failed_recommends_scoped_cleanup_by_default`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn should_mark_auth_method_before_attempt_true_for_brand_new_profile() {
+    assert!(should_mark_auth_method_before_attempt(None));
+}
+
+#[test]
+fn should_mark_auth_method_before_attempt_false_when_switching_from_established_method() {
+    // FIX-F5-login-switch territory: a profile with a WORKING, different
+    // mechanism on record must not be pre-marked -- see
+    // `should_mark_auth_method_before_attempt`'s doc comment for why.
+    assert!(!should_mark_auth_method_before_attempt(Some("api_token")));
+    assert!(!should_mark_auth_method_before_attempt(Some("oauth")));
+}
+
+#[test]
+fn mark_auth_method_if_new_sets_method_for_brand_new_profile() {
+    let mut profiles = std::collections::BTreeMap::new();
+    profiles.insert(
+        "fresh".to_string(),
+        crate::config::ProfileConfig {
+            url: Some("https://fresh.example".into()),
+            auth_method: None,
+            ..crate::config::ProfileConfig::default()
+        },
+    );
+    let global = crate::config::GlobalConfig {
+        default_profile: Some("fresh".into()),
+        profiles,
+        ..crate::config::GlobalConfig::default()
+    };
+    let mutated = mark_auth_method_if_new(global, "fresh", None, "oauth");
+    assert_eq!(
+        mutated.profiles["fresh"].auth_method.as_deref(),
+        Some("oauth")
+    );
+}
+
+#[test]
+fn mark_auth_method_if_new_leaves_switching_profile_untouched() {
+    let mut profiles = std::collections::BTreeMap::new();
+    profiles.insert(
+        "existing".to_string(),
+        crate::config::ProfileConfig {
+            url: Some("https://existing.example".into()),
+            auth_method: Some("api_token".into()),
+            ..crate::config::ProfileConfig::default()
+        },
+    );
+    let global = crate::config::GlobalConfig {
+        default_profile: Some("existing".into()),
+        profiles,
+        ..crate::config::GlobalConfig::default()
+    };
+    let mutated = mark_auth_method_if_new(global, "existing", Some("api_token"), "oauth");
+    assert_eq!(
+        mutated.profiles["existing"].auth_method.as_deref(),
+        Some("api_token"),
+        "a mechanism SWITCH must not be pre-marked -- the profile's still-working prior \
+         mechanism must remain on record until the new login actually succeeds"
+    );
+}
+
+#[test]
+fn auth_method_is_api_token_none_treated_as_api_token() {
+    // BC-1.1.015: this predicate's `None` behavior is correct and
+    // unchanged -- it is exactly the bug PR #771 review Finding B-1 traced:
+    // before the fix, a brand-new profile whose OAuth login failed at the
+    // store step was left with `auth_method: None`, which is (correctly,
+    // per BC-1.1.015) treated as an api-token profile here. The fix is
+    // `handle_login` pre-marking `auth_method` BEFORE attempting the flow
+    // (see `mark_auth_method_if_new` above), not a change to this predicate.
+    assert!(auth_method_is_api_token(None));
+}
+
+#[test]
+fn auth_method_is_api_token_false_for_oauth() {
+    assert!(!auth_method_is_api_token(Some("oauth")));
+}
+
+#[test]
+fn auth_method_is_api_token_true_for_explicit_api_token() {
+    assert!(auth_method_is_api_token(Some("api_token")));
+}
+
+/// End-to-end regression for PR #771 review Finding B-1 (BC-1.4.039):
+/// simulates `handle_login`'s pre-mark step firing for a brand-new profile
+/// (active AND `default_profile`, per `prepare_login_target`) whose
+/// `--oauth` login then fails (e.g. Site 1's `DpapiFallbackFailed`), and
+/// proves the message's TWO recommended cleanup commands' actual outcomes:
+/// `jr auth logout` now routes to the OAuth-clear branch (not the
+/// misleading "nothing to log out" branch), while `jr auth remove` is
+/// STILL refused -- documenting exactly why the corrected message text
+/// (see `src/api/auth.rs::site1_login_store_failure_message`) notes the
+/// "not your active profile" caveat rather than recommending `jr auth
+/// remove` unconditionally.
+#[test]
+fn b1_brand_new_oauth_profile_login_failure_logout_routes_to_oauth_branch() {
+    let mut profiles = std::collections::BTreeMap::new();
+    profiles.insert(
+        "fresh".to_string(),
+        crate::config::ProfileConfig {
+            url: Some("https://fresh.example".into()),
+            auth_method: None, // brand-new profile: no prior login ever completed
+            ..crate::config::ProfileConfig::default()
+        },
+    );
+    let global = crate::config::GlobalConfig {
+        // `prepare_login_target` promotes a brand-new target to default_profile.
+        default_profile: Some("fresh".into()),
+        profiles,
+        ..crate::config::GlobalConfig::default()
+    };
+
+    // Simulate handle_login's pre-mark step firing before the OAuth flow is
+    // attempted, then the flow failing partway through (e.g. at the
+    // credential-store step).
+    let global = mark_auth_method_if_new(global, "fresh", None, "oauth");
+
+    let auth_method = global.profiles["fresh"].auth_method.as_deref();
+    assert!(
+        !auth_method_is_api_token(auth_method),
+        "B-1 regression: `jr auth logout` must route to the OAuth clear branch for a \
+         profile whose OAuth login just failed -- got auth_method={auth_method:?}"
+    );
+
+    let remove_result = handle_remove_in_memory(global, "fresh", "fresh");
+    assert!(
+        remove_result.is_err(),
+        "documents the residual: `jr auth remove` still refuses a profile that is both \
+         active and default_profile, which a brand-new profile always is -- the corrected \
+         message must not recommend `jr auth remove` unconditionally for this exact scenario"
+    );
+}

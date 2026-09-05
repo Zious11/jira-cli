@@ -18,10 +18,13 @@ pub use login::{
     prompt_auth_method_picker,
 };
 #[cfg(test)]
-pub(crate) use login::{prepare_login_target, resolve_oauth_scopes};
+pub(crate) use login::{
+    mark_auth_method_if_new, prepare_login_target, resolve_oauth_scopes,
+    should_mark_auth_method_before_attempt,
+};
 pub use logout::handle_logout;
 #[cfg(test)]
-pub(crate) use logout::resolve_logout_target;
+pub(crate) use logout::{auth_method_is_api_token, resolve_logout_target};
 #[cfg(test)]
 pub(crate) use refresh::refresh_success_payload;
 pub use refresh::{RefreshArgs, refresh_credentials};
