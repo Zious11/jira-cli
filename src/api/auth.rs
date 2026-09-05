@@ -406,7 +406,13 @@ pub fn store_oauth_tokens(profile: &Profile, access: &str, refresh: &str) -> Res
                     // Refresh overflowed after access succeeded — delete the
                     // ENTIRE existing keyring pair (incl. the just-written
                     // access token) before routing the fresh pair to DPAPI
-                    // (ADR-0021 §2 "Ordering, and why").
+                    // (ADR-0021 §2 "Ordering, and why"). Note: a GENUINE
+                    // (non-NoEntry) delete failure here propagates via `?`
+                    // before `store_pair` runs, which can leave a mismatched
+                    // keyring pair (e.g. access deleted, refresh delete
+                    // failed). This is the documented honest-fail behavior —
+                    // ADR-0021 §2 addresses crash-safety, and a subsequent
+                    // re-login self-corrects.
                     delete_credential_tolerating_no_entry(&access_key)?;
                     delete_credential_tolerating_no_entry(&refresh_key)?;
                     auth_windows_store::store_pair(profile, access, refresh)
@@ -419,6 +425,8 @@ pub fn store_oauth_tokens(profile: &Profile, access: &str, refresh: &str) -> Res
             // whatever is currently under either key can be a complete,
             // stale pair from a prior fitting login. Delete both before
             // routing the fresh pair to DPAPI (ADR-0021 §2, same ordering).
+            // Same honest-fail note as above: a genuine (non-NoEntry) delete
+            // failure propagates via `?` before `store_pair` runs.
             delete_credential_tolerating_no_entry(&access_key)?;
             delete_credential_tolerating_no_entry(&refresh_key)?;
             auth_windows_store::store_pair(profile, access, refresh)
@@ -3865,26 +3873,27 @@ mod tests {
     //      are private (`fn`, no `pub`/`pub(crate)`) — only reachable from
     //      code inside `src/api/auth.rs` itself.
     //
-    // A NEW fault-injection seam this Red Gate step DEPENDS ON but does NOT
-    // implement: `JR_S759_FORCE_TOOLONG` (values: "access" | "refresh"),
-    // read by `store_oauth_tokens` to simulate `keyring::Error::TooLong` on
-    // the named key's `set_password` call, REGARDLESS of what the real
-    // backend actually returns for a small test value. This mirrors the
+    // A fault-injection seam these tests DEPEND ON and which IS
+    // implemented: `JR_S759_FORCE_TOOLONG` (values: "access" | "refresh"),
+    // read by `store_oauth_tokens` (via `forced_toolong`, see that fn's doc
+    // comment above) to simulate `keyring::Error::TooLong` on the named
+    // key's `set_password` call, REGARDLESS of what the real backend
+    // actually returns for a small test value. This mirrors the
     // pre-existing `JR_S303_PERSIST_FAIL` precedent in
-    // `tests/oauth_refresh_integration.rs` (a test written and `#[ignore]`d
-    // against a seam that "doesn't exist yet," with "TO UN-IGNORE:
-    // implementer adds this seam" instructions) — it exists because no real
-    // OS keychain backend on macOS/Linux CI naturally produces `TooLong` at
-    // a size small enough to seed/observe deterministically in a test, so
+    // `tests/oauth_refresh_integration.rs` — it exists because no real OS
+    // keychain backend on macOS/Linux CI naturally produces `TooLong` at a
+    // size small enough to seed/observe deterministically in a test, so
     // `store_oauth_tokens`'s `TooLong`-routing match arms (BC-1.4.035
     // Postconditions 2/3) are otherwise UNREACHABLE off-Windows even with
     // `JR_FORCE_DPAPI_FALLBACK=1` (that seam only lifts
     // `engage_dpapi_fallback`'s cfg-gate — it does not manufacture the
     // `TooLong` `Err` the `match` arm's guard requires in the first place).
-    // Until the implementer adds this seam, every test below that sets
-    // `JR_S759_FORCE_TOOLONG` observes NO EFFECT (the real `set_password`
-    // succeeds normally for the small test values used here) — this is a
-    // genuine RED failure (assertion mismatch), not a compile error.
+    // The tests below that use `JR_S759_FORCE_TOOLONG` remain `#[ignore]`d
+    // ONLY because they are keyring-gated (they perform real
+    // `set_password`/`get_password`/`delete_credential` calls against an
+    // OS keychain backend and require `JR_RUN_KEYRING_TESTS=1` to run) —
+    // the same standard convention as every other keyring-gated test in
+    // this file. The seam itself carries no separate unimplemented status.
     // ------------------------------------------------------------------
     // classify_load_pair_result / classify_dpapi_removal_result —
     // AC-009/AC-010/AC-011 (BC-1.4.036, VP-AUTHDX-015) and AC-015
@@ -4183,9 +4192,10 @@ mod tests {
             }
         }
 
-        /// Sets the NOT-YET-IMPLEMENTED `JR_S759_FORCE_TOOLONG` fault-
-        /// injection seam (see this file's module doc above) for the
-        /// duration of the guard. `value` is `"access"` or `"refresh"`.
+        /// Sets the implemented `JR_S759_FORCE_TOOLONG` fault-injection
+        /// seam (see this file's module doc above and `forced_toolong`'s
+        /// doc comment) for the duration of the guard. `value` is
+        /// `"access"` or `"refresh"`.
         struct ForceTooLongGuard {
             prev: Option<String>,
         }
@@ -4245,12 +4255,9 @@ mod tests {
         /// ordering (AC-005) AND the propagated error's TYPE (AC-019) in
         /// one shot, without needing a real Windows machine.
         #[test]
-        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run. ALSO requires \
-                    the JR_S759_FORCE_TOOLONG fault-injection seam described in this file's \
-                    module doc above — NOT YET IMPLEMENTED as of this Red Gate commit. \
-                    TO UN-IGNORE: implementer adds JR_S759_FORCE_TOOLONG support to \
-                    store_oauth_tokens's set_password call sites, then: \
-                    JR_RUN_KEYRING_TESTS=1 cargo test --lib -- --include-ignored"]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run. Uses the \
+                    JR_S759_FORCE_TOOLONG fault-injection seam described in this file's \
+                    module doc above (implemented; see forced_toolong)."]
         fn test_store_oauth_tokens_refresh_overflow_deletes_stale_pair_and_routes_to_dpapi() {
             with_test_keyring(|| {
                 let _seam = DpapiFallbackSeamGuard::engaged();
@@ -4308,8 +4315,9 @@ mod tests {
         /// `store_pair`, which fails deterministically off-Windows
         /// (DpapiFallbackFailed). Mirrors the refresh-overflow test above.
         #[test]
-        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run. ALSO requires \
-                    the JR_S759_FORCE_TOOLONG fault-injection seam — see module doc above."]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run. Uses the \
+                    JR_S759_FORCE_TOOLONG fault-injection seam (implemented) — see module \
+                    doc above."]
         fn test_store_oauth_tokens_access_overflow_deletes_stale_pair_and_routes_to_dpapi() {
             with_test_keyring(|| {
                 let _seam = DpapiFallbackSeamGuard::engaged();
@@ -4361,8 +4369,9 @@ mod tests {
         /// step is unconditional, not merely "delete IF a stale pair
         /// happens to exist."
         #[test]
-        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run. ALSO requires \
-                    the JR_S759_FORCE_TOOLONG fault-injection seam — see module doc above."]
+        #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run. Uses the \
+                    JR_S759_FORCE_TOOLONG fault-injection seam (implemented) — see module \
+                    doc above."]
         fn test_store_oauth_tokens_toolong_on_fresh_profile_leaves_no_keyring_remnant() {
             with_test_keyring(|| {
                 let _seam = DpapiFallbackSeamGuard::engaged();
@@ -4373,18 +4382,30 @@ mod tests {
                     let _force = ForceTooLongGuard::engaged("refresh");
                     store_oauth_tokens(&profile, "new-access", "new-refresh")
                 };
+                let err =
+                    result.expect_err("AC-006: expected the (non-Windows) DPAPI store to fail");
                 assert!(
-                    result.is_err(),
-                    "AC-006: expected the (non-Windows) DPAPI store to fail"
+                    err.downcast_ref::<auth_windows_store::DpapiFallbackFailed>()
+                        .is_some(),
+                    "AC-019 VIOLATION: the propagated error must carry the DpapiFallbackFailed \
+                     marker, asserted by type. Got: {err:#}"
                 );
 
                 let access_result = entry(&oauth_access_key(profile.as_ref()))
+                    .unwrap()
+                    .get_password();
+                let refresh_result = entry(&oauth_refresh_key(profile.as_ref()))
                     .unwrap()
                     .get_password();
                 assert!(
                     matches!(access_result, Err(keyring::Error::NoEntry)),
                     "AC-006 VIOLATION: the just-written access key must be rolled back even \
                      when there was no PRE-EXISTING stale pair to begin with. Got: {access_result:?}"
+                );
+                assert!(
+                    matches!(refresh_result, Err(keyring::Error::NoEntry)),
+                    "AC-006 VIOLATION: both keyring keys must be absent (refresh was never \
+                     written this call, but must remain absent too). Got: {refresh_result:?}"
                 );
             });
         }

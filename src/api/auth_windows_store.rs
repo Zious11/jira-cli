@@ -24,15 +24,21 @@
 //! recognizer, and the `CRYPTPROTECT_UI_FORBIDDEN`/USER-scope-only DPAPI flag
 //! decision).
 //!
-//! # TDD Green step (S-cycle4-dpapi-storage-fix)
+//! # Windows-only verification (S-cycle4-dpapi-storage-fix, DEC-335)
 //!
 //! Every function body is implemented per ADR-0021. The
 //! `#[cfg(windows)] mod dpapi` FFI wrapper (`CryptProtectData`/
 //! `CryptUnprotectData` via `windows-sys`) and the `#[cfg(windows)]` arms of
 //! `store_pair`/`load_pair`/`remove_if_present` cannot be compiled or
-//! exercised on a non-Windows host — see this story's delivery report for
-//! the F4 CI-spike / F7 manual-Windows-smoke-test residuals (VP-AUTHDX-010
-//! sub-property (b), the real DPAPI round-trip).
+//! exercised on THIS (non-Windows) development host. Per the DEC-335-approved
+//! validation plan, this is not an open/unowned unverified risk: the real
+//! DPAPI FFI round-trip (`windows_only_tests::test_dpapi_protect_unprotect_real_round_trip`)
+//! and the LOCAL_MACHINE-bit-clear test are `#[cfg(windows)]`-gated (not
+//! `#[ignore]`d) so they compile AND execute automatically on the
+//! `test (windows-latest)` CI leg — a required merge-gate check — and are
+//! additionally covered by the F7 manual Windows smoke-test gate before
+//! release. VP-AUTHDX-010 sub-property (b) (the real DPAPI round-trip) is
+//! therefore verified on every PR via CI, not merely documented as a residual.
 
 use crate::profile::Profile;
 use std::path::PathBuf;
@@ -1581,12 +1587,17 @@ mod tests {
             /// VP-AUTHDX-016: for ANY string, if
             /// `reject_unsafe_profile_component` accepts it, the string is
             /// by construction a single, non-empty, non-dot-segment,
-            /// no-separator, no-colon, no-NUL, no-trailing-dot-or-space,
-            /// non-reserved-device-name opaque path segment (Invariant 3 —
-            /// "acceptance ⇒ opaque single segment"). Adversarial generator
-            /// biased toward the exact hazard classes the guard defends
-            /// against, not a uniform arbitrary-Unicode fuzz (which would
-            /// almost always land in one rejection bucket trivially).
+            /// no-separator, no-colon, no-NUL, no-trailing-dot-or-space
+            /// opaque path segment (Invariant 3 — "acceptance ⇒ opaque
+            /// single segment"). Adversarial generator biased toward the
+            /// exact hazard classes the guard defends against, not a
+            /// uniform arbitrary-Unicode fuzz (which would almost always
+            /// land in one rejection bucket trivially). Deliberately does
+            /// NOT re-assert `!is_reserved_windows_device_name(&s)` here —
+            /// that predicate IS the guard's own reserved-name branch, so
+            /// asserting it post-hoc would be tautological, not an
+            /// independent check; `test_is_reserved_windows_device_name_direct`
+            /// and the guard's own dedicated tests cover that class.
             #[test]
             fn prop_reject_unsafe_profile_component_acceptance_implies_opaque_segment(
                 s in prop_oneof![
@@ -1607,7 +1618,6 @@ mod tests {
                     prop_assert!(!s.contains(':'));
                     prop_assert!(!s.ends_with('.'));
                     prop_assert!(!s.ends_with(' '));
-                    prop_assert!(!is_reserved_windows_device_name(&s));
                 }
             }
         }
@@ -1615,8 +1625,13 @@ mod tests {
 
     // ------------------------------------------------------------------
     // Windows-only — VP-AUTHDX-010. #[cfg(windows)]: compiles out entirely
-    // on this (non-Windows) host, per this story's dispatch instructions.
-    // Not compile-verified on this host — see the Red Gate report.
+    // on this (non-Windows) development host, so these tests are not
+    // compile- or run-verified HERE. Per the DEC-335-approved Windows
+    // validation plan, this is not an open/unowned unverified risk:
+    // neither test carries `#[ignore]`, so both compile AND execute
+    // automatically on the `test (windows-latest)` CI leg — a required
+    // branch-protection merge gate — and are additionally covered by the
+    // F7 manual Windows smoke-test gate before release.
     // ------------------------------------------------------------------
 
     #[cfg(windows)]
