@@ -179,6 +179,31 @@ pub async fn login_token(
 /// it returns `Some` at all). This lets tests assert on the exact soft-fail
 /// wording (preserved-vs-none, ADV LOW-4) AND on JSON-mode suppression
 /// (ADV MED) without needing to capture the real stderr file descriptor.
+///
+/// Structural note (ADV MED-B, S-cycle4-cloud-id-correctness fix burst):
+/// the would-be diagnostic (`diag: Option<String>`, computed independently
+/// of `output` on the no-URL/fetch-failure paths) and the actual emit
+/// (`eprintln!`) are decided by a SINGLE tail gate — `let emit = if
+/// matches!(output, OutputFormat::Table) { diag } else { None };` — rather
+/// than two separate `if matches!(output, OutputFormat::Table) { eprintln!
+/// …; return Some(msg) }` blocks (one per soft-fail branch, as this
+/// function had prior to this fix burst). This makes the return value a
+/// faithful-by-construction proxy for what actually reached stderr: there
+/// is exactly one `eprintln!(` call in this function's body (down from
+/// two), and it is reached if and only if `emit` — the value this function
+/// returns — is `Some`. A hand-edit can no longer hoist an `eprintln!`
+/// above the mode gate on just one branch while leaving the other, or the
+/// return-value tests, apparently intact — both branches now share the one
+/// gate. This is also why a dedicated in-process real-stderr-fd capture
+/// test is unnecessary here: there is no crate already in this repo for
+/// that (checked — no `gag`-style dependency, and `assert_cmd`/`predicates`
+/// are subprocess-level tools that cannot reach a module-private `async
+/// fn`), so stderr silence under `--output json` is guaranteed
+/// STRUCTURALLY by this single-gate design instead, pinned by two
+/// independent things: the return-value assertions on this function
+/// (`test_adv_med_json_mode_fetch_failure_suppresses_diagnostic` et al.,
+/// below) and the source-level guard confirming no stdout leak exists
+/// (`test_adv_low1_resolve_cloud_id_source_has_no_stdout_macro_or_write`).
 async fn resolve_and_apply_cloud_id(
     config: &mut Config,
     profile: &str,
@@ -204,68 +229,78 @@ async fn resolve_and_apply_cloud_id(
         .get(profile)
         .and_then(|p| p.url.clone());
 
-    let Some(site_url) = site_url else {
-        // No URL to fetch against at all — soft-fail, leave cloud_id as-is.
-        // Human-mode-only (BC-1.2.052 Postcondition 3): suppressed under
-        // `--output json`, matching the sibling notice convention.
-        let msg = format!(
-            "warning: could not look up cloud_id for profile {profile:?} — no URL configured."
-        );
-        if matches!(output, OutputFormat::Table) {
-            eprintln!("{msg}");
-            return Some(msg);
+    // `diag` is the diagnostic that WOULD be shown, computed independently
+    // of `output` — the single tail gate below is the only place `output`
+    // decides anything.
+    let diag: Option<String> = match site_url {
+        None => {
+            // No URL to fetch against at all — soft-fail, leave cloud_id
+            // as-is.
+            Some(format!(
+                "warning: could not look up cloud_id for profile {profile:?} — no URL configured."
+            ))
         }
-        return None;
-    };
-
-    // Captured before the fetch so the soft-fail diagnostic (below) can
-    // distinguish "a prior value survives untouched" from "there was
-    // never one to begin with" (ADV LOW-4) — BC-1.2.053 Invariant 3: on
-    // `auth refresh` this fetch fires on every invocation, so a
-    // transient failure must not read as an error when the existing
-    // value is in fact preserved intact.
-    let had_existing_cloud_id = config
-        .global
-        .profiles
-        .get(profile)
-        .is_some_and(|p| p.cloud_id.is_some());
-
-    match crate::api::jira::tenant::fetch_cloud_id(&site_url).await {
-        Ok(cloud_id) => {
-            // AC-005 / AC-007 (BC-1.2.052 Postcondition 5, BC-1.2.053
-            // Postcondition 1): fetch success overwrites p.cloud_id
-            // unconditionally, even a stale OAuth-era value.
-            let p = config
+        Some(site_url) => {
+            // Captured before the fetch so the soft-fail diagnostic
+            // (below) can distinguish "a prior value survives untouched"
+            // from "there was never one to begin with" (ADV LOW-4) —
+            // BC-1.2.053 Invariant 3: on `auth refresh` this fetch fires
+            // on every invocation, so a transient failure must not read
+            // as an error when the existing value is in fact preserved
+            // intact.
+            let had_existing_cloud_id = config
                 .global
                 .profiles
-                .entry(profile.to_string())
-                .or_default();
-            p.cloud_id = Some(cloud_id);
-            None
-        }
-        Err(err) => {
-            // AC-003 / AC-007 (BC-1.2.052 Postcondition 3, BC-1.2.053
-            // Postcondition 2): soft-fail — p.cloud_id is left as it
-            // already was (None stays None; a prior value survives
-            // untouched). Never abort login_token.
-            let msg = if had_existing_cloud_id {
-                format!(
-                    "warning: could not refresh cloud_id for profile {profile:?} ({err}); keeping the existing value."
-                )
-            } else {
-                format!("warning: could not look up cloud_id for profile {profile:?}: {err}")
-            };
-            // Human-mode-only (BC-1.2.052 Postcondition 3): suppressed
-            // under `--output json`, matching the sibling notice
-            // convention (`emit_oauth_deprecation_notice` et al.).
-            if matches!(output, OutputFormat::Table) {
-                eprintln!("{msg}");
-                Some(msg)
-            } else {
-                None
+                .get(profile)
+                .is_some_and(|p| p.cloud_id.is_some());
+
+            match crate::api::jira::tenant::fetch_cloud_id(&site_url).await {
+                Ok(cloud_id) => {
+                    // AC-005 / AC-007 (BC-1.2.052 Postcondition 5,
+                    // BC-1.2.053 Postcondition 1): fetch success
+                    // overwrites p.cloud_id unconditionally, even a stale
+                    // OAuth-era value.
+                    let p = config
+                        .global
+                        .profiles
+                        .entry(profile.to_string())
+                        .or_default();
+                    p.cloud_id = Some(cloud_id);
+                    None
+                }
+                Err(err) => {
+                    // AC-003 / AC-007 (BC-1.2.052 Postcondition 3,
+                    // BC-1.2.053 Postcondition 2): soft-fail — p.cloud_id
+                    // is left as it already was (None stays None; a prior
+                    // value survives untouched). Never abort login_token.
+                    Some(if had_existing_cloud_id {
+                        format!(
+                            "warning: could not refresh cloud_id for profile {profile:?} ({err}); keeping the existing value."
+                        )
+                    } else {
+                        format!(
+                            "warning: could not look up cloud_id for profile {profile:?}: {err}"
+                        )
+                    })
+                }
             }
         }
+    };
+
+    // Single decision point (ADV MED-B): human-mode-only (BC-1.2.052
+    // Postcondition 3) — suppressed entirely under `--output json`,
+    // matching the sibling notice convention (`emit_oauth_deprecation_notice`
+    // et al.). `eprintln!` fires IFF this function returns `Some` — there is
+    // no way for the two to desync.
+    let emit = if matches!(output, OutputFormat::Table) {
+        diag
+    } else {
+        None
+    };
+    if let Some(m) = &emit {
+        eprintln!("{m}");
     }
+    emit
 }
 
 /// Run the OAuth 2.0 (3LO) login flow and persist site configuration.
@@ -1409,6 +1444,38 @@ mod cloud_id_fallback_chain_tests {
         assert_eq!(cloud_id_of(&config, "sandbox"), None);
     }
 
+    /// ADV MED-A (S-cycle4-cloud-id-correctness fix burst): the positive
+    /// control for `test_adv_med_json_mode_no_url_configured_suppresses_diagnostic`
+    /// above — no prior test asserted the Table-mode (human-mode) HALF of
+    /// the no-URL-configured branch, nor its exact wording. Mirrors
+    /// `test_adv_med_table_mode_fetch_failure_emits_diagnostic`'s role for
+    /// the fetch-failure branch: together with its JSON-mode sibling, this
+    /// proves the no-URL-configured gate actually branches on `output`
+    /// rather than always emitting or always suppressing.
+    #[tokio::test]
+    async fn test_adv_med_table_mode_no_url_configured_emits_diagnostic() {
+        let mut config = make_config("sandbox", None, None);
+
+        let diagnostic =
+            resolve_and_apply_cloud_id(&mut config, "sandbox", None, OutputFormat::Table).await;
+
+        assert_eq!(
+            diagnostic,
+            Some(
+                "warning: could not look up cloud_id for profile \"sandbox\" — \
+                 no URL configured."
+                    .to_string()
+            ),
+            "ADV MED-A: Table mode must emit and return the exact \
+             no-URL-configured diagnostic wording"
+        );
+        assert_eq!(
+            cloud_id_of(&config, "sandbox"),
+            None,
+            "the no-URL-configured soft-fail must leave cloud_id untouched (None)"
+        );
+    }
+
     /// Counts occurrences of `pattern` (e.g. `"println!("` or `"print!("`)
     /// in `body` that are NOT immediately preceded by the byte `'e'` — i.e.
     /// occurrences that are not actually part of `eprintln!(`/`eprint!(`.
@@ -1471,11 +1538,15 @@ mod cloud_id_fallback_chain_tests {
             .expect("the next item after resolve_and_apply_cloud_id must exist");
         let body = &src[start..end];
         let eprintln_count = body.matches("eprintln!(").count();
-        assert!(
-            eprintln_count >= 2,
-            "sanity: expected at least the two soft-fail eprintln! calls \
-             (no-URL-configured, fetch-failure) in this function's body — \
-             the test's start/end source markers may have drifted"
+        assert_eq!(
+            eprintln_count, 1,
+            "sanity: expected exactly ONE eprintln! call in this function's \
+             body (ADV MED-B, S-cycle4-cloud-id-correctness fix burst: both \
+             soft-fail branches — no-URL-configured, fetch-failure — now \
+             funnel through a single tail gate rather than each carrying \
+             its own eprintln!/return pair) — either the test's start/end \
+             source markers have drifted, or the single-gate structure was \
+             reverted to two separate gates"
         );
 
         // Neither a bare `println!(` nor a bare `print!(` (stdout) may
