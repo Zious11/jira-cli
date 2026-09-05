@@ -1374,15 +1374,26 @@ impl RedirectUriStrategy {
 /// host-testable with constructed `anyhow::Error` values, independent of any
 /// I/O (Architecture Mapping "Message-selection logic itself" row; Purity
 /// Classification table, Pure Core).
-///
-/// STUB (S-cycle4-honest-fail-message): body intentionally `todo!()` per
-/// BC-5.38.001 — implemented by the following TDD story stage against
-/// AC-001/AC-002/AC-004.
-#[allow(dead_code)]
 fn site1_login_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow::Error {
-    let _ = (profile, e);
-    todo!(
-        "BC-1.4.039 AC-001/AC-002/AC-004: Site 1 ProfilePathEscape/DpapiFallbackFailed/legacy message-selection branch"
+    if let Some(escape) = e.downcast_ref::<auth_windows_store::ProfilePathEscape>() {
+        return invalid_profile_name_error(&Profile::from(profile), *escape);
+    }
+    if let Some(dpapi_failed) = e.downcast_ref::<auth_windows_store::DpapiFallbackFailed>() {
+        let inner = &dpapi_failed.0;
+        return anyhow::anyhow!(
+            "Authorization succeeded with Atlassian, but the OAuth tokens were too large for \
+             Windows Credential Manager's 2560-byte limit AND jr's encrypted-file fallback \
+             also failed ({inner}). Check available disk space and file permissions, then run \
+             \"jr auth login --oauth --profile {profile}\" again. You must first revoke the \
+             now-unused Atlassian grant: visit https://id.atlassian.com/manage-profile/apps."
+        );
+    }
+    anyhow::anyhow!(
+        "Authorization succeeded with Atlassian, but jr could not save the OAuth \
+         tokens to the system keychain ({e:#}). Unlock your keychain (or grant \
+         access to jr) and run `jr auth login --oauth --profile {profile}` again. \
+         To fully revoke the active grant first, visit \
+         https://id.atlassian.com/manage-profile/apps."
     )
 }
 
@@ -1403,14 +1414,25 @@ fn site1_login_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow:
 /// when this function's `DpapiFallbackFailed` arm fires — not inside this
 /// pure message-selection function.
 ///
-/// STUB (S-cycle4-honest-fail-message): body intentionally `todo!()` per
-/// BC-5.38.001 — implemented by the following TDD story stage against
-/// AC-001/AC-003/AC-004.
-#[allow(dead_code)]
 fn site3_refresh_store_failure_message(profile: &str, e: anyhow::Error) -> anyhow::Error {
-    let _ = (profile, e);
-    todo!(
-        "BC-1.4.039 AC-001/AC-003/AC-004: Site 3 ProfilePathEscape/DpapiFallbackFailed/legacy message-selection branch, grant-revoke-free"
+    if let Some(escape) = e.downcast_ref::<auth_windows_store::ProfilePathEscape>() {
+        return invalid_profile_name_error(&Profile::from(profile), *escape);
+    }
+    if let Some(dpapi_failed) = e.downcast_ref::<auth_windows_store::DpapiFallbackFailed>() {
+        let inner = &dpapi_failed.0;
+        return anyhow::anyhow!(
+            "The OAuth refresh succeeded with Atlassian, but the new tokens were too large \
+             for Windows Credential Manager's 2560-byte limit AND jr's encrypted-file fallback \
+             also failed ({inner}). Check available disk space and file permissions, then run \
+             \"jr auth login --oauth --profile {profile}\" again to re-authenticate."
+        );
+    }
+    anyhow::anyhow!(
+        "Token refresh succeeded with Atlassian, but jr could not save the new \
+         OAuth tokens to the system keychain ({e:#}). Unlock your keychain (or \
+         grant access to jr) and run `jr auth refresh --profile {profile}` again. \
+         If the problem persists, run `jr auth login --oauth --profile {profile}` \
+         to start fresh."
     )
 }
 
@@ -1603,15 +1625,7 @@ pub async fn oauth_login(
         &tokens.access_token,
         &tokens.refresh_token,
     )
-    .map_err(|e| {
-        anyhow::anyhow!(
-            "Authorization succeeded with Atlassian, but jr could not save the OAuth \
-             tokens to the system keychain ({e:#}). Unlock your keychain (or grant \
-             access to jr) and run `jr auth login --oauth --profile {profile}` again. \
-             To fully revoke the active grant first, visit \
-             https://id.atlassian.com/manage-profile/apps."
-        )
-    })?;
+    .map_err(|e| site1_login_store_failure_message(profile, e))?;
 
     Ok(OAuthResult {
         cloud_id: resource.id.clone(),
@@ -1788,20 +1802,26 @@ pub(crate) async fn refresh_oauth_token_with_url(profile: &str, token_url: &str)
     // Atlassian rotated the tokens, but if the keychain write fails the
     // new pair is lost and the next request will use the now-invalid
     // refresh token. Surface the partial state explicitly.
-    store_oauth_tokens(
+    if let Err(e) = store_oauth_tokens(
         &Profile::from(profile),
         &tokens.access_token,
         &tokens.refresh_token,
-    )
-    .map_err(|e| {
-        anyhow::anyhow!(
-            "Token refresh succeeded with Atlassian, but jr could not save the new \
-             OAuth tokens to the system keychain ({e:#}). Unlock your keychain (or \
-             grant access to jr) and run `jr auth refresh --profile {profile}` again. \
-             If the problem persists, run `jr auth login --oauth --profile {profile}` \
-             to start fresh."
-        )
-    })?;
+    ) {
+        // AC-005 (BC-1.4.039 Postcondition 4): when this store failure
+        // carries a DpapiFallbackFailed marker, proactively clear the
+        // profile's now-stale stored OAuth pair BEFORE returning the
+        // honest-fail error — NotFound-tolerant defense-in-depth, retained
+        // even though `store_oauth_tokens`'s own delete-first ordering
+        // (BC-1.4.035) typically already removed it. Site-3-ONLY: Site 1
+        // (a brand-new login failure) has no meaningfully stale prior pair
+        // and must clear nothing.
+        if e.downcast_ref::<auth_windows_store::DpapiFallbackFailed>()
+            .is_some()
+        {
+            let _ = clear_profile_oauth_pair(&Profile::from(profile));
+        }
+        return Err(site3_refresh_store_failure_message(profile, e));
+    }
     Ok(tokens.access_token)
 }
 

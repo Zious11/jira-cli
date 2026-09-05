@@ -53,6 +53,26 @@ All notable changes to jr will be documented here.
   (never bare-clears it) on fetch failure. `Config::base_url()`'s existing
   `auth_method == "oauth"` gateway guard is unchanged — core Jira REST v3
   requests remain unaffected either way.
+- **Windows: accurate error messages when the DPAPI-encrypted-file fallback
+  itself fails** (S-cycle4-honest-fail-message, ADR-0021 §6, BC-1.4.039,
+  issue #759). The fast-follow promised by S-cycle4-dpapi-storage-fix above:
+  when BOTH Windows Credential Manager AND the DPAPI fallback fail to store
+  an oversized OAuth token, `jr auth login --oauth` and the internal OAuth
+  refresh path no longer report the misleading "Unlock your keychain"
+  message — they now name the 2560-byte Credential Manager limit and the
+  fallback failure detail, and instruct the user to check disk space/file
+  permissions and re-authenticate. The two sites' messages are intentionally
+  distinct: `jr auth login`'s message additionally instructs revoking the
+  now-unused Atlassian grant created by the same failed attempt (safe
+  cleanup, no other consumer), while the internal refresh path's message
+  omits any grant-revoke instruction (the grant may still back other active
+  sessions for the profile) and proactively clears the profile's now-stale
+  stored OAuth pair so the next command sees a clean "no stored OAuth token"
+  state instead of a confusing `invalid_grant`. An invalid profile name
+  (rejected by the DPAPI-fallback's path-traversal guard) continues to
+  render as its own distinct, actionable error at both sites. macOS/Linux
+  behavior is unaffected — this failure mode is unreachable there by
+  construction.
 
 ## [0.7.0-dev.4] - 2026-09-03
 
