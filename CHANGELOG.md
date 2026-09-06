@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.7.0-dev.5] - 2026-09-06
+
 ### Changed
 
 - **CI: mutation-test scope gap closed for `tenant.rs`; body-cap boundary
