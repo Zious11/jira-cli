@@ -1840,5 +1840,146 @@ mod tests {
             let unprotected = dpapi::unprotect(&protected).expect("DPAPI unprotect must succeed");
             assert_eq!(unprotected, plaintext);
         }
+
+        /// Serializes `JR_CACHE_DIR` mutation for the production-path test
+        /// below (mirrors `force_dpapi_load_pair_seam_tests::LOAD_PAIR_SEAM_MUTEX`
+        /// in this same file, and `ENV_MUTEX` in `src/cache.rs`/`src/config.rs`
+        /// — each module that mutates a shared debug-only env-var seam carries
+        /// its own local mutex rather than a crate-wide one). A LOCAL static is
+        /// used here (not a shared one with those other modules) because this
+        /// is the only `JR_CACHE_DIR`-mutating test in THIS file/module.
+        static CACHE_DIR_SEAM_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        /// Builds a distinctive, non-repeating, printable-ASCII string of
+        /// exactly `len` bytes: a fixed prefix (to make access/refresh
+        /// trivially distinguishable by eye in a failure message) followed
+        /// by a cycling alphanumeric sequence (never a single repeated byte)
+        /// so the ciphertext-inequality assertions below are meaningful —
+        /// a DPAPI implementation that merely, say, XORed a fixed key over a
+        /// uniform "aaaa..." plaintext could coincidentally reproduce long
+        /// runs; a cycling, varied plaintext makes that class of accidental
+        /// pass far less likely.
+        fn distinctive_payload(prefix: &str, len: usize) -> String {
+            const CHARSET: &[u8] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+            let mut out = String::from(prefix);
+            let mut i = 0usize;
+            while out.len() < len {
+                out.push(CHARSET[i % CHARSET.len()] as char);
+                i += 1;
+            }
+            out.truncate(len);
+            out
+        }
+
+        /// Naive byte-subslice search — `[T]::windows` is the simplest
+        /// correct way to check "does `haystack` contain `needle`
+        /// verbatim anywhere" without pulling in a crate; both `haystack`
+        /// and `needle` are at most a few KB in this test, so the O(n*m)
+        /// cost is irrelevant here.
+        fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+            !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+        }
+
+        /// Production-path DPAPI-encrypted-file round-trip for issue #759
+        /// (F7 Windows-verification gap, VP-AUTHDX-010 sub-property (b) —
+        /// production-path variant). Unlike
+        /// `test_dpapi_protect_unprotect_real_round_trip` above, which
+        /// exercises the raw `dpapi::protect`/`dpapi::unprotect` FFI wrapper
+        /// directly, this test drives the actual public entry points
+        /// (`store_pair`/`load_pair`) that `store_oauth_tokens`/
+        /// `load_oauth_tokens` (`src/api/auth.rs`) call in production after a
+        /// keyring `TooLong` — covering the envelope encode/wrap, the real
+        /// disk write via `atomic_write`, and the real disk read + unwrap +
+        /// decode on the way back, all under a real Windows DPAPI
+        /// protect/unprotect call. Runs on the `windows-latest` CI leg (not
+        /// `#[ignore]`d) inside `cargo test --all-features`.
+        ///
+        /// Would genuinely FAIL if: (a) `store_pair` wrote plaintext instead
+        /// of DPAPI ciphertext (the `contains_subslice` assertions below);
+        /// (b) `load_pair` returned the wrong or an empty pair (the
+        /// `assert_eq!` pair at the end); or (c) the file were written to the
+        /// wrong path (the `expected_path.exists()` assertion, where
+        /// `expected_path` is derived via the SAME `file_path()` function
+        /// production code uses, not a hand-rolled path).
+        #[test]
+        fn test_store_pair_then_load_pair_oversized_token_round_trips_via_dpapi_file() {
+            let _guard = CACHE_DIR_SEAM_MUTEX
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let tmp =
+                tempfile::TempDir::new().expect("failed to create TempDir for JR_CACHE_DIR seam");
+            // SAFETY: held under CACHE_DIR_SEAM_MUTEX for this test's whole
+            // duration — JR_CACHE_DIR is only read/written while this guard
+            // is live, so no concurrent env access occurs from this test.
+            unsafe { std::env::set_var("JR_CACHE_DIR", tmp.path()) };
+
+            // Well above the ~2560-byte Windows Credential Manager ceiling
+            // (ADR-0021) — this is the entire reason the DPAPI-file fallback
+            // exists. Distinct prefixes + distinct lengths keep access and
+            // refresh unambiguously different from each other.
+            let access = distinctive_payload("ACCESS-TOKEN-", 4000);
+            let refresh = distinctive_payload("REFRESH-TOKEN-", 4300);
+            // A distinctive, non-"default" profile name sidesteps any
+            // legacy-flat-key migration path that only applies to "default".
+            let p = profile("cycle4-dpapi-roundtrip-ci-759");
+
+            let store_result = store_pair(&p, &access, &refresh);
+            let path_result = file_path(&p);
+            let load_result = load_pair(&p);
+
+            // SAFETY: still under CACHE_DIR_SEAM_MUTEX.
+            unsafe { std::env::remove_var("JR_CACHE_DIR") };
+
+            store_result.expect(
+                "VP-AUTHDX-010(b) production-path VIOLATION: store_pair must succeed for an \
+                 oversized pair on a real Windows host",
+            );
+
+            let expected_path = path_result
+                .expect("file_path must succeed for a guard-passing, non-hazardous profile name");
+            assert!(
+                expected_path.exists(),
+                "VP-AUTHDX-010(b) VIOLATION: store_pair must write the encrypted secret file to \
+                 the exact path production code derives via file_path(); expected it at \
+                 {expected_path:?} but it does not exist"
+            );
+
+            let on_disk = std::fs::read(&expected_path)
+                .expect("must be able to read the just-written encrypted secret file");
+            assert!(
+                on_disk.len() > 5,
+                "sanity: the on-disk file must contain more than just the 5-byte wrap header"
+            );
+            assert!(
+                !contains_subslice(&on_disk, access.as_bytes()),
+                "VP-AUTHDX-010(b) VIOLATION: the plaintext access token must not appear \
+                 verbatim in the on-disk ciphertext — store_pair must have written plaintext \
+                 instead of real DPAPI ciphertext"
+            );
+            assert!(
+                !contains_subslice(&on_disk, refresh.as_bytes()),
+                "VP-AUTHDX-010(b) VIOLATION: the plaintext refresh token must not appear \
+                 verbatim in the on-disk ciphertext — store_pair must have written plaintext \
+                 instead of real DPAPI ciphertext"
+            );
+
+            let (loaded_access, loaded_refresh) = load_result
+                .expect("VP-AUTHDX-010(b) VIOLATION: load_pair must succeed decrypting the file store_pair just wrote")
+                .expect(
+                    "VP-AUTHDX-010(b) VIOLATION: load_pair must find the pair store_pair just \
+                     wrote, not report it absent",
+                );
+            assert_eq!(
+                loaded_access, access,
+                "VP-AUTHDX-010(b) VIOLATION: load_pair's decrypted access token must exactly \
+                 match what store_pair wrote"
+            );
+            assert_eq!(
+                loaded_refresh, refresh,
+                "VP-AUTHDX-010(b) VIOLATION: load_pair's decrypted refresh token must exactly \
+                 match what store_pair wrote"
+            );
+        }
     }
 }
