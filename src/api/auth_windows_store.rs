@@ -1842,12 +1842,23 @@ mod tests {
         }
 
         /// Serializes `JR_CACHE_DIR` mutation for the production-path test
-        /// below (mirrors `force_dpapi_load_pair_seam_tests::LOAD_PAIR_SEAM_MUTEX`
-        /// in this same file, and `ENV_MUTEX` in `src/cache.rs`/`src/config.rs`
-        /// — each module that mutates a shared debug-only env-var seam carries
-        /// its own local mutex rather than a crate-wide one). A LOCAL static is
-        /// used here (not a shared one with those other modules) because this
-        /// is the only `JR_CACHE_DIR`-mutating test in THIS file/module.
+        /// below, LOCAL to this file (mirrors
+        /// `force_dpapi_load_pair_seam_tests::LOAD_PAIR_SEAM_MUTEX` in this
+        /// same file). This does **not** provide mutual exclusion against
+        /// `src/cache.rs`'s or `src/config.rs`'s own separate `static
+        /// ENV_MUTEX`, each of which independently mutates this SAME
+        /// process-global `JR_CACHE_DIR` env var under its own lock —
+        /// `cargo test --all-features` runs multi-threaded (no
+        /// `--test-threads=1`), so three unrelated mutexes guarding one
+        /// shared env var is a known, accepted (not closed) pre-existing
+        /// race, consistent with this crate's existing convention of one
+        /// local `ENV_MUTEX`-style lock per module rather than a shared
+        /// crate-wide one. If the race is ever actually hit, the failure
+        /// mode is a visible test failure (wrong cache root read back by
+        /// `load_pair`, tripping the `assert_eq!` below) — never a silent
+        /// false pass. Unifying `cache.rs`'s, `config.rs`'s, and this
+        /// module's env mutexes into one shared crate-test mutex is tracked
+        /// as a follow-up maintenance item, not done here.
         static CACHE_DIR_SEAM_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
         /// Builds a distinctive, non-repeating, printable-ASCII string of
