@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use pulldown_cmark::{
     BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
     TextMergeStream,
@@ -13,6 +15,88 @@ use crate::error::JrError;
 /// nesting while staying well below the stack-overflow threshold on the
 /// configured 8 MB stack.
 pub(crate) const MAX_ADF_DEPTH: usize = 256;
+
+// ---------------------------------------------------------------------------
+// Mention pure data types (S-cycle5-mention-pure-conversion, ADR-0023 §2,
+// BC-7.2.016/BC-7.2.017/BC-7.2.018).
+// ---------------------------------------------------------------------------
+
+/// Which mention *form* a detected candidate span came from (BC-7.2.016
+/// point 1 [bracket], BC-7.2.018 [`@Name`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MentionCandidateKind {
+    /// `[~accountid:<id>]` — the candidate's `span` is the literal accountId,
+    /// byte-for-byte, never regex-validated or normalized as a UUID (AC-001).
+    Bracket,
+    /// `@Name` — the candidate's `span` is the POST-TRIM token, WITH the
+    /// leading `@` INCLUDED (e.g. `"@jsmith"`, never `"jsmith"`) — per
+    /// BC-7.2.017's pass-3 L4 correction and BC-7.2.018 point 2, which are
+    /// the source of truth over this module's earlier, now-corrected framing
+    /// (trailing `.`/`-`/`_` trimmed per AC-006 point 3; a token that trims
+    /// to empty is not a candidate at all).
+    AtName,
+}
+
+/// One detected mention-candidate span, as reported by
+/// `find_mention_candidates` (AC-001, AC-006). `span` is the REPORTED,
+/// POST-TRIM text — uniform across `MentionCandidates`, the
+/// `MentionResolutions` key space, and the tree-replacement span (AC-006).
+/// For `AtName`, `span` INCLUDES the leading `@` (see
+/// [`MentionCandidateKind::AtName`]).
+// `#[allow(dead_code)]`: this story's public API (`find_mention_candidates`)
+// is consumed by `src/cli/issue/mentions.rs::resolve_mentions`, which is
+// S-cycle5-mention-resolution-wiring's (Story B's) scope, not this story's —
+// remove once Story B wires that call site.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MentionCandidate {
+    pub(crate) kind: MentionCandidateKind,
+    pub(crate) span: String,
+}
+
+/// Output of `find_mention_candidates` — every bracket-form id and every
+/// `@Name` token found, in scan order, WITHOUT deduplication. Deduplication
+/// is a network-cost concern owned by the effectful resolver
+/// (`src/cli/issue/mentions.rs`, Story B), not this pure scanner (ADR-0023
+/// §2).
+#[allow(dead_code)] // see MentionCandidate's #[allow(dead_code)] note above
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct MentionCandidates {
+    pub(crate) candidates: Vec<MentionCandidate>,
+}
+
+/// A resolved mention identity: the pair `markdown_to_adf_with_mentions`
+/// needs to populate a `mention` node's `attrs.id`/`attrs.text` (BC-7.2.017).
+/// Plain data — no `Client`, no `async`, no I/O (ADR-0023 §2).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MentionResolution {
+    pub account_id: String,
+    pub display_name: String,
+}
+
+/// Input to `markdown_to_adf_with_mentions` — a lookup keyed SEPARATELY per
+/// mention form (AC-014, ADR-0023 §2/"Two new key spaces to keep straight"):
+/// bracket-form keys are literal accountIds; `@Name`-form keys are the
+/// POST-TRIM, `@`-PREFIX-INCLUDED candidate token (e.g. `"@jsmith"`, not
+/// `"jsmith"` — see [`MentionCandidateKind::AtName`]). Two internal maps (never a
+/// single bare `HashMap<String, _>`) so a lookup by one form's key can never
+/// accidentally resolve against an entry inserted under the other form's key
+/// space, even if a bracket accountId and an `@Name` token happen to collide
+/// as strings.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MentionResolutions {
+    bracket: HashMap<String, MentionResolution>,
+    at_name: HashMap<String, MentionResolution>,
+}
+
+impl MentionResolutions {
+    /// The zero-mention default — what `markdown_to_adf`'s wrapper passes
+    /// today, and what a `--no-mentions` invocation never needs to
+    /// construct (AC-003, AC-004).
+    pub fn empty() -> Self {
+        Self::default()
+    }
+}
 
 pub fn text_to_adf(text: &str) -> Value {
     // BC-7.2.011 EC-12 (S-522): no raw \r or \n may appear in any text node
@@ -116,8 +200,14 @@ pub fn text_to_adf(text: &str) -> Value {
     })
 }
 
-pub fn markdown_to_adf(markdown: &str) -> Result<Value, JrError> {
-    let options = Options::ENABLE_TABLES
+/// The shared `pulldown-cmark` `Options` bitset used by every parse call site
+/// in this module (`markdown_to_adf_with_mentions`, `markdown_to_adf_no_mentions`,
+/// and the disposable code-range guard scan in [`compute_code_ranges`]) —
+/// extracted so all parses see the identical grammar (ADR-0023 §4.1 requires
+/// the guard scan to use "the same `Options` bitset `markdown_to_adf`'s main
+/// build uses").
+fn cmark_options() -> Options {
+    Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
         // `^x^` / `~x~` -> ADF subsup mark. ENABLE_SUBSCRIPT reassigns single-tilde
@@ -153,24 +243,743 @@ pub fn markdown_to_adf(markdown: &str) -> Result<Value, JrError> {
         // taskList` passes through (panel.content permits taskList).
         // localIds assigned post-normalization via DFS pre-order walk (#471).
         // See docs/specs/adf-task-list.md.
-        | Options::ENABLE_TASKLISTS;
-    let parser = TextMergeStream::new(Parser::new_ext(markdown, options));
+        | Options::ENABLE_TASKLISTS
+}
+
+/// PURE — the one-line wrapper ADR-0023 §1 specifies (AC-003). Delegates to
+/// `markdown_to_adf_with_mentions` with an empty resolutions map: bracket-form
+/// mentions still convert "for free" (id only, no `attrs.text`), `@Name` stays
+/// inert (an empty resolutions map never has a matching entry) — byte-for-byte
+/// matching this function's pre-#674 behavior for every one of the 275
+/// pre-#674 tests.
+pub fn markdown_to_adf(markdown: &str) -> Result<Value, JrError> {
+    markdown_to_adf_with_mentions(markdown, &MentionResolutions::empty())
+}
+
+// ---------------------------------------------------------------------------
+// Mention pure entrypoints (S-cycle5-mention-pure-conversion, ADR-0023 §1/§4,
+// BC-7.2.016/BC-7.2.017/BC-7.2.018).
+// ---------------------------------------------------------------------------
+
+/// Private-Use-Area sentinel standing in for an escaped `\@` (ADR-0023 §4
+/// step 3).
+const SENTINEL_ESCAPE: char = '\u{E000}';
+/// Private-Use-Area sentinel standing in for a pre-existing literal
+/// `SENTINEL_ESCAPE` found in the user's raw input (ADR-0023 §4 step 2, the
+/// pass-2 adversarial-review L-3 collision guard).
+const SENTINEL_GUARD: char = '\u{E001}';
+
+/// Private-Use-Area sentinels bracketing a pre-parse-protected bracket-form
+/// mention token (F4-discovered extension to ADR-0023 §4, see the module
+/// note above [`protect_bracket_mentions`] for why this is required in
+/// addition to the `\@` sentinels).
+const BRACKET_SENTINEL_OPEN: char = '\u{E010}';
+const BRACKET_SENTINEL_CLOSE: char = '\u{E011}';
+/// Base codepoint for the reversible, one-to-one ASCII->PUA encoding
+/// [`encode_bracket_id_char`]/[`decode_bracket_id_char`] use to smuggle a
+/// bracket-form id's own characters through CommonMark's inline parser.
+/// The id charset (`[A-Za-z0-9:_-]`) is a subset of ASCII 0..=127, so
+/// `BRACKET_ID_ENCODE_BASE..BRACKET_ID_ENCODE_BASE+128` (0xE100..0xE180)
+/// comfortably fits the Private Use Area without overlapping
+/// `SENTINEL_ESCAPE`/`SENTINEL_GUARD`/`BRACKET_SENTINEL_OPEN`/`_CLOSE` above.
+const BRACKET_ID_ENCODE_BASE: u32 = 0xE100;
+
+fn encode_bracket_id_char(c: char) -> char {
+    // The id grammar (scan below) only ever admits ASCII alphanumerics, ':',
+    // '_', '-' — always < 128 — so this cannot overflow past the reserved
+    // PUA block.
+    char::from_u32(BRACKET_ID_ENCODE_BASE + c as u32)
+        .expect("bracket-form id charset is ASCII-only, encoding always stays in PUA")
+}
+
+fn decode_bracket_id_char(c: char) -> Option<char> {
+    let code = c as u32;
+    if (BRACKET_ID_ENCODE_BASE..BRACKET_ID_ENCODE_BASE + 128).contains(&code) {
+        char::from_u32(code - BRACKET_ID_ENCODE_BASE)
+    } else {
+        None
+    }
+}
+
+/// Disposable, single-purpose scan (ADR-0023 §4 step 1, extended): parse
+/// `markdown` once with the same `Options` bitset every other parse in this
+/// module uses, collecting the byte ranges of `Event::Code` (inline code
+/// spans), `Tag::CodeBlock` (fenced/indented code blocks), AND `Tag::Link`
+/// (any markdown link, needed by [`protect_bracket_mentions`]'s
+/// EC-7.2.016-6 exact-span exclusion below). Every other event is discarded
+/// immediately; no tree is retained. Neither code blocks nor links nest in
+/// CommonMark, so a single `Option<usize>` start-cursor per kind suffices.
+struct ProtectedRanges {
+    code: Vec<std::ops::Range<usize>>,
+    link: Vec<std::ops::Range<usize>>,
+}
+
+fn compute_protected_ranges(markdown: &str) -> ProtectedRanges {
+    let mut code = Vec::new();
+    let mut link = Vec::new();
+    let mut block_start: Option<usize> = None;
+    let mut link_start: Option<usize> = None;
+    for (event, range) in Parser::new_ext(markdown, cmark_options()).into_offset_iter() {
+        match event {
+            Event::Code(_) => code.push(range),
+            Event::Start(Tag::CodeBlock(_)) => block_start = Some(range.start),
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some(start) = block_start.take() {
+                    code.push(start..range.end);
+                }
+            }
+            Event::Start(Tag::Link { .. }) => link_start = Some(range.start),
+            Event::End(TagEnd::Link) => {
+                if let Some(start) = link_start.take() {
+                    link.push(start..range.end);
+                }
+            }
+            _ => {}
+        }
+    }
+    ProtectedRanges { code, link }
+}
+
+/// Same as [`compute_protected_ranges`] but code ranges only — used to
+/// recompute code ranges against the post-bracket-protection string (whose
+/// byte offsets differ from the original), where link ranges are no longer
+/// needed.
+fn compute_code_ranges(markdown: &str) -> Vec<std::ops::Range<usize>> {
+    compute_protected_ranges(markdown).code
+}
+
+/// `true` when `pos` is at the start of `text` or immediately follows
+/// whitespace or one of `*_~(\[` — the shared start-boundary rule for both
+/// mention forms (AC-002/AC-006 point 1), identical in shape to
+/// `find_bare_url_spans`'s own boundary check, extended with `[` (so a
+/// bracket-form or `@Name` span sitting as the very first character of an
+/// enclosing markdown link's TEXT — e.g. `[[~accountid:X]](url)`,
+/// EC-7.2.016-4 — is recognized as eligible; CommonMark's own `[` link
+/// delimiter is exactly the structural equivalent of "start of a text run"
+/// here) and `\` (so the live, unescaped `@` immediately following an
+/// even-count backslash run — AC-007's "even count ... genuine mention
+/// candidate" case — is still recognized once pulldown's native handling has
+/// already collapsed the backslash pairs).
+fn is_mention_boundary(text: &str, pos: usize) -> bool {
+    pos == 0
+        || text[..pos]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_whitespace() || matches!(c, '*' | '_' | '~' | '(' | '[' | '\\'))
+}
+
+/// `true` when `pos` is the first byte of a line (start of `text`, or
+/// immediately preceded by `\n`).
+fn is_start_of_line(text: &str, pos: usize) -> bool {
+    pos == 0 || text.as_bytes().get(pos - 1) == Some(&b'\n')
+}
+
+/// PRE-PARSE bracket-form protection (F4 spike finding, extends ADR-0023 §4
+/// beyond its originally-scoped `\@`-only mechanism). **Why this is
+/// required, not merely a nice-to-have:** CommonMark's inline grammar can
+/// destructively reinterpret characters INSIDE an otherwise-valid
+/// `[~accountid:<id>]` id — e.g. `[~accountid:_a_]`'s interior `_a_` is a
+/// genuine, syntactically valid emphasis span, and pulldown-cmark consumes
+/// the delimiting underscores as syntax (they never survive as literal text
+/// at all). Unlike the `\@` case, where the escaped character survives
+/// natively and only needs to be told apart from a live one, a destroyed
+/// delimiter cannot be recovered from the POST-`finish()` tree by any
+/// tree-walk — AC-001's byte-for-byte id-preservation guarantee is only
+/// achievable by protecting the id BEFORE the destructive parse ever runs.
+///
+/// For every bracket-form span matching the AC-001/AC-002 grammar (boundary,
+/// then one or more `[A-Za-z0-9:_-]` characters, then a closing `]`) in the
+/// RAW markdown, found via the same linear scan `scan_mention_spans` uses
+/// post-parse, this function replaces the WHOLE match with
+/// `BRACKET_SENTINEL_OPEN`, a reversible one-to-one PUA encoding of the id's
+/// own characters ([`encode_bracket_id_char`]), then `BRACKET_SENTINEL_CLOSE`
+/// — codepoints with zero special meaning anywhere in CommonMark's inline
+/// grammar, so the whole token is guaranteed to survive parsing as one
+/// unbroken run of ordinary characters. A span is EXCLUDED from protection
+/// (left completely untouched) when:
+/// - it starts inside a detected code span/fence (EC-7.2.016-3), or
+/// - its FULL match range is EXACTLY the range of some markdown `Link` event
+///   (i.e. the whole `[~accountid:X]` IS a shortcut/reference-style link,
+///   not merely nested inside a larger inline link's text) — this is
+///   EC-7.2.016-6's collision case: a matching `[label]: url` reference
+///   definition makes pulldown consume the brackets into a real link with no
+///   literal brackets surviving at all, so leaving it unprotected preserves
+///   "resolves as a link, not a mention" with zero special-casing, exactly
+///   as ADR-0023 originally intended (the ADR just didn't anticipate this
+///   needing a DIFFERENT range relationship than "is nested inside" — a span
+///   genuinely nested inside a larger inline link's text, e.g.
+///   `[[~accountid:X]](url)`, does NOT match this exact-range exclusion and
+///   IS protected, correctly preserving EC-7.2.016-4's opposite requirement); or
+/// - it sits at the start of a line and is immediately followed by `:` — the
+///   shape of a link REFERENCE DEFINITION's own `[label]: destination` line.
+///   Protecting a definition's label text would corrupt the very definition
+///   a case above depends on matching. This is a narrow syntactic heuristic,
+///   not a full reference-definition parse; it is deliberately conservative
+///   (a real prose sentence starting a line with `[~accountid:X]:` followed
+///   by ordinary text is vanishingly unlikely and not exercised by any
+///   holdout/test scenario).
+///
+/// Returns the transformed string and whether any replacement was made (so
+/// the caller can skip an unnecessary code-range recompute when nothing
+/// changed).
+fn protect_bracket_mentions(
+    markdown: &str,
+    code_ranges: &[std::ops::Range<usize>],
+    link_ranges: &[std::ops::Range<usize>],
+) -> (String, bool) {
+    const BRACKET_PREFIX: &str = "[~accountid:";
+    let in_code = |pos: usize| code_ranges.iter().any(|r| r.start <= pos && pos < r.end);
+    let is_exact_link_span =
+        |start: usize, end: usize| link_ranges.iter().any(|r| r.start == start && r.end == end);
+
+    let mut out = String::with_capacity(markdown.len());
+    let mut i = 0usize;
+    let mut changed = false;
+    while i < markdown.len() {
+        if is_mention_boundary(markdown, i)
+            && markdown[i..].starts_with(BRACKET_PREFIX)
+            && !in_code(i)
+        {
+            let id_start = i + BRACKET_PREFIX.len();
+            let mut id_end = id_start;
+            for ch in markdown[id_start..].chars() {
+                if ch.is_ascii_alphanumeric() || matches!(ch, ':' | '_' | '-') {
+                    id_end += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let match_end = id_end + 1;
+            let well_formed = id_end > id_start && markdown[id_end..].starts_with(']');
+            if well_formed
+                && !is_exact_link_span(i, match_end)
+                && !(is_start_of_line(markdown, i) && markdown[match_end..].starts_with(':'))
+            {
+                out.push(BRACKET_SENTINEL_OPEN);
+                for ch in markdown[id_start..id_end].chars() {
+                    out.push(encode_bracket_id_char(ch));
+                }
+                out.push(BRACKET_SENTINEL_CLOSE);
+                i = match_end;
+                changed = true;
+                continue;
+            }
+        }
+        let ch = markdown[i..].chars().next().expect("i < markdown.len()");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    (out, changed)
+}
+
+/// PURE — code-context-guarded pre-parse `\@` escape-sentinel protect pass
+/// (ADR-0023 §4, BC-7.2.018 point 6), extended (F4 spike finding) with
+/// [`protect_bracket_mentions`]'s bracket-form protection ahead of it. Runs
+/// at the top of BOTH `find_mention_candidates` and
+/// `markdown_to_adf_with_mentions` — NEVER `markdown_to_adf_no_mentions`
+/// (ADR-0023 §4 pass-2/L-3 correction; see AC-004/Architecture Compliance
+/// Rules).
+///
+/// Steps: (0) [`protect_bracket_mentions`] — bracket-form pre-parse
+/// protection (see its own doc comment for why this step exists); (1)
+/// [`compute_code_ranges`] recomputed against the (possibly bracket-protected)
+/// string — the disposable code-range guard scan (ADR-0023 §4.1); (2) a
+/// collision pre-pass remapping any pre-existing literal [`SENTINEL_ESCAPE`]
+/// in the non-code complement to [`SENTINEL_GUARD`] (§4.2); (3) a
+/// backslash-parity scan: for each maximal run of consecutive `\`
+/// immediately followed by `@` (outside a code range), an ODD run length
+/// means the `@` is escaped — the trailing backslash and the `@` are
+/// replaced together with `SENTINEL_ESCAPE` (the preceding, now-even-length
+/// remainder of the run is left untouched for pulldown-cmark's own native
+/// backslash-pair handling); an EVEN run length means the `@` is unescaped —
+/// the entire run and the `@` are left completely untouched (native handling
+/// already collapses backslash pairs correctly and leaves the `@` live).
+/// Content inside a detected code range is left byte-for-byte untouched by
+/// every step (§4.3, EC-7.2.016-3).
+pub(crate) fn protect_mention_escapes(markdown: &str) -> String {
+    let initial_ranges = compute_protected_ranges(markdown);
+    let (stage1, bracket_changed) =
+        protect_bracket_mentions(markdown, &initial_ranges.code, &initial_ranges.link);
+    // Bracket protection changes byte offsets whenever it fires, so the code
+    // ranges must be recomputed against `stage1` before the backslash-parity
+    // scan indexes into it; when nothing changed, `stage1 == markdown` and
+    // the already-computed ranges remain valid, saving a fourth parse.
+    let code_ranges = if bracket_changed {
+        compute_code_ranges(&stage1)
+    } else {
+        initial_ranges.code
+    };
+    let in_code = |pos: usize| code_ranges.iter().any(|r| r.start <= pos && pos < r.end);
+
+    // Step 2: collision guard. Byte-length-preserving (SENTINEL_ESCAPE and
+    // SENTINEL_GUARD are both 3-byte UTF-8 sequences), so `code_ranges`
+    // stays valid against this pass's output for step 3 below.
+    let step2: String = stage1
+        .char_indices()
+        .map(|(pos, ch)| {
+            if !in_code(pos) && ch == SENTINEL_ESCAPE {
+                SENTINEL_GUARD
+            } else {
+                ch
+            }
+        })
+        .collect();
+
+    // Step 3: backslash-parity scan over the step-2 string.
+    let chars: Vec<(usize, char)> = step2.char_indices().collect();
+    let mut result = String::with_capacity(step2.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        let (pos, ch) = chars[i];
+        if ch == '\\' && !in_code(pos) {
+            let mut j = i;
+            while j < chars.len() && chars[j].1 == '\\' && !in_code(chars[j].0) {
+                j += 1;
+            }
+            let run_len = j - i;
+            let next_is_live_at = j < chars.len() && chars[j].1 == '@' && !in_code(chars[j].0);
+            if next_is_live_at {
+                if run_len % 2 == 1 {
+                    // Odd: the trailing backslash escapes '@'. Emit the
+                    // leading (even-length) remainder unchanged, then the
+                    // sentinel in place of the final backslash + '@'.
+                    for &(_, c) in &chars[i..j - 1] {
+                        result.push(c);
+                    }
+                    result.push(SENTINEL_ESCAPE);
+                } else {
+                    // Even: no escape reaches '@'. Leave the whole run and
+                    // the '@' completely untouched.
+                    for &(_, c) in &chars[i..=j] {
+                        result.push(c);
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+            // No live '@' follows this run — emit it unchanged.
+            for &(_, c) in &chars[i..j] {
+                result.push(c);
+            }
+            i = j;
+            continue;
+        }
+        result.push(ch);
+        i += 1;
+    }
+    result
+}
+
+/// A single mention-candidate match located within one plain-text string by
+/// [`scan_mention_spans`]. `match_start`/`match_end` bound the FULL literal
+/// text consumed (used for tree-splitting/replacement); `reported` is the
+/// REPORTED candidate text (AC-006: for `Bracket` this is the id only,
+/// decoded from its PUA encoding — see [`protect_bracket_mentions`] — never
+/// a slice of `text` itself; for `AtName` it is a slice of `text` identical
+/// to the match span, since the leading `@` is part of the reported form).
+#[derive(Debug, Clone)]
+struct MentionSpan {
+    match_start: usize,
+    match_end: usize,
+    reported: String,
+    kind: MentionCandidateKind,
+}
+
+/// Locate every bracket-form and `@Name` mention-candidate span within a
+/// single plain-text string (BC-7.2.016/BC-7.2.018). Shared by the
+/// collect-only walk ([`find_mention_candidates`]) and the emit/mutate walk
+/// (`convert_mentions`, inside `markdown_to_adf_with_mentions`) so the
+/// detection grammar is defined exactly once (ADR-0023's own Rationale).
+///
+/// Bracket-form detection looks for a [`BRACKET_SENTINEL_OPEN`]/
+/// `BRACKET_SENTINEL_CLOSE`-delimited token (inserted pre-parse by
+/// [`protect_bracket_mentions`] for every ELIGIBLE bracket-form span) rather
+/// than the raw `[~accountid:` text — by the time this function ever runs
+/// (post-`finish()`), eligibility has already been decided; a bracket-form
+/// span that was NOT protected (mid-word, malformed, inside code, or one of
+/// [`protect_bracket_mentions`]'s two link-collision exclusions) is meant to
+/// stay literal, and scanning for the sentinel form alone achieves that with
+/// no further special-casing here.
+fn scan_mention_spans(text: &str) -> Vec<MentionSpan> {
+    let mut spans = Vec::new();
+    let mut i = 0usize;
+    while i < text.len() {
+        if text[i..].starts_with(BRACKET_SENTINEL_OPEN) {
+            let after_open = i + BRACKET_SENTINEL_OPEN.len_utf8();
+            if let Some(close_rel) = text[after_open..].find(BRACKET_SENTINEL_CLOSE) {
+                let encoded = &text[after_open..after_open + close_rel];
+                let mut id = String::with_capacity(encoded.len());
+                let mut ok = !encoded.is_empty();
+                for ch in encoded.chars() {
+                    match decode_bracket_id_char(ch) {
+                        Some(d) => id.push(d),
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if ok {
+                    let match_end = after_open + close_rel + BRACKET_SENTINEL_CLOSE.len_utf8();
+                    spans.push(MentionSpan {
+                        match_start: i,
+                        match_end,
+                        reported: id,
+                        kind: MentionCandidateKind::Bracket,
+                    });
+                    i = match_end;
+                    continue;
+                }
+            }
+        } else if is_mention_boundary(text, i) && text[i..].starts_with('@') {
+            let token_start = i + 1;
+            let mut raw_end = token_start;
+            for ch in text[token_start..].chars() {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                    raw_end += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let mut trimmed_end = raw_end;
+            while trimmed_end > token_start {
+                let last = text[token_start..trimmed_end].chars().next_back().unwrap();
+                if matches!(last, '.' | '-' | '_') {
+                    trimmed_end -= last.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if trimmed_end > token_start {
+                spans.push(MentionSpan {
+                    match_start: i,
+                    match_end: trimmed_end,
+                    reported: text[i..trimmed_end].to_string(),
+                    kind: MentionCandidateKind::AtName,
+                });
+                i = trimmed_end;
+                continue;
+            }
+        }
+        let step = text[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        i += step;
+    }
+    spans
+}
+
+/// `true` when `node` is a `text` node carrying a `code` mark. Mirrors the
+/// existing `autolink_bare_urls` skip check, narrowed to `code` only (H-2,
+/// AC-009): mention detection does NOT skip `link`-marked text.
+fn has_code_mark(node: &Value) -> bool {
+    node.get("marks")
+        .and_then(Value::as_array)
+        .is_some_and(|ms| {
+            ms.iter()
+                .any(|m| m.get("type").and_then(Value::as_str) == Some("code"))
+        })
+}
+
+/// Recursive collect-only walk (AC-008 step 3, `find_mention_candidates`
+/// arm): skips `codeBlock` content and `code`-marked text nodes (AC-009),
+/// recurses into every other node's `content` array, and appends every
+/// candidate span found in scan order without deduplication.
+#[allow(dead_code)] // see MentionCandidate's #[allow(dead_code)] note above — the sole caller, find_mention_candidates, carries the same note
+fn collect_mention_candidates_walk(
+    nodes: &[Value],
+    depth: usize,
+    out: &mut Vec<MentionCandidate>,
+) -> Result<(), JrError> {
+    if depth >= MAX_ADF_DEPTH {
+        return Err(JrError::UserError(
+            "markdown nesting too deep (max 256 levels)".to_string(),
+        ));
+    }
+    for node in nodes {
+        let node_type = node.get("type").and_then(Value::as_str).unwrap_or("");
+        match node_type {
+            "codeBlock" => {}
+            "text" => {
+                if !has_code_mark(node) {
+                    if let Some(text) = node.get("text").and_then(Value::as_str) {
+                        for span in scan_mention_spans(text) {
+                            out.push(MentionCandidate {
+                                kind: span.kind,
+                                span: span.reported,
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {
+                if let Some(content) = node.get("content").and_then(Value::as_array) {
+                    collect_mention_candidates_walk(content, depth + 1, out)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// PURE — read-only scan (BC-7.2.016/BC-7.2.018, ADR-0023 §1/§5). Runs the
+/// identical `TextMergeStream<Parser>` build `markdown_to_adf_with_mentions`
+/// runs (same tree shape, same code-mark exclusion; link-marked text is NOT
+/// excluded — AC-009/ADR-0023 §5 H-2 correction) and returns every literal
+/// mention-candidate span found in an eligible position, in scan order,
+/// WITHOUT deduplication. Performs steps 0-3 of the definitive five-step
+/// post-`finish()` pass order (AC-008): `protect_mention_escapes` ->
+/// parse+`finish()` -> `autolink_bare_urls` -> candidate collection
+/// (collect-only, no mutation). Zero conversion, zero HTTP — parsing text is
+/// not I/O.
+// `#[allow(dead_code)]`: consumed by `src/cli/issue/mentions.rs::resolve_mentions`,
+// S-cycle5-mention-resolution-wiring's (Story B's) scope — remove once wired.
+#[allow(dead_code)]
+pub(crate) fn find_mention_candidates(markdown: &str) -> Result<MentionCandidates, JrError> {
+    let protected = protect_mention_escapes(markdown);
+    let parser = TextMergeStream::new(Parser::new_ext(&protected, cmark_options()));
     let mut builder = AdfBuilder::new();
     for event in parser {
         builder.process(event);
     }
     let mut content = builder.finish()?;
-    // Post-normalization DFS pre-order walk: assign monotonically increasing
-    // 1-based counter strings ("1", "2", …) to all taskList.attrs.localId and
-    // taskItem.attrs.localId fields. The walk runs AFTER finish() so that pruned
-    // nodes (whose counter slots are reclaimed) do not participate. Container
-    // nodes are numbered before their children (pre-order). No uuid crate (#471).
-    assign_local_ids(&mut content)?;
+    autolink_bare_urls(&mut content, 0)?;
+    let mut candidates = Vec::new();
+    collect_mention_candidates_walk(&content, 0, &mut candidates)?;
+    Ok(MentionCandidates { candidates })
+}
+
+/// Build a mention's `attrs.text` value from a resolved `display_name`
+/// (BC-7.2.017 postcondition 1,2,3): control characters (`\r`/`\n`/other C0
+/// controls) are replaced with a single space FIRST, then any leading `@`
+/// characters are stripped before re-applying exactly one `@` prefix — so a
+/// bot display name `"@build-bot"` yields `"@build-bot"`, never
+/// `"@@build-bot"`.
+fn build_mention_text(display_name: &str) -> String {
+    let sanitized: String = display_name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let stripped = sanitized.trim_start_matches('@');
+    format!("@{stripped}")
+}
+
+/// Split a plain `text` node into a run of nodes where each convertible
+/// mention-candidate span becomes a `mention` node, preserving the node's
+/// existing inline marks on the surrounding literal-text runs (mirrors
+/// `split_text_node_on_urls`'s shape). Returns `None` when nothing in this
+/// node actually converts, so the caller leaves the node as-is.
+///
+/// Bracket-form spans ALWAYS convert (AC-001, self-contained: `attrs.id` is
+/// always populated; `attrs.text` only if `resolved` has a matching entry).
+/// `@Name` spans convert ONLY IF `resolved` has a matching entry — an
+/// unresolved `@Name` is left as literal text (ADR-0023 §1 safe default) by
+/// simply never advancing the cursor past it, so it re-merges into whatever
+/// literal-text run surrounds it.
+fn split_text_node_on_mentions(node: &Value, resolved: &MentionResolutions) -> Option<Vec<Value>> {
+    let text = node.get("text").and_then(Value::as_str)?;
+    let spans = scan_mention_spans(text);
+    if spans.is_empty() {
+        return None;
+    }
+    let base_marks = node.get("marks").and_then(Value::as_array).cloned();
+    let make_text = |slice: &str| -> Value {
+        let mut out = json!({ "type": "text", "text": slice });
+        if let Some(m) = &base_marks {
+            if !m.is_empty() {
+                out["marks"] = json!(m);
+            }
+        }
+        out
+    };
+    let mut result = Vec::new();
+    let mut cursor = 0usize;
+    let mut converted_any = false;
+    for span in &spans {
+        let reported = span.reported.as_str();
+        let resolution = match span.kind {
+            MentionCandidateKind::Bracket => resolved.bracket.get(reported),
+            MentionCandidateKind::AtName => resolved.at_name.get(reported),
+        };
+        let should_convert =
+            matches!(span.kind, MentionCandidateKind::Bracket) || resolution.is_some();
+        if !should_convert {
+            continue;
+        }
+        if span.match_start > cursor {
+            result.push(make_text(&text[cursor..span.match_start]));
+        }
+        let mut attrs = serde_json::Map::new();
+        match span.kind {
+            MentionCandidateKind::Bracket => {
+                attrs.insert("id".to_string(), json!(reported));
+            }
+            MentionCandidateKind::AtName => {
+                let r = resolution.expect("should_convert guarantees Some for AtName");
+                attrs.insert("id".to_string(), json!(r.account_id));
+            }
+        }
+        if let Some(r) = resolution {
+            attrs.insert(
+                "text".to_string(),
+                json!(build_mention_text(&r.display_name)),
+            );
+        }
+        result.push(json!({ "type": "mention", "attrs": attrs }));
+        cursor = span.match_end;
+        converted_any = true;
+    }
+    if !converted_any {
+        return None;
+    }
+    if cursor < text.len() {
+        result.push(make_text(&text[cursor..]));
+    }
+    Some(result)
+}
+
+/// Recursive mutate walk (AC-008 step 3, emit arm): mirrors
+/// `autolink_bare_urls`'s shape exactly, splicing in `mention` nodes wherever
+/// [`split_text_node_on_mentions`] finds a convertible span.
+fn convert_mentions(
+    nodes: &mut Vec<Value>,
+    resolved: &MentionResolutions,
+    depth: usize,
+) -> Result<(), JrError> {
+    if depth >= MAX_ADF_DEPTH {
+        return Err(JrError::UserError(
+            "markdown nesting too deep (max 256 levels)".to_string(),
+        ));
+    }
+    let mut i = 0;
+    while i < nodes.len() {
+        let node_type = nodes[i].get("type").and_then(Value::as_str).unwrap_or("");
+        match node_type {
+            "codeBlock" => {}
+            "text" => {
+                if !has_code_mark(&nodes[i]) {
+                    if let Some(replacement) = split_text_node_on_mentions(&nodes[i], resolved) {
+                        let len = replacement.len();
+                        nodes.splice(i..=i, replacement);
+                        i += len;
+                        continue;
+                    }
+                }
+            }
+            _ => {
+                if let Some(content) = nodes[i].get_mut("content").and_then(Value::as_array_mut) {
+                    convert_mentions(content, resolved, depth + 1)?;
+                }
+            }
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+/// Post-`finish()` sentinel-restore pass (AC-008 step 4, ADR-0023 §4 step 6):
+/// walks `text` nodes exactly where `autolink_bare_urls`/`convert_mentions`
+/// already walk, skipping `codeBlock` content and `code`-marked text nodes
+/// (defense-in-depth — steps 2/3 of `protect_mention_escapes` never insert
+/// either sentinel into code content in the first place). Within eligible
+/// text, applies two independent, order-insensitive substitutions:
+/// `SENTINEL_ESCAPE` -> `'@'`, and `SENTINEL_GUARD` -> `SENTINEL_ESCAPE`.
+fn restore_mention_sentinels(nodes: &mut [Value], depth: usize) -> Result<(), JrError> {
+    if depth >= MAX_ADF_DEPTH {
+        return Err(JrError::UserError(
+            "markdown nesting too deep (max 256 levels)".to_string(),
+        ));
+    }
+    for node in nodes.iter_mut() {
+        let node_type = node.get("type").and_then(Value::as_str).unwrap_or("");
+        match node_type {
+            "codeBlock" => {}
+            "text" => {
+                if !has_code_mark(node) {
+                    if let Some(text) = node.get("text").and_then(Value::as_str) {
+                        if text.contains(SENTINEL_ESCAPE) || text.contains(SENTINEL_GUARD) {
+                            let restored: String = text
+                                .chars()
+                                .map(|c| match c {
+                                    SENTINEL_ESCAPE => '@',
+                                    SENTINEL_GUARD => SENTINEL_ESCAPE,
+                                    other => other,
+                                })
+                                .collect();
+                            node["text"] = json!(restored);
+                        }
+                    }
+                }
+            }
+            _ => {
+                if let Some(content) = node.get_mut("content").and_then(Value::as_array_mut) {
+                    restore_mention_sentinels(content, depth + 1)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// PURE — the real `markdown_to_adf` body, extended (BC-7.2.016/BC-7.2.017,
+/// ADR-0023 §1). Every bracket-form span is ALWAYS converted to a `mention`
+/// node (self-contained, AC-001); every `@Name` span is converted ONLY IF
+/// `resolved` has a matching entry (safe default — an unresolved `@Name`
+/// never silently vanishes, it is left as literal text, per ADR-0023 §1).
+/// Runs the full five-step pass order (AC-008): `protect_mention_escapes`
+/// -> parse+`finish()` -> `autolink_bare_urls` -> `convert_mentions` (emit)
+/// -> sentinel-restore -> `assign_local_ids` (last, unconditionally).
+pub fn markdown_to_adf_with_mentions(
+    markdown: &str,
+    resolved: &MentionResolutions,
+) -> Result<Value, JrError> {
+    let protected = protect_mention_escapes(markdown);
+    let parser = TextMergeStream::new(Parser::new_ext(&protected, cmark_options()));
+    let mut builder = AdfBuilder::new();
+    for event in parser {
+        builder.process(event);
+    }
+    let mut content = builder.finish()?;
     // pulldown-cmark 0.13 has no autolink extension (ENABLE_GFM only adds alert
     // blockquotes), so bare URLs arrive as plain text. Post-process the built
     // tree to apply `link` marks to explicit-scheme `http(s)://` runs — Jira's
     // REST API does NOT auto-linkify plain text, so the mark is required for the
     // URL to be clickable (#473, .factory/research/issue-473-bare-url-autolink-scope.md).
+    autolink_bare_urls(&mut content, 0)?;
+    convert_mentions(&mut content, resolved, 0)?;
+    restore_mention_sentinels(&mut content, 0)?;
+    // ADR-0023 §5: assign_local_ids now runs LAST, unconditionally, after
+    // every other post-finish() pass — a deliberate, in-scope tightening of
+    // the pre-existing documented order (previously: after finish(), before
+    // autolink_bare_urls). Behavior-preserving for every pre-#674 test, since
+    // neither `mention` nor `link`-marked text runs receive a `localId`.
+    assign_local_ids(&mut content)?;
+    Ok(json!({
+        "version": 1,
+        "type": "doc",
+        "content": content,
+    }))
+}
+
+/// PURE — byte-for-byte equivalent to `markdown_to_adf`'s pre-#674 behavior
+/// (BC-7.2.016 postcondition 7, ADR-0023 §6, AC-004). Both mention forms
+/// are left as literal text; zero mention nodes; zero HTTP. Does NOT call
+/// `protect_mention_escapes` (ADR-0023 §4 pass-2/L-3 correction) — this
+/// entrypoint performs no mention detection at all, so pulldown-cmark's
+/// native `\@`->`@` handling already satisfies the byte-for-byte contract
+/// with zero extra code. This is the pure half of the `--no-mentions` CLI
+/// flag (the flag declaration + wiring is Story B's scope, ADR-0023 §6).
+/// The pass order here is deliberately UNCHANGED from `markdown_to_adf`'s
+/// pre-#674 body (`assign_local_ids` before `autolink_bare_urls`) — this
+/// entrypoint's whole contract is byte-for-byte pre-#674 equivalence, so it
+/// does not adopt the AC-008/ADR-0023 §5 reordering that only applies to
+/// pipelines that also run the mention passes.
+pub fn markdown_to_adf_no_mentions(markdown: &str) -> Result<Value, JrError> {
+    let parser = TextMergeStream::new(Parser::new_ext(markdown, cmark_options()));
+    let mut builder = AdfBuilder::new();
+    for event in parser {
+        builder.process(event);
+    }
+    let mut content = builder.finish()?;
+    assign_local_ids(&mut content)?;
     autolink_bare_urls(&mut content, 0)?;
     Ok(json!({
         "version": 1,
@@ -2412,15 +3221,45 @@ impl AdfRenderer {
                 // on its cells. Fall through to flat rendering defensively.
                 self.render_cell_inline(node)?;
             }
+            // BC-7.2.019/AC-011 (S-cycle5-mention-pure-conversion, issue #674):
+            // `mention` is a LEAF node (no `content` array) — never calls
+            // `render_children`. Three-way fallback, in order: (1) `attrs.text`
+            // present and non-empty -> render verbatim (it already includes the
+            // leading "@"; never prepend a second one); (2) else `attrs.id`
+            // present and non-empty -> render "@" + id; (3) else -> literal
+            // "@?". Empty-string values are treated identically to absent (no
+            // special empty-string branch) — `Value::as_str` + a non-empty
+            // filter handles both "missing key" and "present but empty" the
+            // same way. This carves `mention` out of the `_` catch-all's
+            // silently-dropped-node set (BC-7.2.004 amendment): `emoji`/
+            // `inlineCard`/`media` remain unchanged, silently dropped, below.
+            "mention" => {
+                let attrs = node.get("attrs");
+                let text = attrs
+                    .and_then(|a| a.get("text"))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty());
+                let id = attrs
+                    .and_then(|a| a.get("id"))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty());
+                let rendered = match (text, id) {
+                    (Some(t), _) => t.to_string(),
+                    (None, Some(i)) => format!("@{i}"),
+                    (None, None) => "@?".to_string(),
+                };
+                self.output.push_str(&rendered);
+            }
             _ => {
-                // NFR-O-I: ADF inline nodes mention/emoji/inlineCard/media fall through to `_`
-                // here. Canonical render hints (per developer.atlassian.com/cloud/jira/platform/
-                // apis/document/nodes/, retrieved 2026-05):
-                //   mention    -> attrs.text (already includes leading "@"); fallback "@?"
+                // NFR-O-I: ADF inline nodes emoji/inlineCard/media fall through
+                // to `_` here (`mention` is carved out above, BC-7.2.004
+                // amendment). Canonical render hints (per
+                // developer.atlassian.com/cloud/jira/platform/apis/document/nodes/,
+                // retrieved 2026-05):
                 //   emoji      -> attrs.text (unicode glyph) or attrs.shortName (e.g. ":smile:")
                 //   inlineCard -> attrs.url (title not guaranteed; either url OR data, not both)
                 //   media      -> "[media]" placeholder; fileName requires Media Services call
-                // Not implemented in v0.5; tracked under issue #202.
+                // emoji/inlineCard/media not implemented in v0.5; tracked under issue #202.
                 //
                 // Unknown node: recurse into content if present, otherwise
                 // drop silently. Per the #202 spec, this avoids debug strings
@@ -11989,5 +12828,1093 @@ mod tests {
             def_nodes[1].get("marks").is_none(),
             "definition body must carry no marks: {def_nodes:?}"
         );
+    }
+
+    // =========================================================================
+    // S-cycle5-mention-pure-conversion (issue #674, ADR-0023) — RED GATE.
+    //
+    // Every test below exercises `find_mention_candidates`,
+    // `markdown_to_adf_with_mentions`, `markdown_to_adf_no_mentions`, and/or
+    // `protect_mention_escapes` — all `todo!()` in the stub phase — OR the new
+    // `AdfRenderer::render_node` "mention" arm, which does not exist yet (the
+    // reverse-path tests fail via a real assertion mismatch, not a panic,
+    // since the mention node currently falls through the pre-existing `_`
+    // catch-all and renders nothing).
+    //
+    // Discipline note (avoiding vacuous pre-implementation passes): tests that
+    // assert NEGATIVE/boundary properties (e.g. "this must NOT become a
+    // mention") are routed through `conv`/`conv_with` (i.e.
+    // `markdown_to_adf_with_mentions`) rather than bare `markdown_to_adf`.
+    // Bare `markdown_to_adf` is UNCHANGED in the stub phase (see the module
+    // note above `find_mention_candidates`) and therefore already emits zero
+    // mention nodes for every input today — a negative assertion against bare
+    // `markdown_to_adf` would vacuously pass before implementation. Routing
+    // through the `todo!()`-stubbed `markdown_to_adf_with_mentions` instead
+    // guarantees every such test is genuinely RED (via panic) right now. The
+    // small, deliberate exception is the "AC-003 wrapper" section below, which
+    // exists specifically to pin bare `markdown_to_adf`'s post-implementation
+    // behavior and is positive-shaped (already RED today via assertion
+    // mismatch, since bare `markdown_to_adf` currently never emits mentions).
+    //
+    // TEST-WRITER FLAG (discrepancy for the implementer to resolve — see the
+    // final report): the stub's own doc comments on `MentionCandidateKind::AtName`
+    // and `MentionResolutions` describe the `@Name` form's reported span /
+    // resolutions key as "WITHOUT the leading @" / "@-prefix-STRIPPED". BC-7.2.017's
+    // pass-3 L4 correction and BC-7.2.018 point 2 are explicit and repeated that
+    // the reported span (and therefore the `MentionResolutions` key) is the
+    // POST-TRIM, `@`-PREFIX-INCLUDED token (e.g. "@jsmith", not "jsmith") — per
+    // this repo's "the BC is the source of truth" convention, every test below
+    // assumes the `@`-prefixed form for the `@Name` key space.
+
+    /// The real, mention-aware emitter with an empty resolutions map —
+    /// equivalent, per AC-003, to what bare `markdown_to_adf` becomes once
+    /// implemented. Used throughout this section instead of bare
+    /// `markdown_to_adf` so every test is genuinely RED against the stub.
+    fn conv(markdown: &str) -> Value {
+        markdown_to_adf_with_mentions(markdown, &MentionResolutions::empty()).unwrap()
+    }
+
+    /// Same as [`conv`] but with a caller-supplied resolutions map.
+    fn conv_with(markdown: &str, resolved: &MentionResolutions) -> Value {
+        markdown_to_adf_with_mentions(markdown, resolved).unwrap()
+    }
+
+    /// Build a `MentionResolutions` with one bracket-form entry, keyed by the
+    /// literal accountId (BC-7.2.017/ADR-0023 §2). Constructs the struct
+    /// directly via its private fields — permitted because `tests` is a
+    /// descendant module of `adf` (same file), the same pattern this file
+    /// already relies on for whitebox testing of other private state.
+    fn resolutions_with_bracket(account_id: &str, display_name: &str) -> MentionResolutions {
+        let mut r = MentionResolutions::empty();
+        r.bracket.insert(
+            account_id.to_string(),
+            MentionResolution {
+                account_id: account_id.to_string(),
+                display_name: display_name.to_string(),
+            },
+        );
+        r
+    }
+
+    /// Build a `MentionResolutions` with one `@Name`-form entry, keyed by the
+    /// POST-TRIM, `@`-prefixed candidate token (see the TEST-WRITER FLAG note
+    /// above this section).
+    fn resolutions_with_at_name(
+        at_name_key: &str,
+        account_id: &str,
+        display_name: &str,
+    ) -> MentionResolutions {
+        let mut r = MentionResolutions::empty();
+        r.at_name.insert(
+            at_name_key.to_string(),
+            MentionResolution {
+                account_id: account_id.to_string(),
+                display_name: display_name.to_string(),
+            },
+        );
+        r
+    }
+
+    /// Recursively collect every `mention` node's `attrs` object anywhere in
+    /// an ADF value tree, in document order.
+    fn collect_mention_attrs(value: &Value) -> Vec<Value> {
+        let mut out = Vec::new();
+        collect_mention_attrs_walk(value, &mut out);
+        out
+    }
+
+    fn collect_mention_attrs_walk(value: &Value, out: &mut Vec<Value>) {
+        if value.get("type").and_then(Value::as_str) == Some("mention") {
+            out.push(value.get("attrs").cloned().unwrap_or_else(|| json!({})));
+        }
+        match value {
+            Value::Array(items) => {
+                for item in items {
+                    collect_mention_attrs_walk(item, out);
+                }
+            }
+            Value::Object(map) => {
+                for v in map.values() {
+                    collect_mention_attrs_walk(v, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Count `mention` nodes anywhere in the tree.
+    fn count_mention_nodes(value: &Value) -> usize {
+        collect_mention_attrs(value).len()
+    }
+
+    /// Find the first node of the given `type` anywhere in the tree (DFS,
+    /// pre-order), returning the whole node (not just `attrs`).
+    fn find_first_node_of_type<'a>(value: &'a Value, node_type: &str) -> Option<&'a Value> {
+        if value.get("type").and_then(Value::as_str) == Some(node_type) {
+            return Some(value);
+        }
+        match value {
+            Value::Array(items) => items
+                .iter()
+                .find_map(|v| find_first_node_of_type(v, node_type)),
+            Value::Object(map) => map
+                .values()
+                .find_map(|v| find_first_node_of_type(v, node_type)),
+            _ => None,
+        }
+    }
+
+    /// Recursively collect every `text`-bearing string anywhere in the tree:
+    /// `text` node bodies AND `mention.attrs.text` (INV-1 applies file-wide to
+    /// every text-bearing field, per BC-7.2.017's own cross-reference).
+    fn collect_all_text_strings(value: &Value, out: &mut Vec<String>) {
+        let node_type = value.get("type").and_then(Value::as_str);
+        if node_type == Some("text") {
+            if let Some(t) = value.get("text").and_then(Value::as_str) {
+                out.push(t.to_string());
+            }
+        }
+        if node_type == Some("mention") {
+            if let Some(t) = value
+                .get("attrs")
+                .and_then(|a| a.get("text"))
+                .and_then(Value::as_str)
+            {
+                out.push(t.to_string());
+            }
+        }
+        match value {
+            Value::Array(items) => {
+                for item in items {
+                    collect_all_text_strings(item, out);
+                }
+            }
+            Value::Object(map) => {
+                for v in map.values() {
+                    collect_all_text_strings(v, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `find_mention_candidates`, filtered to the `@Name` form, span-only, in
+    /// scan order.
+    fn at_name_candidates(markdown: &str) -> Vec<String> {
+        find_mention_candidates(markdown)
+            .unwrap()
+            .candidates
+            .into_iter()
+            .filter(|c| c.kind == MentionCandidateKind::AtName)
+            .map(|c| c.span)
+            .collect()
+    }
+
+    /// `find_mention_candidates`, filtered to the bracket form, span-only, in
+    /// scan order.
+    fn bracket_candidates(markdown: &str) -> Vec<String> {
+        find_mention_candidates(markdown)
+            .unwrap()
+            .candidates
+            .into_iter()
+            .filter(|c| c.kind == MentionCandidateKind::Bracket)
+            .map(|c| c.span)
+            .collect()
+    }
+
+    // -------------------------------------------------------------------
+    // AC-001 / VP-674-001 — bracket-form emission is unconditional and opaque
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_016_bracket_form_emits_single_mention_id_verbatim() {
+        let adf = conv("Hello [~accountid:5b10ac8d82e05b22cc7d4349]");
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(
+            mentions.len(),
+            1,
+            "expected exactly one mention node: {adf}"
+        );
+        assert_eq!(mentions[0]["id"], "5b10ac8d82e05b22cc7d4349");
+        assert!(
+            mentions[0].get("text").is_none(),
+            "unresolved bracket form must omit attrs.text: {mentions:?}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_016_bracket_form_id_preserves_colon_and_hyphen_verbatim() {
+        let adf = conv("[~accountid:abc:def-123]");
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(
+            mentions[0]["id"], "abc:def-123",
+            "id must be opaque, never UUID-normalized: {mentions:?}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_016_bracket_form_nested_inside_paragraph() {
+        let adf = conv("[~accountid:X]");
+        assert_eq!(adf["content"][0]["type"], "paragraph");
+        assert_eq!(adf["content"][0]["content"][0]["type"], "mention");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn prop_bc_7_2_016_bracket_form_emits_single_mention_id_verbatim(
+            id in "[A-Za-z0-9:_-]{1,40}"
+        ) {
+            let md = format!("[~accountid:{id}]");
+            let adf = conv(&md);
+            let mentions = collect_mention_attrs(&adf);
+            prop_assert_eq!(mentions.len(), 1);
+            prop_assert_eq!(mentions[0]["id"].as_str().unwrap(), id.as_str());
+        }
+
+        #[test]
+        fn prop_bc_7_2_016_bracket_form_start_after_whitespace_or_open_punct(
+            id in "[A-Za-z0-9:_-]{1,20}",
+            prefix_char in prop_oneof![Just(' '), Just('*'), Just('_'), Just('~'), Just('(')]
+        ) {
+            let md = format!("x{prefix_char}[~accountid:{id}]");
+            let adf = conv(&md);
+            prop_assert_eq!(count_mention_nodes(&adf), 1);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // AC-002 — bracket-form start-boundary and skip-context rules
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_016_mid_word_bracket_start_rejected() {
+        let adf = conv("foo[~accountid:abc]");
+        assert_eq!(
+            count_mention_nodes(&adf),
+            0,
+            "mid-word bracket must NOT convert: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_016_malformed_bracket_not_a_candidate() {
+        assert_eq!(count_mention_nodes(&conv("[~accountid:]")), 0);
+        assert_eq!(count_mention_nodes(&conv("[~accountid:a b]")), 0);
+    }
+
+    #[test]
+    fn test_bc_7_2_016_inside_inline_code_never_converted() {
+        let adf = conv("`[~accountid:X]`");
+        assert_eq!(count_mention_nodes(&adf), 0);
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains("[~accountid:X]")),
+            "literal bracket text must survive inside code: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_016_inside_fenced_code_block_never_converted() {
+        let adf = conv("```\n[~accountid:X]\n```");
+        assert_eq!(count_mention_nodes(&adf), 0);
+    }
+
+    #[test]
+    fn test_bc_7_2_016_ec4_inside_link_text_still_converts() {
+        // EC-7.2.016-4: bracket span inside markdown link text still converts
+        // (mention detection does NOT skip `link`-marked text, ADR-0023 §5 H-2).
+        let adf = conv("[[~accountid:X]](https://example.com)");
+        assert_eq!(
+            count_mention_nodes(&adf),
+            1,
+            "mention inside link text must still convert: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_016_ec6_reference_link_collision_resolves_as_link_not_mention() {
+        // EC-7.2.016-6: a same-document reference definition matching the
+        // bracket token resolves the token as a link, not a mention. No
+        // special-casing.
+        let md = "[~accountid:X]\n\n[~accountid:X]: https://example.com";
+        let adf = conv(md);
+        assert_eq!(
+            count_mention_nodes(&adf),
+            0,
+            "a matching reference definition must win over mention conversion: {adf}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // AC-006 / VP-674-018 — `@Name` detection grammar (find_mention_candidates)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_018_at_name_boundary_and_charset_examples() {
+        // EC-7.2.018-1: email local part excluded by the mid-word boundary rule.
+        assert_eq!(
+            at_name_candidates("Contact me at user@example.com"),
+            Vec::<String>::new()
+        );
+        assert_eq!(at_name_candidates("a@b"), Vec::<String>::new());
+        // Start-of-node candidate.
+        assert_eq!(at_name_candidates("@jsmith"), vec!["@jsmith".to_string()]);
+        // After-whitespace candidate.
+        assert_eq!(
+            at_name_candidates("cc @jsmith"),
+            vec!["@jsmith".to_string()]
+        );
+        // EC-7.2.018-2: npm scoped package -> candidate is "@angular" only.
+        assert_eq!(
+            at_name_candidates("@angular/core is great"),
+            vec!["@angular".to_string()]
+        );
+        // EC-7.2.018-5: trailing punctuation, non-charset form (charset exclusion alone).
+        assert_eq!(
+            at_name_candidates("Thanks @jsmith!"),
+            vec!["@jsmith".to_string()]
+        );
+        // EC-7.2.018-5: trailing punctuation, IN-CHARSET forms (needs the trim step).
+        assert_eq!(
+            at_name_candidates("Thanks @jsmith."),
+            vec!["@jsmith".to_string()]
+        );
+        assert_eq!(
+            at_name_candidates("Thanks @jsmith-"),
+            vec!["@jsmith".to_string()]
+        );
+        assert_eq!(
+            at_name_candidates("Thanks @jsmith_"),
+            vec!["@jsmith".to_string()]
+        );
+        // EC-7.2.018-9: trim-to-empty is not a candidate at all.
+        assert_eq!(at_name_candidates("@."), Vec::<String>::new());
+        assert_eq!(at_name_candidates("@---"), Vec::<String>::new());
+        // EC-7.2.018-10: consecutive, whitespace-separated -> two candidates.
+        assert_eq!(
+            at_name_candidates("@a @b"),
+            vec!["@a".to_string(), "@b".to_string()]
+        );
+        // EC-7.2.018-10: no intervening whitespace -> exactly one candidate.
+        assert_eq!(at_name_candidates("@a@b"), vec!["@a".to_string()]);
+        // Mid-word negative.
+        assert_eq!(at_name_candidates("foo@bar"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_bc_7_2_018_ec3_java_annotation_prose_is_a_genuine_candidate() {
+        assert_eq!(
+            at_name_candidates("add @Override to the method"),
+            vec!["@Override".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_018_ec4_slack_broadcast_tokens_are_candidates() {
+        assert_eq!(
+            at_name_candidates("cc @channel"),
+            vec!["@channel".to_string()]
+        );
+        assert_eq!(at_name_candidates("cc @here"), vec!["@here".to_string()]);
+    }
+
+    #[test]
+    fn test_bc_7_2_018_at_name_skip_code_never_a_candidate() {
+        assert_eq!(at_name_candidates("`@jsmith`"), Vec::<String>::new());
+        assert_eq!(
+            at_name_candidates("```\n@Deprecated\n```"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_018_ec6_at_name_inside_link_text_still_a_candidate() {
+        // EC-7.2.018-6: link-mark interaction is NOT separately excluded.
+        assert_eq!(
+            at_name_candidates("[@jsmith](https://example.com)"),
+            vec!["@jsmith".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_018_multi_word_display_name_only_first_token_is_candidate() {
+        // EC-7.2.018-7: "@Jane Doe" detects "@Jane" only; "Doe" is untouched.
+        assert_eq!(at_name_candidates("@Jane Doe"), vec!["@Jane".to_string()]);
+    }
+
+    #[test]
+    fn test_bc_7_2_016_bracket_candidates_reported_by_find_mention_candidates() {
+        assert_eq!(
+            bracket_candidates("[~accountid:abc:def-123]"),
+            vec!["abc:def-123".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_find_mention_candidates_deterministic_across_calls() {
+        // VP-674-004 (read-only scan) — calling it twice on the same input
+        // yields byte-identical results (no hidden mutable state / side effects).
+        let a = find_mention_candidates("cc @jsmith and [~accountid:X]").unwrap();
+        let b = find_mention_candidates("cc @jsmith and [~accountid:X]").unwrap();
+        assert_eq!(a, b);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn prop_bc_7_2_018_at_name_detection_grammar(
+            name in "[A-Za-z0-9]{1,12}",
+            has_leading_space in any::<bool>(),
+        ) {
+            let sep = if has_leading_space { " " } else { "" };
+            let md = format!("hello{sep}@{name}");
+            let candidates = at_name_candidates(&md);
+            if has_leading_space {
+                prop_assert_eq!(candidates, vec![format!("@{name}")]);
+            } else {
+                // mid-word: "hello@name" — '@' is preceded by 'o', a word char.
+                prop_assert!(candidates.is_empty());
+            }
+        }
+
+        #[test]
+        fn prop_bc_7_2_018_at_name_no_candidate_contains_slash_or_whitespace(
+            name in "[A-Za-z0-9._-]{1,15}",
+            suffix in "[A-Za-z0-9/]{0,10}",
+        ) {
+            let md = format!("@{name}{suffix}");
+            for c in at_name_candidates(&md) {
+                prop_assert!(!c.contains('/'));
+                prop_assert!(!c.chars().any(|ch| ch.is_whitespace()));
+            }
+        }
+
+        #[test]
+        fn prop_bc_7_2_018_at_name_no_candidate_ends_in_trim_chars(
+            name in "[A-Za-z0-9]{1,10}",
+            trail in prop_oneof![Just(""), Just("."), Just("-"), Just("_"), Just("..")],
+        ) {
+            let md = format!("@{name}{trail}");
+            for c in at_name_candidates(&md) {
+                prop_assert!(!c.ends_with('.') && !c.ends_with('-') && !c.ends_with('_'));
+            }
+        }
+
+        #[test]
+        fn prop_bc_7_2_018_find_mention_candidates_never_panics_and_deterministic(s in ".{0,200}") {
+            let a = find_mention_candidates(&s);
+            let b = find_mention_candidates(&s);
+            prop_assert_eq!(a.is_ok(), b.is_ok());
+            if let (Ok(a), Ok(b)) = (a, b) {
+                prop_assert_eq!(a, b);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // AC-007 / VP-674-012 — `\@` escape mechanism (F4 SPIKE observable)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_018_backslash_escaped_at_name_is_not_a_candidate() {
+        assert_eq!(
+            at_name_candidates(r"Contact \@jsmith directly"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_018_odd_backslash_escape_wins_over_resolvable_candidate() {
+        let resolved = resolutions_with_at_name("@jsmith", "acc-1", "Jane Smith");
+        let adf = conv_with(r"Contact \@jsmith directly", &resolved);
+        assert_eq!(
+            count_mention_nodes(&adf),
+            0,
+            "escaped @jsmith must NOT become a mention even though it would resolve: {adf}"
+        );
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains("@jsmith")),
+            "literal @jsmith text must survive: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_018_double_backslash_at_name_is_genuine_mention() {
+        // Even backslash count = one literal '\' followed by a genuine mention.
+        let resolved = resolutions_with_at_name("@jsmith", "acc-1", "Jane Smith");
+        let adf = conv_with(r"Contact \\@jsmith directly", &resolved);
+        assert_eq!(
+            count_mention_nodes(&adf),
+            1,
+            "even-backslash @jsmith MUST become a genuine mention: {adf}"
+        );
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(mentions[0]["id"], "acc-1");
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains('\\')),
+            "one literal backslash must survive in the rendered text: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_016_backslash_at_inside_code_span_stays_literal_backslash() {
+        // EC-7.2.016-3 extended: `\@x` inside inline code MUST stay literal
+        // `\@x` (backslash preserved, never sentinel-substituted/stripped).
+        let adf = conv(r"`\@x`");
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        assert!(
+            texts.iter().any(|t| t == r"\@x"),
+            "code-span content must preserve the literal backslash byte-for-byte: {texts:?}"
+        );
+        assert_eq!(count_mention_nodes(&adf), 0);
+    }
+
+    #[test]
+    fn test_pre_existing_pua_sentinel_survives_full_round_trip() {
+        // ADR-0023 §4 step 2 (L-3 collision guard): a literal U+E000 already
+        // present in ordinary prose must survive the protect/restore round
+        // trip byte-for-byte, never misread as our own escape marker.
+        let input = "hello \u{E000} world";
+        let adf = conv(input);
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        let joined = texts.concat();
+        assert!(
+            joined.contains('\u{E000}'),
+            "a pre-existing literal U+E000 must survive the protect/restore round trip: {texts:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // AC-015 / VP-674-005 — mark-composition (F4 empirical check anchor)
+    //
+    // BC-7.2.016 point 5 already states, architecturally, that a `mention`
+    // node is a distinct inline-node type from `text` and therefore carries
+    // no `marks` array the way a `text` node does. This anchors Outcome A of
+    // AC-015's two acceptable outcomes for the PURE-EMISSION half: the
+    // emitted `mention` node has no `marks` key at all, regardless of any
+    // active mark context enclosing the source token. The separate question
+    // ("would Atlaskit's adf-schema even ACCEPT a marks array on mention, if
+    // one were ever attached") is the schema-validator/live-round-trip half
+    // of AC-015 this pure-core story cannot resolve statically — flagged for
+    // the implementer per the story's own AC-015/Task 17 instructions.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_016_ec5_bold_wrapped_bracket_mention_carries_no_marks() {
+        let adf = conv("**[~accountid:X]**");
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(mentions.len(), 1);
+        let mention_node =
+            find_first_node_of_type(&adf, "mention").expect("mention node must exist");
+        assert!(
+            mention_node.get("marks").is_none(),
+            "mention node must never carry a marks array (BC-7.2.016 point 5): {mention_node}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_018_ec5_italic_wrapped_at_name_mention_carries_no_marks() {
+        let resolved = resolutions_with_at_name("@jsmith", "acc-1", "Jane Smith");
+        let adf = conv_with("_@jsmith_", &resolved);
+        let mention_node =
+            find_first_node_of_type(&adf, "mention").expect("mention node must exist");
+        assert!(mention_node.get("marks").is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // AC-004 / VP-674-019 — `markdown_to_adf_no_mentions` pure bypass
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_no_mentions_bracket_form_stays_literal_zero_mention_nodes() {
+        let adf = markdown_to_adf_no_mentions("[~accountid:X]").unwrap();
+        assert_eq!(count_mention_nodes(&adf), 0);
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        assert!(texts.iter().any(|t| t.contains("[~accountid:X]")));
+    }
+
+    #[test]
+    fn test_no_mentions_at_name_stays_literal_zero_mention_nodes() {
+        let adf = markdown_to_adf_no_mentions("@jsmith").unwrap();
+        assert_eq!(count_mention_nodes(&adf), 0);
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        assert!(texts.iter().any(|t| t.contains("@jsmith")));
+    }
+
+    #[test]
+    fn test_no_mentions_vs_default_bracket_is_differential() {
+        // Contrast anchor: kills a mutant that collapses markdown_to_adf_no_mentions
+        // into markdown_to_adf (or markdown_to_adf_with_mentions).
+        let with_mentions = conv("[~accountid:X]");
+        let without = markdown_to_adf_no_mentions("[~accountid:X]").unwrap();
+        assert_eq!(count_mention_nodes(&with_mentions), 1);
+        assert_eq!(count_mention_nodes(&without), 0);
+    }
+
+    #[test]
+    fn test_no_mentions_native_backslash_escape_handling_unaffected() {
+        // ADR-0023 §4 pass-2/L-3: markdown_to_adf_no_mentions does NOT call
+        // protect_mention_escapes — it relies on pulldown-cmark's native
+        // `\@` -> `@` handling, which already produces literal `@jsmith`.
+        let adf = markdown_to_adf_no_mentions(r"Contact \@jsmith directly").unwrap();
+        assert_eq!(count_mention_nodes(&adf), 0);
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        assert!(texts.iter().any(|t| t.contains("@jsmith")));
+    }
+
+    #[test]
+    fn test_no_mentions_pre_existing_pua_sentinel_passes_through_untouched() {
+        // No protect/restore pass runs at all on this entrypoint, so a literal
+        // U+E000/U+E001 in user input must survive completely untouched.
+        let input = "hello \u{E000}\u{E001} world";
+        let adf = markdown_to_adf_no_mentions(input).unwrap();
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        let joined = texts.concat();
+        assert!(joined.contains('\u{E000}') && joined.contains('\u{E001}'));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn prop_bc_no_mentions_emits_zero_mention_nodes_bracket(id in "[A-Za-z0-9:_-]{1,40}") {
+            let md = format!("[~accountid:{id}]");
+            let adf = markdown_to_adf_no_mentions(&md).unwrap();
+            prop_assert_eq!(count_mention_nodes(&adf), 0);
+        }
+
+        #[test]
+        fn prop_bc_no_mentions_emits_zero_mention_nodes_at_name(name in "[A-Za-z0-9]{1,12}") {
+            let md = format!("@{name}");
+            let adf = markdown_to_adf_no_mentions(&md).unwrap();
+            prop_assert_eq!(count_mention_nodes(&adf), 0);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // AC-003 — `markdown_to_adf` becomes the one-line empty-resolutions wrapper
+    //
+    // These tests deliberately call BARE `markdown_to_adf` (not `conv`) to pin
+    // its post-implementation behavior. They are positive-shaped and already
+    // RED today (bare `markdown_to_adf`'s body is unchanged in the stub phase
+    // and never emits mention nodes for any input) — via assertion mismatch,
+    // not a panic.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_016_bare_markdown_to_adf_converts_bracket_form_for_free() {
+        let adf = markdown_to_adf("[~accountid:X]").unwrap();
+        assert_eq!(
+            count_mention_nodes(&adf),
+            1,
+            "bare markdown_to_adf must still auto-convert bracket-form mentions for free: {adf}"
+        );
+        let mention_node = find_first_node_of_type(&adf, "mention").unwrap();
+        assert!(
+            !mention_node["attrs"]
+                .as_object()
+                .unwrap()
+                .contains_key("text")
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_016_bare_markdown_to_adf_at_name_stays_inert() {
+        // @Name always needs a resolution; bare markdown_to_adf passes an
+        // empty resolutions map, so @Name never converts — matches today's
+        // (pre-#674) zero-mention behavior exactly.
+        let adf = markdown_to_adf("cc @jsmith").unwrap();
+        assert_eq!(count_mention_nodes(&adf), 0);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn prop_bc_7_2_016_bare_wrapper_matches_with_mentions_empty(
+            id in "[A-Za-z0-9:_-]{1,20}",
+        ) {
+            let md = format!("Hello [~accountid:{id}]");
+            let a = markdown_to_adf(&md).unwrap();
+            let b = markdown_to_adf_with_mentions(&md, &MentionResolutions::empty()).unwrap();
+            prop_assert_eq!(a, b);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // AC-005 / VP-674-002 — attrs.text population, leading-@ normalization,
+    // control-character sanitization
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_017_at_name_resolved_emits_id_and_at_prefixed_text() {
+        let resolved = resolutions_with_at_name("@jsmith", "abc", "Jane Smith");
+        let adf = conv_with("cc @jsmith", &resolved);
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(mentions[0]["id"], "abc");
+        assert_eq!(mentions[0]["text"], "@Jane Smith");
+    }
+
+    #[test]
+    fn test_bc_7_2_017_bracket_form_resolved_populates_attrs_text() {
+        let resolved = resolutions_with_bracket("5b10ac8d82e05b22cc7d4349", "Jane Smith");
+        let adf = conv_with("[~accountid:5b10ac8d82e05b22cc7d4349]", &resolved);
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(mentions[0]["text"], "@Jane Smith");
+    }
+
+    #[test]
+    fn test_bc_7_2_017_ec4_display_name_already_at_prefixed_no_double_at() {
+        let resolved = resolutions_with_at_name("@buildbot", "svc-1", "@build-bot");
+        let adf = conv_with("cc @buildbot", &resolved);
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(
+            mentions[0]["text"], "@build-bot",
+            "must not double up the leading @: {mentions:?}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_017_pathological_multi_at_display_name_normalizes_to_single_at() {
+        let resolved = resolutions_with_at_name("@weird", "svc-2", "@@weird");
+        let adf = conv_with("cc @weird", &resolved);
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(mentions[0]["text"], "@weird");
+    }
+
+    #[test]
+    fn test_bc_7_2_017_ec2_bracket_unvalidated_omits_attrs_text_key() {
+        let adf = markdown_to_adf("[~accountid:X]").unwrap();
+        let mention_node = find_first_node_of_type(&adf, "mention").unwrap();
+        assert!(
+            !mention_node["attrs"]
+                .as_object()
+                .unwrap()
+                .contains_key("text"),
+            "attrs.text must be OMITTED (not an empty string key) when unresolved: {mention_node}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_017_no_resolution_entry_omits_attrs_text_via_with_mentions_too() {
+        let adf = conv("[~accountid:X]");
+        let mention_node = find_first_node_of_type(&adf, "mention").unwrap();
+        assert!(
+            !mention_node["attrs"]
+                .as_object()
+                .unwrap()
+                .contains_key("text")
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_017_attrs_text_never_contains_raw_newline() {
+        // VP-674-006 Property B / EC-7.2.017-5: a pathological display_name
+        // with an embedded \n must never leak a raw newline into attrs.text.
+        let resolved = resolutions_with_at_name("@jsmith", "acc-1", "Evil\nBot");
+        let adf = conv_with("cc @jsmith", &resolved);
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(mentions.len(), 1);
+        let text = mentions[0]["text"]
+            .as_str()
+            .expect("attrs.text must be a string");
+        assert!(
+            !text.contains('\n') && !text.contains('\r'),
+            "attrs.text must never contain a raw newline: {text:?}"
+        );
+        assert_eq!(
+            text, "@Evil Bot",
+            "control chars must be replaced with a single space BEFORE the leading-@ step"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // AC-014 — MentionResolutions key-space non-collision
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_mention_resolutions_bracket_entry_does_not_leak_into_at_name_lookup() {
+        let mut resolved = MentionResolutions::empty();
+        resolved.bracket.insert(
+            "jsmith".to_string(),
+            MentionResolution {
+                account_id: "bracket-acc".to_string(),
+                display_name: "Bracket Person".to_string(),
+            },
+        );
+        // No @Name-space entry exists under "@jsmith" — a bracket-keyed
+        // "jsmith" entry must never satisfy an "@jsmith" @Name lookup, even
+        // though the strings collide.
+        let adf = conv_with("cc @jsmith", &resolved);
+        assert_eq!(
+            count_mention_nodes(&adf),
+            0,
+            "an @Name candidate must never resolve against a bracket-keyed entry, even on a colliding string: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_mention_resolutions_at_name_entry_does_not_leak_into_bracket_lookup() {
+        let mut resolved = MentionResolutions::empty();
+        resolved.at_name.insert(
+            "X".to_string(),
+            MentionResolution {
+                account_id: "wrong-acc".to_string(),
+                display_name: "Wrong Person".to_string(),
+            },
+        );
+        // Bracket-form is unconditionally converted (AC-001) but must NOT pick
+        // up an @Name-keyed entry's display name even if the accountId string
+        // happens to equal the @Name-space key "X".
+        let adf = conv_with("[~accountid:X]", &resolved);
+        let mention_node = find_first_node_of_type(&adf, "mention").unwrap();
+        assert_eq!(mention_node["attrs"]["id"], "X");
+        assert!(
+            !mention_node["attrs"]
+                .as_object()
+                .unwrap()
+                .contains_key("text")
+                || mention_node["attrs"]["text"] != "@Wrong Person",
+            "bracket-form lookup must never resolve against an @Name-keyed entry: {mention_node}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // AC-008 — definitive five-step post-`finish()` pass order
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_016_assign_local_ids_runs_last_task_list_ids_unaffected_by_mentions() {
+        let md = "- [ ] todo one\n- [x] todo two\n\ncc [~accountid:X]";
+        let adf = conv(md);
+        // Task list local ids must still be sequential "1"/"2"/"3" (taskList +
+        // 2 taskItems) regardless of a mention node also being present in the
+        // same doc — the mention pass must not perturb assign_local_ids'
+        // counting scheme, and assign_local_ids must run LAST (ADR-0023 §5).
+        let task_list = find_first_node_of_type(&adf, "taskList").expect("taskList must exist");
+        assert_eq!(task_list["attrs"]["localId"], "1");
+        let items = task_list["content"].as_array().unwrap();
+        assert_eq!(items[0]["attrs"]["localId"], "2");
+        assert_eq!(items[1]["attrs"]["localId"], "3");
+        // The mention node itself must never receive a localId attribute.
+        let mention_node = find_first_node_of_type(&adf, "mention").expect("mention must exist");
+        assert!(
+            mention_node
+                .get("attrs")
+                .and_then(|a| a.get("localId"))
+                .is_none(),
+            "mention nodes must never receive a localId: {mention_node}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // AC-010 / VP-674-006 — depth guard + INV-1 hold with mentions
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_016_mention_pass_respects_max_adf_depth() {
+        let prefix = "> ".repeat(256);
+        let md = format!("{prefix}[~accountid:X]");
+        let result = markdown_to_adf_with_mentions(&md, &MentionResolutions::empty());
+        assert!(
+            result.is_err(),
+            "depth 256 blockquote wrapping a mention must be Err, not Ok or a panic"
+        );
+        assert_eq!(result.unwrap_err().exit_code(), 64);
+    }
+
+    #[test]
+    fn test_find_mention_candidates_respects_max_adf_depth() {
+        let prefix = "> ".repeat(256);
+        let md = format!("{prefix}[~accountid:X]");
+        assert!(find_mention_candidates(&md).is_err());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn prop_bc_7_2_016_no_raw_newline_in_text_nodes_with_mentions(
+            id in "[A-Za-z0-9:_-]{1,20}",
+            name in "[A-Za-z0-9]{1,10}",
+        ) {
+            let md = format!("Hello [~accountid:{id}] and @{name}\n\nMore text");
+            let adf = conv(&md);
+            let mut texts = Vec::new();
+            collect_all_text_strings(&adf, &mut texts);
+            for t in texts {
+                prop_assert!(!t.contains('\n') && !t.contains('\r'));
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // AC-011 / VP-674-007 — reverse-path three-way mention render
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_bc_7_2_019_mention_render_fallback_precedence() {
+        // EC-7.2.019-1: attrs.text present -> verbatim, no double @.
+        let adf1 = json!({"version":1,"type":"doc","content":[
+            {"type":"paragraph","content":[
+                {"type":"mention","attrs":{"id":"X","text":"@Jane Doe"}}
+            ]}
+        ]});
+        assert_eq!(adf_to_text(&adf1).unwrap().trim(), "@Jane Doe");
+
+        // EC-7.2.019-2: attrs.text absent, attrs.id present -> "@" + id.
+        let adf2 = json!({"version":1,"type":"doc","content":[
+            {"type":"paragraph","content":[
+                {"type":"mention","attrs":{"id":"X"}}
+            ]}
+        ]});
+        assert_eq!(adf_to_text(&adf2).unwrap().trim(), "@X");
+
+        // EC-7.2.019-3: neither present -> literal "@?" fallback.
+        let adf3 = json!({"version":1,"type":"doc","content":[
+            {"type":"paragraph","content":[
+                {"type":"mention","attrs":{}}
+            ]}
+        ]});
+        assert_eq!(adf_to_text(&adf3).unwrap().trim(), "@?");
+
+        // attrs missing entirely -> "@?".
+        let adf3b = json!({"version":1,"type":"doc","content":[
+            {"type":"paragraph","content":[
+                {"type":"mention"}
+            ]}
+        ]});
+        assert_eq!(adf_to_text(&adf3b).unwrap().trim(), "@?");
+
+        // EC-7.2.019-4: empty-string values treated identically to absent.
+        let adf4 = json!({"version":1,"type":"doc","content":[
+            {"type":"paragraph","content":[
+                {"type":"mention","attrs":{"text":"","id":""}}
+            ]}
+        ]});
+        assert_eq!(adf_to_text(&adf4).unwrap().trim(), "@?");
+
+        // Empty text, non-empty id -> falls through to the id fallback.
+        let adf5 = json!({"version":1,"type":"doc","content":[
+            {"type":"paragraph","content":[
+                {"type":"mention","attrs":{"text":"","id":"Y"}}
+            ]}
+        ]});
+        assert_eq!(adf_to_text(&adf5).unwrap().trim(), "@Y");
+    }
+
+    /// AC-012 / BC-7.2.004 amendment differential: confirms AC-011's new
+    /// "mention" arm does not accidentally start rendering emoji/inlineCard/
+    /// media, which remain silently dropped, UNCHANGED. This is a
+    /// non-regression confirmation over PRE-EXISTING (already-implemented)
+    /// catch-all behavior — unlike every other test in this section it is NOT
+    /// expected to be RED against the stub (the drop behavior it pins already
+    /// holds today); flagged explicitly rather than silently included as if
+    /// it were a new-behavior test.
+    #[test]
+    fn test_bc_7_2_004_emoji_inlinecard_media_still_dropped_after_mention_arm() {
+        let adf = json!({"version":1,"type":"doc","content":[
+            {"type":"paragraph","content":[
+                {"type":"text","text":"before "},
+                {"type":"emoji","attrs":{"shortName":":smile:","text":"😀"}},
+                {"type":"text","text":" middle "},
+                {"type":"inlineCard","attrs":{"url":"https://example.com"}},
+                {"type":"text","text":" middle2 "},
+                {"type":"media","attrs":{"id":"m1"}},
+                {"type":"text","text":" after"}
+            ]}
+        ]});
+        let out = adf_to_text(&adf).unwrap();
+        assert!(out.contains("before"));
+        assert!(out.contains("middle"));
+        assert!(out.contains("after"));
+        assert!(!out.contains('😀'));
+        assert!(!out.contains("example.com"));
+        assert!(!out.contains(":smile:"));
+    }
+
+    // -------------------------------------------------------------------
+    // AC-013 / VP-674-008 — reverse-path never panics at any nesting
+    // -------------------------------------------------------------------
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn prop_bc_7_2_019_mention_never_panics_at_any_inline_position(
+            has_text in any::<bool>(),
+            has_id in any::<bool>(),
+            text_val in ".{0,40}",
+            id_val in ".{0,40}",
+            container in prop_oneof![
+                Just("paragraph"), Just("listItem"), Just("panel"),
+                Just("tableCell"), Just("taskItem"), Just("blockquote"), Just("heading"),
+            ],
+        ) {
+            let mut attrs = serde_json::Map::new();
+            if has_text { attrs.insert("text".to_string(), json!(text_val)); }
+            if has_id { attrs.insert("id".to_string(), json!(id_val)); }
+            let mention = json!({"type":"mention","attrs":attrs});
+
+            let wrapped = match container {
+                "paragraph" => json!({"type":"paragraph","content":[mention]}),
+                "listItem" => json!({"type":"listItem","content":[
+                    {"type":"paragraph","content":[mention]}
+                ]}),
+                "panel" => json!({"type":"panel","attrs":{"panelType":"info"},"content":[
+                    {"type":"paragraph","content":[mention]}
+                ]}),
+                "tableCell" => json!({"type":"table","content":[
+                    {"type":"tableRow","content":[
+                        {"type":"tableCell","content":[
+                            {"type":"paragraph","content":[mention]}
+                        ]}
+                    ]}
+                ]}),
+                "taskItem" => json!({"type":"taskList","attrs":{"localId":"1"},"content":[
+                    {"type":"taskItem","attrs":{"localId":"2","state":"TODO"},"content":[mention]}
+                ]}),
+                "blockquote" => json!({"type":"blockquote","content":[
+                    {"type":"paragraph","content":[mention]}
+                ]}),
+                "heading" => json!({"type":"heading","attrs":{"level":1},"content":[mention]}),
+                _ => unreachable!(),
+            };
+            let adf = json!({"version":1,"type":"doc","content":[wrapped]});
+            let result = adf_to_text(&adf);
+            prop_assert!(result.is_ok());
+        }
+
+        #[test]
+        fn prop_bc_7_2_019_mention_junk_attrs_values_never_panic(
+            junk_text in prop_oneof![
+                Just(json!(42)), Just(json!(true)), Just(Value::Null), Just(json!([1,2])),
+            ],
+        ) {
+            let adf = json!({"version":1,"type":"doc","content":[
+                {"type":"paragraph","content":[
+                    {"type":"mention","attrs":{"text": junk_text}}
+                ]}
+            ]});
+            let result = adf_to_text(&adf);
+            prop_assert!(result.is_ok());
+        }
     }
 }
