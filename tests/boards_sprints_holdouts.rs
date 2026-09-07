@@ -17,9 +17,10 @@
 //!   AND at least one issue has a non-null team UUID (conjunctive gate — present case)
 //! - AC-006 / H-043 / BC-5.3.002: Team column absent when all issues have null team UUID
 //!   even when `team_field_id` is configured
-//! - AC-007 / H-044 / BC-7.2.001: `issue view` on ADF doc with heading, paragraph,
-//!   codeBlock, and mention nodes — heading + paragraph rendered, mention silently
-//!   dropped, exit 0, no panic
+//! - AC-007 / H-044 / BC-7.2.001 / BC-7.2.019: `issue view` on ADF doc with heading,
+//!   paragraph, codeBlock, and mention nodes — heading + paragraph rendered, mention
+//!   rendered via attrs.text verbatim (S-cycle5-mention-pure-conversion, issue #674),
+//!   exit 0, no panic
 //!
 //! Test placement: all in `tests/boards_sprints_holdouts.rs`.
 //! All functions under test are exercised through process-spawn (`assert_cmd`). No
@@ -628,7 +629,9 @@ async fn test_s_2_04_h_043_bc_5_3_002_team_column_absent_when_no_uuid_set() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-007 / H-044 / BC-7.2.001 — ADF rendering: heading/paragraph shown, mention dropped
+// AC-007 / H-044 / BC-7.2.001 / BC-7.2.019 — ADF rendering: heading/paragraph
+// shown, mention rendered via its attrs.text (S-cycle5-mention-pure-conversion,
+// issue #674)
 // ---------------------------------------------------------------------------
 
 /// BC-7.2.001 postcondition: `jr issue view PROJ-1` on an issue with an ADF
@@ -636,22 +639,30 @@ async fn test_s_2_04_h_043_bc_5_3_002_team_column_absent_when_no_uuid_set() {
 /// - exits 0 (no panic)
 /// - stdout contains the heading text
 /// - stdout contains the paragraph text
-/// - stdout does NOT contain the mention text (silently dropped per current behavior)
+/// - stdout contains the mention's `attrs.text` VERBATIM (BC-7.2.019 — mention
+///   is no longer silently dropped as of issue #674)
 ///
-/// Current behavior: mention nodes have no `content` child array, so the
-/// `_ =>` catch-all in `src/adf.rs::AdfRenderer::render_node` (line ~531-540)
-/// finds no content to recurse into and silently drops the node. The ADF `attrs`
-/// field (including `text`) is not rendered. This is the correct behavior per
-/// issue #202 (NFR-O-I deferred to Wave 3).
+/// FLIPPED (S-cycle5-mention-pure-conversion, issue #674, closes KNOWN-GAP
+/// H-044): `AdfRenderer::render_node` gains a dedicated `"mention"` match arm
+/// (BC-7.2.019/AC-011), inserted BEFORE the `_ =>` catch-all this test
+/// previously pinned as the mention-dropping path. Per BC-7.2.019 point 1,
+/// `attrs.text` — when present and non-empty — renders VERBATIM (no `"@"` is
+/// prepended a second time). This fixture's `attrs.text` is `"John Smith"`
+/// (NOT `"@John Smith"` — no leading `@` in the fixture itself), so the
+/// correct new expected substring is `"John Smith"` rendered exactly as
+/// authored, not `"@John Smith"` — the double-`@` framing floated in this
+/// test's original KNOWN-GAP comment ("change this assertion to:
+/// assert!(stdout.contains("@John Smith"))") was written before BC-7.2.004's
+/// 2.0.1 fix (H-1, pass-2 adversarial review) retracted exactly that
+/// double-`@` behavior. Renamed to reflect the new, implemented contract
+/// rather than the old drop behavior.
 ///
-/// KNOWN-GAP: H-044. When NFR-O-I is implemented (mention → @displayName),
-/// change this assertion to: assert!(stdout.contains("@John Smith"));
-///
-/// Pins `src/adf.rs::AdfRenderer::render_node` mention drop (catch-all branch).
-/// Without this guard, a future change that adds a `"mention"` match arm that
-/// panics or outputs debug text would not be caught until user-facing regression.
+/// Pins `src/adf.rs::AdfRenderer::render_node`'s `"mention"` arm. Without this
+/// guard, a future change that reverts to dropping mentions, or that panics,
+/// or that emits the wrong fallback, would not be caught until user-facing
+/// regression.
 #[tokio::test]
-async fn test_s_2_04_h_044_bc_7_2_001_adf_renders_heading_paragraph_drops_mention() {
+async fn test_s_2_04_h_044_bc_7_2_019_adf_renders_heading_paragraph_and_mention_text() {
     let server = MockServer::start().await;
 
     // ADF document with:
@@ -761,12 +772,13 @@ async fn test_s_2_04_h_044_bc_7_2_001_adf_renders_heading_paragraph_drops_mentio
         "BC-7.2.001: paragraph text 'Some paragraph text' must appear in stdout; got: {stdout}"
     );
 
-    // Mention text must NOT appear in stdout — silently dropped per current behavior.
-    // KNOWN-GAP: H-044. When NFR-O-I is implemented (mention → @displayName),
-    // change this assertion to: assert!(stdout.contains("@John Smith"));
+    // Mention text MUST appear in stdout, rendered verbatim from attrs.text
+    // (BC-7.2.019 point 1 — this fixture's attrs.text is "John Smith", with NO
+    // leading "@", so the verbatim render is "John Smith", not "@John Smith";
+    // BC-7.2.019 never prepends a second "@" when attrs.text is present).
     assert!(
-        !stdout.contains("John Smith"),
-        "BC-7.2.001: mention text 'John Smith' must NOT appear in stdout \
-         (silently dropped per current behavior — NFR-O-I deferred); got: {stdout}"
+        stdout.contains("John Smith"),
+        "BC-7.2.019: mention attrs.text 'John Smith' must be rendered verbatim in stdout \
+         (mention is no longer silently dropped as of issue #674); got: {stdout}"
     );
 }
