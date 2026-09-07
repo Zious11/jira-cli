@@ -96,6 +96,27 @@ impl MentionResolutions {
     pub fn empty() -> Self {
         Self::default()
     }
+
+    /// Insert a resolution into the BRACKET-form key space, keyed by the
+    /// literal accountId (`[~accountid:<id>]`'s `<id>`, byte-for-byte —
+    /// AC-001). This is the only public way to populate the bracket map:
+    /// callers outside this module (e.g. `src/cli/issue/mentions.rs`'s
+    /// effectful resolver, Story B) go through this method rather than
+    /// reaching into a private field, which keeps the two-namespace
+    /// invariant (AC-014) enforced in one place regardless of call site.
+    pub fn insert_bracket(&mut self, account_id: impl Into<String>, resolution: MentionResolution) {
+        self.bracket.insert(account_id.into(), resolution);
+    }
+
+    /// Insert a resolution into the `@Name`-form key space, keyed by the
+    /// POST-TRIM, `@`-PREFIX-INCLUDED candidate token (e.g. `"@jsmith"`,
+    /// never `"jsmith"` — see [`MentionCandidateKind::AtName`],
+    /// BC-7.2.017/BC-7.2.018). This is the only public way to populate the
+    /// `@Name` map, mirroring [`Self::insert_bracket`] for the other key
+    /// space (AC-014).
+    pub fn insert_at_name(&mut self, at_name: impl Into<String>, resolution: MentionResolution) {
+        self.at_name.insert(at_name.into(), resolution);
+    }
 }
 
 pub fn text_to_adf(text: &str) -> Value {
@@ -613,6 +634,23 @@ fn is_start_of_line(text: &str, pos: usize) -> bool {
 ///   (a real prose sentence starting a line with `[~accountid:X]:` followed
 ///   by ordinary text is vanishingly unlikely and not exercised by any
 ///   holdout/test scenario).
+///
+/// **Accepted residual (`]`-boundary widening, LOW-3, mirrors the
+/// EC-7.2.016-6 residual above):** `is_mention_boundary`'s admission of a
+/// preceding `]` as a valid mention boundary (added to fix two adjacent
+/// bracket mentions with no separator, e.g. `[~accountid:a][~accountid:b]`)
+/// means an accountId-shaped FULL-REFERENCE link LABEL is also boundary-
+/// eligible: `[some text][~accountid:X]` with a matching
+/// `[~accountid:X]: url` definition elsewhere in the document has its
+/// second bracket — the reference label, not a bracket-mention span in its
+/// own right — eagerly protected and converted to a mention, destroying
+/// what would otherwise have been a full reference link. This is an
+/// accepted residual, astronomically unlikely in practice (it requires an
+/// accountId-shaped reference label AND a matching definition), and
+/// consistent with this file's existing bias toward converting a
+/// well-formed mention candidate over preserving an enclosing link
+/// (EC-7.2.016-4 already prefers mention conversion over an enclosing
+/// link in the nested case).
 ///
 /// Returns the transformed string and whether any replacement was made (so
 /// the caller can skip an unnecessary code-range recompute when nothing
@@ -13509,6 +13547,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_bc_7_2_016_low3_residual_full_reference_link_label_eagerly_converts_to_mention() {
+        // Accepted residual documented on `protect_bracket_mentions`'s doc
+        // comment (mirrors the EC-7.2.016-6 residual): the LOW-3 `]`-boundary
+        // widening (see `is_mention_boundary`) means an accountId-shaped
+        // FULL-REFERENCE link LABEL — `[some text][~accountid:X]` with a
+        // matching `[~accountid:X]: url` definition — is eagerly converted to
+        // a mention, destroying what would otherwise be a full reference
+        // link. This pins the accepted behavior so a future change doesn't
+        // silently alter it without updating the doc comment.
+        let md = "[some text][~accountid:X]\n\n[~accountid:X]: https://example.com";
+        let adf = conv(md);
+        assert_eq!(
+            count_mention_nodes(&adf),
+            1,
+            "the accepted residual: the reference label converts to a mention \
+             instead of resolving as a full-reference link: {adf}"
+        );
+        assert!(
+            !contains_node_type(&adf, "link"),
+            "the full-reference link is destroyed by this accepted residual: {adf}"
+        );
+    }
+
     // -------------------------------------------------------------------
     // AC-006 / VP-674-018 — `@Name` detection grammar (find_mention_candidates)
     // -------------------------------------------------------------------
@@ -14214,6 +14276,42 @@ mod tests {
                 || mention_node["attrs"]["text"] != "@Wrong Person",
             "bracket-form lookup must never resolve against an @Name-keyed entry: {mention_node}"
         );
+    }
+
+    #[test]
+    fn test_mention_resolutions_public_inserters_populate_both_namespaces() {
+        // Exercises MentionResolutions::insert_bracket / insert_at_name — the
+        // public API that lets a caller outside this module (Story B's
+        // src/cli/issue/mentions.rs::resolve_mentions) populate a
+        // MentionResolutions without reaching into its private fields. Also
+        // constructs a populated MentionResolutions WITHOUT any
+        // whitebox/private-field access, unlike resolutions_with_bracket/
+        // resolutions_with_at_name above.
+        let mut resolved = MentionResolutions::empty();
+        resolved.insert_bracket(
+            "acc-bracket",
+            MentionResolution {
+                account_id: "acc-bracket".to_string(),
+                display_name: "Bracket Person".to_string(),
+            },
+        );
+        resolved.insert_at_name(
+            "@jsmith",
+            MentionResolution {
+                account_id: "acc-atname".to_string(),
+                display_name: "J Smith".to_string(),
+            },
+        );
+
+        let adf = conv_with("[~accountid:acc-bracket] cc @jsmith", &resolved);
+        let mentions = collect_mention_attrs(&adf);
+        assert_eq!(mentions.len(), 2, "both mentions must convert: {adf}");
+
+        assert_eq!(mentions[0]["id"], "acc-bracket");
+        assert_eq!(mentions[0]["text"], "@Bracket Person");
+
+        assert_eq!(mentions[1]["id"], "acc-atname");
+        assert_eq!(mentions[1]["text"], "@J Smith");
     }
 
     // -------------------------------------------------------------------

@@ -670,7 +670,7 @@ async fn test_s_2_04_h_044_bc_7_2_019_adf_renders_heading_paragraph_and_mention_
     //   2. paragraph: "Some paragraph text"
     //   3. codeBlock: "let x = 42;"
     //   4. mention: attrs.id = "account:abc", attrs.text = "John Smith"
-    //      (mention has no content array — will be silently dropped)
+    //      (rendered via attrs.text — see BC-7.2.019)
     let adf_description = serde_json::json!({
         "version": 1,
         "type": "doc",
