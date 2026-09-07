@@ -4,6 +4,29 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Pure markdown-mention conversion in `adf.rs` (S-cycle5-mention-pure-conversion,
+  issue #674, ADR-0023, BC-7.2.016/017/018/019):** `src/adf.rs` gains three new
+  pure, synchronous, zero-HTTP entrypoints — `find_mention_candidates`
+  (bracket-form `[~accountid:<id>]` + `@Name` candidate detection),
+  `markdown_to_adf_with_mentions` (the extended real emitter, taking a
+  caller-supplied `MentionResolutions` map), and `markdown_to_adf_no_mentions`
+  (byte-for-byte pre-#674 bypass, the pure half of a future `--no-mentions`
+  flag). `markdown_to_adf` becomes a one-line wrapper delegating to
+  `markdown_to_adf_with_mentions` with an empty resolutions map — its public
+  signature and behavior are unchanged for every pre-#674 caller. Bracket-form
+  mentions convert unconditionally (opaque, never UUID-validated);
+  unresolved `@Name` tokens are left as literal text. A `\@` escape
+  (odd/even backslash-parity, PUA-sentinel protect/restore) suppresses
+  mention detection for an intentionally-escaped `@Name`. `AdfRenderer`
+  gains a new `"mention"` reverse-render arm: `attrs.text` (verbatim) ->
+  `"@" + attrs.id` -> literal `"@?"` three-way fallback — closing the
+  long-standing `mention`-dropped gap (issue #202/NFR-O-I). This is the pure
+  half only; effectful `@Name`->accountId resolution and CLI wiring
+  (`--no-mentions` flag, the four write-command call sites) are
+  `S-cycle5-mention-resolution-wiring`'s scope.
+
 ### Changed
 
 - **CI: sharded mutation-testing gate replaces the single 240-minute `mutants` job
