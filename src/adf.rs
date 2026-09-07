@@ -284,6 +284,26 @@ const BRACKET_SENTINEL_CLOSE: char = '\u{E011}';
 /// `SENTINEL_ESCAPE`/`SENTINEL_GUARD`/`BRACKET_SENTINEL_OPEN`/`_CLOSE` above.
 const BRACKET_ID_ENCODE_BASE: u32 = 0xE100;
 
+/// Guard codepoint standing in for a pre-existing literal
+/// [`BRACKET_SENTINEL_OPEN`] found in the user's raw input (M-1 pass-1
+/// adversarial-review collision guard — mirrors [`SENTINEL_GUARD`]'s role
+/// for [`SENTINEL_ESCAPE`], but for the bracket-form mechanism). See
+/// [`guard_bracket_sentinel_collisions`] for the full rationale.
+const BRACKET_SENTINEL_OPEN_GUARD: char = '\u{E012}';
+/// Guard codepoint standing in for a pre-existing literal
+/// [`BRACKET_SENTINEL_CLOSE`] found in the user's raw input. See
+/// [`guard_bracket_sentinel_collisions`].
+const BRACKET_SENTINEL_CLOSE_GUARD: char = '\u{E013}';
+/// Base codepoint for the reversible, one-to-one guard shift covering a
+/// pre-existing literal codepoint in `BRACKET_ID_ENCODE_BASE..+128` found in
+/// the user's raw input. Deliberately placed immediately after the encode
+/// block (`0xE180..0xE200`, contiguous with `0xE100..0xE180`) so the two
+/// blocks are trivially non-overlapping. This is a plain codepoint shift
+/// (`+128`), never an ASCII decode — a literal PUA character typed by a user
+/// has no ASCII "original" to decode to; it is guarded and later restored
+/// back to the SAME literal PUA character, byte-for-byte.
+const BRACKET_ID_GUARD_BASE: u32 = BRACKET_ID_ENCODE_BASE + 128;
+
 fn encode_bracket_id_char(c: char) -> char {
     // The id grammar (scan below) only ever admits ASCII alphanumerics, ':',
     // '_', '-' — always < 128 — so this cannot overflow past the reserved
@@ -299,6 +319,98 @@ fn decode_bracket_id_char(c: char) -> Option<char> {
     } else {
         None
     }
+}
+
+/// Returns the guard substitution for `c` when `c` is one of the three
+/// codepoints [`guard_bracket_sentinel_collisions`] must protect
+/// (`BRACKET_SENTINEL_OPEN`, `BRACKET_SENTINEL_CLOSE`, or a codepoint in the
+/// `BRACKET_ID_ENCODE_BASE..+128` encode block), `None` otherwise.
+fn guard_char_for_bracket_collision(c: char) -> Option<char> {
+    if c == BRACKET_SENTINEL_OPEN {
+        return Some(BRACKET_SENTINEL_OPEN_GUARD);
+    }
+    if c == BRACKET_SENTINEL_CLOSE {
+        return Some(BRACKET_SENTINEL_CLOSE_GUARD);
+    }
+    let code = c as u32;
+    if (BRACKET_ID_ENCODE_BASE..BRACKET_ID_ENCODE_BASE + 128).contains(&code) {
+        char::from_u32(BRACKET_ID_GUARD_BASE + (code - BRACKET_ID_ENCODE_BASE))
+    } else {
+        None
+    }
+}
+
+/// Inverse of [`guard_char_for_bracket_collision`] — used by
+/// [`restore_mention_sentinels`] to undo the guard pass after the full
+/// build, restoring the ORIGINAL literal PUA character byte-for-byte.
+fn unguard_char_for_bracket_collision(c: char) -> Option<char> {
+    if c == BRACKET_SENTINEL_OPEN_GUARD {
+        return Some(BRACKET_SENTINEL_OPEN);
+    }
+    if c == BRACKET_SENTINEL_CLOSE_GUARD {
+        return Some(BRACKET_SENTINEL_CLOSE);
+    }
+    let code = c as u32;
+    if (BRACKET_ID_GUARD_BASE..BRACKET_ID_GUARD_BASE + 128).contains(&code) {
+        char::from_u32(BRACKET_ID_ENCODE_BASE + (code - BRACKET_ID_GUARD_BASE))
+    } else {
+        None
+    }
+}
+
+/// M-1 collision pre-pass (pass-1 adversarial review; mirrors the
+/// pre-existing `SENTINEL_ESCAPE`/`SENTINEL_GUARD` collision guard at step 3
+/// of [`protect_mention_escapes`] for the SAME reason, extended to the
+/// bracket-form mechanism). Runs BEFORE [`protect_bracket_mentions`] ever
+/// sees the markdown.
+///
+/// **Why this is required:** [`protect_bracket_mentions`] inserts
+/// [`BRACKET_SENTINEL_OPEN`]/`BRACKET_SENTINEL_CLOSE` plus a reversible
+/// `BRACKET_ID_ENCODE_BASE..+128` PUA encoding of a matched id's own
+/// characters — codepoints chosen specifically because they have no special
+/// meaning to CommonMark. But that same "no special meaning" property means
+/// a literal occurrence of one of those codepoints ALREADY present in a
+/// user's raw `--markdown` body (e.g. pasted from some other PUA-using
+/// source) survives parsing completely untouched and lands in a `text` node
+/// unchanged. Post-`finish()`, [`scan_mention_spans`] cannot tell that
+/// literal run apart from a genuine sentinel token it created itself — it
+/// would decode `U+E010 U+E13A U+E011` as a fabricated bracket-form mention
+/// with `attrs.id == ":"`, a bogus mention node with no corresponding source
+/// syntax (AC-003/BC-7.2.016 point 6 violation: pre-#674, that PUA content
+/// passed through as ordinary text).
+///
+/// For every codepoint in the RAW markdown outside a detected code range
+/// (code content is left byte-for-byte untouched, matching every other step
+/// of `protect_mention_escapes`) that collides with one of the three
+/// reserved ranges, this remaps it to its guard substitution via
+/// [`guard_char_for_bracket_collision`]. Every substitution is one 3-byte
+/// UTF-8 PUA codepoint for another (byte-length preserving), so the already
+/// computed code ranges stay valid against this pass's output — no
+/// recompute needed regardless of whether this pass changes anything.
+/// Running this guard BEFORE [`protect_bracket_mentions`] (rather than
+/// after) means that function's own pattern scan only ever sees genuine
+/// `[~accountid:...]` source text, never a stray pre-existing sentinel
+/// character, so its insertions can never collide with anything this pass
+/// left behind.
+///
+/// Reversed by [`restore_mention_sentinels`] after the whole build, via
+/// [`unguard_char_for_bracket_collision`], restoring the original literal
+/// PUA character byte-for-byte.
+fn guard_bracket_sentinel_collisions(
+    markdown: &str,
+    code_ranges: &[std::ops::Range<usize>],
+) -> String {
+    let in_code = |pos: usize| code_ranges.iter().any(|r| r.start <= pos && pos < r.end);
+    markdown
+        .char_indices()
+        .map(|(pos, ch)| {
+            if in_code(pos) {
+                ch
+            } else {
+                guard_char_for_bracket_collision(ch).unwrap_or(ch)
+            }
+        })
+        .collect()
 }
 
 /// Disposable, single-purpose scan (ADR-0023 §4 step 1, extended): parse
@@ -480,12 +592,16 @@ fn protect_bracket_mentions(
 /// (ADR-0023 §4 pass-2/L-3 correction; see AC-004/Architecture Compliance
 /// Rules).
 ///
-/// Steps: (0) [`protect_bracket_mentions`] — bracket-form pre-parse
-/// protection (see its own doc comment for why this step exists); (1)
+/// Steps: (0) [`guard_bracket_sentinel_collisions`] — M-1 pre-parse collision
+/// guard remapping any pre-existing literal bracket-sentinel/encode-block
+/// codepoint in the non-code complement to its guard substitution (see that
+/// function's own doc comment for why this must run FIRST, ahead of step 1);
+/// (1) [`protect_bracket_mentions`] — bracket-form pre-parse protection (see
+/// its own doc comment for why this step exists); (2)
 /// [`compute_code_ranges`] recomputed against the (possibly bracket-protected)
-/// string — the disposable code-range guard scan (ADR-0023 §4.1); (2) a
+/// string — the disposable code-range guard scan (ADR-0023 §4.1); (3) a
 /// collision pre-pass remapping any pre-existing literal [`SENTINEL_ESCAPE`]
-/// in the non-code complement to [`SENTINEL_GUARD`] (§4.2); (3) a
+/// in the non-code complement to [`SENTINEL_GUARD`] (§4.2); (4) a
 /// backslash-parity scan: for each maximal run of consecutive `\`
 /// immediately followed by `@` (outside a code range), an ODD run length
 /// means the `@` is escaped — the trailing backslash and the `@` are
@@ -498,11 +614,17 @@ fn protect_bracket_mentions(
 /// every step (§4.3, EC-7.2.016-3).
 pub(crate) fn protect_mention_escapes(markdown: &str) -> String {
     let initial_ranges = compute_protected_ranges(markdown);
+    // Step 0: M-1 bracket-sentinel/encode-block collision guard. Byte-length
+    // preserving (every substitution is one 3-byte UTF-8 PUA codepoint for
+    // another), so `initial_ranges.code`/`initial_ranges.link` — both
+    // computed against the ORIGINAL `markdown` — remain valid against this
+    // pass's output for step 1 below.
+    let guarded = guard_bracket_sentinel_collisions(markdown, &initial_ranges.code);
     let (stage1, bracket_changed) =
-        protect_bracket_mentions(markdown, &initial_ranges.code, &initial_ranges.link);
+        protect_bracket_mentions(&guarded, &initial_ranges.code, &initial_ranges.link);
     // Bracket protection changes byte offsets whenever it fires, so the code
     // ranges must be recomputed against `stage1` before the backslash-parity
-    // scan indexes into it; when nothing changed, `stage1 == markdown` and
+    // scan indexes into it; when nothing changed, `stage1 == guarded` and
     // the already-computed ranges remain valid, saving a fourth parse.
     let code_ranges = if bracket_changed {
         compute_code_ranges(&stage1)
@@ -511,9 +633,9 @@ pub(crate) fn protect_mention_escapes(markdown: &str) -> String {
     };
     let in_code = |pos: usize| code_ranges.iter().any(|r| r.start <= pos && pos < r.end);
 
-    // Step 2: collision guard. Byte-length-preserving (SENTINEL_ESCAPE and
+    // Step 3: collision guard. Byte-length-preserving (SENTINEL_ESCAPE and
     // SENTINEL_GUARD are both 3-byte UTF-8 sequences), so `code_ranges`
-    // stays valid against this pass's output for step 3 below.
+    // stays valid against this pass's output for step 4 below.
     let step2: String = stage1
         .char_indices()
         .map(|(pos, ch)| {
@@ -525,7 +647,7 @@ pub(crate) fn protect_mention_escapes(markdown: &str) -> String {
         })
         .collect();
 
-    // Step 3: backslash-parity scan over the step-2 string.
+    // Step 4: backslash-parity scan over the step-3 string.
     let chars: Vec<(usize, char)> = step2.char_indices().collect();
     let mut result = String::with_capacity(step2.len());
     let mut i = 0usize;
@@ -875,13 +997,21 @@ fn convert_mentions(
     Ok(())
 }
 
-/// Post-`finish()` sentinel-restore pass (AC-008 step 4, ADR-0023 §4 step 6):
-/// walks `text` nodes exactly where `autolink_bare_urls`/`convert_mentions`
-/// already walk, skipping `codeBlock` content and `code`-marked text nodes
-/// (defense-in-depth — steps 2/3 of `protect_mention_escapes` never insert
-/// either sentinel into code content in the first place). Within eligible
-/// text, applies two independent, order-insensitive substitutions:
-/// `SENTINEL_ESCAPE` -> `'@'`, and `SENTINEL_GUARD` -> `SENTINEL_ESCAPE`.
+/// Post-`finish()` sentinel-restore pass (AC-008 step 4, ADR-0023 §4 step 6;
+/// extended M-1 pass-1 adversarial-review): walks `text` nodes exactly where
+/// `autolink_bare_urls`/`convert_mentions` already walk, skipping
+/// `codeBlock` content and `code`-marked text nodes (defense-in-depth —
+/// every guard/protect step in `protect_mention_escapes` never inserts a
+/// sentinel or guard codepoint into code content in the first place). Within
+/// eligible text, applies four independent, order-insensitive substitutions:
+/// `SENTINEL_ESCAPE` -> `'@'`; `SENTINEL_GUARD` -> `SENTINEL_ESCAPE`; and,
+/// via [`unguard_char_for_bracket_collision`], `BRACKET_SENTINEL_OPEN_GUARD`
+/// -> `BRACKET_SENTINEL_OPEN`, `BRACKET_SENTINEL_CLOSE_GUARD` ->
+/// `BRACKET_SENTINEL_CLOSE`, and any `BRACKET_ID_GUARD_BASE..+128` codepoint
+/// back to its original `BRACKET_ID_ENCODE_BASE..+128` literal — undoing
+/// [`guard_bracket_sentinel_collisions`]'s M-1 collision guard so a
+/// pre-existing literal PUA character in the user's input survives the
+/// round trip byte-for-byte instead of being left as its guard substitution.
 fn restore_mention_sentinels(nodes: &mut [Value], depth: usize) -> Result<(), JrError> {
     if depth >= MAX_ADF_DEPTH {
         return Err(JrError::UserError(
@@ -895,15 +1025,25 @@ fn restore_mention_sentinels(nodes: &mut [Value], depth: usize) -> Result<(), Jr
             "text" => {
                 if !has_code_mark(node) {
                     if let Some(text) = node.get("text").and_then(Value::as_str) {
-                        if text.contains(SENTINEL_ESCAPE) || text.contains(SENTINEL_GUARD) {
-                            let restored: String = text
-                                .chars()
-                                .map(|c| match c {
-                                    SENTINEL_ESCAPE => '@',
-                                    SENTINEL_GUARD => SENTINEL_ESCAPE,
-                                    other => other,
-                                })
-                                .collect();
+                        let needs_restore = text.chars().any(|c| {
+                            matches!(
+                                c,
+                                SENTINEL_ESCAPE
+                                    | SENTINEL_GUARD
+                                    | BRACKET_SENTINEL_OPEN_GUARD
+                                    | BRACKET_SENTINEL_CLOSE_GUARD
+                            ) || unguard_char_for_bracket_collision(c).is_some()
+                        });
+                        if needs_restore {
+                            let restored: String =
+                                text.chars()
+                                    .map(|c| match c {
+                                        SENTINEL_ESCAPE => '@',
+                                        SENTINEL_GUARD => SENTINEL_ESCAPE,
+                                        other => unguard_char_for_bracket_collision(other)
+                                            .unwrap_or(other),
+                                    })
+                                    .collect();
                             node["text"] = json!(restored);
                         }
                     }
@@ -13392,6 +13532,71 @@ mod tests {
         assert!(
             joined.contains('\u{E000}'),
             "a pre-existing literal U+E000 must survive the protect/restore round trip: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn test_pre_existing_bracket_sentinel_pua_survives_full_round_trip_no_fabricated_mention() {
+        // M-1 (pass-1 adversarial review): a literal
+        // BRACKET_SENTINEL_OPEN/encode-block-char/BRACKET_SENTINEL_CLOSE
+        // sequence already present in ordinary prose (e.g. pasted from some
+        // other PUA-using source) must survive the guard/restore round trip
+        // byte-for-byte, AND must never be misdecoded by scan_mention_spans
+        // as a fabricated bracket-form mention. Mirrors
+        // test_pre_existing_pua_sentinel_survives_full_round_trip above, but
+        // for the bracket-sentinel mechanism (BRACKET_SENTINEL_OPEN/_CLOSE +
+        // the BRACKET_ID_ENCODE_BASE..+128 encode block) rather than the
+        // `\@` escape mechanism.
+        let input = "hello \u{E010}\u{E13A}\u{E011} world";
+        let adf = conv(input);
+        assert_eq!(
+            count_mention_nodes(&adf),
+            0,
+            "a pre-existing literal bracket-sentinel PUA sequence must never fabricate a mention node: {adf}"
+        );
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        let joined = texts.concat();
+        assert!(
+            joined.contains('\u{E010}')
+                && joined.contains('\u{E13A}')
+                && joined.contains('\u{E011}'),
+            "the literal bracket-sentinel PUA sequence must survive the guard/restore round trip byte-for-byte: {texts:?}"
+        );
+        // AC-003 byte-equivalence: markdown_to_adf (empty resolutions) must
+        // match the mention-aware path exactly for this non-mention input.
+        let bare = markdown_to_adf(input).unwrap();
+        assert_eq!(
+            adf, bare,
+            "markdown_to_adf must be byte-equivalent to the mention-aware path for non-mention PUA input"
+        );
+    }
+
+    #[test]
+    fn test_bracket_form_at_start_of_line_with_no_matching_ref_def_stays_literal() {
+        // L-1 (pass-1 adversarial review): protect_bracket_mentions's
+        // start-of-line + trailing-`:` exclusion (the reference-definition-
+        // collision heuristic) is conservative — it excludes a start-of-line
+        // `[~accountid:X]:` span from protection whenever it LOOKS like the
+        // start of a link reference definition, even when no matching
+        // `[label]: url` definition actually exists elsewhere in the
+        // document. This is an ACCEPTED, deliberately conservative
+        // heuristic (see protect_bracket_mentions's own doc comment) — this
+        // test pins the accepted behavior for the pure-prose case rather
+        // than changing it: the mention is NOT converted and stays literal
+        // text.
+        let md = "[~accountid:X]: some note";
+        let adf = conv(md);
+        assert_eq!(
+            count_mention_nodes(&adf),
+            0,
+            "a start-of-line bracket span shaped like a reference definition must stay literal even with no matching def (accepted conservative heuristic): {adf}"
+        );
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains("[~accountid:X]:")),
+            "the literal bracket text must survive untouched: {texts:?}"
         );
     }
 
