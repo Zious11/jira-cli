@@ -381,6 +381,25 @@ fn unguard_char_for_bracket_collision(c: char) -> Option<char> {
     }
 }
 
+/// `true` for a PRIMARY bracket-sentinel/encode-block codepoint
+/// (`BRACKET_SENTINEL_OPEN`, `BRACKET_SENTINEL_CLOSE`, or a codepoint in
+/// `BRACKET_ID_ENCODE_BASE..+128`) — the exact three ranges
+/// [`protect_bracket_mentions`] inserts and [`scan_mention_spans`]/
+/// `convert_mentions` are relied on to fully consume. Used by
+/// [`restore_mention_sentinels`]'s LOW-2 defense-in-depth scrub for a stray
+/// fragment that survived to restore time unconsumed (see that function's
+/// doc comment). Distinct from the GUARD sub-ranges
+/// [`unguard_char_for_bracket_collision`] handles (`BRACKET_SENTINEL_OPEN_GUARD`,
+/// `BRACKET_SENTINEL_CLOSE_GUARD`, `BRACKET_ID_GUARD_BASE..+128`) — the two
+/// helpers cover disjoint codepoint ranges.
+fn is_stray_primary_bracket_sentinel(c: char) -> bool {
+    if c == BRACKET_SENTINEL_OPEN || c == BRACKET_SENTINEL_CLOSE {
+        return true;
+    }
+    let code = c as u32;
+    (BRACKET_ID_ENCODE_BASE..BRACKET_ID_ENCODE_BASE + 128).contains(&code)
+}
+
 /// M-1 collision pre-pass (pass-1 adversarial review; mirrors the
 /// pre-existing `SENTINEL_ESCAPE`/`SENTINEL_GUARD` collision guard at step 3
 /// of [`protect_mention_escapes`] for the SAME reason, extended to the
@@ -500,23 +519,36 @@ fn compute_code_ranges(markdown: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 /// `true` when `pos` is at the start of `text` or immediately follows
-/// whitespace or one of `*_~(\[` — the shared start-boundary rule for both
+/// whitespace or one of `*_~(\[]` — the shared start-boundary rule for both
 /// mention forms (AC-002/AC-006 point 1), identical in shape to
 /// `find_bare_url_spans`'s own boundary check, extended with `[` (so a
 /// bracket-form or `@Name` span sitting as the very first character of an
 /// enclosing markdown link's TEXT — e.g. `[[~accountid:X]](url)`,
 /// EC-7.2.016-4 — is recognized as eligible; CommonMark's own `[` link
 /// delimiter is exactly the structural equivalent of "start of a text run"
-/// here) and `\` (so the live, unescaped `@` immediately following an
+/// here), `\` (so the live, unescaped `@` immediately following an
 /// even-count backslash run — AC-007's "even count ... genuine mention
 /// candidate" case — is still recognized once pulldown's native handling has
-/// already collapsed the backslash pairs).
+/// already collapsed the backslash pairs), and `]` (S-cycle5-mention-pure-conversion
+/// pass-4 adversarial-review LOW-3: without this, two adjacent bracket-form
+/// mentions with no separator, e.g. `[~accountid:a][~accountid:b]`, only
+/// converted the first — the second sits immediately after the first's
+/// closing `]` and failed the boundary check, leaking raw
+/// `[~accountid:b]` syntax as literal text. `]` closing a mention/link span
+/// is the structural mirror of `[` opening one, already admitted above —
+/// admitting it here converts both spans instead of just the first. This
+/// does widen eligibility slightly beyond the adjacent-mention case: a `]`
+/// left over from ordinary unmatched-bracket prose (e.g. `array[i]@ts`, a
+/// literal `]` CommonMark leaves untouched when no link/mention syntax
+/// closes over it) now also counts as a boundary — accepted as a narrow,
+/// low-risk widening consistent with the file's existing bias toward
+/// converting a well-formed mention candidate rather than leaving it
+/// literal).
 fn is_mention_boundary(text: &str, pos: usize) -> bool {
     pos == 0
-        || text[..pos]
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_whitespace() || matches!(c, '*' | '_' | '~' | '(' | '[' | '\\'))
+        || text[..pos].chars().next_back().is_some_and(|c| {
+            c.is_whitespace() || matches!(c, '*' | '_' | '~' | '(' | '[' | ']' | '\\')
+        })
 }
 
 /// `true` when `pos` is the first byte of a line (start of `text`, or
@@ -549,18 +581,30 @@ fn is_start_of_line(text: &str, pos: usize) -> bool {
 /// unbroken run of ordinary characters. A span is EXCLUDED from protection
 /// (left completely untouched) when:
 /// - it starts inside a detected code span/fence (EC-7.2.016-3), or
-/// - its FULL match range is EXACTLY the range of some markdown `Link` event
-///   (i.e. the whole `[~accountid:X]` IS a shortcut/reference-style link,
-///   not merely nested inside a larger inline link's text) — this is
-///   EC-7.2.016-6's collision case: a matching `[label]: url` reference
-///   definition makes pulldown consume the brackets into a real link with no
-///   literal brackets surviving at all, so leaving it unprotected preserves
-///   "resolves as a link, not a mention" with zero special-casing, exactly
-///   as ADR-0023 originally intended (the ADR just didn't anticipate this
-///   needing a DIFFERENT range relationship than "is nested inside" — a span
-///   genuinely nested inside a larger inline link's text, e.g.
-///   `[[~accountid:X]](url)`, does NOT match this exact-range exclusion and
-///   IS protected, correctly preserving EC-7.2.016-4's opposite requirement); or
+/// - it is the TEXT of some markdown `Link` event that starts at the exact
+///   same position as the span (i.e. this bracket span's own `[` IS that
+///   link's opening delimiter — not merely nested inside a larger inline
+///   link's text, which has a DIFFERENT start position, one character
+///   later). This covers three link shapes, all of which resolve as a link
+///   rather than convert to a mention, with zero special-casing beyond this
+///   check:
+///   - **shortcut/reference-style** (EC-7.2.016-6): the link event's FULL
+///     range is exactly the span's range (`[~accountid:X]` alone, no
+///     trailing `(url)`/`[ref]`) — e.g. a matching `[label]: url` reference
+///     definition elsewhere in the document makes pulldown consume the
+///     brackets into a real link with no literal brackets surviving at all;
+///   - **inline** (LOW-4, pass-4 adversarial review):
+///     `[~accountid:X](https://foo)` — the link event's range extends past
+///     the span's closing `]` into a `(` destination with no gap (the
+///     CommonMark-required adjacency for an inline link);
+///   - **full reference** (LOW-4): `[~accountid:X][ref]` — same shape, but
+///     the continuation is a `[` reference label instead of `(`.
+///
+///   A span genuinely nested inside a larger inline link's text, e.g.
+///   `[[~accountid:X]](url)`, has a link event starting one character BEFORE
+///   the span (at the outer `[`), so none of the three shapes above match —
+///   it correctly remains protected, preserving EC-7.2.016-4's opposite
+///   requirement (mention conversion wins over the enclosing link); or
 /// - it sits at the start of a line and is immediately followed by `:` — the
 ///   shape of a link REFERENCE DEFINITION's own `[label]: destination` line.
 ///   Protecting a definition's label text would corrupt the very definition
@@ -580,8 +624,19 @@ fn protect_bracket_mentions(
 ) -> (String, bool) {
     const BRACKET_PREFIX: &str = "[~accountid:";
     let in_code = |pos: usize| code_ranges.iter().any(|r| r.start <= pos && pos < r.end);
-    let is_exact_link_span =
-        |start: usize, end: usize| link_ranges.iter().any(|r| r.start == start && r.end == end);
+    // LOW-4 (pass-4 adversarial review): excludes a bracket span that IS the
+    // link text of a link event starting at the exact same position —
+    // covering shortcut/reference-style (full range equality), inline
+    // (`(` continuation with no gap), and full-reference (`[` continuation
+    // with no gap) link shapes. See this function's own doc comment for the
+    // full rationale and why the `r.start == start` check correctly excludes
+    // the EC-7.2.016-4 nested case (a different start position).
+    let is_exact_link_span = |start: usize, end: usize| {
+        link_ranges.iter().any(|r| {
+            r.start == start
+                && (r.end == end || (r.end > end && markdown[end..].starts_with(['(', '['])))
+        })
+    };
 
     let mut out = String::with_capacity(markdown.len());
     let mut i = 0usize;
@@ -1068,6 +1123,31 @@ fn convert_mentions(
 /// [`unguard_char_for_bracket_collision`] for the full account and
 /// `test_bracket_guard_block_preexisting_pua_is_accepted_one_level_residual`
 /// for the pinned regression test.
+///
+/// **Defense-in-depth scrub for a stray PRIMARY bracket sentinel
+/// (S-cycle5-mention-pure-conversion pass-4 adversarial-review LOW-2):**
+/// [`protect_bracket_mentions`] relies on [`scan_mention_spans`]/
+/// `convert_mentions` fully consuming every
+/// `BRACKET_SENTINEL_OPEN`...`BRACKET_SENTINEL_CLOSE` token it inserts — the
+/// module doc for [`protect_bracket_mentions`] itself flags "pulldown never
+/// splits the contiguous PUA token" as an assumption, not a proven
+/// invariant. If that assumption were ever violated (a future pulldown
+/// version, or an unanticipated inline-parsing interaction, splits a
+/// protected token so a fragment survives to a `text` node unconsumed), this
+/// pass additionally SCRUBS (removes) any raw `BRACKET_SENTINEL_OPEN`/
+/// `BRACKET_SENTINEL_CLOSE` (U+E010/U+E011) or `BRACKET_ID_ENCODE_BASE..+128`
+/// (U+E100..U+E180) codepoint still present in eligible text at restore
+/// time, rather than let it leak verbatim into the ADF POSTed to Jira. This
+/// is degrade-safe, not reconstructive: the original `[~accountid:...]`
+/// source text is already gone by this point (consumed pre-parse), so a
+/// stray fragment cannot be turned back into anything meaningful — it is
+/// simply dropped, symmetric with the `\@`/bracket-guard mechanisms' own
+/// policy of never fabricating content on a to-be-restored codepoint. This
+/// scrub is orthogonal to — and does not touch — the ACCEPTED residual
+/// above (a pre-existing literal in the GUARD sub-ranges, `E012`/`E013`/
+/// `E180..E200`, is still shifted by 128, not scrubbed): the two
+/// mechanisms guard different, non-overlapping ranges. Pinned by
+/// `test_restore_mention_sentinels_scrubs_stray_primary_bracket_sentinel`.
 fn restore_mention_sentinels(nodes: &mut [Value], depth: usize) -> Result<(), JrError> {
     if depth >= MAX_ADF_DEPTH {
         return Err(JrError::UserError(
@@ -1089,17 +1169,26 @@ fn restore_mention_sentinels(nodes: &mut [Value], depth: usize) -> Result<(), Jr
                                     | BRACKET_SENTINEL_OPEN_GUARD
                                     | BRACKET_SENTINEL_CLOSE_GUARD
                             ) || unguard_char_for_bracket_collision(c).is_some()
+                                || is_stray_primary_bracket_sentinel(c)
                         });
                         if needs_restore {
-                            let restored: String =
-                                text.chars()
-                                    .map(|c| match c {
-                                        SENTINEL_ESCAPE => '@',
-                                        SENTINEL_GUARD => SENTINEL_ESCAPE,
-                                        other => unguard_char_for_bracket_collision(other)
-                                            .unwrap_or(other),
-                                    })
-                                    .collect();
+                            let restored: String = text
+                                .chars()
+                                .filter_map(|c| match c {
+                                    SENTINEL_ESCAPE => Some('@'),
+                                    SENTINEL_GUARD => Some(SENTINEL_ESCAPE),
+                                    // LOW-2 defense-in-depth scrub: drop a
+                                    // stray, un-restorable primary
+                                    // bracket-sentinel/encode-block codepoint
+                                    // rather than let it leak into the ADF
+                                    // POSTed to Jira. See this function's
+                                    // doc comment.
+                                    other if is_stray_primary_bracket_sentinel(other) => None,
+                                    other => Some(
+                                        unguard_char_for_bracket_collision(other).unwrap_or(other),
+                                    ),
+                                })
+                                .collect();
                             node["text"] = json!(restored);
                         }
                     }
@@ -3094,10 +3183,22 @@ fn extract_inline_from_list_item_content(list_item: &Value) -> Vec<Value> {
 /// counter slots. No `uuid` crate dependency (BC-7.2.010 §Required attributes).
 ///
 /// The counter is document-wide and unique across all taskList/taskItem nodes.
-/// Called from `markdown_to_adf` after `finish()`, before `autolink_bare_urls`.
-/// The ordering is immaterial to correctness (`autolink_bare_urls` only adds
-/// `link` marks to text nodes and never adds or removes task-list nodes), but
-/// the source order is: `finish()` → `assign_local_ids` → `autolink_bare_urls`.
+///
+/// **Call-site position differs by entrypoint (ADR-0023 §5, S-cycle5 LOW-1
+/// doc-drift fix):** `markdown_to_adf_no_mentions` keeps the original
+/// pre-#674 position — `finish()` → `assign_local_ids` →
+/// `autolink_bare_urls` — since that entrypoint's whole contract is
+/// byte-for-byte pre-#674 equivalence. `markdown_to_adf_with_mentions` (the
+/// primary path `markdown_to_adf` delegates to) runs this pass LAST,
+/// unconditionally, AFTER `autolink_bare_urls`, `convert_mentions`, and
+/// `restore_mention_sentinels`: `finish()` → `autolink_bare_urls` ->
+/// `convert_mentions` -> `restore_mention_sentinels` -> `assign_local_ids`.
+/// In both positions the ordering relative to `autolink_bare_urls` is
+/// immaterial to correctness (`autolink_bare_urls` only adds `link` marks to
+/// text nodes and never adds or removes task-list nodes) — the mention path
+/// additionally requires running after `convert_mentions`/
+/// `restore_mention_sentinels` so neither `mention` nodes nor
+/// `link`-marked text runs receive a `localId`.
 fn assign_local_ids(nodes: &mut [Value]) -> Result<(), JrError> {
     let mut counter = 0u64;
     assign_local_ids_walk(nodes, &mut counter, 0)
@@ -13332,6 +13433,45 @@ mod tests {
     }
 
     #[test]
+    fn test_bc_7_2_016_low4_inline_link_exact_text_resolves_as_link_not_mention() {
+        // LOW-4 (pass-4 adversarial review, S-cycle5-mention-pure-conversion):
+        // a bracket-form mention used as the exact TEXT of an inline
+        // markdown link — `[~accountid:X](https://foo)` — must resolve as
+        // the author's explicit link, not be destroyed by converting to a
+        // mention. Distinct from EC-7.2.016-4 (a bracket span NESTED inside
+        // a larger link's text, e.g. `[[~accountid:X]](url)`, which still
+        // converts): here the bracket span's own `[` IS the link's opening
+        // delimiter.
+        let adf = conv("[~accountid:X](https://example.com)");
+        assert_eq!(
+            count_mention_nodes(&adf),
+            0,
+            "a bracket span that is the exact text of an inline link must not \
+             convert to a mention, destroying the link: {adf}"
+        );
+        assert!(
+            contains_node_type(&adf, "link"),
+            "the author's explicit inline link must survive as a link mark: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_016_low4_full_reference_link_exact_text_resolves_as_link_not_mention() {
+        // LOW-4 sibling case: full-reference-style link,
+        // `[~accountid:X][ref]` + `[ref]: https://example.com` — same
+        // "bracket span IS the link text" shape, different destination
+        // syntax (`[ref]` instead of `(url)`).
+        let md = "[~accountid:X][ref]\n\n[ref]: https://example.com";
+        let adf = conv(md);
+        assert_eq!(
+            count_mention_nodes(&adf),
+            0,
+            "a bracket span that is the exact text of a full-reference link \
+             must not convert to a mention, destroying the link: {adf}"
+        );
+    }
+
+    #[test]
     fn test_bc_7_2_016_ec6_reference_link_collision_resolves_as_link_not_mention() {
         // EC-7.2.016-6: a same-document reference definition matching the
         // bracket token resolves the token as a link, not a mention. No
@@ -13342,6 +13482,30 @@ mod tests {
             count_mention_nodes(&adf),
             0,
             "a matching reference definition must win over mention conversion: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_bc_7_2_016_consecutive_bracket_mentions_no_separator_both_convert() {
+        // LOW-3 (pass-4 adversarial review, S-cycle5-mention-pure-conversion):
+        // two bracket-form mentions with NO separator between them —
+        // `[~accountid:a][~accountid:b]` — previously only converted the
+        // first: the second sits immediately after the first's closing `]`,
+        // which was not in `is_mention_boundary`'s boundary-char set, so it
+        // failed the boundary check and leaked raw `[~accountid:b]` syntax
+        // as literal text. Fixed by admitting `]` as a boundary character
+        // (see `is_mention_boundary`'s doc comment) — both now convert.
+        let adf = conv("[~accountid:a][~accountid:b]");
+        assert_eq!(
+            count_mention_nodes(&adf),
+            2,
+            "both consecutive bracket-form mentions must convert, none left literal: {adf}"
+        );
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        assert!(
+            texts.iter().all(|t| !t.contains("accountid")),
+            "no raw bracket-form syntax may leak into literal text: {texts:?}"
         );
     }
 
@@ -13686,6 +13850,41 @@ mod tests {
             "markdown_to_adf must be byte-equivalent to the mention-aware path \
              for this non-mention PUA input, including the accepted residual"
         );
+    }
+
+    #[test]
+    fn test_restore_mention_sentinels_scrubs_stray_primary_bracket_sentinel() {
+        // LOW-2 (pass-4 adversarial review, S-cycle5-mention-pure-conversion):
+        // defense-in-depth for the unverified "pulldown never splits the
+        // contiguous PUA token" assumption (protect_bracket_mentions's own
+        // doc comment). A stray, unconsumed PRIMARY bracket-sentinel
+        // (BRACKET_SENTINEL_OPEN/_CLOSE, U+E010/U+E011) or encode-block
+        // (BRACKET_ID_ENCODE_BASE..+128, U+E100..U+E180) codepoint that
+        // survives to restore_mention_sentinels — because scan_mention_spans/
+        // convert_mentions never found a matching pair to decode — must be
+        // scrubbed rather than leaked verbatim into the ADF POSTed to Jira.
+        // Exercised directly against restore_mention_sentinels with a
+        // hand-crafted text node, since reproducing an actual pulldown token
+        // split is not feasible with the pinned parser version.
+        let mut nodes = vec![json!({
+            "type": "text",
+            "text": "hello \u{E010} stray open, \u{E011} stray close, \u{E13A} stray encoded world",
+        })];
+        restore_mention_sentinels(&mut nodes, 0).unwrap();
+        let restored = nodes[0]["text"].as_str().unwrap();
+        assert!(
+            !restored.chars().any(is_stray_primary_bracket_sentinel),
+            "a stray primary bracket-sentinel/encode-block codepoint must be \
+             scrubbed, never leaked into restored text: {restored:?}"
+        );
+        // Surrounding ordinary text must survive untouched (degrade-safe:
+        // scrub the unrestorable fragment, don't corrupt the rest of the
+        // node).
+        assert!(restored.contains("hello"));
+        assert!(restored.contains("stray open"));
+        assert!(restored.contains("stray close"));
+        assert!(restored.contains("stray encoded world"));
+        assert_eq!(count_mention_nodes(&json!(nodes)), 0);
     }
 
     #[test]
