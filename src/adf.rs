@@ -250,8 +250,12 @@ fn cmark_options() -> Options {
 /// `markdown_to_adf_with_mentions` with an empty resolutions map: bracket-form
 /// mentions still convert "for free" (id only, no `attrs.text`), `@Name` stays
 /// inert (an empty resolutions map never has a matching entry) — byte-for-byte
-/// matching this function's pre-#674 behavior for every one of the 275
-/// pre-#674 tests.
+/// for all non-bracket-form input, matching this function's pre-#674 behavior
+/// for the entire pre-#674 test corpus of 275 tests. This does NOT extend to
+/// bracket-form input: per BC-7.2.016 point 7, bracket-form spans now
+/// intentionally convert to a `mention` node even through this entrypoint, so
+/// byte-equivalence with the pre-#674 body is scoped to non-bracket-form
+/// input only.
 pub fn markdown_to_adf(markdown: &str) -> Result<Value, JrError> {
     markdown_to_adf_with_mentions(markdown, &MentionResolutions::empty())
 }
@@ -342,7 +346,26 @@ fn guard_char_for_bracket_collision(c: char) -> Option<char> {
 
 /// Inverse of [`guard_char_for_bracket_collision`] — used by
 /// [`restore_mention_sentinels`] to undo the guard pass after the full
-/// build, restoring the ORIGINAL literal PUA character byte-for-byte.
+/// build, restoring the ORIGINAL literal PUA character byte-for-byte — for
+/// every codepoint [`guard_char_for_bracket_collision`] actually produced.
+///
+/// **Accepted one-level residual (ADR-0023 §4a, symmetric with §4's
+/// `\@`/[`SENTINEL_GUARD`] residual for a pre-existing literal
+/// [`SENTINEL_ESCAPE`]):** [`restore_mention_sentinels`] applies this
+/// function unconditionally to every eligible `text` node, with no way to
+/// tell "a guard substitution this build produced" apart from "a literal
+/// guard-range codepoint the user already typed." So a literal
+/// [`BRACKET_SENTINEL_OPEN_GUARD`] (U+E012), [`BRACKET_SENTINEL_CLOSE_GUARD`]
+/// (U+E013), or `BRACKET_ID_GUARD_BASE..+128` (U+E180..U+E200) codepoint
+/// ALREADY present in the user's raw input — never produced by
+/// [`guard_char_for_bracket_collision`] at all, since that function only
+/// guards the ENCODE/SENTINEL ranges it protects, not its own guard ranges
+/// — is silently SHIFTED BY 128 on output instead of surviving
+/// byte-for-byte. Fully closing this is an infinite regress (the new guard
+/// range would itself need a guard, and so on); these are Private Use Area
+/// codepoints not produced by normal input, so the residual is accepted
+/// rather than chased, matching the file's own `\@` precedent. Pinned by
+/// `test_bracket_guard_block_preexisting_pua_is_accepted_one_level_residual`.
 fn unguard_char_for_bracket_collision(c: char) -> Option<char> {
     if c == BRACKET_SENTINEL_OPEN_GUARD {
         return Some(BRACKET_SENTINEL_OPEN);
@@ -395,7 +418,23 @@ fn unguard_char_for_bracket_collision(c: char) -> Option<char> {
 ///
 /// Reversed by [`restore_mention_sentinels`] after the whole build, via
 /// [`unguard_char_for_bracket_collision`], restoring the original literal
-/// PUA character byte-for-byte.
+/// PUA character byte-for-byte — for every codepoint THIS pass actually
+/// guarded (a pre-existing literal `BRACKET_SENTINEL_OPEN`/`_CLOSE` or
+/// `BRACKET_ID_ENCODE_BASE..+128` character).
+///
+/// **Accepted one-level residual:** this pass only guards the
+/// ENCODE/SENTINEL ranges it protects — it does NOT guard its own GUARD
+/// sub-ranges (`BRACKET_SENTINEL_OPEN_GUARD` U+E012,
+/// `BRACKET_SENTINEL_CLOSE_GUARD` U+E013, or `BRACKET_ID_GUARD_BASE..+128`
+/// U+E180..U+E200). [`restore_mention_sentinels`] unconditionally reverses
+/// those guard ranges regardless of why a codepoint in them is present, so
+/// a literal already sitting in one of them is shifted by 128 on output
+/// instead of surviving byte-for-byte. This is symmetric with the sibling
+/// `\@`/[`SENTINEL_GUARD`] mechanism's own accepted residual for a
+/// pre-existing literal [`SENTINEL_ESCAPE`] (ADR-0023 §4) — closing it
+/// fully is an infinite regress (each guard range would need its own
+/// guard), so it is accepted rather than chased. See
+/// [`unguard_char_for_bracket_collision`] for the full account.
 fn guard_bracket_sentinel_collisions(
     markdown: &str,
     code_ranges: &[std::ops::Range<usize>],
@@ -1010,8 +1049,25 @@ fn convert_mentions(
 /// `BRACKET_SENTINEL_CLOSE`, and any `BRACKET_ID_GUARD_BASE..+128` codepoint
 /// back to its original `BRACKET_ID_ENCODE_BASE..+128` literal — undoing
 /// [`guard_bracket_sentinel_collisions`]'s M-1 collision guard so a
-/// pre-existing literal PUA character in the user's input survives the
-/// round trip byte-for-byte instead of being left as its guard substitution.
+/// pre-existing literal PUA character in the ENCODE/SENTINEL ranges that
+/// pass actually guarded survives the round trip byte-for-byte instead of
+/// being left as its guard substitution.
+///
+/// **Accepted one-level residual (ADR-0023 §4a):** these four
+/// substitutions are applied unconditionally to every eligible `text`
+/// node, with no way to distinguish "a guard substitution the build
+/// produced" from "a literal guard-range codepoint the user typed" — so a
+/// literal `BRACKET_SENTINEL_OPEN_GUARD`/`BRACKET_SENTINEL_CLOSE_GUARD`/
+/// `BRACKET_ID_GUARD_BASE..+128` codepoint already present in the raw
+/// input is shifted by 128 on output rather than restored, never
+/// fabricating a mention (this pass runs after `convert_mentions`).
+/// Symmetric with the `\@` mechanism's own accepted residual for a
+/// pre-existing literal `SENTINEL_ESCAPE` (ADR-0023 §4); fully closing it
+/// is an infinite regress, so it is accepted rather than chased — same
+/// disposition the file already applies to the `\@` case. See
+/// [`unguard_char_for_bracket_collision`] for the full account and
+/// `test_bracket_guard_block_preexisting_pua_is_accepted_one_level_residual`
+/// for the pinned regression test.
 fn restore_mention_sentinels(nodes: &mut [Value], depth: usize) -> Result<(), JrError> {
     if depth >= MAX_ADF_DEPTH {
         return Err(JrError::UserError(
@@ -13569,6 +13625,66 @@ mod tests {
         assert_eq!(
             adf, bare,
             "markdown_to_adf must be byte-equivalent to the mention-aware path for non-mention PUA input"
+        );
+    }
+
+    #[test]
+    fn test_bracket_guard_block_preexisting_pua_is_accepted_one_level_residual() {
+        // MEDIUM-1 (pass-2 adversarial review, cycle5-mention-pure-conversion):
+        // the bracket-sentinel collision guard (`guard_bracket_sentinel_collisions`)
+        // remaps a PRE-EXISTING literal in the ENCODE/SENTINEL ranges it
+        // protects (BRACKET_SENTINEL_OPEN/_CLOSE, BRACKET_ID_ENCODE_BASE..+128
+        // — covered above by
+        // test_pre_existing_bracket_sentinel_pua_survives_full_round_trip_no_fabricated_mention)
+        // but it does NOT guard its own GUARD sub-ranges
+        // (BRACKET_SENTINEL_OPEN_GUARD U+E012, BRACKET_SENTINEL_CLOSE_GUARD
+        // U+E013, BRACKET_ID_GUARD_BASE..+128 U+E180..U+E200).
+        // `restore_mention_sentinels` unconditionally reverses those GUARD
+        // ranges regardless of why a codepoint in them is present, so a
+        // literal already sitting there is silently SHIFTED BY 128 on
+        // output — data-fidelity corruption, but NO mention is fabricated
+        // (this pass runs after `convert_mentions` has already finished
+        // scanning). This is an ACCEPTED one-level residual (see
+        // `unguard_char_for_bracket_collision`'s doc comment), symmetric
+        // with the sibling `\@`/SENTINEL_GUARD mechanism's own accepted
+        // residual for a pre-existing literal SENTINEL_ESCAPE (ADR-0023
+        // §4/§4a) — fully closing it is an infinite regress (each new guard
+        // range would need its own guard), so it is pinned here as a
+        // conscious, tested contract rather than left as a silent surprise.
+        //
+        // U+E012 (BRACKET_SENTINEL_OPEN_GUARD) unguards to U+E010
+        // (BRACKET_SENTINEL_OPEN); U+E190 (inside BRACKET_ID_GUARD_BASE
+        // 0xE180..0xE200) unguards to U+E110 (0xE100 + (0xE190 - 0xE180)).
+        let input = "hello \u{E012} and \u{E190} world";
+        let adf = conv(input);
+        assert_eq!(
+            count_mention_nodes(&adf),
+            0,
+            "the accepted residual must never fabricate a mention node: {adf}"
+        );
+        let mut texts = Vec::new();
+        collect_all_text_strings(&adf, &mut texts);
+        let joined = texts.concat();
+        assert!(
+            joined.contains('\u{E010}') && joined.contains('\u{E110}'),
+            "documented accepted-residual behavior: a pre-existing literal in \
+             the guard sub-ranges is shifted by 128 (U+E012->U+E010, \
+             U+E190->U+E110), not preserved byte-for-byte: {texts:?}"
+        );
+        assert!(
+            !joined.contains('\u{E012}') && !joined.contains('\u{E190}'),
+            "the original guard-range literals must NOT survive unshifted — \
+             that would mean the residual was silently closed without this \
+             test (or the doc comments) being updated: {texts:?}"
+        );
+        // AC-003 byte-equivalence still holds for this non-mention input:
+        // markdown_to_adf (empty resolutions) shares the exact same
+        // accepted-residual behavior as the mention-aware path.
+        let bare = markdown_to_adf(input).unwrap();
+        assert_eq!(
+            adf, bare,
+            "markdown_to_adf must be byte-equivalent to the mention-aware path \
+             for this non-mention PUA input, including the accepted residual"
         );
     }
 
