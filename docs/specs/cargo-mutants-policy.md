@@ -824,6 +824,55 @@ Two static-analysis guards protect §Scope integrity (DEC-150):
   `cargo test --test mutants_glob_existence`. On failure: fix the dead examine_globs entry
   or update it for the file move.
 
+## Sharded Gate: Residual Trust Boundary (documented, not fixed) — cycle-006 F4 review round 1, F-PC-MED-001
+
+`mutants-aggregate.sh`'s kill-rate decision reads `caught`/`missed`/`timeout`/`unviable`
+from each shard's `outcomes.json` (Step 3 of `evaluate_mutants_aggregate`). Each
+`outcomes.json` is produced inside the `mutants` shard job's own "Run mutation tests on
+this shard" step, which runs `cargo mutants --in-diff … --shard <k>/8 …` — and `cargo
+mutants` itself compiles and runs the PR's OWN code (`cargo build`/`cargo test` under the
+hood) to determine which mutants are caught. A PR that achieves code execution somewhere
+in that build/test loop (a malicious `build.rs`, a proc-macro, or a test-time side effect)
+runs with the ability to overwrite `mutants.out/outcomes.json` before the shard job's
+"Upload shard outcomes" step picks it up.
+
+**The attack:** `MUTANT_COUNT` — the value `mutants-aggregate.sh`'s Step 4 reconciles the
+pooled shard total against — is deterministically computable offline via the exact same
+`cargo mutants --list --in-diff <diff>` command `mutants-plan` runs (this command only
+lists mutants; it does not execute the PR's code). A PR author can therefore precompute
+`MUTANT_COUNT` for their own diff and hand-fabricate an `outcomes.json` whose
+`caught`/`missed`/`timeout`/`unviable` sum to exactly that value while reporting a 100%
+pooled kill rate — satisfying both Step 4's exact-equality reconciliation and Step 6's
+kill-rate threshold trivially, with no real mutant ever executed.
+
+**Blast radius: mutation-QUALITY signal only.** None of the three `mutants-plan`,
+`mutants`, or `mutants-aggregate` jobs in `ci.yml` reference any repository secret or
+`GITHUB_TOKEN` (grep-verified) — a PR that exploits this residual can force the mutation
+gate green without earning it, but it gains no path to secret exfiltration or write access
+through this mechanism.
+
+**This is not a regression.** The pre-sharding single `mutants` job had this identical
+trust boundary — it also produced `outcomes.json` inside the same job that built and
+tested the PR's own code, with **zero** reconciliation against anything computed
+independently. This diff *narrows* that pre-existing boundary rather than introducing it:
+Step 4's exact-equality `MUTANT_COUNT` cross-check (pooled shard total vs. an
+independently-computed pre-count) did not exist before cycle-006 and forces a forger to at
+minimum reproduce the correct total, not merely report a plausible-looking pass.
+
+**Longer-term mitigation options (tracked as a future direction, not opened as a story by
+this round):**
+1. Independent per-mutant re-derivation — reconcile the actual *set* of mutant IDs each
+   shard reports against the diff-derived set `mutants-plan` computes, not just the
+   summary counts, closing the "right total, wrong contents" forgery this residual
+   currently allows.
+2. Sandboxed/isolated shard execution — run each shard's `cargo mutants` invocation in an
+   environment with no write access to the artifact the aggregator later trusts, so a
+   compromised build/test loop cannot influence its own scoring.
+
+Same documentation posture as this repo's other accepted CI-gate residuals (the sudo bound
+and the two unpinned `uses:` values on the `ci-gate` decision path — see CLAUDE.md's
+"CI Gate — SCOPE SUMMARY"): documented and reasoned about, not fixed in this round.
+
 ## Future Path: Job Sharding (Path B) — LANDED (cycle-006, 2026-09-07)
 
 **This is no longer a future path — it is the current design.** Path A's 240-minute
