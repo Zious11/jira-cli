@@ -1,0 +1,92 @@
+name: Mutants Nightly (Full Scope)
+
+# STATUS: SKELETON (cycle-006 mutants-ci-sharding, F4 Blocking
+# Precondition 2 / Task 2). This is a scaffold matching the shape in
+# .factory/phase-f2-spec-evolution/cycle-006/ci-yml-design.md §4 — advisory
+# only, never wired into `ci-gate.needs` or branch protection, and
+# declares no job named `ci-gate`. The `mutants-full` shard step below is
+# a placeholder command (`echo`), not the real
+# `cargo mutants --shard k/16 --sharding slice --jobs 2 --baseline skip
+# --timeout 240` invocation — that decision-path content lands via Task 23
+# (test-writer/implementer stage), not this scaffold. Advisory only; must
+# never fail a merge.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"  # 08:00 UTC nightly — offset from e2e.yml's 06:00
+                          # cron to avoid runner-queue contention between
+                          # the two scheduled jobs.
+  workflow_dispatch: {}   # manual trigger for on-demand full runs
+
+jobs:
+  mutants-full:
+    name: Mutation Testing (Full, Advisory)
+    runs-on: ubuntu-latest
+    # No pull_request trigger at all in `on:` above; this belt-and-suspenders
+    # if: mirrors e2e.yml's own convention (never run this against a PR
+    # even if `on:` is later edited).
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 240  # full, non-diff-scoped scope; advisory, not
+                           # required, so a long/occasionally-timing-out run
+                           # here is acceptable (does not block any merge).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]  # N=16
+        # heavier sharding than the per-PR N=8 — full examine_globs scope
+        # is materially larger than a typical --in-diff PR slice.
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        with:
+          tool: cargo-mutants@27.1.0
+
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+
+      - name: Run full mutation scope on this shard
+        continue-on-error: true
+        run: |
+          # SCAFFOLD PLACEHOLDER (Task 2) — the real, non-`--in-diff`
+          # invocation (cargo mutants --shard ${{ matrix.shard }}/16
+          # --sharding slice --jobs 2 --baseline skip --timeout 240) is
+          # authored at Task 23, per ci-yml-design.md § "mutants-full" job.
+          # NO --in-diff here — full examine_globs scope, by design.
+          echo "TODO(F4-GREEN, Task 23): cargo mutants --shard ${{ matrix.shard }}/16 --sharding slice --jobs 2 --baseline skip --timeout 240"
+
+      - name: Upload shard outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mutants-nightly-shard-outcomes-${{ matrix.shard }}
+          path: mutants.out/outcomes.json
+          if-no-files-found: warn
+          retention-days: 7  # longer retention than the per-PR shards —
+                              # useful for trend analysis across nightly runs.
+
+  mutants-nightly-report:
+    name: Mutation Testing (Full, Report)
+    runs-on: ubuntu-latest
+    needs: [mutants-full]
+    if: always()
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: mutants-nightly-shard-outcomes-*
+          path: ${{ runner.temp }}/shards
+
+      - name: Summarize pooled kill rate (advisory — never fails the workflow)
+        run: |
+          # SCAFFOLD PLACEHOLDER (Task 2) — the real summation logic
+          # (mirroring mutants-aggregate's INV-AGG pooling, minus the
+          # fail-closed exits) is authored at Task 23. Advisory only:
+          # this step must always exit 0 regardless of the computed kill
+          # rate, since this workflow is not wired into ci-gate.needs and
+          # must never block a merge.
+          echo "TODO(F4-GREEN, Task 23): summarize pooled kill rate across mutants-nightly-shard-outcomes-* (advisory, always exit 0)."
