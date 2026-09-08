@@ -859,6 +859,75 @@ Step 4's exact-equality `MUTANT_COUNT` cross-check (pooled shard total vs. an
 independently-computed pre-count) did not exist before cycle-006 and forces a forger to at
 minimum reproduce the correct total, not merely report a plausible-looking pass.
 
+**Correction (cycle-006 F4 review round 2, F-PE-LOW-002): reconciliation is not an
+adversarial control.** The paragraph above is accurate about the reconciliation's origin,
+but its "narrows the boundary" framing was previously read as if it also raised the bar for
+a DELIBERATE forger — it does not. `mutants-plan` computes `MUTANT_COUNT` by compiling and
+running `cargo mutants --list --in-diff` against the SAME PR checkout the `mutants` shard
+jobs later build and test — so an attacker who has already achieved code execution in one
+job (a malicious `build.rs`, a proc-macro, or a test-time side effect) has code execution in
+the other too, via the identical mechanism. That attacker controls BOTH sides of Step 4's
+exact-equality check simultaneously and can make them agree on any number it likes while
+fabricating a 100% pooled kill rate. Stated plainly: **reconciliation constrains accidental
+divergence only** (a bug, a partial-run artifact, an off-by-one in the sharding math
+producing a `MUTANT_COUNT`/pooled-total mismatch by mistake) — **it offers no adversarial
+protection against an attacker who already has code execution**, because that attacker
+controls both sides of the equation it checks.
+
+**Currency (same round): the TRIVIAL, no-code-execution variant of this bypass is now
+CLOSED.** Before this round, a plaintext `ci.yml` edit to `mutants-plan`'s "Compute diff and
+mutation plan" step — replacing its `run:` body with hardcoded `echo "escalated=false"` /
+`echo "mutant_count=0"` / `echo "overall_diff_lines=1"` output lines and no real `git
+diff`/`cargo mutants --list` invocation at all — satisfied every structural pin that existed
+at the time (job/step presence, `outputs:` key set, `if:` value) while requiring **zero**
+code execution and zero real mutation testing, for any PR diff size. Two new tests in
+`tests/ci_gate_completeness.rs` close this: `test_mutants_plan_compute_step_content_is_pinned`
+asserts the compute step's `run:` body contains ten required fragments, in order, tying each
+of `mutant_count` / `overall_diff_lines` / `escalated` to a real `git diff` / `cargo mutants
+--list --in-diff`-derived shell variable rather than a literal; `test_mutants_plan_job_and_
+step_key_sets_are_pinned` closes the job/step key-set gap that content pin sits inside (a
+smuggled job-level `defaults:`/`continue-on-error:`, or a smuggled step-level
+`if:`/`shell:`/`continue-on-error:`, on `mutants-plan` itself). The residual documented in
+this section is therefore narrower than at initial cycle-006 landing: it is specifically the
+**code-execution-required** path (a malicious `build.rs`/proc-macro/test-time side effect
+reachable from a `cargo mutants`/`cargo build`/`cargo test` invocation), not a plaintext
+`ci.yml` edit — see "A second forgery path" below for a third variant that also requires no
+code execution.
+
+### A second forgery path: spoofed sibling-job artifacts (cycle-006 F4 review round 2, F-PF-LOW-002)
+
+A second, arguably *easier* forgery mechanism exists alongside the build.rs/proc-macro path
+above, and it needs no code execution in the `mutants` shard build/test loop at all.
+`mutants-aggregate`'s two download steps (`ci.yml`'s "Download all shard status sentinels"
+and "Download all shard outcomes") pull artifacts by **name pattern** —
+`mutants-shard-status-*` and `mutants-shard-outcomes-*` — with no binding to the `mutants`
+matrix job's identity, run, or provenance. `scripts/mutants-aggregate.sh`'s completeness
+check (Step 0's sentinel-presence sweep, `EXPECTED_SHARDS=8`) verifies only that exactly one
+status sentinel exists per shard index 0–7; it has no way to tell a sentinel uploaded by the
+legitimate `mutants` matrix job apart from one uploaded by any OTHER job in the same
+workflow run. A PR that adds (or repurposes) a sibling job in the same workflow run — one
+with no relationship to `cargo mutants` at all — to upload 8 well-formed
+`mutants-shard-status-{0..7}` sentinels plus 8 well-formed `mutants-shard-outcomes-{0..7}`
+files (each summing to the `MUTANT_COUNT` `mutants-plan` computed, at a 100% kill rate)
+would be indistinguishable from a genuine shard run to every check `mutants-aggregate.sh`
+performs: the duplicate/stray-artifact guard (`actual_sentinel_count -ne EXPECTED_SHARDS`)
+only catches a *miscount*, not a well-formed spoof landing at exactly the expected count.
+
+This path is **not** narrowed by the `MUTANT_COUNT` reconciliation discussed above — a
+spoofing PR author has the same offline access to `cargo mutants --list --in-diff`'s output
+that `mutants-plan` itself uses (it is, after all, just a `cargo mutants --list` invocation
+against the PR's own diff, requiring no code execution privilege beyond what any PR author
+already has to open the PR), so a spoofed submission can make its fabricated totals
+reconcile exactly against Step 4's check.
+
+**Same blast radius as the build.rs/proc-macro path: mutation-quality signal only.** No
+repository secret or `GITHUB_TOKEN` is read or referenced by this mechanism. **Same
+mitigation, too: this requires a visible `ci.yml` diff** (a new or repurposed job,
+fabricated JSON payloads) — exactly the shape of change code review of a `ci-gate`-touching
+PR is expected to catch (see CLAUDE.md's "CI Gate — SCOPE SUMMARY" "Review scope" note).
+Documented and reasoned about, not fixed in this round; tracked alongside the
+code-execution path as an accepted residual.
+
 **Longer-term mitigation options (tracked as a future direction, not opened as a story by
 this round):**
 1. Independent per-mutant re-derivation — reconcile the actual *set* of mutant IDs each
@@ -868,6 +937,10 @@ this round):**
 2. Sandboxed/isolated shard execution — run each shard's `cargo mutants` invocation in an
    environment with no write access to the artifact the aggregator later trusts, so a
    compromised build/test loop cannot influence its own scoring.
+3. Provenance-bound artifact download — verify the uploading job's identity (e.g. via the
+   GitHub API's run/job metadata) rather than trusting artifact NAME PATTERNS alone, closing
+   the spoofed-sibling-artifact path documented immediately above without requiring either
+   of the two options above.
 
 Same documentation posture as this repo's other accepted CI-gate residuals (the sudo bound
 and the two unpinned `uses:` values on the `ci-gate` decision path — see CLAUDE.md's
