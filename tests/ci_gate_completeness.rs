@@ -4407,152 +4407,222 @@ fn test_spec_guard_contains_check_ci_gate_self_test_step() {
 /// matching step's `if:` value via `Step::value_of` and requires
 /// `ScalarStyle::Plain` (AC-004 mandate applied to this newly-introduced
 /// value pin) plus no YAML tag before trusting its text.
+// RENAMED (cycle-006 mutants-ci-sharding, Task 8 write-test half, story
+// AC-033) from `test_mutants_job_structure_unchanged_by_cigate2_option_c`.
+// The old name/body asserted the PRE-sharding single-job `mutants` shape
+// (Option C's "leave `mutants` entirely unchanged" contract, S-CIGATE-2).
+// This story's design REPLACES that shape: `mutants` becomes an 8-shard
+// `strategy.matrix.shard` job depending on `mutants-plan`, with THREE
+// step-level `if: always()` occurrences (not one) on the two new sentinel
+// steps plus the outcomes-upload step — the "3-count steps_with_if
+// cardinality inversion" the story's Task 8 names explicitly. This test is
+// therefore rewritten, not merely renamed, to assert the NEW sharded
+// design per `ci-yml-design.md §2`'s authoritative shape — it is EXPECTED
+// to fail (RED) until Task 9 (implementer, GREEN phase) reshapes the real
+// `mutants` job in `ci.yml` to match.
 #[test]
-fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
+fn test_mutants_shard_job_structure_matches_sharded_design() {
     let ci = read_ci_yml();
     let mutants_block = extract_job_block(&ci, "mutants").unwrap_or_else(|| {
         panic!("FAIL: `.github/workflows/ci.yml` does not contain a `mutants:` job.")
     });
 
-    // Job-level if: unchanged — PR-only scope, the exact fact
-    // `scripts/check-ci-gate.sh`'s `ALLOWED_SKIPS` allowlist is built to
-    // tolerate (mutants reports `skipped` on push BECAUSE of this guard).
-    //
-    // Tree-based via `extract_and_normalize_if_expr` (S-CIGATE-3 finding
-    // fix, ADV-SC3-P1-MED-003): immune to spelling/indent variance and
-    // enforces the AC-004 `ScalarStyle::Plain` mandate on the value itself.
+    // AC-033: `mutants` now depends on `mutants-plan` for the shared
+    // diff-file artifact (one upload, 8 downloads of identical bytes).
+    let needs = parse_needs_set(mutants_block).unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-033): `mutants` job block has no `needs:` key — the \
+             sharded design requires `needs: [mutants-plan]`.\n\
+             Current mutants block:\n{mutants_block}"
+        )
+    });
+    assert!(
+        needs.contains("mutants-plan"),
+        "FAIL (AC-033): `mutants`'s `needs:` set {needs:?} does not \
+         contain `mutants-plan` — the sharded shard job must depend on \
+         `mutants-plan` for the shared diff-file artifact it downloads.\n\
+         Current mutants block:\n{mutants_block}"
+    );
+
+    // Job-level `if:` gains the escalation-aware conjunct — defense in
+    // depth alongside `mutants-plan`'s own escalation short-circuit
+    // (ci-yml-design.md §2 design note: "explicitly re-derives the
+    // PR-only condition rather than relying on implicit needs-success
+    // propagation").
     let actual_job_if_expr =
         extract_and_normalize_if_expr(mutants_block).unwrap_or_else(|reason| {
             panic!(
-                "FAIL (S-CIGATE-2 AC-006): `mutants`'s job-level `if:` {reason}\n\
+                "FAIL (AC-033): `mutants`'s job-level `if:` {reason}\n\
              Current mutants block:\n{mutants_block}"
             )
         });
     assert_eq!(
         actual_job_if_expr.as_deref(),
-        Some("github.event_name == 'pull_request'"),
-        "FAIL (S-CIGATE-2 AC-006): `mutants`'s job-level `if: \
-         github.event_name == 'pull_request'` guard is missing or was \
-         changed. Option C leaves the `mutants` job entirely UNCHANGED — \
-         this guard (and the fact that `mutants` therefore reports \
-         `skipped` on push) is exactly what `scripts/check-ci-gate.sh`'s \
-         `ALLOWED_SKIPS` allowlist is built to tolerate.\n\
+        Some("github.event_name == 'pull_request' && needs.mutants-plan.outputs.escalated != 'true'"),
+        "FAIL (AC-033): `mutants`'s job-level `if:` guard does not match \
+         the sharded design's escalation-aware condition (the shard \
+         matrix must be skipped entirely when `mutants-plan` escalated).\n\
          Current mutants block:\n{mutants_block}"
     );
 
-    // All six steps present, unchanged (Option C's principal advantage
-    // over the rejected Option B).
+    // AC-005/AC-033: the SOLE declaration of shard count N — an 8-entry
+    // `strategy.matrix.shard: [0..7]` sequence. Cross-checked independently
+    // against `scripts/mutants-aggregate.sh`'s own `EXPECTED_SHARDS`
+    // constant by `test_mutants_aggregate_expected_shards_matches_matrix_shard_count`.
+    let shard_items = common::wf::job_level_nested_sequence_items(
+        mutants_block,
+        &["strategy", "matrix", "shard"],
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-033): `mutants` has no `strategy.matrix.shard` \
+             sequence — the sharded design requires an 8-entry shard \
+             matrix ([0, 1, 2, 3, 4, 5, 6, 7]).\n\
+             Current mutants block:\n{mutants_block}"
+        )
+    });
+    let expected_shard_items: Vec<String> =
+        (0..8).map(|i: u32| i.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        shard_items, expected_shard_items,
+        "FAIL (AC-033): `mutants`'s `strategy.matrix.shard` sequence \
+         ({shard_items:?}) does not match the pinned 8-entry [0..7] list \
+         ({expected_shard_items:?}).\n\
+         Current mutants block:\n{mutants_block}"
+    );
+
+    // Required step names, per `ci-yml-design.md §2`'s authoritative
+    // sharded shape — two brand-new sentinel steps inserted between the
+    // existing run and upload steps.
     let required_step_names = [
         "Harden the runner (Audit all outbound calls)",
-        "Run mutation tests on PR diff",
-        "Check kill rate",
+        "Run mutation tests on this shard",
+        "Write shard status sentinel",
+        "Upload shard status sentinel",
+        "Upload shard outcomes",
     ];
     for step_name in &required_step_names {
         assert!(
             mutants_block.contains(step_name),
-            "FAIL (S-CIGATE-2 AC-006): `mutants` is missing expected step \
-             `{step_name}`. Option C requires the `mutants` job to remain \
-             unchanged.\n\
-             Current mutants block:\n{mutants_block}"
-        );
-    }
-    let required_uses_prefixes = [
-        "uses: actions/checkout@",
-        "uses: taiki-e/install-action@",
-        "uses: Swatinem/rust-cache@",
-    ];
-    for prefix in &required_uses_prefixes {
-        assert!(
-            mutants_block.contains(prefix),
-            "FAIL (S-CIGATE-2 AC-006): `mutants` is missing an expected \
-             step using `{prefix}`. Option C requires the `mutants` job to \
-             remain unchanged (no steps added, removed, or reordered).\n\
+            "FAIL (AC-033): `mutants` is missing expected sharded-design \
+             step `{step_name}` (ci-yml-design.md §2).\n\
              Current mutants block:\n{mutants_block}"
         );
     }
 
-    // Exactly one step-level `if:` must exist in the block — the
-    // pre-existing `if: always()` on `Check kill rate`. A NEW step-level
-    // `if:` on any of the other five steps would be the rejected Option
-    // B's signature edit (moving PR-only gating from job level down to
-    // individual steps).
-    //
-    // S-CIGATE-3 finding fix (ADV-SC3-P1-MED-003): rewritten on
-    // `WfDoc::parse_single_job` + `Job::steps[i].keys` tree membership,
-    // mirroring `test_ci_gate_pass_fail_semantics_are_structurally_placed`'s
-    // M2-d `has_step_level_if` pattern. Unlike the deleted
-    // `l.starts_with("        if:")` scan, this has no indent literal to
-    // hard-code and no enumerated spelling list to be incomplete — a step's
-    // `if:` key (however spelled, however indented, on any step including
-    // one smuggled in as an entirely new list entry) is found by walking
-    // the parsed tree, not by re-deriving a column/text-prefix guess.
+    // AC-033: the shard invocation shape is load-bearing, INCLUDING flag
+    // ORDER (`--in-diff` first) — without it, each shard would slice the
+    // FULL `examine_globs` scope instead of the in-diff subset, and the
+    // pooled sum could never reconcile against `MUTANT_COUNT` (AC-008's
+    // exact-equality reconciliation would hard-fail every PR). The
+    // step's `run:` body is a multi-line block scalar (`run: |`), so this
+    // is an ordered-substring check over the whole job block rather than
+    // the single-physical-line byte-pin extractor used elsewhere in this
+    // file (that extractor explicitly rejects non-single-line scalars —
+    // see `extract_and_normalize_step_run_line_by_name`'s own doc
+    // comment).
+    let required_invocation_fragments_in_order = [
+        "cargo mutants",
+        "--in-diff",
+        "--shard ${{ matrix.shard }}/8",
+        "--sharding slice",
+        "--jobs 2",
+        "--baseline skip",
+        "--timeout 240",
+    ];
+    let mut last_offset = 0usize;
+    for fragment in &required_invocation_fragments_in_order {
+        let offset = mutants_block[last_offset..]
+            .find(fragment)
+            .unwrap_or_else(|| {
+                panic!(
+                    "FAIL (AC-033): `mutants`'s shard invocation is \
+                     missing the fragment `{fragment}`, or it appears out \
+                     of order relative to the previously-matched \
+                     fragment(s) {:?} — flag ORDER is load-bearing \
+                     (`--in-diff` first per ci-yml-design.md §2's \
+                     authoritative shard job).\n\
+                     Current mutants block:\n{mutants_block}",
+                    &required_invocation_fragments_in_order
+                        [..required_invocation_fragments_in_order
+                            .iter()
+                            .position(|f| f == fragment)
+                            .unwrap()]
+                )
+            });
+        last_offset += offset + fragment.len();
+    }
+
+    // Task 8's "3-count steps_with_if cardinality inversion": the
+    // pre-sharding design had exactly ONE step-level `if:` (`Check kill
+    // rate`, now removed — kill-rate computation moved to
+    // `mutants-aggregate`); the sharded design has exactly THREE, all
+    // `if: always()`, on the two new sentinel steps plus the outcomes
+    // upload (ci-yml-design.md §2: "Runs UNCONDITIONALLY (if: always())
+    // after run-mutants, regardless of that step's outcome").
     let job = WfDoc::parse_single_job(mutants_block);
     let steps_with_if: Vec<&Step> = job
         .steps
         .iter()
         .filter(|s| s.keys.iter().any(|k| k == "if"))
         .collect();
-
     assert_eq!(
         steps_with_if.len(),
-        1,
-        "FAIL (S-CIGATE-2 AC-006): expected exactly one step-level `if:` \
-         in `mutants` (the pre-existing `if: always()` on `Check kill \
-         rate`), found {} (resolved by tree membership under \
-         `Job::steps` — immune to `if:` key-spelling and indent variance, \
-         and to a smuggled `if:` on a brand-new step).\n\
-         A NEW step-level `if:` on any of the other five steps (Harden the \
-         runner, checkout, install-action, rust-cache, Run mutation tests \
-         on PR diff), or on an entirely new step, would be the rejected \
-         Option B's signature edit — Option C requires `mutants` to remain \
-         entirely unchanged.\n\
+        3,
+        "FAIL (AC-033, Task 8 cardinality inversion): expected exactly 3 \
+         step-level `if:` occurrences in the sharded `mutants` design \
+         (`Write shard status sentinel` / `Upload shard status sentinel` \
+         / `Upload shard outcomes`, all `if: always()`) — found {} \
+         (resolved by tree membership under `Job::steps`, immune to `if:` \
+         key-spelling/indent variance).\n\
          Current mutants block:\n{mutants_block}",
         steps_with_if.len(),
     );
-
-    // AC-004 quoting-fidelity mandate applied to this newly-introduced
-    // value pin: the sole step-level `if:` value must be a plain
-    // (unquoted, single-physical-line, untagged) scalar reading
-    // `always()` — a re-quoted or re-tagged form is rejected outright
-    // rather than resolved and trusted, matching every other rewritten
-    // pin in this file (see `extract_and_normalize_if_expr`'s doc comment
-    // for the full AC-004 rationale).
-    match steps_with_if[0].value_of("if") {
-        Some(Value::Scalar {
-            text, style, tag, ..
-        }) => {
-            assert!(
-                tag.is_none(),
-                "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in \
-                 `mutants` carries a YAML tag ({tag:?}) — a node property \
-                 on the value is rejected outright rather than resolved \
-                 and trusted (S-CIGATE-3 AC-007).\n\
-                 Current mutants block:\n{mutants_block}"
-            );
-            assert_eq!(
-                *style,
-                ScalarStyle::Plain,
-                "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in \
-                 `mutants` is written in a non-plain YAML scalar style \
-                 ({style:?}) — S-CIGATE-3 AC-004 treats a quoted or \
-                 block-scalar `if:` value as a DIFFERENT, unpinned form \
-                 even when its resolved text is identical to the plain \
-                 pin.\n\
-                 Current mutants block:\n{mutants_block}"
-            );
-            assert!(
-                text.contains("always()"),
-                "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in \
-                 `mutants` no longer reads `if: always()` (found: \
-                 {text:?}).\n\
-                 Current mutants block:\n{mutants_block}"
-            );
+    for step in &steps_with_if {
+        match step.value_of("if") {
+            Some(Value::Scalar {
+                text,
+                style,
+                tag,
+                has_anchor,
+                ..
+            }) => {
+                assert!(
+                    !has_anchor && tag.is_none(),
+                    "FAIL (AC-033): a sharded-design step-level `if:` \
+                     carries a YAML node property (anchor={has_anchor}, \
+                     tag={tag:?}) — rejected outright rather than \
+                     resolved and trusted (S-CIGATE-3 AC-007 parity).\n\
+                     step: {:?}\n\
+                     Current mutants block:\n{mutants_block}",
+                    step.name
+                );
+                assert_eq!(
+                    *style,
+                    ScalarStyle::Plain,
+                    "FAIL (AC-033): a sharded-design step-level `if:` is \
+                     not a plain scalar ({style:?}).\n\
+                     step: {:?}\n\
+                     Current mutants block:\n{mutants_block}",
+                    step.name
+                );
+                assert!(
+                    text.contains("always()"),
+                    "FAIL (AC-033): a sharded-design step-level `if:` \
+                     does not read `always()` (found {text:?}).\n\
+                     step: {:?}\n\
+                     Current mutants block:\n{mutants_block}",
+                    step.name
+                );
+            }
+            other => panic!(
+                "FAIL (AC-033): a sharded-design step-level `if:` is not \
+                 a plain scalar value (found: {other:?}).\n\
+                 step: {:?}\n\
+                 Current mutants block:\n{mutants_block}",
+                step.name
+            ),
         }
-        other => panic!(
-            "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in \
-             `mutants` is not a plain scalar value (found: {other:?}).\n\
-             Current mutants block:\n{mutants_block}"
-        ),
     }
 }
 
@@ -8745,5 +8815,763 @@ fn test_b1_needs_line_rejects_value_side_tag() {
         "FAIL (B-1 RED proof): extract_and_normalize_sole_needs_line \
          accepted a job-level `needs:` value carrying a YAML tag instead \
          of rejecting it — got {result:?}.\njob_block:\n{tagged}"
+    );
+}
+
+// =============================================================================
+// cycle-006 mutants-ci-sharding (S-cycle6-mutants-ci-sharding.md) — RED-phase
+// guard tests (test-writer, Tasks 6/8/17-23 write-test halves).
+//
+// Every test below is EXPECTED TO FAIL until the implementer's GREEN-phase
+// work lands: `mutants-plan`/`mutants-aggregate` do not yet exist in
+// `.github/workflows/ci.yml`, the `mutants` job has not yet been reshaped
+// into the 8-shard matrix (see `test_mutants_shard_job_structure_matches_
+// sharded_design` above, RENAMED/rewritten for the same reason), and
+// `scripts/mutants-aggregate.sh`'s decision logic is still the Task-2b
+// scaffold stub. This is genuine RED-before-GREEN, not a false failure:
+// each assertion below names a specific AC from `S-cycle6-mutants-ci-
+// sharding.md` and is written against the exact job/step shapes in
+// `.factory/phase-f2-spec-evolution/cycle-006/ci-yml-design.md`.
+//
+// Deliberately OUT OF SCOPE for this RED-phase pass (left for the
+// implementer's GREEN-phase Task 20, which lands the ci.yml retarget and
+// the corresponding test-constant update in the SAME commit, per this
+// story's own "AC -> Task Coverage Audit" table): AC-032's `ci-gate.needs`
+// retarget (`PINNED_GATE_NEEDS_LINE` / `test_ci_gate_needs_exactly_the_
+// required_jobs`'s expected set) and `PINNED_GATE_EXCLUDED_JOBS`'s
+// `mutants`/`mutants-plan` admission — touching either now, ahead of the
+// real `ci.yml` edit, would either be inert (an unused literal) or would
+// retarget a currently-PASSING pre-existing test to fail for a reason
+// unrelated to a fixture this pass authored, muddying the RED signal this
+// section exists to produce cleanly. `EXPECTED_GUARD_TEST_COUNT` above is
+// likewise NOT bumped here (F4 Blocking Precondition / AC-031 is a
+// GREEN-phase process gate, Task 25) — `test_this_file_test_count_matches_
+// expected_denominator` is therefore EXPECTED to fail too, for the entirely
+// legitimate reason that this file now has more `#[test]` fns than that
+// stale counter says; this is reported as a known, intentional RED side
+// effect, not a defect in this pass's own new tests.
+// =============================================================================
+
+/// Read `scripts/mutants-aggregate.sh` relative to the repo root. Mirrors
+/// `read_ci_yml`'s CRLF-normalization convention (no BOM-stripping needed —
+/// this is a bash script, not YAML, and none of the checks below are
+/// sensitive to a leading BOM the way a YAML key-name match would be).
+fn read_mutants_aggregate_sh() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/mutants-aggregate.sh");
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
+    raw.replace("\r\n", "\n")
+}
+
+/// AC-004: `mutants-plan`'s structural shape — PR-only `if:`, its three
+/// `outputs:` bound to `steps.plan.outputs.*`, and its diff-file-upload
+/// step present. Per `ci-yml-design.md §1`'s authoritative job design.
+#[test]
+fn test_mutants_plan_job_structural_shape() {
+    let ci = read_ci_yml();
+    let plan_block = extract_job_block(&ci, "mutants-plan").unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-004): `.github/workflows/ci.yml` does not contain a \
+             `mutants-plan:` job yet — this is the RED-phase proof for \
+             AC-004 (mutants-plan job structural pin); Task 7 (implementer, \
+             GREEN phase) adds it."
+        )
+    });
+
+    let actual_if_expr = extract_and_normalize_if_expr(plan_block).unwrap_or_else(|reason| {
+        panic!("FAIL (AC-004): `mutants-plan`'s job-level `if:` {reason}\nCurrent mutants-plan block:\n{plan_block}")
+    });
+    assert_eq!(
+        actual_if_expr.as_deref(),
+        Some("github.event_name == 'pull_request'"),
+        "FAIL (AC-004): `mutants-plan`'s job-level `if:` does not match \
+         the pinned PR-only condition.\n\
+         Current mutants-plan block:\n{plan_block}"
+    );
+
+    let mut expected_output_keys: Vec<String> =
+        ["escalated", "mutant_count", "overall_diff_lines"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+    expected_output_keys.sort();
+    let mut actual_output_keys =
+        common::wf::job_level_nested_keys(plan_block, &["outputs"]).unwrap_or_else(|| {
+            panic!(
+                "FAIL (AC-004): `mutants-plan` has no `outputs:` mapping — \
+                 the sharded design requires escalated/mutant_count/\
+                 overall_diff_lines, threaded to `mutants-aggregate`.\n\
+                 Current mutants-plan block:\n{plan_block}"
+            )
+        });
+    actual_output_keys.sort();
+    assert_eq!(
+        actual_output_keys, expected_output_keys,
+        "FAIL (AC-004): `mutants-plan`'s `outputs:` key set \
+         ({actual_output_keys:?}) does not match the pinned set \
+         ({expected_output_keys:?}).\n\
+         Current mutants-plan block:\n{plan_block}"
+    );
+
+    assert!(
+        plan_block.contains("mutants-diff-file"),
+        "FAIL (AC-004): `mutants-plan` does not upload the shared \
+         `mutants-diff-file` artifact every shard downloads.\n\
+         Current mutants-plan block:\n{plan_block}"
+    );
+}
+
+/// AC-010 (functional half, Task 6): `mutants-plan`'s `outputs.escalated`
+/// is byte-wired to `${{ steps.plan.outputs.escalated }}` — a mistyped
+/// step id/output name degrades gracefully to empty at the consumer, so
+/// this is a structural byte pin, not just "the key exists."
+#[test]
+fn test_mutants_plan_escalated_output_wired_to_step_output() {
+    let ci = read_ci_yml();
+    let plan_block = extract_job_block(&ci, "mutants-plan").unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-010): `.github/workflows/ci.yml` does not contain a \
+             `mutants-plan:` job yet."
+        )
+    });
+
+    match common::wf::job_level_nested_value(plan_block, &["outputs", "escalated"]) {
+        Some(Value::Scalar {
+            text,
+            style,
+            tag,
+            has_anchor,
+            ..
+        }) => {
+            assert!(
+                !has_anchor && tag.is_none(),
+                "FAIL (AC-010): `mutants-plan.outputs.escalated` carries a \
+                 YAML node property — rejected outright.\n\
+                 Current mutants-plan block:\n{plan_block}"
+            );
+            assert_eq!(
+                style,
+                ScalarStyle::Plain,
+                "FAIL (AC-010): `mutants-plan.outputs.escalated` is not a \
+                 plain scalar.\nCurrent mutants-plan block:\n{plan_block}"
+            );
+            assert_eq!(
+                text, "${{ steps.plan.outputs.escalated }}",
+                "FAIL (AC-010): `mutants-plan.outputs.escalated`'s value \
+                 does not byte-match the pinned wiring \
+                 `${{{{ steps.plan.outputs.escalated }}}}`.\n\
+                 Current mutants-plan block:\n{plan_block}"
+            );
+        }
+        other => panic!(
+            "FAIL (AC-010): `mutants-plan.outputs.escalated` is missing or \
+             not a plain scalar (found: {other:?}).\n\
+             Current mutants-plan block:\n{plan_block}"
+        ),
+    }
+}
+
+/// AC-005: `scripts/mutants-aggregate.sh`'s `EXPECTED_SHARDS` constant
+/// cross-checked against `mutants`'s `strategy.matrix.shard` sequence
+/// length — both currently absent (the script's Step 2 body is still the
+/// Task-2b stub; `mutants`'s matrix does not yet exist), so this is a
+/// genuine RED proof of the cross-check itself, not merely of one side.
+#[test]
+fn test_mutants_aggregate_expected_shards_matches_matrix_shard_count() {
+    let ci = read_ci_yml();
+    let mutants_block = extract_job_block(&ci, "mutants").unwrap_or_else(|| {
+        panic!("FAIL (AC-005): `.github/workflows/ci.yml` does not contain a `mutants:` job.")
+    });
+    let shard_items = common::wf::job_level_nested_sequence_items(
+        mutants_block,
+        &["strategy", "matrix", "shard"],
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-005): `mutants` has no `strategy.matrix.shard` \
+             sequence yet — AC-033/Task 9 (implementer) adds the 8-shard \
+             matrix.\n\
+             Current mutants block:\n{mutants_block}"
+        )
+    });
+
+    let script = read_mutants_aggregate_sh();
+    let expected_shards_line = script
+        .lines()
+        .find(|l| l.trim_start().starts_with("EXPECTED_SHARDS="))
+        .unwrap_or_else(|| {
+            panic!(
+                "FAIL (AC-005): `scripts/mutants-aggregate.sh` has no \
+                 `EXPECTED_SHARDS=` assignment yet — this is the Step 2 \
+                 body Tasks 10/11 (RED->GREEN cycle) will author; the \
+                 Task-2b scaffold deliberately does not implement it."
+            )
+        });
+    let digits: String = expected_shards_line
+        .trim_start()
+        .trim_start_matches("EXPECTED_SHARDS=")
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let expected_shards: usize = digits.parse().unwrap_or_else(|e| {
+        panic!(
+            "FAIL (AC-005): could not parse a number out of \
+             `EXPECTED_SHARDS=` line {expected_shards_line:?}: {e}"
+        )
+    });
+
+    assert_eq!(
+        shard_items.len(),
+        expected_shards,
+        "FAIL (AC-005): `mutants`'s `strategy.matrix.shard` sequence has \
+         {} entries ({shard_items:?}), but `scripts/mutants-aggregate.sh`'s \
+         `EXPECTED_SHARDS` constant says {expected_shards}. These two MUST \
+         match — update both in the SAME commit \
+         (mutants-sharding-invariants.md §INV-COMPLETE).",
+        shard_items.len(),
+    );
+}
+
+/// AC-016: `spec-guard` gains exactly one new step whose `run:` line is
+/// byte-pinned to `bash scripts/mutants-aggregate.sh --self-test` —
+/// without this, `EXPECTED_MUTANTS_AGG_FIXTURES` would be "a self-test
+/// suite nobody runs in CI." Step selected by NAME, mirroring the existing
+/// `check-ci-gate.sh --self-test` step's own pin idiom.
+#[test]
+fn test_spec_guard_contains_mutants_aggregate_self_test_step() {
+    let ci = read_ci_yml();
+    let spec_guard_block = extract_job_block(&ci, "spec-guard").unwrap_or_else(|| {
+        panic!("FAIL (AC-016): `.github/workflows/ci.yml` does not contain a `spec-guard:` job.")
+    });
+
+    let run_line = extract_and_normalize_step_run_line_by_name(
+        spec_guard_block,
+        "check-mutants-aggregate self-test (fixture suite)",
+    )
+    .unwrap_or_else(|reason| {
+        panic!(
+            "FAIL (AC-016): `spec-guard`{reason} Expected a step named \
+             `check-mutants-aggregate self-test (fixture suite)` whose \
+             `run:` line invokes `bash scripts/mutants-aggregate.sh \
+             --self-test` — mirrors the existing `check-ci-gate self-test \
+             (fixture suite, S-CIGATE-2)` step's own pin idiom.\n\
+             Current spec-guard block:\n{spec_guard_block}"
+        )
+    });
+    assert_eq!(
+        run_line, "bash scripts/mutants-aggregate.sh --self-test",
+        "FAIL (AC-016): `spec-guard`'s mutants-aggregate self-test step's \
+         `run:` line does not byte-match the pinned invocation.\n\
+         Current spec-guard block:\n{spec_guard_block}"
+    );
+}
+
+/// AC-017: `mutants-aggregate`'s eval step's `run:` line is byte-pinned to
+/// `bash scripts/mutants-aggregate.sh` — blocks `|| true`, `| cat`,
+/// `; exit 0`, mirroring `ci-gate`'s own M2-i protection.
+#[test]
+fn test_mutants_aggregate_run_line_is_byte_pinned() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-017): `.github/workflows/ci.yml` does not contain a \
+             `mutants-aggregate:` job yet — this is the RED-phase proof for \
+             AC-017; Task 16 (implementer, GREEN phase) adds it."
+        )
+    });
+    let run_line =
+        extract_and_normalize_step_run_line_by_name(agg_block, "Evaluate sharded mutation gate")
+            .unwrap_or_else(|reason| {
+                panic!(
+                    "FAIL (AC-017): `mutants-aggregate`{reason}\n\
+                     Current mutants-aggregate block:\n{agg_block}"
+                )
+            });
+    assert_eq!(
+        run_line, "bash scripts/mutants-aggregate.sh",
+        "FAIL (AC-017): `mutants-aggregate`'s eval step's `run:` line does \
+         not byte-match the pinned invocation — a suffix like `|| true` \
+         or `| cat` would silently disable the pass/fail signal.\n\
+         Current mutants-aggregate block:\n{agg_block}"
+    );
+}
+
+/// AC-018: the eval step's `env:` mapping's COMPLETE key set is pinned to
+/// exactly 7 keys — closes a `BASH_ENV:`-class smuggled-env-child vector
+/// in one stroke, mirroring `ci-gate`'s M2-o.
+const PINNED_MUTANTS_AGGREGATE_ENV_KEYS: &[&str] = &[
+    "ESCALATED",
+    "EVENT_NAME",
+    "MUTANT_COUNT",
+    "OVERALL_DIFF_LINES",
+    "PLAN_RESULT",
+    "SHARD_DIR",
+    "STATUS_DIR",
+];
+
+#[test]
+fn test_mutants_aggregate_env_key_set_is_pinned() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-018): `.github/workflows/ci.yml` does not contain a \
+             `mutants-aggregate:` job yet."
+        )
+    });
+    let mut expected: Vec<String> = PINNED_MUTANTS_AGGREGATE_ENV_KEYS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    expected.sort();
+    let actual = common::wf::step_mapping_child_keys(agg_block, "run", "env").unwrap_or_default();
+    assert_eq!(
+        actual, expected,
+        "FAIL (AC-018): `mutants-aggregate`'s eval step's `env:` complete \
+         key set ({actual:?}) does not match the pinned 7-key set \
+         ({expected:?}) — an added/renamed key (e.g. `BASH_ENV`) is a \
+         smuggled-env-child vector this pin closes.\n\
+         Current mutants-aggregate block:\n{agg_block}"
+    );
+}
+
+/// AC-019: the eval step genuinely INVOKES `scripts/mutants-aggregate.sh`
+/// — mirrors `ci-gate`'s AC-001: exactly one step in the job carries a
+/// `run:` key at all, so a decoy `run:` step elsewhere in the job (with
+/// the real step's `run:` neutered) cannot satisfy a bare substring check
+/// on the whole job block.
+#[test]
+fn test_mutants_aggregate_eval_step_invokes_the_real_script() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-019): `.github/workflows/ci.yml` does not contain a \
+             `mutants-aggregate:` job yet."
+        )
+    });
+    let job = WfDoc::parse_single_job(agg_block);
+    let steps_with_run: Vec<&Step> = job
+        .steps
+        .iter()
+        .filter(|s| s.keys.iter().any(|k| k == "run"))
+        .collect();
+    assert_eq!(
+        steps_with_run.len(),
+        1,
+        "FAIL (AC-019): expected exactly one step in `mutants-aggregate` \
+         to carry a `run:` key at all (the eval step) — found {}. A decoy \
+         `run:` step elsewhere would defeat a substring-only check on the \
+         whole job block.\n\
+         Current mutants-aggregate block:\n{agg_block}",
+        steps_with_run.len(),
+    );
+    match steps_with_run[0].value_of("run") {
+        Some(Value::Scalar { text, .. }) => {
+            assert!(
+                text.contains("scripts/mutants-aggregate.sh"),
+                "FAIL (AC-019): the sole `run:`-carrying step's value \
+                 ({text:?}) does not invoke `scripts/mutants-aggregate.sh`.\n\
+                 Current mutants-aggregate block:\n{agg_block}"
+            );
+        }
+        other => panic!(
+            "FAIL (AC-019): the sole `run:`-carrying step's value is not \
+             a plain scalar (found: {other:?}).\n\
+             Current mutants-aggregate block:\n{agg_block}"
+        ),
+    }
+}
+
+/// AC-020: `mutants-aggregate`'s entire job block is scanned for a mapping
+/// key carrying a YAML anchor/tag node property — the round-16 `ci-gate`
+/// bypass class, structurally closed for this job from day one via
+/// `find_key_node_properties` (mirrors `ci-gate`'s own M2-q/AC-007).
+#[test]
+fn test_mutants_aggregate_job_block_has_no_node_properties() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-020): `.github/workflows/ci.yml` does not contain a \
+             `mutants-aggregate:` job yet."
+        )
+    });
+    let node_properties = common::wf::find_key_node_properties(agg_block);
+    assert!(
+        node_properties.is_empty(),
+        "FAIL (AC-020): the `mutants-aggregate` job block contains {} \
+         key(s) carrying a YAML node property (anchor and/or tag) \
+         directly on the key itself: {node_properties:?}. No key in \
+         `mutants-aggregate` has a legitimate reason to carry one.\n\
+         Current mutants-aggregate block:\n{agg_block}",
+        node_properties.len(),
+    );
+}
+
+/// AC-021: every legitimate step-level `if:` in `mutants-aggregate` is
+/// exactly `always()` — the three occurrences named in `ci-yml-design.md
+/// §3` ("Download all shard status sentinels", "Download all shard
+/// outcomes", "Evaluate sharded mutation gate"), each individually
+/// asserted (iterated, not indexed at `[0]`), never a compound expression.
+#[test]
+fn test_mutants_aggregate_step_if_values_are_all_always() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!(
+            "FAIL (AC-021): `.github/workflows/ci.yml` does not contain a \
+             `mutants-aggregate:` job yet."
+        )
+    });
+    let job = WfDoc::parse_single_job(agg_block);
+    let steps_with_if: Vec<&Step> = job
+        .steps
+        .iter()
+        .filter(|s| s.keys.iter().any(|k| k == "if"))
+        .collect();
+    assert_eq!(
+        steps_with_if.len(),
+        3,
+        "FAIL (AC-021): expected exactly 3 step-level `if:` occurrences in \
+         `mutants-aggregate` (Download all shard status sentinels / \
+         Download all shard outcomes / Evaluate sharded mutation gate) — \
+         found {}.\n\
+         Current mutants-aggregate block:\n{agg_block}",
+        steps_with_if.len(),
+    );
+    for step in &steps_with_if {
+        match step.value_of("if") {
+            Some(Value::Scalar {
+                text,
+                style,
+                tag,
+                has_anchor,
+                ..
+            }) => {
+                assert!(
+                    !has_anchor && tag.is_none(),
+                    "FAIL (AC-021): a `mutants-aggregate` step-level `if:` \
+                     carries a YAML node property — rejected outright.\n\
+                     step: {:?}\nCurrent mutants-aggregate block:\n{agg_block}",
+                    step.name
+                );
+                assert_eq!(
+                    *style,
+                    ScalarStyle::Plain,
+                    "FAIL (AC-021): a `mutants-aggregate` step-level `if:` \
+                     is not a plain scalar ({style:?}).\n\
+                     step: {:?}\nCurrent mutants-aggregate block:\n{agg_block}",
+                    step.name
+                );
+                assert_eq!(
+                    text, "always()",
+                    "FAIL (AC-021): a `mutants-aggregate` step-level `if:` \
+                     is not the exact tautology `always()` (found {text:?}) \
+                     — never a compound expression that could smuggle in a \
+                     conditional skip.\n\
+                     step: {:?}\nCurrent mutants-aggregate block:\n{agg_block}",
+                    step.name
+                );
+            }
+            other => panic!(
+                "FAIL (AC-021): a `mutants-aggregate` step-level `if:` is \
+                 not a plain scalar value (found: {other:?}).\n\
+                 step: {:?}\nCurrent mutants-aggregate block:\n{agg_block}",
+                step.name
+            ),
+        }
+    }
+}
+
+/// AC-009: `PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS` (containing exactly
+/// `("mutants-aggregate", "always()")`) is asserted disjoint from
+/// `SKIP_TOLERANT_NEEDS_MEMBERS`, from `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`
+/// keys, and from `check-ci-gate.sh --print-allowed-skips`'s reported set
+/// — AND every pinned `if:` value in the list is the exact tautology
+/// `always()`.
+const PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS: &[(&str, &str)] = &[("mutants-aggregate", "always()")];
+
+#[test]
+fn test_mutants_aggregate_if_exception_is_disjoint_and_tautological() {
+    for (job, if_expr) in PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS {
+        assert_eq!(
+            *if_expr, "always()",
+            "FAIL (AC-009): PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS entry for \
+             `{job}` is not the exact tautology `always()` (found \
+             {if_expr:?}) — a compound expression here could smuggle in a \
+             conditional skip under this exception category."
+        );
+        assert!(
+            !SKIP_TOLERANT_NEEDS_MEMBERS.contains(job),
+            "FAIL (AC-009): `{job}` appears in BOTH \
+             PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS AND \
+             SKIP_TOLERANT_NEEDS_MEMBERS — these two are meant to be \
+             disjoint: a job with an always()-run if: exception never \
+             legitimately reports `skipped` to GitHub Actions at all \
+             (mutants-aggregate internally resolves to success/failure,\
+             never skipped)."
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        let from_if_expressions: Vec<&str> = PINNED_ALLOWED_SKIP_IF_EXPRESSIONS
+            .iter()
+            .map(|(job, _)| *job)
+            .collect();
+        for (job, _) in PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS {
+            assert!(
+                !from_if_expressions.contains(job),
+                "FAIL (AC-009): `{job}` appears in BOTH \
+                 PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS AND \
+                 PINNED_ALLOWED_SKIP_IF_EXPRESSIONS — these must be \
+                 disjoint (a job never both `if: always()`-exempted from \
+                 the general always-run `if:` pin AND allowlisted to \
+                 report `skipped`)."
+            );
+        }
+
+        let script_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/check-ci-gate.sh");
+        let output = std::process::Command::new("bash")
+            .arg(&script_path)
+            .arg("--print-allowed-skips")
+            .output()
+            .unwrap_or_else(|e| panic!("FAIL: could not run {}: {e}", script_path.display()));
+        let printed = String::from_utf8_lossy(&output.stdout);
+        for (job, _) in PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS {
+            assert!(
+                !printed.lines().any(|l| l.trim() == *job),
+                "FAIL (AC-009): `{job}` appears in BOTH \
+                 PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS AND \
+                 `check-ci-gate.sh --print-allowed-skips`'s reported set \
+                 ({printed:?}) — these must be disjoint."
+            );
+        }
+    }
+}
+
+/// The 7 env-wiring byte-VALUE pins (AC-010 structural half, AC-015,
+/// AC-026 through AC-030) — every eval-step env value byte-pinned, closing
+/// the F-H1/round-9 class where a `${VAR:?message}` runtime guard alone
+/// cannot catch a maliciously-but-validly-SET redirect.
+fn assert_mutants_aggregate_env_value_pin(agg_block: &str, key: &str, expected: &str) {
+    match common::wf::step_mapping_child_value(agg_block, "run", "env", key) {
+        Some(Value::Scalar {
+            text,
+            style,
+            tag,
+            has_anchor,
+            ..
+        }) => {
+            assert!(
+                !has_anchor && tag.is_none(),
+                "FAIL: `mutants-aggregate`'s eval-step env `{key}:` carries \
+                 a YAML node property — rejected outright.\n\
+                 Current mutants-aggregate block:\n{agg_block}"
+            );
+            assert_eq!(
+                style,
+                ScalarStyle::Plain,
+                "FAIL: `mutants-aggregate`'s eval-step env `{key}:` is not \
+                 a plain scalar.\nCurrent mutants-aggregate block:\n{agg_block}"
+            );
+            assert_eq!(
+                text, expected,
+                "FAIL: `mutants-aggregate`'s eval-step env `{key}:` value \
+                 does not byte-match the pinned wiring {expected:?}.\n\
+                 Current mutants-aggregate block:\n{agg_block}"
+            );
+        }
+        other => panic!(
+            "FAIL: `mutants-aggregate`'s eval-step env `{key}:` is missing \
+             or not a plain scalar (found: {other:?}) — this is the \
+             RED-phase proof: the `mutants-aggregate` job does not exist \
+             yet in ci.yml.\n\
+             Current mutants-aggregate block:\n{agg_block}"
+        ),
+    }
+}
+
+#[test]
+fn test_mutants_aggregate_env_escalated_byte_pin() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!("FAIL (AC-010): `.github/workflows/ci.yml` does not contain a `mutants-aggregate:` job yet.")
+    });
+    assert_mutants_aggregate_env_value_pin(
+        agg_block,
+        "ESCALATED",
+        "${{ needs.mutants-plan.outputs.escalated }}",
+    );
+}
+
+#[test]
+fn test_mutants_aggregate_env_event_name_byte_pin() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!("FAIL (AC-015): `.github/workflows/ci.yml` does not contain a `mutants-aggregate:` job yet.")
+    });
+    assert_mutants_aggregate_env_value_pin(agg_block, "EVENT_NAME", "${{ github.event_name }}");
+}
+
+#[test]
+fn test_mutants_aggregate_env_status_dir_byte_pin() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!("FAIL (AC-026): `.github/workflows/ci.yml` does not contain a `mutants-aggregate:` job yet.")
+    });
+    assert_mutants_aggregate_env_value_pin(
+        agg_block,
+        "STATUS_DIR",
+        "${{ runner.temp }}/shard-status",
+    );
+}
+
+#[test]
+fn test_mutants_aggregate_env_shard_dir_byte_pin() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!("FAIL (AC-027): `.github/workflows/ci.yml` does not contain a `mutants-aggregate:` job yet.")
+    });
+    assert_mutants_aggregate_env_value_pin(agg_block, "SHARD_DIR", "${{ runner.temp }}/shards");
+}
+
+#[test]
+fn test_mutants_aggregate_env_mutant_count_byte_pin() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!("FAIL (AC-028): `.github/workflows/ci.yml` does not contain a `mutants-aggregate:` job yet.")
+    });
+    assert_mutants_aggregate_env_value_pin(
+        agg_block,
+        "MUTANT_COUNT",
+        "${{ needs.mutants-plan.outputs.mutant_count }}",
+    );
+}
+
+#[test]
+fn test_mutants_aggregate_env_overall_diff_lines_byte_pin() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!("FAIL (AC-029): `.github/workflows/ci.yml` does not contain a `mutants-aggregate:` job yet.")
+    });
+    assert_mutants_aggregate_env_value_pin(
+        agg_block,
+        "OVERALL_DIFF_LINES",
+        "${{ needs.mutants-plan.outputs.overall_diff_lines }}",
+    );
+}
+
+#[test]
+fn test_mutants_aggregate_env_plan_result_byte_pin() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!("FAIL (AC-030): `.github/workflows/ci.yml` does not contain a `mutants-aggregate:` job yet.")
+    });
+    assert_mutants_aggregate_env_value_pin(
+        agg_block,
+        "PLAN_RESULT",
+        "${{ needs.mutants-plan.result }}",
+    );
+}
+
+/// Structural sanity (rides AC-033/architecture-delta §4, no dedicated VP):
+/// `mutants-aggregate`'s own `needs:` set is exactly `[mutants-plan,
+/// mutants]` and its job-level `if:` is the bare literal `always()` (NOT
+/// `${{ always() }}` — `ci-gate`'s own job-level `if:` happens to use the
+/// braced form, separately pinned as `PINNED_GATE_IF_EXPR`; the two pins
+/// are independent and NOT byte-compatible per ci-yml-design.md §3's own
+/// ROUND-1 style note).
+#[test]
+fn test_mutants_aggregate_needs_and_job_level_if() {
+    let ci = read_ci_yml();
+    let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
+        panic!(
+            "FAIL: `.github/workflows/ci.yml` does not contain a \
+             `mutants-aggregate:` job yet."
+        )
+    });
+
+    let needs = parse_needs_set(agg_block).unwrap_or_else(|| {
+        panic!(
+            "FAIL: `mutants-aggregate` job block has no `needs:` key.\n\
+             Current mutants-aggregate block:\n{agg_block}"
+        )
+    });
+    let mut expected: HashSet<String> = HashSet::new();
+    expected.insert("mutants-plan".to_string());
+    expected.insert("mutants".to_string());
+    assert_eq!(
+        needs, expected,
+        "FAIL: `mutants-aggregate`'s `needs:` set ({needs:?}) does not \
+         match the pinned `[mutants-plan, mutants]` set.\n\
+         Current mutants-aggregate block:\n{agg_block}"
+    );
+
+    let job = WfDoc::parse_single_job(agg_block);
+    match job.value_of("if") {
+        Some(Value::Scalar {
+            text,
+            style,
+            tag,
+            has_anchor,
+            ..
+        }) => {
+            assert!(
+                !has_anchor && tag.is_none(),
+                "FAIL: `mutants-aggregate`'s job-level `if:` carries a \
+                 YAML node property — rejected outright.\n\
+                 Current mutants-aggregate block:\n{agg_block}"
+            );
+            assert_eq!(
+                *style,
+                ScalarStyle::Plain,
+                "FAIL: `mutants-aggregate`'s job-level `if:` is not a \
+                 plain scalar.\nCurrent mutants-aggregate block:\n{agg_block}"
+            );
+            assert_eq!(
+                text, "always()",
+                "FAIL: `mutants-aggregate`'s job-level `if:` does not \
+                 byte-match the bare literal `always()` (found {text:?}) \
+                 — this job must NEVER report `skipped` to GitHub \
+                 Actions.\n\
+                 Current mutants-aggregate block:\n{agg_block}"
+            );
+        }
+        other => panic!(
+            "FAIL: `mutants-aggregate`'s job-level `if:` is missing or not \
+             a plain scalar (found: {other:?}).\n\
+             Current mutants-aggregate block:\n{agg_block}"
+        ),
+    }
+}
+
+/// AC-034 regression guard (Task 23): `mutants-nightly.yml` is a wholly
+/// separate workflow file, invisible to `ci.yml`-scoped job enumeration by
+/// construction, and declares no job named `ci-gate`. This is the SAME
+/// generic, file-name-agnostic scan every sibling advisory workflow
+/// (`e2e.yml`) is already checked against — the assertion below is a
+/// dedicated, mutants-nightly-specific instance of it (rather than relying
+/// solely on the pre-existing generic sweep) so this story's own coverage
+/// table has a directly-citable test for AC-034.
+#[test]
+fn test_mutants_nightly_workflow_does_not_declare_a_job_named_ci_gate() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".github/workflows/mutants-nightly.yml");
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
+    let raw = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw).replace("\r\n", "\n");
+
+    let doc = WfDoc::parse(&raw);
+    let job_names: Vec<&str> = doc.jobs.iter().map(|j| j.id.as_str()).collect();
+    assert!(
+        !job_names.contains(&"ci-gate"),
+        "FAIL (AC-034): `.github/workflows/mutants-nightly.yml` declares a \
+         job literally named `ci-gate` ({job_names:?}) — this collides \
+         with the reserved required-status-check name and must never \
+         happen in a sibling, advisory-only workflow file."
+    );
+    assert!(
+        !job_names.is_empty(),
+        "FAIL: `.github/workflows/mutants-nightly.yml` has no jobs at all \
+         — the scaffold's `mutants-full`/`mutants-nightly-report` jobs are \
+         missing or the file failed to parse as expected."
     );
 }
