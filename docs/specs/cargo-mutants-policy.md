@@ -547,6 +547,16 @@ the scoped files and scores below 90% on changed lines will fail CI.
 
 ## Local Invocation
 
+**Note (cycle-006):** the commands below reproduce a single (non-sharded) run
+locally — they remain valid for local iteration and are what an `examine_globs`
+file's own `--file`-scoped run uses. They do NOT reproduce the sharded CI topology
+(`mutants-plan` → 8-shard matrix → `mutants-aggregate`) itself; the pooled kill-rate
+computation, the sentinel-based completeness accounting, and the escalation
+threshold are CI-only behaviors implemented in `scripts/mutants-aggregate.sh` (see
+**Sharded Mutation Gate** above) and are not exercised by a local single-process run.
+To reproduce one shard's slice locally, add `--shard <k>/8 --sharding slice
+--baseline skip` to the PR-diff-equivalent command below.
+
 Install (one-time):
 
 ```bash
@@ -584,6 +594,15 @@ cargo mutants --file src/api/jira/bulk.rs --jobs 4 --timeout 240
 Results land in `mutants.out/` (excluded from git via `.gitignore`).
 
 ## CI Integration
+
+**Superseded by cycle-006's sharded pipeline — see Sharded Mutation Gate above for
+the current job names/shapes.** The description below (a single `mutants` job) is
+retained as history; the required `ci-gate.needs` member today is
+`mutants-aggregate`, fed by `mutants-plan` and the 8-shard `mutants` matrix, all
+three PR-only (`mutants-plan`/`mutants`: `if: github.event_name == 'pull_request'`;
+`mutants-aggregate`: `if: always()`, resolving push-event no-ops internally rather
+than via a job-level `if:`). This remains consistent with the `security` job
+pattern and keeps mutation testing cost bounded to the PR review phase.
 
 The `mutants` job in `.github/workflows/ci.yml` runs on PRs only (not pushes to
 `develop` / `main`). This is consistent with the `security` job pattern and keeps
@@ -774,6 +793,15 @@ mutation gate invariants need formal traceability in a future cycle, author a BC
 time. For F7 traceability: the governing artifact is this file at the `docs/specs/` path,
 not a PRD BC.
 
+**cycle-006 (S-cycle6-mutants-ci-sharding) continues this precedent.** The sharded
+gate's governing invariants — INV-AGG, INV-COMPLETE, INV-ESCALATE (see **Sharded
+Mutation Gate** above) — are also policy-doc-only, per DEC-348 (F1 approval) and
+DEC-349 (F2 gate approval). No PRD BC exists for the sharded gate either; this file,
+plus `.factory/phase-f2-spec-evolution/cycle-006/mutants-sharding-invariants.md` (the
+invariant statements and their adversarial-review history) and
+`.factory/cycles/cycle-006/phase-f3-stories/S-cycle6-mutants-ci-sharding.md` (the
+delivering story), are the governing artifacts.
+
 ## Guards
 
 Two static-analysis guards protect §Scope integrity (DEC-150):
@@ -796,33 +824,49 @@ Two static-analysis guards protect §Scope integrity (DEC-150):
   `cargo test --test mutants_glob_existence`. On failure: fix the dead examine_globs entry
   or update it for the file move.
 
-## Future Path: Job Sharding (Path B)
+## Future Path: Job Sharding (Path B) — LANDED (cycle-006, 2026-09-07)
 
-If a future cycle needs to further reduce CI wall-clock time (e.g., for very large
-ADF-touching PRs or a widened `examine_globs` scope), the recommended approach is
-job sharding via `--shard k/n` across a GitHub Actions matrix. Key requirements for
-Path B, informed by research (`.factory/research/mutation-ci-perf-2026-06-28.md` §3–4):
+**This is no longer a future path — it is the current design.** Path A's 240-minute
+single-job budget did prove insufficient in practice (PR #778, 281 mutants), and
+cycle-006 (S-cycle6-mutants-ci-sharding) implemented the sharded design this section
+originally proposed. See **Sharded Mutation Gate (cycle-006)** above for the current,
+authoritative topology, invariants, and job shapes. This section is retained,
+unedited below, as the historical proposal — cross-referenced against what actually
+landed:
 
-1. Run a dedicated `mutants-baseline` job first (`cargo test --locked`) to prove the
-   suite is green; shards then run with `--baseline=skip`.
-2. Under `--baseline=skip`, `timeout_multiplier` is ignored and the test timeout falls
-   back to 300s per mutant (book verbatim). Pass `--timeout 240` (or the current tuned
-   value) explicitly on every shard command — do NOT rely on the multiplier or the
-   `minimum_test_timeout` floor under `--baseline=skip`.
-3. Wire a single **shard-aggregator job** (`needs: [all shards]`) into `ci-gate.needs`
-   per DEC-096/097 — not the individual shard matrix jobs.
-4. Pass the **same diff file** to every shard for correct `--in-diff` behavior.
-5. The base-ref drift guard (F-3, `OVERALL_DIFF_LINES` check) must run in the
-   aggregator job, not per-shard — only the aggregate outcomes.json reflects the full
-   run. The guard FAILs only when the overall diff is empty; a non-empty diff with
-   0 mutants passes (comment-only, docs-only, or non-scoped-file PRs).
-
-Path B is deferred until Path A's 240-minute budget proves insufficient in practice.
+1. ~~Run a dedicated `mutants-baseline` job first (`cargo test --locked`) to prove
+   the suite is green; shards then run with `--baseline=skip`.~~ **Landed
+   differently:** no dedicated `mutants-baseline` job was added. The shard jobs rely
+   on the pre-existing `test` job (already a `ci-gate.needs` member, already proving
+   the suite green on every PR) instead of duplicating that proof — see `ci.yml`'s
+   `mutants` shard job's own comment: `--baseline skip` is "legitimate here because
+   `test` (ci-gate.needs member) already proves the suite green before mutants ever
+   runs."
+2. **Landed as proposed.** `--timeout 240` is passed explicitly on every shard
+   command (`cargo mutants --in-diff "$DIFF_FILE" --shard <k>/8 --sharding slice
+   --jobs 2 --baseline skip --timeout 240`) — neither `timeout_multiplier` nor
+   `minimum_test_timeout` is relied upon under `--baseline skip`, per this
+   document's own **`--baseline=skip` and Path B** section above.
+3. **Landed as proposed, by name.** `mutants-aggregate` (`needs: [mutants-plan,
+   mutants]`) is the single shard-aggregator job wired into `ci-gate.needs` per
+   DEC-096/097 — not any individual shard matrix job.
+4. **Landed as proposed.** `mutants-plan` computes `DIFF_FILE` exactly once and
+   uploads it as the `mutants-diff-file` artifact; every one of the 8 shards
+   downloads and uses the SAME artifact bytes.
+5. **Landed with a refinement, not exactly as proposed.** The base-ref drift guard
+   does run in the aggregator job, not per-shard, as proposed — but its
+   discriminator changed from the proposed `OVERALL_DIFF_LINES`-only check to
+   `MUTANT_COUNT == 0` (established independently by `mutants-plan`, consulted only
+   after INV-COMPLETE's sentinel-presence/interpretation and INV-AGG's
+   `MUTANT_COUNT` reconciliation have already ruled out a shard-level crash or
+   plan/execution mismatch) — see **INV-COMPLETE** above for why this is stronger
+   than the original proposal.
 
 ## Changelog
 
 | Date | Cycle | Change |
 |------|-------|--------|
+| 2026-09-07 | S-cycle6-mutants-ci-sharding | **Sharded mutation gate:** replaced the single `mutants` job with a three-job pipeline (`mutants-plan` → 8-shard `mutants` matrix → `mutants-aggregate`) plus an advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=16). `mutants-aggregate` (extracted to `scripts/mutants-aggregate.sh`) replaces `mutants` as the `ci-gate.needs` member and computes a POOLED sum-not-average kill rate across all 8 shards (INV-AGG), with exact-equality `MUTANT_COUNT` reconciliation as a hard fail (both over- and under-count directions). Fail-closed, sentinel-based shard-completeness accounting (INV-COMPLETE) replaces the old artifact-count proxy, closing an all-shards-crash false-green and an empty-shard false-red the single-job design was never exposed to. A `>120`-in-diff-mutant escape hatch (`ESCALATION_THRESHOLD=120`, INV-ESCALATE) routes oversized PRs to an ordinary, actionable CI failure — never a silent skip or pass — resolved by splitting the diff or an admin branch-protection bypass. `cargo-mutants` pin tightened from major-only `@27` to the exact release `@27.1.0`. Both `scripts/check-ci-gate.sh` and the new `scripts/mutants-aggregate.sh` now source a shared `scripts/lib/trusted-jq.sh`. See **Sharded Mutation Gate (cycle-006)** above for the full account; governed by this policy doc per DEC-348/DEC-349 (policy-doc-only, no new PRD BC), mirroring the MUTATION-CI-TIMEOUT precedent below. No `src/` (product-code) changes — CI/CD infrastructure only. |
 | 2026-08-31 | FIX-F6-MUTANTS-SCOPE | Scope-gap fix: added `src/cli/field.rs` (~91 mutants, S-580-1's `jr field options <field>` M1/M2/M3 resolution) and `src/cli/issue/field_resolve.rs` (~45 mutants, shared `--field` resolution/dispatch hub for `issue edit --field` and `issue create --field`) to `examine_globs` (18 → 20 entries). Both files had been omitted since creation across all field-dx PRs (S-580-1, #578 parts 1-5) — same P22-001/DEC-149/S-MUTANTS-SCOPE-1 drift class ("new CLI handler file → add to mutants.toml at creation"), meaning the required CI `mutants` gate generated zero mutants for either file across every field-dx PR to date. |
 | 2026-08-21 | S-575-1 | Added new "Exclusions" section (distinct from `#[mutants::skip]` Whitelist Convention) and a single `exclude_re` entry in `.cargo/mutants.toml` for `src/api/jira/issues.rs:374:16: delete ! in JiraClient::search_issues_with_fields` — an infinite-loop mutant uncatchable-as-anything-but-TIMEOUT under the whole-binary test-harness execution model. Termination correctness remains verified by existing multi-page pagination tests. |
 | 2026-08-14 | S-MUTANTS-SCOPE-1 | Scope widening + drift backfill: added `src/cli/queue.rs` and `src/main.rs` to `examine_globs` (16 → 18 entries). Backfilled §Scope bullets for 5 previously-undocumented `examine_globs` members: `src/cli/issue/interactions.rs`, `src/cli/issue/attachments.rs`, `src/api/jira/attachments.rs`, `src/api/jsm/attachments.rs`, `src/api/jsm/servicedesks.rs`. Closes drift item MUTANTS-SCOPE-GAP-QUEUE-MAIN. |

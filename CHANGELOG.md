@@ -4,6 +4,35 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **CI: sharded mutation-testing gate replaces the single 240-minute `mutants` job
+  (S-cycle6-mutants-ci-sharding, cycle-006).** Internal CI/CD infrastructure only —
+  no user-facing `jr` binary behavior changed. The required mutation-testing gate is
+  now a three-job pipeline (`mutants-plan` → an 8-shard `mutants` matrix →
+  `mutants-aggregate`) plus a new advisory nightly full-scope workflow
+  (`.github/workflows/mutants-nightly.yml`, N=16 shards, never blocks a merge).
+  `mutants-aggregate` (implemented in the new `scripts/mutants-aggregate.sh`)
+  replaces `mutants` as the `ci-gate.needs` member and computes a POOLED,
+  sum-not-average kill rate across all 8 shards, with an exact-equality
+  `MUTANT_COUNT` reconciliation hard fail (both over- and under-count directions)
+  against `mutants-plan`'s independent pre-count. Fail-closed, per-shard status
+  sentinels (reading `steps.run-mutants.outcome`, never `.conclusion`, which
+  `continue-on-error: true` would otherwise force to always read `success`) replace
+  the old single-job artifact-count proxy for completeness, closing an
+  all-shards-crash false-green and an empty-shard false-red the single-job design
+  was never exposed to. A `>120`-in-diff-mutant escape hatch routes oversized PRs to
+  an ordinary, actionable CI failure (never a silent skip or pass) — resolved by
+  splitting the diff or an admin branch-protection bypass with an explicit
+  PR-description acknowledgment. This unblocks any PR with ≤120 in-diff mutants from
+  hitting the old 240-minute wall-clock ceiling (the trigger: PR #778, 281 mutants);
+  it does not itself make a PR that size "pass within budget" — it still escalates.
+  `cargo-mutants` pin tightened from major-only `@27` to the exact release
+  `@27.1.0`. `scripts/check-ci-gate.sh` and the new `scripts/mutants-aggregate.sh`
+  now share a common `scripts/lib/trusted-jq.sh` jq-trust resolver. Governed
+  policy-doc-only (DEC-348/DEC-349), no new PRD BC — see
+  `docs/specs/cargo-mutants-policy.md` §"Sharded Mutation Gate (cycle-006)".
+
 ## [0.7.0-dev.5] - 2026-09-06
 
 ### Changed
