@@ -44,22 +44,24 @@ unset _mutants_agg_self _mutants_agg_dir
 
 # EXPECTED_MUTANTS_AGG_FIXTURES — sibling to check-ci-gate.sh's
 # EXPECTED_FIXTURES fixed-denominator pin (ADV-P61-INFO-006 pattern).
-# 22 fixtures are wired below in run_mutants_aggregate_self_test(), well
+# 24 fixtures are wired below in run_mutants_aggregate_self_test(), well
 # above AC-031's floor of 12 — every FATAL/warning-only arm named in the
 # story's "INV-AGG/INV-COMPLETE Sub-Invariant -> Named RED Fixture"
 # mini-table has its own dedicated fixture (AC-001/002x2/003/006/007/008/
 # 013/014/022/023/036/037/038/039x2, plus the three previously-unnamed
 # per-shard sub-invariant-3/5/6 fixtures, plus a Step-0 push-event no-op
 # regression fixture, plus (cycle-006 F4 review round 1, F-PA-MED-001) a
-# Step-6 kill-rate<90% FAIL fixture and its all-unviable-PASS companion —
-# see fixtures 21/22 below). All 22 fixtures are GREEN against the real
-# evaluate_mutants_aggregate() implementation below (S-cycle6-mutants-ci-
-# sharding.md Tasks 10-15's RED->GREEN cycle, verified via
+# Step-6 kill-rate<90% FAIL fixture and its all-unviable-PASS companion,
+# plus (cycle-006 F4 review round 2, F-PD-LOW-002) a malformed-shard-
+# status-sentinel FATAL fixture and a non-numeric-MUTANT_COUNT FATAL
+# fixture — see fixtures 21-24 below). All 24 fixtures are GREEN against
+# the real evaluate_mutants_aggregate() implementation below (S-cycle6-
+# mutants-ci-sharding.md Tasks 10-15's RED->GREEN cycle, verified via
 # `bash scripts/mutants-aggregate.sh --self-test`). A silently deleted or
 # loosened fixture reopens the exact false-green class each one was
 # written to catch — do not shrink this count without confirming no
 # coverage was lost.
-readonly EXPECTED_MUTANTS_AGG_FIXTURES=22
+readonly EXPECTED_MUTANTS_AGG_FIXTURES=24
 
 # evaluate_mutants_aggregate — the sole pass/fail arbiter `mutants-aggregate`
 # (ci.yml) invokes. Implements Steps -1..6 (INV-AGG / INV-COMPLETE /
@@ -158,8 +160,18 @@ evaluate_mutants_aggregate() {
                       # (test_mutants_aggregate_expected_shards_matches_matrix_shard_count
                       # cross-checks this structurally).
 
+  # (cycle-006 F4 review round 2, F-PE-LOW-003) `nullglob` is a shell OPTION,
+  # not a local variable — `shopt -s nullglob` here leaks into the rest of
+  # this sourced process (including, when this file is sourced rather than
+  # exec'd, any caller that runs after this function returns, and the
+  # `--self-test` harness's own fixture loop below). Save the prior state and
+  # restore it immediately after the one glob expansion that needs it, so
+  # this function's effect on shell options is scoped to itself.
+  local _nullglob_was_set=0
+  shopt -q nullglob && _nullglob_was_set=1
   shopt -s nullglob
   sentinel_files=("${STATUS_DIR}"/mutants-shard-status-*/shard-status-*.json)
+  [ "${_nullglob_was_set}" -eq 1 ] || shopt -u nullglob
 
   missing=()
   for i in $(seq 0 $((EXPECTED_SHARDS - 1))); do
@@ -245,6 +257,22 @@ evaluate_mutants_aggregate() {
       echo "FAIL: shard ${i}'s outcomes.json schema drift detected (non-empty outcomes/total_mutants but all summary keys sum to 0). Pin: cargo-mutants@27.1.0"
       return 1
     fi
+    # (cycle-006 F4 review round 2, F-PE-LOW-001) M-2 reconciliation is
+    # warning-only AT THIS PER-SHARD LEVEL for the reason docs/specs/
+    # cargo-mutants-policy.md's own M-2 section gives (forward-compat with a
+    # future cargo-mutants outcome category this script does not yet
+    # enumerate) — but that warning-only posture is effectively MOOT under
+    # Step 4's exact-equality reconciliation below, not a genuine escape
+    # hatch in its own right. A future outcome category would pull some
+    # mutants out of caught/missed/timeout/unviable's sum (this shard's
+    # `_sum_check`) without changing MUTANT_COUNT (mutants-plan's
+    # `cargo mutants --list` pre-count, independent of this per-shard
+    # summary) — so the pooled `total_scored` folded from every shard's
+    # `_sum_check` would then fail to equal MUTANT_COUNT, and Step 4 hard-
+    # fails the whole gate regardless of whether this warning already fired.
+    # This warning therefore functions as an early diagnostic pointing at
+    # WHY Step 4 is about to fail, not as a lenient fallback that lets a
+    # schema-drifted shard's mutants quietly go unscored.
     if [ "${total_mutants}" -ne 0 ] && [ "${_sum_check}" -ne "${total_mutants}" ]; then
       echo "::warning::Schema mismatch on shard ${i}: total_mutants=${total_mutants} but sum of known categories=${_sum_check}."
     fi
@@ -546,14 +574,28 @@ run_mutants_aggregate_self_test() {
         "INV-AGG sub-invariant 5 (H-1): non-empty outcomes but all summary keys sum to 0 is schema drift, fails closed" \
         "fail:1" "schema drift detected"
 
-    # ==== Fixture 10 (INV-AGG sub-invariant 6 / M-2) — total_mutants mismatch is warning-only, non-fatal ====
+    # ==== Fixture 10 (INV-AGG sub-invariant 6 / M-2) — total_mutants
+    #      mismatch warns but does not fail the job, ONLY when the pooled
+    #      caught/missed/timeout/unviable sum still reconciles with
+    #      MUTANT_COUNT (cycle-006 F4 review round 2, F-PE-LOW-001: this
+    #      fixture's own comment previously implied this branch is
+    #      unconditionally non-fatal — see the "moot under Step 4" comment
+    #      at the warning's emission site above for why that is narrower
+    #      than it sounds: a REAL schema-drift scenario that actually moves
+    #      mutants out of the four known categories would also desync
+    #      total_scored from MUTANT_COUNT and hard-fail at Step 4; this
+    #      fixture deliberately keeps `total_mutants`'s own internal
+    #      bookkeeping (105) inconsistent with `caught+missed+timeout+
+    #      unviable` (100) while leaving the CATEGORY SUM itself accurate,
+    #      which is the one shape where Step 4 still reconciles and the
+    #      warning is genuinely (not just diagnostically) non-fatal) ====
     AGG_STATUS_DIR=$(_agg_mktemp_dir); AGG_SHARD_DIR=$(_agg_mktemp_dir)
     for i in 0 1 2 3 4 5 6 7; do _agg_write_sentinel "${AGG_STATUS_DIR}" "${i}" "success" "true"; done
     _agg_write_outcomes "${AGG_SHARD_DIR}" 0 90 8 2 0 105  # total_mutants=105 != sum=100
     for i in 1 2 3 4 5 6 7; do _agg_write_outcomes "${AGG_SHARD_DIR}" "${i}" 0 0 0 0 0; done
     AGG_MUTANT_COUNT="100"
     agg_check_fixture \
-        "INV-AGG sub-invariant 6 (M-2): per-shard total_mutants mismatch warns but does not fail the job" \
+        "INV-AGG sub-invariant 6 (M-2): per-shard total_mutants mismatch warns but does not fail the job when the category sum still reconciles with MUTANT_COUNT" \
         "pass" "::warning::Schema mismatch on shard 0"
 
     # ==== Fixture 11 (AC-008) — pooled-total < MUTANT_COUNT (undercount) hard fails ====
@@ -671,6 +713,39 @@ run_mutants_aggregate_self_test() {
     agg_check_fixture \
         "F-PA-MED-001 companion: reconciled pooled total (10), all unviable (killable=0) — Step 6 PASS branch" \
         "pass" "all unviable"
+
+    # ==== Fixture 23 (cycle-006 F4 review round 2, F-PD-LOW-002) — a
+    #      malformed shard STATUS SENTINEL reaches the Step 3 `jq empty`
+    #      defense-in-depth guard specifically, distinct from Fixture 8
+    #      (which malforms the shard's outcomes.json, not its sentinel).
+    #      Before this fixture, nothing exercised this guard's own FATAL
+    #      branch — a regression there (e.g. swallowing the `jq empty`
+    #      failure instead of returning 1) would leave every other fixture
+    #      green. ====
+    AGG_STATUS_DIR=$(_agg_mktemp_dir); AGG_SHARD_DIR=$(_agg_mktemp_dir)
+    mkdir -p "${AGG_STATUS_DIR}/mutants-shard-status-0"
+    printf '{not valid json' > "${AGG_STATUS_DIR}/mutants-shard-status-0/shard-status-0.json"
+    _agg_write_all_legit_empty "${AGG_STATUS_DIR}" 1 7
+    agg_check_fixture \
+        "F-PD-LOW-002 (a): shard 0's status sentinel is malformed JSON — the Step 3 defense-in-depth jq-empty guard fires, not a set -e propagation accident" \
+        "fail:1" "status sentinel"
+
+    # ==== Fixture 24 (cycle-006 F4 review round 2, F-PD-LOW-002 companion)
+    #      — a non-numeric MUTANT_COUNT reaches Step 4's numeric-validation
+    #      guard specifically. Before this fixture, nothing exercised this
+    #      guard's own FATAL branch (Fixture 14 covers the SAME guard shape
+    #      for OVERALL_DIFF_LINES at Step 5, but nothing exercised
+    #      MUTANT_COUNT's own `[[ ... =~ ^[0-9]+$ ]]` regex guard at Step 4)
+    #      — a regression there would leave every other fixture green. ====
+    AGG_STATUS_DIR=$(_agg_mktemp_dir); AGG_SHARD_DIR=$(_agg_mktemp_dir)
+    for i in 0 1 2 3 4 5 6 7; do _agg_write_sentinel "${AGG_STATUS_DIR}" "${i}" "success" "true"; done
+    _agg_write_outcomes "${AGG_SHARD_DIR}" 0 90 8 2 0 100
+    for i in 1 2 3 4 5 6 7; do _agg_write_outcomes "${AGG_SHARD_DIR}" "${i}" 0 0 0 0 0; done
+    AGG_MUTANT_COUNT="not-a-number"
+    agg_check_fixture \
+        "F-PD-LOW-002 (b): non-numeric MUTANT_COUNT from mutants-plan fails closed at Step 4's numeric guard, not silently coerced" \
+        "fail:1" "not a valid non-negative integer"
+    AGG_MUTANT_COUNT="100"
 
     echo
     if [ "${total}" != "${EXPECTED_MUTANTS_AGG_FIXTURES}" ]; then

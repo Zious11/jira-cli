@@ -880,6 +880,25 @@ fn test_ci_gate_excludes_advisory_and_secret_scan_jobs() {
 ///     same shape `ci-gate.needs` membership would otherwise need
 ///     `ALLOWED_SKIPS`/`SKIP_TOLERANT_NEEDS_MEMBERS` treatment for —
 ///     avoided entirely by not making it a direct `needs:` member at all.
+///     **`mutants-plan` is a pinned decision-path job, not an advisory
+///     one — do not read its co-location in this literal alongside
+///     `security`/`coverage` as implying otherwise** (cycle-006 F4 review
+///     round 2, F-PF-HIGH-001): before this round, `mutants-plan`'s
+///     "Compute diff and mutation plan" step's `run:` BODY (as opposed to
+///     its `outputs:` key set and job-level `if:`, both already pinned by
+///     `test_mutants_plan_job_structural_shape`) carried no content pin at
+///     all, so `mutants-aggregate`'s Step 1 escalation short-circuit and
+///     Step 4 exact-equality reconciliation trusted three outputs
+///     (`escalated`/`mutant_count`/`overall_diff_lines`) a PR could
+///     fabricate outright by replacing the compute step with an all-`echo`
+///     script — see `test_mutants_plan_compute_step_content_is_pinned`'s
+///     own doc comment for the concrete exploit this closes. Also newly
+///     pinned this round: `mutants-plan`'s COMPLETE job-level and per-step
+///     key sets (`test_mutants_plan_job_and_step_key_sets_are_pinned`),
+///     mirroring `PINNED_ALWAYS_RUN_JOB_KEY_SETS`/`PINNED_ALWAYS_RUN_STEP_
+///     KEY_SETS`'s idiom for the always-run jobs even though `mutants-plan`
+///     itself is excluded from those two constants (same "not always-run"
+///     reason `mutants` is excluded from them).
 const PINNED_GATE_EXCLUDED_JOBS: &[&str] = &["security", "coverage", "mutants", "mutants-plan"];
 
 /// S-626-1 U1 (external research finding): closes the "allowlist with no
@@ -4736,6 +4755,76 @@ fn test_mutants_shard_job_structure_matches_sharded_design() {
     }
 }
 
+/// (cycle-006 F4 review round 2, F-PD-MED-001): pins the shard status
+/// sentinel's `run_outcome` field to `steps.run-mutants.outcome` — NOT
+/// `.conclusion` — closing the VP-006 F5 hand-off residual early.
+/// `scripts/mutants-aggregate.sh`'s Step 3 (`evaluate_mutants_aggregate`)
+/// treats this sentinel's `run_outcome` as the SOLE per-shard completeness
+/// signal distinguishing "this shard legitimately produced 0 mutants" from
+/// "this shard's `run-mutants` step genuinely crashed before producing any
+/// `outcomes.json` at all." `run-mutants` carries `continue-on-error:
+/// true` (routine and correct — a shard reporting missed/timeout mutants
+/// under `--baseline skip` is expected, not a step failure), which forces
+/// `.conclusion` to ALWAYS read `success` at the job-status-context level
+/// regardless of what genuinely happened inside the step; `.outcome` is
+/// the ONE context value that still reflects the step's real result. A
+/// flip from `.outcome` to `.conclusion` here would silently reopen the
+/// all-shards-crash false-green class — before this test, nothing on the
+/// `ci.yml` side asserted that choice actually holds; only this step's own
+/// `ci.yml` comment (and the mirrored rationale in `mutants-aggregate.sh`)
+/// documented it in prose.
+#[test]
+fn test_mutants_shard_status_sentinel_uses_outcome_not_conclusion() {
+    let ci = read_ci_yml();
+    let mutants_block = extract_job_block(&ci, "mutants").unwrap_or_else(|| {
+        panic!("FAIL (F-PD-MED-001): `.github/workflows/ci.yml` does not contain a `mutants:` job.")
+    });
+
+    let job = WfDoc::parse_single_job(mutants_block);
+    let sentinel_step = job
+        .steps
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Write shard status sentinel"))
+        .unwrap_or_else(|| {
+            panic!(
+                "FAIL (F-PD-MED-001): `mutants` has no step named \
+                 `Write shard status sentinel`.\n\
+                 Current mutants block:\n{mutants_block}"
+            )
+        });
+
+    match sentinel_step.value_of("run") {
+        Some(Value::Scalar { text, .. }) => {
+            assert!(
+                text.contains("steps.run-mutants.outcome"),
+                "FAIL (F-PD-MED-001): the `Write shard status sentinel` \
+                 step's `run:` body does not contain \
+                 `steps.run-mutants.outcome` — the sole per-shard \
+                 completeness signal `mutants-aggregate.sh` trusts must be \
+                 sourced from `.outcome`, not `.conclusion` (which always \
+                 reads `success` under `run-mutants`'s `continue-on-error: \
+                 true`).\n\
+                 run body:\n{text}"
+            );
+            assert!(
+                !text.contains("steps.run-mutants.conclusion"),
+                "FAIL (F-PD-MED-001): the `Write shard status sentinel` \
+                 step's `run:` body reads `steps.run-mutants.conclusion` \
+                 — this ALWAYS reads `success` under `run-mutants`'s \
+                 `continue-on-error: true`, silently reopening the \
+                 all-shards-crash false-green class. It must read \
+                 `.outcome` instead.\n\
+                 run body:\n{text}"
+            );
+        }
+        other => panic!(
+            "FAIL (F-PD-MED-001): the `Write shard status sentinel` \
+             step's `run:` value is not a plain scalar (found: {other:?}).\n\
+             Current mutants block:\n{mutants_block}"
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CRITICAL — behavioral closure via PINNED LITERALS (PR #671 review, round
 // 6 — replaces every predicate tried in rounds 3-5).
@@ -8451,7 +8540,17 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// consolidated the INV-AGG/INV-COMPLETE behavioral proofs into
 /// `scripts/mutants-aggregate.sh`'s bash `--self-test` harness instead of
 /// duplicating them as separate Rust `#[test]` fns.
-const EXPECTED_GUARD_TEST_COUNT: usize = 57;
+///
+/// **cycle-006 F4 review round 2 (F-PF-HIGH-001 / F-PD-MED-001): +3, 57 ->
+/// 60.** `test_mutants_plan_job_and_step_key_sets_are_pinned` and
+/// `test_mutants_plan_compute_step_content_is_pinned` close the
+/// untrusted-`mutants-plan`-output gate-bypass (HIGH); `test_mutants_
+/// shard_status_sentinel_uses_outcome_not_conclusion` pins the per-shard
+/// status sentinel's `run_outcome` source to `.outcome`, not `.conclusion`
+/// (MED, the VP-006 F5 hand-off residual, closed early). Re-verified
+/// mechanically (`grep -c '^\s*#\[test\]' tests/ci_gate_completeness.rs`
+/// == 60).
+const EXPECTED_GUARD_TEST_COUNT: usize = 60;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
@@ -9146,6 +9245,214 @@ fn test_mutants_plan_job_structural_shape() {
          `mutants-diff-file` artifact every shard downloads.\n\
          Current mutants-plan block:\n{plan_block}"
     );
+}
+
+/// (cycle-006 F4 review round 2, F-PF-HIGH-001): `mutants-plan`'s COMPLETE
+/// job-level and per-step key sets, mirroring `PINNED_ALWAYS_RUN_JOB_KEY_
+/// SETS`/`PINNED_ALWAYS_RUN_STEP_KEY_SETS`'s idiom for the always-run jobs.
+/// `mutants-plan` is deliberately NOT added to those two constants — like
+/// `mutants`, it is not an always-run job (`if: github.event_name ==
+/// 'pull_request'`) — but it sits squarely on the required-gate DECISION
+/// PATH (its outputs feed `mutants-aggregate`'s Step 1/Step 4), so it needs
+/// the same protection: a smuggled job-level `defaults:`/`continue-on-
+/// error:` key, or a smuggled step-level `if:`/`shell:`/`continue-on-
+/// error:` on any of its six steps, is now caught by set-equality rather
+/// than left as an unpinned open set under AC-004's narrower "the outputs
+/// key set and the `if:` value exist" pin.
+const PINNED_MUTANTS_PLAN_JOB_KEY_SET: &[&str] = &[
+    "if",
+    "name",
+    "outputs",
+    "runs-on",
+    "steps",
+    "timeout-minutes",
+];
+
+/// See `PINNED_MUTANTS_PLAN_JOB_KEY_SET`'s doc comment immediately above.
+/// Step order, per `ci.yml`'s `mutants-plan` job as of this pass: harden-
+/// runner, checkout (fetch-depth: 0), install-action (cargo-mutants),
+/// rust-cache, the compute step (id: plan), the diff-file upload.
+const PINNED_MUTANTS_PLAN_STEP_KEY_SETS: &[&[&str]] = &[
+    &["name", "uses", "with"], // Harden the runner (Audit all outbound calls)
+    &["uses", "with"],         // actions/checkout (fetch-depth: 0)
+    &["uses", "with"],         // taiki-e/install-action (cargo-mutants@27.1.0)
+    &["uses"],                 // Swatinem/rust-cache
+    &["id", "name", "run"],    // Compute diff and mutation plan
+    &["name", "uses", "with"], // Upload diff file
+];
+
+#[test]
+fn test_mutants_plan_job_and_step_key_sets_are_pinned() {
+    let ci = read_ci_yml();
+    let plan_block = extract_job_block(&ci, "mutants-plan").unwrap_or_else(|| {
+        panic!(
+            "FAIL (F-PF-HIGH-001): `.github/workflows/ci.yml` does not \
+             contain a `mutants-plan:` job yet."
+        )
+    });
+
+    let mut expected_job_keys: Vec<String> = PINNED_MUTANTS_PLAN_JOB_KEY_SET
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    expected_job_keys.sort();
+    let actual_job_keys = extract_job_level_key_set(plan_block);
+    assert_eq!(
+        actual_job_keys, expected_job_keys,
+        "FAIL (F-PF-HIGH-001): `mutants-plan`'s complete job-level key set \
+         ({actual_job_keys:?}) does not match the pinned set \
+         ({expected_job_keys:?}) — an added/removed/renamed job-level key \
+         (most importantly a job-level `defaults:`, which could redirect \
+         every `run:` step in this job through a custom shell template, \
+         e.g. `shell: cat {{0}}`) is unpinned until reviewed here. If this \
+         is a deliberate, reviewed change, update \
+         PINNED_MUTANTS_PLAN_JOB_KEY_SET in the SAME change.\n\
+         Current mutants-plan block:\n{plan_block}"
+    );
+
+    let expected_step_sets: Vec<Vec<String>> = PINNED_MUTANTS_PLAN_STEP_KEY_SETS
+        .iter()
+        .map(|set| {
+            let mut v: Vec<String> = set.iter().map(|s| s.to_string()).collect();
+            v.sort();
+            v
+        })
+        .collect();
+    let actual_step_sets = extract_gate_step_key_sets(plan_block);
+    assert_eq!(
+        actual_step_sets, expected_step_sets,
+        "FAIL (F-PF-HIGH-001): `mutants-plan`'s per-step key sets \
+         ({actual_step_sets:?}) do not match the pinned, human-reviewed \
+         sets ({expected_step_sets:?}). Any added, removed, or renamed key \
+         on ANY step — most importantly a step-level `if:` (silently skips \
+         that step while the job still reports `success`), `continue-on-\
+         error:`, or `shell:` (can redirect that step's `run:` body \
+         through a custom shell template) — or any added/removed/reordered \
+         step, changes this. If this is a deliberate, reviewed change, \
+         update PINNED_MUTANTS_PLAN_STEP_KEY_SETS in the SAME change.\n\
+         Current mutants-plan block:\n{plan_block}"
+    );
+
+    assert!(
+        !plan_block.contains("continue-on-error"),
+        "FAIL (F-PF-HIGH-001): `mutants-plan`'s job block contains the \
+         literal substring `continue-on-error` — this job has no \
+         legitimate use for it anywhere (unlike the `mutants` shard job's \
+         `run-mutants` step, whose non-zero exit is EXPECTED, routine \
+         output under `--baseline skip`): a `continue-on-error: true` on \
+         `mutants-plan`'s compute step would let a genuinely crashed `git \
+         diff`/`cargo mutants --list` invocation still report the job as \
+         `success` with empty/default GITHUB_OUTPUT values, silently \
+         reopening the same false-green class Step 0.5's PLAN_RESULT check \
+         in `scripts/mutants-aggregate.sh` exists to catch at the OTHER \
+         end of this wiring.\n\
+         Current mutants-plan block:\n{plan_block}"
+    );
+}
+
+/// (cycle-006 F4 review round 2, F-PF-HIGH-001 — HIGH-severity gate-bypass
+/// fix): closes the untrusted-`mutants-plan`-output vector.
+/// `mutants-plan`'s three outputs (`escalated`/`mutant_count`/
+/// `overall_diff_lines`) are trusted, UNRECONCILED inputs to
+/// `mutants-aggregate`'s Step 1 escalation short-circuit and Step 4
+/// exact-equality reconciliation — `mutants-aggregate` never re-derives
+/// them independently. Before this test, `mutants-plan` had structural
+/// pins (AC-004's `outputs:` key set + job-level `if:`, and — as of this
+/// same review round — `test_mutants_plan_job_and_step_key_sets_are_
+/// pinned`'s job/step key-set sweep) but NOTHING asserted the "Compute
+/// diff and mutation plan" step's `run:` BODY actually derives those
+/// outputs from real `git diff`/`cargo mutants --list` invocations rather
+/// than fabricating them outright — a content-level gap neither a key-set
+/// pin (which only sees KEYS, never a scalar's own multi-line VALUE) nor
+/// AC-004's `outputs.escalated` wiring pin (which only proves the output
+/// is wired to `steps.plan.outputs.escalated`, not that `steps.plan`
+/// computed it honestly) can close.
+///
+/// **Concrete exploit this closes** (RED-proven this session against a
+/// temporary, untracked reproduction of `ci.yml` — the tracked file was
+/// never modified; see this story's completion report for the exact diff
+/// applied and reverted): replace the ENTIRE "Compute diff and mutation
+/// plan" step's `run:` body with
+/// `echo "escalated=false" >> "$GITHUB_OUTPUT"; echo "mutant_count=0" >>
+/// "$GITHUB_OUTPUT"; echo "overall_diff_lines=1" >> "$GITHUB_OUTPUT"`
+/// (plus a placeholder file write so the "Upload diff file" step's
+/// `if-no-files-found: error` stays satisfied). Every shard then
+/// legitimately reports `has_outcomes=false`/`run_outcome=success` (0
+/// mutants examined), `total_scored` sums to 0, `mutants-aggregate`'s
+/// Step 4 reconciles `0 == MUTANT_COUNT(0)` cleanly, Step 5's base-ref-
+/// drift guard is dodged by the non-zero `OVERALL_DIFF_LINES=1`, Step 6
+/// is unreachable (`total_scored == 0` returns OK at Step 5) — the
+/// required `ci-gate` goes GREEN with zero `cargo mutants` invocation and
+/// zero code execution, for ANY PR diff size.
+///
+/// **Fix:** the step's `run:` body is a multi-line block scalar
+/// (`run: |`), so — mirroring `test_mutants_shard_job_structure_matches_
+/// sharded_design`'s own justification for the identical shape one job
+/// over — this is an ORDERED-substring check over the whole job block,
+/// not the single-physical-line byte-pin extractor used elsewhere in this
+/// file (which explicitly rejects non-single-line scalars; see
+/// `extract_and_normalize_step_run_line_by_name`'s own doc comment). Every
+/// fragment below ties a REQUIRED real command/variable to the SPECIFIC
+/// output it feeds, in the ORDER those computations must occur — the
+/// all-`echo` exploit above satisfies NONE of them: it invokes neither
+/// `git diff` nor `cargo mutants --list --in-diff`, and assigns
+/// `mutant_count`/`overall_diff_lines` from LITERAL numbers rather than
+/// `wc -l`-derived shell variables, so this test fails at the very FIRST
+/// fragment (`git diff origin/...`) against that reproduction.
+#[test]
+fn test_mutants_plan_compute_step_content_is_pinned() {
+    let ci = read_ci_yml();
+    let plan_block = extract_job_block(&ci, "mutants-plan").unwrap_or_else(|| {
+        panic!(
+            "FAIL (F-PF-HIGH-001): `.github/workflows/ci.yml` does not \
+             contain a `mutants-plan:` job yet."
+        )
+    });
+
+    let required_fragments_in_order: [&str; 10] = [
+        // OVERALL_DIFF_LINES is computed from a REAL `git diff` against the
+        // PR's base ref, not a literal.
+        "git diff origin/${{ github.base_ref }}...HEAD",
+        r#"OVERALL_DIFF_LINES=$(wc -l < "${DIFF_FILE}""#,
+        // MUTANT_COUNT is computed from a REAL `cargo mutants --list`
+        // invocation scoped to that same diff file; a non-zero exit from
+        // it is a hard FAIL, not silently coerced to MUTANT_COUNT=0
+        // (mutants-sharding-invariants.md §INV-AGG sub-invariant 8's
+        // residual-risk note, cited in this step's own ci.yml comment).
+        r#"if ! cargo mutants --list --in-diff "${DIFF_FILE}""#,
+        "cannot reliably pre-count in-diff mutants",
+        r#"MUTANT_COUNT=$(wc -l < "${LIST_OUTPUT}""#,
+        // The escalation threshold is the human-reviewed literal,
+        // compared against the REAL MUTANT_COUNT computed above — not
+        // against a fabricated value.
+        "ESCALATION_THRESHOLD=120",
+        r#"if [ "${MUTANT_COUNT}" -gt "${ESCALATION_THRESHOLD}" ]"#,
+        // The three GITHUB_OUTPUT writes are wired to the VARIABLES
+        // computed above, not to literal values — an all-`echo` exploit
+        // writing e.g. `escalated=false` directly satisfies none of these.
+        r#"echo "escalated=${ESCALATED}" >> "${GITHUB_OUTPUT}""#,
+        r#"echo "mutant_count=${MUTANT_COUNT}" >> "${GITHUB_OUTPUT}""#,
+        r#"echo "overall_diff_lines=${OVERALL_DIFF_LINES}" >> "${GITHUB_OUTPUT}""#,
+    ];
+    let mut last_offset = 0usize;
+    for fragment in &required_fragments_in_order {
+        let offset = plan_block[last_offset..].find(fragment).unwrap_or_else(|| {
+            panic!(
+                "FAIL (F-PF-HIGH-001, HIGH-severity gate-bypass): \
+                 `mutants-plan`'s \"Compute diff and mutation plan\" step \
+                 is missing the fragment `{fragment}`, or it appears out \
+                 of order relative to the previously-matched fragment(s) \
+                 — this step's `run:` body must compute \
+                 `escalated`/`mutant_count`/`overall_diff_lines` from REAL \
+                 `git diff`/`cargo mutants --list` invocations, not \
+                 fabricate them (the exact gate-bypass this test exists to \
+                 catch — see this test's own doc comment for the concrete \
+                 exploit).\n\
+                 Current mutants-plan block:\n{plan_block}"
+            )
+        });
+        last_offset += offset + fragment.len();
+    }
 }
 
 /// AC-010 (functional half, Task 6): `mutants-plan`'s `outputs.escalated`
