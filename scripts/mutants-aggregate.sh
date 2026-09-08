@@ -6,7 +6,7 @@
 # gate. Implements Steps -1..6 (INV-AGG / INV-COMPLETE / INV-ESCALATE) per
 # the authoritative design below; every branch was authored via strict
 # TDD's RED->GREEN cycle against this file's own `--self-test` fixture
-# harness (all 20 fixtures GREEN — S-cycle6-mutants-ci-sharding.md Tasks
+# harness (all 22 fixtures GREEN — S-cycle6-mutants-ci-sharding.md Tasks
 # 10-15).
 #
 # See:
@@ -44,20 +44,22 @@ unset _mutants_agg_self _mutants_agg_dir
 
 # EXPECTED_MUTANTS_AGG_FIXTURES — sibling to check-ci-gate.sh's
 # EXPECTED_FIXTURES fixed-denominator pin (ADV-P61-INFO-006 pattern).
-# 20 fixtures are wired below in run_mutants_aggregate_self_test(), well
+# 22 fixtures are wired below in run_mutants_aggregate_self_test(), well
 # above AC-031's floor of 12 — every FATAL/warning-only arm named in the
 # story's "INV-AGG/INV-COMPLETE Sub-Invariant -> Named RED Fixture"
 # mini-table has its own dedicated fixture (AC-001/002x2/003/006/007/008/
 # 013/014/022/023/036/037/038/039x2, plus the three previously-unnamed
 # per-shard sub-invariant-3/5/6 fixtures, plus a Step-0 push-event no-op
-# regression fixture). All 20 fixtures are GREEN against the real
+# regression fixture, plus (cycle-006 F4 review round 1, F-PA-MED-001) a
+# Step-6 kill-rate<90% FAIL fixture and its all-unviable-PASS companion —
+# see fixtures 21/22 below). All 22 fixtures are GREEN against the real
 # evaluate_mutants_aggregate() implementation below (S-cycle6-mutants-ci-
 # sharding.md Tasks 10-15's RED->GREEN cycle, verified via
 # `bash scripts/mutants-aggregate.sh --self-test`). A silently deleted or
 # loosened fixture reopens the exact false-green class each one was
 # written to catch — do not shrink this count without confirming no
 # coverage was lost.
-readonly EXPECTED_MUTANTS_AGG_FIXTURES=20
+readonly EXPECTED_MUTANTS_AGG_FIXTURES=22
 
 # evaluate_mutants_aggregate — the sole pass/fail arbiter `mutants-aggregate`
 # (ci.yml) invokes. Implements Steps -1..6 (INV-AGG / INV-COMPLETE /
@@ -187,6 +189,17 @@ evaluate_mutants_aggregate() {
   caught_total=0; missed_total=0; timeout_total=0; unviable_total=0
   for i in $(seq 0 $((EXPECTED_SHARDS - 1))); do
     sentinel="${STATUS_DIR}/mutants-shard-status-${i}/shard-status-${i}.json"
+
+    # (cycle-006 F4 review round 1, F-PB-LOW-001) defense-in-depth
+    # validity guard, mirroring the outcomes.json malformed-JSON guard
+    # below — a malformed sentinel must fail loudly here rather than rely
+    # on `set -e` propagating out of a `jq -r` invocation inside a
+    # command substitution (a construct where `set -e`'s exit-on-error
+    # behavior is easy to lose track of across a future refactor).
+    if ! "${jq_bin}" empty "${sentinel}" 2>/dev/null; then
+      echo "FAIL: shard ${i}'s status sentinel (${sentinel}) is malformed JSON."
+      return 1
+    fi
     run_outcome=$("${jq_bin}" -r '.run_outcome' "${sentinel}")
     has_outcomes=$("${jq_bin}" -r '.has_outcomes' "${sentinel}")
     f="${SHARD_DIR}/mutants-shard-outcomes-${i}/outcomes.json"
@@ -268,7 +281,14 @@ evaluate_mutants_aggregate() {
   #     `total_scored == MUTANT_COUNT == 0` — Step 4 already returned 1
   #     for ANY mismatch, including a `MUTANT_COUNT > 0` that reconciled
   #     down to a `total_scored` of 0 through a dropped-mutant defect. ---
-  [[ "${OVERALL_DIFF_LINES:-0}" =~ ^[0-9]+$ ]] || { echo "FAIL: OVERALL_DIFF_LINES ('${OVERALL_DIFF_LINES:-}') from mutants-plan is not a valid non-negative integer — cannot evaluate the base-ref-drift guard."; return 1; }
+  # (cycle-006 F4 review round 1, F-PB-LOW-002) validated WITHOUT a
+  # `:-0` default — symmetric with MUTANT_COUNT's Step-4 guard above, so
+  # an unset/empty OVERALL_DIFF_LINES fails closed here rather than
+  # silently normalizing to 0. `${OVERALL_DIFF_LINES:-}` (not a bare
+  # `${OVERALL_DIFF_LINES}`) is still required so `set -u` doesn't abort
+  # on a genuinely-unset var — an empty string simply fails the `[0-9]+`
+  # regex, same fail-closed outcome as MUTANT_COUNT's guard.
+  [[ "${OVERALL_DIFF_LINES:-}" =~ ^[0-9]+$ ]] || { echo "FAIL: OVERALL_DIFF_LINES ('${OVERALL_DIFF_LINES:-}') from mutants-plan is not a valid non-negative integer — cannot evaluate the base-ref-drift guard."; return 1; }
   if [ "${total_scored}" -eq 0 ]; then
     if [ "${OVERALL_DIFF_LINES:-0}" -eq 0 ]; then
       echo "FAIL: 0 mutants scored (MUTANT_COUNT=0, already reconciled at Step 4) AND overall diff is EMPTY."
@@ -620,6 +640,37 @@ run_mutants_aggregate_self_test() {
         "Step 0 regression: EVENT_NAME=push is a legitimate no-op pass, not a failure" \
         "pass" "not a pull_request event"
     AGG_EVENT_NAME="pull_request"
+
+    # ==== Fixture 21 (cycle-006 F4 review round 1, F-PA-MED-001) — Step 6
+    #      kill-rate<90% FAIL, reached via a genuinely RECONCILED pooled
+    #      total. This is the gate's core decision (the 90% threshold
+    #      itself) and, before this fixture, had NO fixture reaching
+    #      Step 6's FAIL branch at all — every other fixture either passed
+    #      at >=90% (Fixture 1) or hard-failed earlier at Step 4
+    #      reconciliation (Fixtures 11/12/13). A regression to the
+    #      threshold comparison (e.g. `-lt 90` -> `-lt 0`) or to the
+    #      branch's `return 1` would leave every other fixture green. ====
+    AGG_STATUS_DIR=$(_agg_mktemp_dir); AGG_SHARD_DIR=$(_agg_mktemp_dir)
+    for i in 0 1 2 3 4 5 6 7; do _agg_write_sentinel "${AGG_STATUS_DIR}" "${i}" "success" "true"; done
+    _agg_write_outcomes "${AGG_SHARD_DIR}" 0 80 20 0 0 100
+    for i in 1 2 3 4 5 6 7; do _agg_write_outcomes "${AGG_SHARD_DIR}" "${i}" 0 0 0 0 0; done
+    AGG_MUTANT_COUNT="100"
+    agg_check_fixture \
+        "F-PA-MED-001: reconciled pooled total (100) with 80% kill rate — below the 90% target hard-fails Step 6" \
+        "fail:1" "below the 90% target"
+
+    # ==== Fixture 22 (cycle-006 F4 review round 1, F-PA-MED-001 companion)
+    #      — Step 6's all-unviable PASS branch (killable == 0), reached
+    #      via a genuinely RECONCILED pooled total, mirroring Fixture 21's
+    #      FAIL companion above. ====
+    AGG_STATUS_DIR=$(_agg_mktemp_dir); AGG_SHARD_DIR=$(_agg_mktemp_dir)
+    _agg_write_sentinel "${AGG_STATUS_DIR}" 0 "success" "true"
+    _agg_write_outcomes "${AGG_SHARD_DIR}" 0 0 0 0 10 10
+    _agg_write_all_legit_empty "${AGG_STATUS_DIR}" 1 7
+    AGG_MUTANT_COUNT="10"
+    agg_check_fixture \
+        "F-PA-MED-001 companion: reconciled pooled total (10), all unviable (killable=0) — Step 6 PASS branch" \
+        "pass" "all unviable"
 
     echo
     if [ "${total}" != "${EXPECTED_MUTANTS_AGG_FIXTURES}" ]; then

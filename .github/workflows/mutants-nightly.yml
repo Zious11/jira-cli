@@ -72,6 +72,8 @@ jobs:
     if: always()
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: mutants-nightly-shard-outcomes-*
@@ -86,17 +88,30 @@ jobs:
           # block a merge. See mutants-aggregate's per-shard-guard logic in
           # ci.yml for the summation algorithm this step mirrors.
           set +e
+          # (cycle-006 F4 review round 1, F-PC-LOW-003) source the same
+          # PATH-shim-resistant jq resolver the decision-path scripts use,
+          # for consistency — this workflow is advisory-only and never
+          # blocks a merge, so a resolution failure here just falls back
+          # to bare `jq` rather than aborting the summary.
+          # shellcheck source=lib/trusted-jq.sh
+          source scripts/lib/trusted-jq.sh
+          jq_bin="jq"
+          if resolved_jq_bin=$(resolve_trusted_jq); then
+            jq_bin="${resolved_jq_bin}"
+          else
+            echo "NOTE: resolve_trusted_jq could not resolve a trusted jq binary — falling back to bare 'jq' (advisory summary only)."
+          fi
           caught_total=0; missed_total=0; timeout_total=0; unviable_total=0
           shopt -s nullglob
           for f in "${{ runner.temp }}"/shards/mutants-nightly-shard-outcomes-*/outcomes.json; do
-            if ! jq empty "${f}" 2>/dev/null; then
+            if ! "${jq_bin}" empty "${f}" 2>/dev/null; then
               echo "NOTE: ${f} is missing or not valid JSON — skipped (advisory summary only)."
               continue
             fi
-            caught=$(jq '.caught // 0' "${f}")
-            missed=$(jq '.missed // 0' "${f}")
-            timeout=$(jq '.timeout // 0' "${f}")
-            unviable=$(jq '.unviable // 0' "${f}")
+            caught=$("${jq_bin}" '.caught // 0' "${f}")
+            missed=$("${jq_bin}" '.missed // 0' "${f}")
+            timeout=$("${jq_bin}" '.timeout // 0' "${f}")
+            unviable=$("${jq_bin}" '.unviable // 0' "${f}")
             [[ "${caught}"   =~ ^[0-9]+$ ]] || caught=0
             [[ "${missed}"   =~ ^[0-9]+$ ]] || missed=0
             [[ "${timeout}"  =~ ^[0-9]+$ ]] || timeout=0
