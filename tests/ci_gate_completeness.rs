@@ -41,7 +41,7 @@
 //!   test_ci_gate_job_exists_with_required_metadata           → AC-001
 //!   test_ci_gate_needs_exactly_the_required_jobs             → AC-003
 //!   test_ci_gate_excludes_advisory_and_secret_scan_jobs      → AC-003
-//!   test_mutants_is_in_ci_gate_needs                         → MUTATION-CI-TIMEOUT / AC-003
+//!   test_mutants_aggregate_is_in_ci_gate_needs               → MUTATION-CI-TIMEOUT / AC-003
 //!   test_ci_gate_fails_on_failed_or_cancelled_need           → AC-002 (retargeted, S-CIGATE-2)
 //!   test_ci_gate_needs_jobs_have_no_job_level_if             → EC-002 (M1)
 //!   test_ci_gate_pass_fail_semantics_are_structurally_placed → AC-001/AC-002 (M2, retargeted, S-CIGATE-2)
@@ -108,7 +108,7 @@
 //! New test coverage (→ S-CIGATE-2 AC):
 //!   test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json → AC-001
 //!   test_spec_guard_contains_check_ci_gate_self_test_step          → AC-008
-//!   test_mutants_job_structure_unchanged_by_cigate2_option_c       → AC-006
+//!   test_mutants_shard_job_structure_matches_sharded_design         → AC-006
 //!
 //! `test_ci_gate_fails_on_failed_or_cancelled_need` and
 //! `test_ci_gate_pass_fail_semantics_are_structurally_placed` (both
@@ -295,13 +295,24 @@ fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
 /// bash). This constant exists so `always_run_needs_members` below — used
 /// by tests that do NOT need bash and must run on every platform — has a
 /// skip-tolerance list to filter against without depending on a
-/// unix-only pin. Kept in sync manually; today both contain exactly
-/// `["mutants"]`. Drift is caught by
+/// unix-only pin. Kept in sync manually.
+///
+/// **cycle-006 (mutants-ci-sharding): EMPTY by design, not a regression.**
+/// Prior to this cycle this list contained exactly `["mutants"]` — the
+/// single-job `mutants` job legitimately reported `skipped` on a push
+/// event. `mutants-aggregate` (the new `ci-gate.needs` member that
+/// replaces `mutants`) is engineered to NEVER report `skipped` to GitHub
+/// Actions: its job-level `if: always()` (see
+/// `PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS` below) makes it run
+/// unconditionally, and `scripts/mutants-aggregate.sh`'s Step 0 resolves a
+/// push/schedule/workflow_dispatch event to an ordinary `exit 0` (success)
+/// rather than a GitHub Actions `skipped` conclusion — see
+/// architecture-delta.md §6.4. Drift is caught by
 /// `test_skip_tolerant_needs_members_matches_pinned_if_expressions`
 /// (unix-only, since it reads the unix-gated constant) — see that test's
 /// doc comment for what "drift" means here and why it can't be closed
 /// portably.
-const SKIP_TOLERANT_NEEDS_MEMBERS: &[&str] = &["mutants"];
+const SKIP_TOLERANT_NEEDS_MEMBERS: &[&str] = &[];
 
 /// Every `ci-gate.needs` member EXCEPT those in `SKIP_TOLERANT_NEEDS_MEMBERS`
 /// — i.e. every job required to run unconditionally (no job-level `if:`
@@ -616,15 +627,23 @@ fn test_ci_gate_job_exists_with_required_metadata() {
 // ---------------------------------------------------------------------------
 
 /// AC-003 (exact-set check): `ci-gate.needs` must contain exactly the eight
-/// jobs `{fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants}`
+/// jobs `{fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants-aggregate}`
 /// — order-insensitive, no extras, none missing.
 ///
 /// `mutants` was promoted to hard-required in MUTATION-CI-TIMEOUT (2026-06-28).
-/// It carries `if: github.event_name == 'pull_request'` and emits `skipped` on
-/// push events. Since S-CIGATE-2, `scripts/check-ci-gate.sh` tolerates this
-/// ONLY because `mutants` is named in that script's restrictive
-/// `ALLOWED_SKIPS` allowlist — any other job's `skipped` result fails the
-/// gate by default.
+/// **cycle-006 (mutants-ci-sharding) retargets this ONE member:** the
+/// single-job `mutants` job was replaced by a `mutants-plan` ->
+/// 8-shard `mutants` matrix -> `mutants-aggregate` pipeline;
+/// `mutants-aggregate` is the new `ci-gate.needs` member (`mutants` and
+/// `mutants-plan` are admitted into `ci.yml`'s job universe only via
+/// `PINNED_GATE_EXCLUDED_JOBS`, never wired directly into branch
+/// protection — DEC-096/DEC-097). Unlike the old `mutants` job,
+/// `mutants-aggregate` NEVER reports `skipped` to GitHub Actions — its
+/// job-level `if: always()` makes it run unconditionally and
+/// `scripts/mutants-aggregate.sh`'s Step 0 resolves a non-PR event to an
+/// ordinary `exit 0` internally — so `ALLOWED_SKIPS`/
+/// `SKIP_TOLERANT_NEEDS_MEMBERS`/`PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` are
+/// all empty as of this cycle (see those constants' own doc comments).
 ///
 /// Rationale for exact-set (not subset):
 ///   - Adding a job to `needs` without updating this test intentionally fails
@@ -652,7 +671,7 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
             "FAIL (RED GATE): The `ci-gate` job block does not contain a \
              `needs:` key.\n\
              Required: `needs: [fmt, clippy, test, msrv, deny, spec-guard, \
-             check-signing-workflow-injection, mutants]`\n\
+             check-signing-workflow-injection, mutants-aggregate]`\n\
              Current ci-gate block:\n{gate_block}"
         )
     });
@@ -665,17 +684,14 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
         "deny",
         "spec-guard",
         "check-signing-workflow-injection",
-        // MUTATION-CI-TIMEOUT (2026-06-28): promoted to hard-required.
-        // Carries `if: github.event_name == 'pull_request'`; emits `skipped`
-        // on push events — safe ONLY because `mutants` is named in
-        // `scripts/check-ci-gate.sh`'s restrictive `ALLOWED_SKIPS` allowlist
-        // (with a matching `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` entry in
-        // this file).  Since S-CIGATE-2 an unlisted job's `skipped` result
-        // fails the gate by default (fail-closed) — `ALLOWED_SKIPS`
-        // membership is the mechanism, not "ci-gate checks failure/cancelled
-        // only" (that inline condition was retired).  See delta-analysis §5
+        // cycle-006 (mutants-ci-sharding): `mutants-aggregate` replaces the
+        // old `mutants` job as the `ci-gate.needs` member. Carries
+        // `if: always()` and NEVER reports `skipped` — see
+        // `SKIP_TOLERANT_NEEDS_MEMBERS`'s doc comment above for why
+        // `ALLOWED_SKIPS`/`PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` are now
+        // empty rather than naming this job. See architecture-delta.md §4
         // and cargo-mutants-policy.md §CI Gate.
-        "mutants",
+        "mutants-aggregate",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -831,16 +847,40 @@ fn test_ci_gate_excludes_advisory_and_secret_scan_jobs() {
 /// `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`'s convention for the opposite
 /// carve-out): it is a claim that this job must NEVER be required to pass,
 /// under any circumstances, for any future reason — not merely "it isn't
-/// required today." Today's two members and their rationale (carried over
-/// verbatim from `test_ci_gate_excludes_advisory_and_secret_scan_jobs`,
-/// which predates this partition check and remains as a narrower,
-/// faster-to-read diagnostic):
+/// required today." Today's four members and their rationale (`security`/
+/// `coverage` carried over verbatim from
+/// `test_ci_gate_excludes_advisory_and_secret_scan_jobs`, which predates
+/// this partition check and remains as a narrower, faster-to-read
+/// diagnostic):
 ///   - `security`: PR-only (`if: github.event_name == 'pull_request'`) AND
 ///     further gated by `vars.GITLEAKS_DISABLED` — a secret scan that is
 ///     advisory by policy, not a merge blocker.
 ///   - `coverage`: uses `fail_ci_if_error: false` on the codecov upload —
 ///     advisory by design; a flaky coverage upload must not block merges.
-const PINNED_GATE_EXCLUDED_JOBS: &[&str] = &["security", "coverage"];
+///   - **`mutants` (cycle-006, mutants-ci-sharding):** a genuinely
+///     DIFFERENT exclusion rationale class than the two above — this job
+///     is NOT advisory (its 8-shard results feed directly into
+///     `mutants-aggregate`'s pass/fail decision, which IS required via
+///     `ci-gate.needs`). It is excluded from `ci-gate.needs` DIRECTLY
+///     because `mutants-aggregate` is the required proxy for it, per
+///     CLAUDE.md's DEC-096/DEC-097 convention ("New CI jobs that must be
+///     required must be added to `ci-gate.needs`, never wired directly
+///     into branch protection") — a matrix job with per-shard
+///     `continue-on-error: true` and a variable skip condition
+///     (`needs.mutants-plan.outputs.escalated != 'true'`) is a poor
+///     `ci-gate.needs` member in its own right; `mutants-aggregate`
+///     is engineered specifically to be the single, well-behaved
+///     decision point instead.
+///   - **`mutants-plan` (cycle-006, mutants-ci-sharding):** same
+///     DIRECTLY-REQUIRED-VIA-PROXY rationale as `mutants` — its
+///     `escalated`/`mutant_count`/`overall_diff_lines` outputs feed
+///     `mutants-aggregate`, which is itself the `ci-gate.needs` member.
+///     `mutants-plan`'s own job-level `if: github.event_name ==
+///     'pull_request'` additionally makes it skip on push events, the
+///     same shape `ci-gate.needs` membership would otherwise need
+///     `ALLOWED_SKIPS`/`SKIP_TOLERANT_NEEDS_MEMBERS` treatment for —
+///     avoided entirely by not making it a direct `needs:` member at all.
+const PINNED_GATE_EXCLUDED_JOBS: &[&str] = &["security", "coverage", "mutants", "mutants-plan"];
 
 /// S-626-1 U1 (external research finding): closes the "allowlist with no
 /// default-deny over its universe" gap one level up from the fixes already
@@ -975,26 +1015,34 @@ fn test_ci_gate_needs_partitions_all_ci_yml_jobs() {
 }
 
 // ---------------------------------------------------------------------------
-// MUTATION-CI-TIMEOUT — `mutants` is in `ci-gate.needs`
+// MUTATION-CI-TIMEOUT — `mutants-aggregate` is in `ci-gate.needs`
 // ---------------------------------------------------------------------------
 
-/// MUTATION-CI-TIMEOUT (2026-06-28): `mutants` must be in `ci-gate.needs`.
+/// MUTATION-CI-TIMEOUT (2026-06-28): the mutation gate must be in
+/// `ci-gate.needs`. **cycle-006 (mutants-ci-sharding) retarget:** the
+/// single-job `mutants` job was replaced by a `mutants-plan` -> 8-shard
+/// `mutants` matrix -> `mutants-aggregate` pipeline; `mutants-aggregate`
+/// is the new `ci-gate.needs` member enforcing the 90% pooled kill-rate
+/// gate on every PR (`mutants`/`mutants-plan` are admitted into `ci.yml`'s
+/// job universe only via `PINNED_GATE_EXCLUDED_JOBS`, never wired
+/// directly into branch protection — DEC-096/DEC-097).
 ///
-/// The `mutants` job was promoted to hard-required to enforce the 90% kill-rate
-/// gate on every PR.  It carries `if: github.event_name == 'pull_request'` and
-/// emits `skipped` on push events.  Since S-CIGATE-2, `scripts/check-ci-gate.sh`
-/// tolerates this ONLY because `mutants` is named in that script's restrictive
-/// `ALLOWED_SKIPS` allowlist — any other job's `skipped` result, or a `failure`
-/// / `cancelled` result for `mutants` itself, fails the gate.
+/// Unlike the old `mutants` job, `mutants-aggregate` carries
+/// `if: always()` and NEVER reports `skipped` to GitHub Actions —
+/// `scripts/mutants-aggregate.sh`'s Step 0 resolves a push/schedule/
+/// workflow_dispatch event to an ordinary `exit 0` internally, so
+/// `ALLOWED_SKIPS`/`SKIP_TOLERANT_NEEDS_MEMBERS`/
+/// `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` no longer need an entry for it
+/// (see those constants' own doc comments) — a `failure`/`cancelled`
+/// result for `mutants-aggregate` still fails the gate.
 ///
 /// This test pins the promotion: a future edit that accidentally removes
-/// `mutants` from `ci-gate.needs` must explicitly update this test (and, per
-/// CLAUDE.md's `ci-gate` convention, `scripts/check-ci-gate.sh`'s
-/// `ALLOWED_SKIPS`).
+/// `mutants-aggregate` from `ci-gate.needs` must explicitly update this
+/// test.
 ///
 /// Anchoring: assertion is made only within the `ci-gate` job block.
 #[test]
-fn test_mutants_is_in_ci_gate_needs() {
+fn test_mutants_aggregate_is_in_ci_gate_needs() {
     let ci = read_ci_yml();
     let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_else(|| {
         panic!(
@@ -1012,15 +1060,15 @@ fn test_mutants_is_in_ci_gate_needs() {
     });
 
     assert!(
-        needs.contains("mutants"),
-        "FAIL (MUTATION-CI-TIMEOUT): `mutants` is missing from `ci-gate.needs`.\n\
-         The `mutants` job was promoted to hard-required in MUTATION-CI-TIMEOUT \
-         (2026-06-28) to enforce the 90% kill-rate gate on every PR.\n\
-         Push-event safety: `mutants` emits `skipped` on push events; \
-         `scripts/check-ci-gate.sh` tolerates this ONLY because `mutants` is \
-         named in that script's restrictive `ALLOWED_SKIPS` allowlist \
-         (S-CIGATE-2).\n\
-         To restore: add `mutants` to `ci-gate.needs` in ci.yml.\n\
+        needs.contains("mutants-aggregate"),
+        "FAIL (MUTATION-CI-TIMEOUT): `mutants-aggregate` is missing from \
+         `ci-gate.needs`.\n\
+         `mutants-aggregate` was promoted to hard-required in cycle-006 \
+         (mutants-ci-sharding), replacing the pre-sharding single `mutants` \
+         job, to enforce the 90% pooled kill-rate gate on every PR.\n\
+         `mutants-aggregate` carries `if: always()` and never legitimately \
+         reports `skipped` — see architecture-delta.md §6.4.\n\
+         To restore: add `mutants-aggregate` to `ci-gate.needs` in ci.yml.\n\
          Current needs: {:?}",
         {
             let mut v: Vec<_> = needs.iter().collect();
@@ -1136,13 +1184,17 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 /// closes both escapes, because a folded scalar's opening line still starts
 /// with `    if:` even though its condition text lives on continuation lines.
 ///
-/// `mutants` is intentionally excluded from this list: it carries
-/// `if: github.event_name == 'pull_request'` by design (PR-only scope),
-/// emits `skipped` on push events, and is named in
-/// `scripts/check-ci-gate.sh`'s restrictive `ALLOWED_SKIPS` allowlist — so
-/// its `skipped` result is tolerated deliberately, not by accident.  The
-/// `test_mutants_is_in_ci_gate_needs` test pins that `mutants` remains in
-/// `ci-gate.needs`.
+/// `mutants`/`mutants-plan` are not `ci-gate.needs` members at all (they
+/// are admitted into `ci.yml`'s job universe only via
+/// `PINNED_GATE_EXCLUDED_JOBS` — DEC-096/DEC-097), so `always_run_needs_
+/// members` never iterates them; this docstring's `mutants`-specific
+/// carve-out is HISTORICAL (pre-cycle-006). **cycle-006 (mutants-ci-
+/// sharding) EXTENSION:** `mutants-aggregate` IS a `ci-gate.needs` member
+/// and DOES carry a job-level `if: always()` by design — its carve-out is
+/// handled below via `PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS`, a byte-exact
+/// pin on the expected `if:` text, not a bare exclusion from this check.
+/// The `test_mutants_aggregate_is_in_ci_gate_needs` test pins that
+/// `mutants-aggregate` remains in `ci-gate.needs`.
 ///
 /// Job-level `if:` is the job's own DIRECT mapping key (a job-level `if:`
 /// example: `    if: github.event_name == 'pull_request'`, at 4-space
@@ -1225,7 +1277,7 @@ fn test_ci_gate_needs_jobs_have_no_job_level_if() {
         // job-level `if:` key is found by TREE MEMBERSHIP
         // (`Job::keys`/`WfDoc::parse_single_job`) — deliberately NOT
         // filtering on the condition's content or shape (see F-03 docstring
-        // above): any job-level `if:` key on these seven jobs is hazardous,
+        // above): any job-level `if:` key on these jobs is hazardous,
         // whether it's a single-line condition, a folded/block scalar, or
         // references something other than `github.event_name`. Tree
         // membership is immune, by construction, to every spelling variant
@@ -1233,7 +1285,39 @@ fn test_ci_gate_needs_jobs_have_no_job_level_if() {
         // `extract_key_name_at_indent`) AND every job-body indent (the old
         // scan hard-coded 4 spaces — `POSITIONAL-ASSUMPTION-AXIS`, closed
         // here per AC-008).
+        //
+        // cycle-006 (mutants-ci-sharding) EXTENSION: a job named in
+        // `PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS` (today, exactly
+        // `mutants-aggregate`) is EXPECTED to carry a job-level `if:` —
+        // its `if: always()` is load-bearing (see architecture-delta.md
+        // §6.4/§6.2) — so for that job the assertion is inverted: the
+        // `if:` value must EXACTLY equal the pinned tautology text,
+        // instead of asserting no `if:` key exists at all. Every other
+        // always-run job keeps the unchanged "no job-level `if:` key,
+        // period" assertion below.
         let job = WfDoc::parse_single_job(job_block);
+        let pinned_exception = PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS
+            .iter()
+            .find(|(job, _)| job == job_name);
+        if let Some((_, expected_if_expr)) = pinned_exception {
+            let actual_if_expr =
+                extract_and_normalize_if_expr(job_block).unwrap_or_else(|reason| {
+                    panic!(
+                        "FAIL (M1/F-03, PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS): \
+                         job `{job_name}`'s job-level `if:` {reason}\n\
+                         Current `{job_name}` block:\n{job_block}"
+                    )
+                });
+            assert_eq!(
+                actual_if_expr.as_deref(),
+                Some(*expected_if_expr),
+                "FAIL (M1/F-03, PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS): job \
+                 `{job_name}`'s job-level `if:` does not byte-match its \
+                 pinned exception text ({expected_if_expr:?}).\n\
+                 Current `{job_name}` block:\n{job_block}"
+            );
+            continue;
+        }
         if job.keys.iter().any(|k| k == "if") {
             panic!(
                 "FAIL (M1/F-03): Job `{job_name}` has a job-level `if:` key.\n\
@@ -1310,11 +1394,16 @@ fn test_ci_gate_needs_jobs_have_no_job_level_if() {
 /// absence of any pin on these jobs' key sets) regardless of that
 /// open question.
 ///
-/// **Scope — why ALL seven always-run jobs, not just the five with an
-/// unguarded `run:` step:** of the seven, only `fmt`, `clippy`, `msrv`,
-/// `spec-guard`, and `check-signing-workflow-injection` are concretely
-/// exposed to the `defaults.run.shell` vector specifically (none of their
-/// steps sets its own `shell:`). `test` is NOT exposed to that specific
+/// **Scope — why ALL EIGHT always-run jobs, not just the six with an
+/// unguarded `run:` step (cycle-006, mutants-ci-sharding: `mutants-
+/// aggregate` joins this table as the eighth always-run job — its
+/// "Evaluate sharded mutation gate" step declares no step-level `shell:`
+/// of its own, so it is concretely exposed to the `defaults.run.shell`
+/// vector exactly as described below for the other five):** of the
+/// eight, `fmt`, `clippy`, `msrv`, `spec-guard`,
+/// `check-signing-workflow-injection`, and `mutants-aggregate` are
+/// concretely exposed to the `defaults.run.shell` vector specifically
+/// (none of their steps sets its own `shell:`). `test` is NOT exposed to that specific
 /// vector — its POL-11 guard step already carries an explicit
 /// step-level `shell: bash` (pinned separately by
 /// `PINNED_TEST_GUARD_STEP_KEYS`), which GitHub Actions' documented
@@ -1348,6 +1437,13 @@ const PINNED_ALWAYS_RUN_JOB_KEY_SETS: &[(&str, &[&str])] = &[
     ("deny", &["name", "runs-on", "steps", "timeout-minutes"]),
     ("fmt", &["name", "runs-on", "steps", "timeout-minutes"]),
     ("msrv", &["name", "runs-on", "steps", "timeout-minutes"]),
+    (
+        // cycle-006 (mutants-ci-sharding): the FIRST entry in this list
+        // with BOTH `needs` and `if` as job-level keys — `if: always()` is
+        // load-bearing (see PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS).
+        "mutants-aggregate",
+        &["if", "name", "needs", "runs-on", "steps", "timeout-minutes"],
+    ),
     (
         "spec-guard",
         &["name", "runs-on", "steps", "timeout-minutes"],
@@ -1516,8 +1612,9 @@ fn test_always_run_jobs_have_pinned_complete_job_key_sets() {
 //     them.
 
 /// PINNED, human-reviewed COMPLETE per-step key sets, in step order, for
-/// every step of each of the five NON-matrix always-run `ci-gate.needs`
-/// jobs. Sibling of `PINNED_GATE_STEP_KEY_SETS` (which pins `ci-gate`'s own
+/// every step of each of the six NON-matrix always-run `ci-gate.needs`
+/// jobs (cycle-006, mutants-ci-sharding: `mutants-aggregate` joins as the
+/// sixth). Sibling of `PINNED_GATE_STEP_KEY_SETS` (which pins `ci-gate`'s own
 /// steps this same way) and `PINNED_ALWAYS_RUN_JOB_KEY_SETS` (which pins
 /// these same jobs' KEYS one level up — JOB-level, not per-step). See the
 /// module comment immediately above this constant for the concrete `if:
@@ -1561,6 +1658,17 @@ const PINNED_ALWAYS_RUN_STEP_KEY_SETS: &[(&str, &[&[&str]])] = &[
         ],
     ),
     (
+        // cycle-006 (mutants-ci-sharding): sixth non-matrix always-run job.
+        "mutants-aggregate",
+        &[
+            &["name", "uses", "with"], // Harden the runner (Audit all outbound calls)
+            &["uses"],                 // actions/checkout
+            &["name", "if", "uses", "with"], // Download all shard status sentinels
+            &["name", "if", "uses", "with"], // Download all shard outcomes
+            &["name", "if", "env", "run"], // Evaluate sharded mutation gate
+        ],
+    ),
+    (
         "spec-guard",
         &[
             &["name", "uses", "with"], // Harden the runner (Audit all outbound calls)
@@ -1575,6 +1683,7 @@ const PINNED_ALWAYS_RUN_STEP_KEY_SETS: &[(&str, &[&[&str]])] = &[
             &["name", "run"],          // check-bc-citation-symbols self-test (BC-CITE-001)
             &["name", "run"],          // check-bc-citation-symbols (BC-CITE-001)
             &["name", "run"],          // check-ci-gate self-test (fixture suite, S-CIGATE-2)
+            &["name", "run"], // check-mutants-aggregate self-test (fixture suite) — cycle-006
         ],
     ),
 ];
@@ -4458,7 +4567,9 @@ fn test_mutants_shard_job_structure_matches_sharded_design() {
         });
     assert_eq!(
         actual_job_if_expr.as_deref(),
-        Some("github.event_name == 'pull_request' && needs.mutants-plan.outputs.escalated != 'true'"),
+        Some(
+            "github.event_name == 'pull_request' && needs.mutants-plan.outputs.escalated != 'true'"
+        ),
         "FAIL (AC-033): `mutants`'s job-level `if:` guard does not match \
          the sharded design's escalation-aware condition (the shard \
          matrix must be skipped entirely when `mutants-plan` escalated).\n\
@@ -4481,8 +4592,7 @@ fn test_mutants_shard_job_structure_matches_sharded_design() {
              Current mutants block:\n{mutants_block}"
         )
     });
-    let expected_shard_items: Vec<String> =
-        (0..8).map(|i: u32| i.to_string()).collect::<Vec<_>>();
+    let expected_shard_items: Vec<String> = (0..8).map(|i: u32| i.to_string()).collect::<Vec<_>>();
     assert_eq!(
         shard_items, expected_shard_items,
         "FAIL (AC-033): `mutants`'s `strategy.matrix.shard` sequence \
@@ -4724,18 +4834,20 @@ fn test_mutants_shard_job_structure_matches_sharded_design() {
 /// practice, on both the always-true and always-false axes (the axis that
 /// bypassed round 5's predicate).
 ///
-/// Verified by direct read of `.github/workflows/ci.yml :: mutants` for
-/// this revision (do not trust a transcription — re-verify at the time of
-/// any change): the job-level `if:` is exactly `github.event_name ==
-/// 'pull_request'`, with NO `${{ }}` wrapper.
+/// **cycle-006 (mutants-ci-sharding): EMPTY by design, not a regression.**
+/// Prior to this cycle this held exactly `[("mutants", "github.event_name
+/// == 'pull_request'")]` — the single-job `mutants` job's own job-level
+/// `if:`. `mutants-aggregate` (the `ci-gate.needs` member that replaces
+/// `mutants`) never legitimately reports `skipped` (see
+/// `SKIP_TOLERANT_NEEDS_MEMBERS`'s doc comment above and
+/// architecture-delta.md §6.4), so there is no entry to pin here anymore.
 ///
 /// `#[cfg(unix)]` (PR #671 review round 15, CI-caught): every reader of
 /// this pin lives inside one of the three `#[cfg(unix)]`-gated tests —
 /// see `list_all_ci_yml_job_names`'s doc comment for the full "gating a
 /// test orphans its helpers" explanation.
 #[cfg(unix)]
-const PINNED_ALLOWED_SKIP_IF_EXPRESSIONS: &[(&str, &str)] =
-    &[("mutants", "github.event_name == 'pull_request'")];
+const PINNED_ALLOWED_SKIP_IF_EXPRESSIONS: &[(&str, &str)] = &[];
 
 /// S-626-1 sweep-to-class fix: `SKIP_TOLERANT_NEEDS_MEMBERS` (portable) is a
 /// hand-maintained duplicate of `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`'s
@@ -6236,8 +6348,7 @@ fn extract_and_normalize_sole_needs_json_line(job_block: &str) -> Result<String,
 /// byte-for-byte pin here closes the class the same way, rather than
 /// leaving `needs:` as the one job-level key in `PINNED_GATE_JOB_KEYS`
 /// with a presence pin but no value pin.
-const PINNED_GATE_NEEDS_LINE: &str =
-    "[fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants]";
+const PINNED_GATE_NEEDS_LINE: &str = "[fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants-aggregate]";
 
 /// Extract and normalize the SOLE job-level `needs:` value for
 /// pinned-literal comparison against `PINNED_GATE_NEEDS_LINE`.
@@ -6583,20 +6694,37 @@ fn build_multi_skip_payload(all_jobs: &[String], skipped_jobs: &[&str]) -> Strin
 }
 
 /// The set of payload "skip variants" to check for job `job`: always the
-/// single-skip case (only `job` skipped), PLUS the production-realistic
-/// multi-skip case where `job` and `mutants` are both skipped (the shape
-/// every real push already has, since `mutants` reports `skipped` on
-/// every push by design). When `job` IS `mutants`, the two variants are
-/// identical — still run both for code-path uniformity; the redundancy is
-/// cheap.
+/// single-skip case (only `job` skipped), PLUS a production-realistic
+/// multi-skip case where `job` and one OTHER `ci-gate.needs` member
+/// (`companion`, the first job in `all_jobs` that isn't `job` itself) are
+/// both skipped. When `job` IS the companion (impossible by construction
+/// — `find` excludes `job` itself), the two variants would be identical;
+/// this never happens here.
+///
+/// **cycle-006 (mutants-ci-sharding) rewrite:** previously hard-coded
+/// `"mutants"` as the companion — faithful only while `mutants` legitimately
+/// reported `skipped` on every real push (the production-realistic shape
+/// this function exists to model). `mutants-aggregate` (the job that
+/// replaces `mutants` as a `ci-gate.needs` member) never reports `skipped`
+/// (see architecture-delta.md §6.4), so a hardcoded `"mutants"` companion
+/// would either no longer name a `ci-gate.needs` member at all, or would
+/// silently stop modeling a realistic multi-skip shape. The companion is
+/// now dynamically selected — "the first OTHER job in `all_jobs`" — so this
+/// function tracks whatever `ci-gate.needs`'s real membership is, rather
+/// than a job name that may no longer occupy that role.
 ///
 /// `#[cfg(unix)]` (PR #671 review round 15, CI-caught): only caller is
 /// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`,
 /// itself `#[cfg(unix)]`-gated — see `list_all_ci_yml_job_names`'s doc
 /// comment for the full "gating a test orphans its helpers" explanation.
 #[cfg(unix)]
-fn all_skip_variants_for(job: &str) -> Vec<Vec<&str>> {
-    vec![vec![job], vec![job, "mutants"]]
+fn all_skip_variants_for<'a>(job: &'a str, all_jobs: &'a [String]) -> Vec<Vec<&'a str>> {
+    let companion = all_jobs
+        .iter()
+        .map(String::as_str)
+        .find(|&j| j != job)
+        .expect("ci-gate.needs must contain at least 2 members for a multi-skip variant");
+    vec![vec![job], vec![job, companion]]
 }
 
 /// Run `scripts/check-ci-gate.sh` with `json_payload` on stdin (via a real
@@ -6657,9 +6785,11 @@ fn run_check_ci_gate_sh(json_payload: &str) -> std::process::Output {
 ///   - Look up a pinned literal for this job by name in
 ///     `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`.
 ///   - If BOTH exist AND are byte-identical: this is the POSITIVE
-///     (legitimate-skip) case. For EACH of `all_skip_variants_for(job)`
-///     (single-skip, and the production-realistic job+`mutants` both
-///     skipped — CRITICAL-3, PR #671 review round 7), synthesize a
+///     (legitimate-skip) case. For EACH of `all_skip_variants_for(job,
+///     &all_jobs)` (single-skip, and the production-realistic job+
+///     dynamically-selected-companion both skipped — CRITICAL-3, PR #671
+///     review round 7; companion selection cycle-006-rewritten, see that
+///     function's own doc comment), synthesize a
 ///     PRODUCTION-SHAPED payload (`result`+`outputs` per job, not
 ///     `result` alone — `build_multi_skip_payload`; round 8 corrected
 ///     this to drop a phantom `outcome` field the real `needs` context
@@ -6869,7 +6999,7 @@ fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
             saw_negative_branch = true;
         }
 
-        for skipped_jobs in all_skip_variants_for(job) {
+        for skipped_jobs in all_skip_variants_for(job, &all_jobs) {
             let variant_desc = if skipped_jobs.len() == 1 {
                 "single-skip".to_string()
             } else {
@@ -6974,16 +7104,40 @@ fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
         }
     }
 
-    assert!(
-        saw_positive_branch,
-        "FAIL: no job in ci-gate.needs matched a pinned literal — the \
-         positive (legitimate-skip) branch above never ran, so this test \
-         cannot prove the gate still tolerates a real skip. This should \
-         not happen while `mutants` remains in ci-gate.needs with its \
-         current `if:` matching PINNED_ALLOWED_SKIP_IF_EXPRESSIONS; if it \
-         does, something upstream (job list, `if:` text, or the pinned \
-         literal) changed unexpectedly and needs re-review."
-    );
+    // cycle-006 (mutants-ci-sharding): `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`
+    // is now EMPTY by design (mutants-aggregate never reports `skipped` —
+    // see architecture-delta.md §6.4), so `saw_positive_branch` can never
+    // legitimately fire — no pinned literal exists for any job to match.
+    // Emptiness itself is the thing under test here: a positive match
+    // would mean either this pin desynced from
+    // `SKIP_TOLERANT_NEEDS_MEMBERS`/`ALLOWED_SKIPS`, or a job was
+    // re-admitted to the skip-tolerant category without updating this
+    // list.
+    let expect_positive_branch = !PINNED_ALLOWED_SKIP_IF_EXPRESSIONS.is_empty();
+    if expect_positive_branch {
+        assert!(
+            saw_positive_branch,
+            "FAIL: no job in ci-gate.needs matched a pinned literal — the \
+             positive (legitimate-skip) branch above never ran, so this test \
+             cannot prove the gate still tolerates a real skip. This should \
+             not happen while PINNED_ALLOWED_SKIP_IF_EXPRESSIONS is \
+             non-empty; if it does, something upstream (job list, `if:` \
+             text, or the pinned literal) changed unexpectedly and needs \
+             re-review."
+        );
+    } else {
+        assert!(
+            !saw_positive_branch,
+            "FAIL: PINNED_ALLOWED_SKIP_IF_EXPRESSIONS is empty (cycle-006 \
+             design — mutants-aggregate never reports `skipped`, see \
+             architecture-delta.md §6.4), so no ci-gate.needs member should \
+             match a pinned skip-tolerant `if:` expression. A positive \
+             match here means either this pin desynced from \
+             SKIP_TOLERANT_NEEDS_MEMBERS/ALLOWED_SKIPS, or a job was \
+             re-admitted to the skip-tolerant category without updating \
+             this list."
+        );
+    }
     assert!(
         saw_negative_branch,
         "FAIL: no job in ci-gate.needs lacks a matching pinned literal — \
@@ -7378,13 +7532,25 @@ fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
         .filter(|s| !s.is_empty())
         .collect();
 
-    assert!(
-        !allowed_skips.is_empty(),
-        "FAIL: `scripts/check-ci-gate.sh --print-allowed-skips` printed no \
-         job names — either ALLOWED_SKIPS is unexpectedly empty (it should \
-         contain at least `mutants`) or the `--print-allowed-skips` mode is \
-         broken.\nstdout: {stdout}"
-    );
+    // cycle-006 (mutants-ci-sharding): production `ALLOWED_SKIPS` is now
+    // empty by design (mutants-aggregate never reports `skipped` — see
+    // architecture-delta.md §6.4), so `--print-allowed-skips` printing NO
+    // job names is the correct, expected state — not a broken mode. The
+    // consistency check below is what remains load-bearing: if
+    // `--print-allowed-skips` ever DOES print something while the
+    // Rust-side pins (`SKIP_TOLERANT_NEEDS_MEMBERS`/
+    // `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`) are still empty, that is a
+    // genuine desync between `scripts/check-ci-gate.sh` and this file.
+    if allowed_skips.is_empty() {
+        assert!(
+            SKIP_TOLERANT_NEEDS_MEMBERS.is_empty() && PINNED_ALLOWED_SKIP_IF_EXPRESSIONS.is_empty(),
+            "FAIL: `--print-allowed-skips` printed no job names, but \
+             SKIP_TOLERANT_NEEDS_MEMBERS or PINNED_ALLOWED_SKIP_IF_EXPRESSIONS \
+             is non-empty — scripts/check-ci-gate.sh's ALLOWED_SKIPS and this \
+             file's Rust-side pins have desynced. Either restore ALLOWED_SKIPS \
+             in check-ci-gate.sh, or empty the Rust-side pins to match."
+        );
+    }
 
     let ci = read_ci_yml();
 
@@ -7447,10 +7613,12 @@ fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
 /// mention "ALLOWED_SKIPS" in human-readable text without referencing the
 /// array at all) in `scripts/check-ci-gate.sh`'s source text, and asserts
 /// the count equals exactly the known set of legitimate code-level sites:
-/// the declaration (`ALLOWED_SKIPS=("mutants")`), the read in
-/// `is_allowed_skip` (`for allowed in "${ALLOWED_SKIPS[@]}"`), and the read
-/// in `print_allowed_skips` (`printf '%s\n' "${ALLOWED_SKIPS[@]}"`) — 3
-/// total.
+/// the declaration (`ALLOWED_SKIPS=()`), the read in `is_allowed_skip`
+/// (`for allowed in "${ALLOWED_SKIPS[@]}"`), the read in
+/// `print_allowed_skips` (`printf '%s\n' "${ALLOWED_SKIPS[@]}"`), and
+/// (cycle-006, mutants-ci-sharding, round-3 MEDIUM-2) the local override
+/// in `run_fixture_with_synthetic_skip_tolerant_job`
+/// (`local ALLOWED_SKIPS=("example-skip-tolerant-job")`) — 4 total.
 ///
 /// Why this matters even with `--print-allowed-skips` in place: that mode
 /// asks bash for whatever `ALLOWED_SKIPS` evaluates to AT THE POINT
@@ -7481,18 +7649,27 @@ fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
 /// all.
 ///
 /// Runs on all platforms (no bash shell-out) — no `#[cfg(unix)]` needed.
+///
+/// RENAMED (cycle-006, mutants-ci-sharding, round-3 MEDIUM-2) from
+/// `test_allowed_skips_has_exactly_three_code_level_references` — the old
+/// name asserted a number its body no longer checks (this repo's own
+/// test-naming convention treats that as a defect to correct, not style
+/// churn to avoid). The count moved `3 -> 4` when
+/// `run_fixture_with_synthetic_skip_tolerant_job`'s local override
+/// (`scripts/check-ci-gate.sh`) was added.
 #[test]
-fn test_allowed_skips_has_exactly_three_code_level_references() {
+fn test_allowed_skips_has_exactly_four_code_level_references() {
     let script = read_check_ci_gate_sh();
     let count = count_allowed_skips_code_occurrences(&script);
 
     assert_eq!(
-        count, 3,
-        "FAIL (CRITICAL, PR #671 review round 2): expected exactly 3 \
+        count, 4,
+        "FAIL (CRITICAL, PR #671 review round 2): expected exactly 4 \
          non-comment-line occurrences of `ALLOWED_SKIPS=` / \
          `ALLOWED_SKIPS+=` / `${{ALLOWED_SKIPS` in scripts/check-ci-gate.sh \
-         (the declaration, the read in is_allowed_skip, and the read in \
-         print_allowed_skips); found {count}.\n\
+         (the declaration, the read in is_allowed_skip, the read in \
+         print_allowed_skips, and the local override in \
+         run_fixture_with_synthetic_skip_tolerant_job); found {count}.\n\
          \n\
          A NEW occurrence of one of those THREE SPECIFIC shapes (e.g. an \
          `ALLOWED_SKIPS+=(...)` append line added anywhere in the file) \
@@ -7910,6 +8087,17 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
 /// correcting it). Moved above the docstring so rustdoc attaches
 /// correctly: this short paragraph documents the constant, and Guard
 /// B's full rationale below documents the test.
+///
+/// cycle-006 (mutants-ci-sharding, FIX-B) — VERIFIED non-change, not
+/// merely assumed: the `mutants` shard job (`strategy.matrix.shard`, 8
+/// entries) is NOT a `ci-gate.needs` member (only `mutants-aggregate` is
+/// — `mutants`/`mutants-plan` are admitted into `ci.yml`'s job universe
+/// solely via `PINNED_GATE_EXCLUDED_JOBS`), so `matrix_needs_members()`
+/// (which filters strictly within `ci-gate.needs`) still returns exactly
+/// `[clippy, test]`, unchanged. Confirmed by re-running
+/// `test_matrix_os_lists_remain_static_literals` and this constant's own
+/// consuming test against the live post-cycle-006 `ci.yml` — both stayed
+/// green with zero edits to either test.
 const PINNED_MATRIX_NEEDS_MEMBER_COUNT: usize = 2;
 
 /// S-626-1 Guard B (DEC-246 §Q4 + "New material this reconstruction
@@ -8159,7 +8347,7 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// by `scripts/check-ci-gate.sh --self-test`'s own `EXPECTED_FIXTURES`,
 /// `scripts/check-bc-citation-symbols.sh`'s, and
 /// `scripts/check-cargo-mutants-policy-citations.sh`'s self-tests — and,
-/// within this file, `test_allowed_skips_has_exactly_three_code_level_
+/// within this file, `test_allowed_skips_has_exactly_four_code_level_
 /// references`'s narrower precedent of counting textual occurrences of a
 /// known-good shape.
 ///
@@ -8223,7 +8411,47 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// `needs:`). See `tests/common/wf.rs`'s `Value::Scalar::has_anchor` field
 /// and `ValueSpanOutcome` enum for the fix itself. No other `#[test]` fn
 /// was added to or removed from THIS file in this pass.
-const EXPECTED_GUARD_TEST_COUNT: usize = 38;
+///
+/// cycle-006 (mutants-ci-sharding): bumped 38 -> 57 for nineteen new
+/// `#[test]` fns backing the `mutants-plan` / 8-shard `mutants` matrix /
+/// `mutants-aggregate` sharded-gate pipeline (structural/wiring pins only
+/// — the INV-AGG/INV-COMPLETE/INV-ESCALATE behavioral proofs live in
+/// `scripts/mutants-aggregate.sh`'s own `--self-test` fixture harness,
+/// mechanically counted separately via `EXPECTED_MUTANTS_AGG_FIXTURES`):
+/// `test_mutants_plan_job_structural_shape`,
+/// `test_mutants_plan_escalated_output_wired_to_step_output`,
+/// `test_mutants_aggregate_expected_shards_matches_matrix_shard_count`,
+/// `test_spec_guard_contains_mutants_aggregate_self_test_step`,
+/// `test_mutants_aggregate_run_line_is_byte_pinned`,
+/// `test_mutants_aggregate_env_key_set_is_pinned`,
+/// `test_mutants_aggregate_eval_step_invokes_the_real_script`,
+/// `test_mutants_aggregate_job_block_has_no_node_properties`,
+/// `test_mutants_aggregate_step_if_values_are_all_always`,
+/// `test_mutants_aggregate_if_exception_is_disjoint_and_tautological`,
+/// `test_mutants_aggregate_env_escalated_byte_pin`,
+/// `test_mutants_aggregate_env_event_name_byte_pin`,
+/// `test_mutants_aggregate_env_status_dir_byte_pin`,
+/// `test_mutants_aggregate_env_shard_dir_byte_pin`,
+/// `test_mutants_aggregate_env_mutant_count_byte_pin`,
+/// `test_mutants_aggregate_env_overall_diff_lines_byte_pin`,
+/// `test_mutants_aggregate_env_plan_result_byte_pin`,
+/// `test_mutants_aggregate_needs_and_job_level_if`, and
+/// `test_mutants_nightly_workflow_does_not_declare_a_job_named_ci_gate`.
+/// Three PRE-EXISTING tests were renamed (not added/removed, so no count
+/// change from these): `test_mutants_is_in_ci_gate_needs` ->
+/// `test_mutants_aggregate_is_in_ci_gate_needs`;
+/// `test_mutants_job_structure_unchanged_by_cigate2_option_c` ->
+/// `test_mutants_shard_job_structure_matches_sharded_design`;
+/// `test_allowed_skips_has_exactly_three_code_level_references` ->
+/// `test_allowed_skips_has_exactly_four_code_level_references`. Verified
+/// mechanically against the live tree at F4 (`grep -c '^\s*#\[test\]'
+/// tests/ci_gate_completeness.rs` == 57), per this story's own AC-031
+/// re-verification mandate — the story's own F2-stage estimate (65) is
+/// superseded by this actual count, since story decomposition (F3)
+/// consolidated the INV-AGG/INV-COMPLETE behavioral proofs into
+/// `scripts/mutants-aggregate.sh`'s bash `--self-test` harness instead of
+/// duplicating them as separate Rust `#[test]` fns.
+const EXPECTED_GUARD_TEST_COUNT: usize = 57;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
@@ -8889,14 +9117,13 @@ fn test_mutants_plan_job_structural_shape() {
          Current mutants-plan block:\n{plan_block}"
     );
 
-    let mut expected_output_keys: Vec<String> =
-        ["escalated", "mutant_count", "overall_diff_lines"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+    let mut expected_output_keys: Vec<String> = ["escalated", "mutant_count", "overall_diff_lines"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     expected_output_keys.sort();
-    let mut actual_output_keys =
-        common::wf::job_level_nested_keys(plan_block, &["outputs"]).unwrap_or_else(|| {
+    let mut actual_output_keys = common::wf::job_level_nested_keys(plan_block, &["outputs"])
+        .unwrap_or_else(|| {
             panic!(
                 "FAIL (AC-004): `mutants-plan` has no `outputs:` mapping — \
                  the sharded design requires escalated/mutant_count/\
@@ -9553,11 +9780,13 @@ fn test_mutants_aggregate_needs_and_job_level_if() {
 /// table has a directly-citable test for AC-034.
 #[test]
 fn test_mutants_nightly_workflow_does_not_declare_a_job_named_ci_gate() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(".github/workflows/mutants-nightly.yml");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/mutants-nightly.yml");
     let raw = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
-    let raw = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw).replace("\r\n", "\n");
+    let raw = raw
+        .strip_prefix('\u{FEFF}')
+        .unwrap_or(&raw)
+        .replace("\r\n", "\n");
 
     let doc = WfDoc::parse(&raw);
     let job_names: Vec<&str> = doc.jobs.iter().map(|j| j.id.as_str()).collect();

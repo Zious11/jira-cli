@@ -1,15 +1,11 @@
 name: Mutants Nightly (Full Scope)
 
-# STATUS: SKELETON (cycle-006 mutants-ci-sharding, F4 Blocking
-# Precondition 2 / Task 2). This is a scaffold matching the shape in
-# .factory/phase-f2-spec-evolution/cycle-006/ci-yml-design.md §4 — advisory
-# only, never wired into `ci-gate.needs` or branch protection, and
-# declares no job named `ci-gate`. The `mutants-full` shard step below is
-# a placeholder command (`echo`), not the real
-# `cargo mutants --shard k/16 --sharding slice --jobs 2 --baseline skip
-# --timeout 240` invocation — that decision-path content lands via Task 23
-# (test-writer/implementer stage), not this scaffold. Advisory only; must
-# never fail a merge.
+# cycle-006 mutants-ci-sharding — advisory, non-diff-scoped full mutation
+# run. Matches .factory/phase-f2-spec-evolution/cycle-006/ci-yml-design.md
+# §4. Never wired into `ci-gate.needs` or branch protection, and declares
+# no job named `ci-gate`. Advisory only — this workflow must never fail a
+# merge; see `mutants-nightly-report`'s own note on why its summary step
+# always exits 0.
 
 on:
   schedule:
@@ -52,12 +48,12 @@ jobs:
       - name: Run full mutation scope on this shard
         continue-on-error: true
         run: |
-          # SCAFFOLD PLACEHOLDER (Task 2) — the real, non-`--in-diff`
-          # invocation (cargo mutants --shard ${{ matrix.shard }}/16
-          # --sharding slice --jobs 2 --baseline skip --timeout 240) is
-          # authored at Task 23, per ci-yml-design.md § "mutants-full" job.
-          # NO --in-diff here — full examine_globs scope, by design.
-          echo "TODO(F4-GREEN, Task 23): cargo mutants --shard ${{ matrix.shard }}/16 --sharding slice --jobs 2 --baseline skip --timeout 240"
+          # NO --in-diff — full examine_globs scope, per docs/specs/
+          # cargo-mutants-policy.md's own note that --in-diff is "not a
+          # substitute for a full run" (weakened coverage of UNCHANGED
+          # code is invisible to the per-PR diff-scoped gate).
+          cargo mutants --shard ${{ matrix.shard }}/16 --sharding slice \
+            --jobs 2 --baseline skip --timeout 240
 
       - name: Upload shard outcomes
         if: always()
@@ -83,10 +79,45 @@ jobs:
 
       - name: Summarize pooled kill rate (advisory — never fails the workflow)
         run: |
-          # SCAFFOLD PLACEHOLDER (Task 2) — the real summation logic
-          # (mirroring mutants-aggregate's INV-AGG pooling, minus the
-          # fail-closed exits) is authored at Task 23. Advisory only:
-          # this step must always exit 0 regardless of the computed kill
-          # rate, since this workflow is not wired into ci-gate.needs and
-          # must never block a merge.
-          echo "TODO(F4-GREEN, Task 23): summarize pooled kill rate across mutants-nightly-shard-outcomes-* (advisory, always exit 0)."
+          # Mirrors scripts/mutants-aggregate.sh's Step 3/Step 6 pooled
+          # INV-AGG summation, minus every fail-closed `return 1` branch —
+          # this job is advisory only and must never exit non-zero, since
+          # this workflow is not wired into ci-gate.needs and must never
+          # block a merge. See mutants-aggregate's per-shard-guard logic in
+          # ci.yml for the summation algorithm this step mirrors.
+          set +e
+          caught_total=0; missed_total=0; timeout_total=0; unviable_total=0
+          shopt -s nullglob
+          for f in "${{ runner.temp }}"/shards/mutants-nightly-shard-outcomes-*/outcomes.json; do
+            if ! jq empty "${f}" 2>/dev/null; then
+              echo "NOTE: ${f} is missing or not valid JSON — skipped (advisory summary only)."
+              continue
+            fi
+            caught=$(jq '.caught // 0' "${f}")
+            missed=$(jq '.missed // 0' "${f}")
+            timeout=$(jq '.timeout // 0' "${f}")
+            unviable=$(jq '.unviable // 0' "${f}")
+            [[ "${caught}"   =~ ^[0-9]+$ ]] || caught=0
+            [[ "${missed}"   =~ ^[0-9]+$ ]] || missed=0
+            [[ "${timeout}"  =~ ^[0-9]+$ ]] || timeout=0
+            [[ "${unviable}" =~ ^[0-9]+$ ]] || unviable=0
+            caught_total=$((caught_total + caught))
+            missed_total=$((missed_total + missed))
+            timeout_total=$((timeout_total + timeout))
+            unviable_total=$((unviable_total + unviable))
+          done
+
+          total_scored=$((caught_total + missed_total + timeout_total + unviable_total))
+          echo "Nightly pooled summary: ${caught_total} caught / ${missed_total} missed / ${timeout_total} timeout / ${unviable_total} unviable (${total_scored} total)"
+
+          killable=$((caught_total + missed_total + timeout_total))
+          if [ "${killable}" -eq 0 ]; then
+            echo "NOTE: 0 killable mutants scored across all nightly shards."
+          else
+            kill_rate=$(( (caught_total * 100) / killable ))
+            echo "Nightly pooled kill rate: ${kill_rate}% (target >= 90%, advisory only — never blocks a merge)"
+            if [ "${kill_rate}" -lt 90 ]; then
+              echo "::warning::Nightly full-scope pooled kill rate ${kill_rate}% is below the 90% target — advisory only, does not fail this workflow."
+            fi
+          fi
+          exit 0

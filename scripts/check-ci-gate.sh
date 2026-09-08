@@ -24,10 +24,21 @@
 #
 # ALLOWED_SKIPS is restrictive, not blanket: a listed job still fails the
 # gate on `failure`/`cancelled` — the carve-out tolerates `skipped` ONLY.
-# It currently contains `mutants` only (the sole `ci-gate.needs` member that
-# carries a job-level `if: github.event_name == 'pull_request'` today, and
-# therefore reports `skipped` on every push by design — see
-# `.github/workflows/ci.yml :: mutants`, unchanged by this story).
+#
+# cycle-006 (mutants-ci-sharding): CURRENTLY EMPTY, not a regression.
+# Prior to this cycle it contained `mutants` only (the sole
+# `ci-gate.needs` member that carried a job-level `if: github.event_name
+# == 'pull_request'`, and therefore reported `skipped` on every push by
+# design). `mutants-aggregate` (the job that replaces `mutants` as a
+# `ci-gate.needs` member) is deliberately engineered to NEVER report
+# `skipped` to GitHub Actions — its job-level `if: always()` makes it run
+# unconditionally, and `scripts/mutants-aggregate.sh`'s own Step 0
+# resolves a push/schedule/workflow_dispatch event to an ordinary
+# `exit 0` (success) internally, not a GitHub Actions `skipped`
+# conclusion (see `tests/ci_gate_completeness.rs`'s
+# `PINNED_ALWAYS_RUN_WITH_IF_EXCEPTIONS`). The mechanism below is
+# retained as load-bearing infrastructure for any FUTURE `ci-gate.needs`
+# member that legitimately needs skip-tolerance — it is not dead code.
 #
 # TOOLING CHOICE: `jq` — pre-installed on `ubuntu-latest`, already an assumed
 # dependency of this exact file (`.github/workflows/ci.yml :: mutants §
@@ -100,8 +111,9 @@ bash -n "${BASH_SOURCE[0]}"
 # under `set -e`. Declared here at file scope instead — assigned exactly
 # once when this file is parsed, regardless of how many times any
 # function below is called.
-readonly EXPECTED_FIXTURES=13
+readonly EXPECTED_FIXTURES=14
 readonly EXPECTED_JQ_TRUST_CHECKS=17
+readonly EXPECTED_PRINT_ALLOWED_SKIPS_CHECKS=1
 
 # ---------------------------------------------------------------------------
 # ALLOWED_SKIPS — restrictive per-job carve-out (S-CIGATE-2 AC-002).
@@ -179,13 +191,37 @@ readonly EXPECTED_JQ_TRUST_CHECKS=17
 # the CRITICALs above — recorded here so it stays a documented boundary
 # rather than an implicit gap someone has to rediscover.
 # ---------------------------------------------------------------------------
-ALLOWED_SKIPS=("mutants")
+ALLOWED_SKIPS=()
 
 # is_allowed_skip <job_name> — returns 0 (true) if job_name is in
 # ALLOWED_SKIPS, 1 (false) otherwise.
+#
+# cycle-006 (mutants-ci-sharding, round-3 MEDIUM-1): explicit empty-array
+# guard, added because `ALLOWED_SKIPS` is genuinely empty in production
+# for the first time this cycle, at the exact moment the `#[cfg(unix)]`
+# subprocess tests exercise this script on TWO CI runners with two
+# DIFFERENT bash major versions — `ubuntu-latest` (bash >=5.x, where
+# `"${empty_array[@]}"` under `set -u` expands to nothing, harmlessly) and
+# `macos-latest` (bash 3.2.57, Apple's frozen pre-GPLv3 build, where the
+# IDENTICAL expansion is a FATAL "unbound variable" error under this
+# script's own `set -euo pipefail`). The guard makes the empty-array case
+# NEVER attempt the expansion at all, independent of which bash's
+# `nounset` semantics happen to be in play.
+#
+# Returns 1 (NOT 0) on empty — an empty allowlist means "nothing is
+# allowed to skip," the same conclusion the unguarded loop below already
+# reaches (a `for` over zero elements simply falls through to `return 1`);
+# this guard only makes that conclusion reachable WITHOUT attempting the
+# empty-array expansion. Returning 0 here (copy-pasting
+# `print_allowed_skips`'s `return 0`) would be a SEVERE regression — it
+# would make every `skipped` result pass unconditionally the moment
+# ALLOWED_SKIPS is empty, the exact opposite of fail-closed.
 is_allowed_skip() {
     local job="$1"
     local allowed
+    if [ "${#ALLOWED_SKIPS[@]}" -eq 0 ]; then
+        return 1
+    fi
     for allowed in "${ALLOWED_SKIPS[@]}"; do
         if [ "${allowed}" = "${job}" ]; then
             return 0
@@ -200,8 +236,32 @@ is_allowed_skip() {
 # external caller (the Rust test suite) ask bash directly, instead of
 # re-parsing this file's source text with a form-specific parser that can
 # desync from what bash actually honors.
+#
+# cycle-006 (mutants-ci-sharding, round-2 MEDIUM-1): explicit empty-array
+# short-circuit — guarantees `--print-allowed-skips` emits zero lines (not
+# a phantom blank line) for the empty case, and, like `is_allowed_skip`'s
+# sibling guard above, avoids ever attempting the empty-array expansion
+# under `set -u` at all.
 print_allowed_skips() {
+    if [ "${#ALLOWED_SKIPS[@]}" -eq 0 ]; then
+        return 0
+    fi
     printf '%s\n' "${ALLOWED_SKIPS[@]}"
+}
+
+# run_fixture_with_synthetic_skip_tolerant_job <fixture_name> <needs_json>
+#   <expected> [msg]
+# Wraps check_fixture with a LOCAL override of ALLOWED_SKIPS, exercising
+# is_allowed_skip's/evaluate_needs()'s positive skip-tolerance branch even
+# though production's array is empty (see ALLOWED_SKIPS's own doc comment
+# above). `local ALLOWED_SKIPS=(...)` shadows the file-scope array for the
+# DURATION OF THIS FUNCTION CALL ONLY (bash dynamic scoping) — no explicit
+# save/restore needed, and the override cannot leak into any OTHER
+# fixture or into a production evaluate_needs() call made outside this
+# function.
+run_fixture_with_synthetic_skip_tolerant_job() {
+    local ALLOWED_SKIPS=("example-skip-tolerant-job")
+    check_fixture "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -830,6 +890,80 @@ CATSHIM
 }
 
 # ---------------------------------------------------------------------------
+# print_allowed_skips output-shape self-test (cycle-006 mutants-ci-sharding,
+# round-2 MEDIUM-1). A SEPARATE, sibling counter/suite to EXPECTED_FIXTURES
+# (which tests evaluate_needs()'s JSON-payload pass/fail DECISION
+# specifically) and to EXPECTED_JQ_TRUST_CHECKS (is_trusted_jq_dir/
+# resolve_trusted_jq's own suite) — print_allowed_skips's output SHAPE is a
+# different function's behavior entirely; folding this into EXPECTED_FIXTURES
+# would be the same category error that precedent already avoided.
+#
+# Exactly ONE check, deliberately not paired with a "populated array still
+# prints correctly" regression check: the mutation that second check would
+# guard against (an unconditional early `return 0` that defeats a FUTURE
+# populated ALLOWED_SKIPS) is ALREADY caught, transitively, the moment
+# ALLOWED_SKIPS next becomes non-empty —
+# `tests/ci_gate_completeness.rs::test_allowed_skips_members_require_job_level_conditional_in_ci_yml`
+# independently probes evaluate_needs()'s OWN behavioral skip-tolerance and
+# cross-checks it against `--print-allowed-skips`'s reported set; a
+# print_allowed_skips that always reports empty while evaluate_needs()
+# genuinely tolerates a skip would desync those two and fail that EXISTING
+# guard loudly.
+# ---------------------------------------------------------------------------
+run_print_allowed_skips_self_test() {
+    echo "=== check-ci-gate.sh print_allowed_skips SELF-TEST (cycle-006) ==="
+    echo
+
+    local pas_total=0
+    local pas_mismatches=0
+
+    # check_print_allowed_skips_output <desc> <expected_output>
+    check_print_allowed_skips_output() {
+        local desc="$1"
+        local expected="$2"
+        pas_total=$((pas_total + 1))
+
+        local actual
+        actual=$(print_allowed_skips)
+
+        if [ "${actual}" = "${expected}" ]; then
+            echo "[PASS] ${desc}"
+        else
+            echo "[FAIL] ${desc} (expected \"${expected}\", got \"${actual}\")"
+            pas_mismatches=$((pas_mismatches + 1))
+        fi
+    }
+
+    # The check itself: calls print_allowed_skips with NO override (the
+    # true, current, file-scope ALLOWED_SKIPS=()), asserts the captured
+    # output is the empty string / zero lines.
+    check_print_allowed_skips_output \
+        "production-allowed-skips-is-empty" \
+        ""
+
+    echo
+    echo "${pas_total}/${EXPECTED_PRINT_ALLOWED_SKIPS_CHECKS} print_allowed_skips" \
+         "checks run, ${pas_mismatches} mismatch(es)."
+
+    if [ "${pas_mismatches}" -ne 0 ]; then
+        echo "FAIL: ${pas_mismatches} print_allowed_skips check(s) disagreed" \
+             "with the expected output."
+        return 1
+    fi
+
+    if [ "${pas_total}" != "${EXPECTED_PRINT_ALLOWED_SKIPS_CHECKS}" ]; then
+        echo "SELF-TEST-FIXTURE-COUNT: expected" \
+             "${EXPECTED_PRINT_ALLOWED_SKIPS_CHECKS} print_allowed_skips" \
+             "checks, got ${pas_total}. A check was added or removed" \
+             "without updating EXPECTED_PRINT_ALLOWED_SKIPS_CHECKS."
+        return 1
+    fi
+
+    echo "PASS: all print_allowed_skips checks matched their expected output."
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Self-test fixture suite (S-CIGATE-2 AC-002/AC-003/AC-004/AC-005).
 #
 # Each fixture asserts an EXPECTED outcome against evaluate_needs():
@@ -938,18 +1072,25 @@ run_self_test() {
         '{"fmt":{"result":"skipped"},"clippy":{"result":"success"}}' \
         "fail:1"
 
-    # Fixture 4 — mutants (allowlisted) reports skipped -> PASS.
-    check_fixture \
+    # Fixture 4 — an allowlisted job reports skipped -> PASS. cycle-006
+    # (mutants-ci-sharding): production's ALLOWED_SKIPS is now empty (see
+    # that array's own doc comment), so this fixture exercises
+    # is_allowed_skip's/evaluate_needs()'s positive skip-tolerance branch
+    # via `run_fixture_with_synthetic_skip_tolerant_job`'s LOCAL override
+    # instead of a real production entry — same PASS expectation, different
+    # mechanism under test.
+    run_fixture_with_synthetic_skip_tolerant_job \
         "mutants-skipped-allowlisted" \
-        '{"mutants":{"result":"skipped"},"fmt":{"result":"success"}}' \
+        '{"example-skip-tolerant-job":{"result":"skipped"},"fmt":{"result":"success"}}' \
         "pass"
 
-    # Fixture 5 — mutants reports failure -> FAIL (allowlist tolerates
-    # `skipped` ONLY, never any other non-success value — proves the
-    # carve-out is restrictive, not a blanket exemption).
-    check_fixture \
+    # Fixture 5 — the allowlisted job reports failure -> FAIL (allowlist
+    # tolerates `skipped` ONLY, never any other non-success value — proves
+    # the carve-out is restrictive, not a blanket exemption). Same
+    # synthetic-override mechanism as Fixture 4.
+    run_fixture_with_synthetic_skip_tolerant_job \
         "mutants-failure-allowlist-is-restrictive" \
-        '{"mutants":{"result":"failure"},"fmt":{"result":"success"}}' \
+        '{"example-skip-tolerant-job":{"result":"failure"},"fmt":{"result":"success"}}' \
         "fail:1"
 
     # Fixture 6 — a job reports cancelled -> FAIL.
@@ -1058,10 +1199,16 @@ run_self_test() {
     # `parse_needs_set`, so a drift here would only stale this bash
     # fixture's realism, not silently widen what the gate tolerates) —
     # same drift CLASS `NEEDS_CONTEXT_JOB_KEYS` closed for payload keys,
-    # left open here for job identities. Expected: PASS (mutants skipped
-    # + allowlisted, every other required job
-    # succeeded — the actual shape of a legitimate
-    # push-event run).
+    # left open here for job identities. cycle-006 (mutants-ci-sharding):
+    # rekeyed `mutants` -> `mutants-aggregate`, `"result": "skipped"` ->
+    # `"result": "success"` — under the new design, a legitimate
+    # push-event run has `mutants-aggregate` reporting SUCCESS (its
+    # internal push-event no-op resolves to `exit 0`, never `skipped`),
+    # not `skipped` as the old `mutants` job did. This is a real,
+    # deliberate semantic change to what "the realistic push-event shape"
+    # looks like, not a cosmetic rename. Expected: PASS (every required
+    # job — including `mutants-aggregate` — reports success — the actual
+    # shape of a legitimate push-event run under this cycle's design).
     check_fixture \
         "realistic-multiline-toJSON-needs-payload" \
         '{
@@ -1093,27 +1240,26 @@ run_self_test() {
     "result": "success",
     "outputs": {}
   },
-  "mutants": {
-    "result": "skipped",
+  "mutants-aggregate": {
+    "result": "success",
     "outputs": {}
   }
 }' \
         "pass"
 
-    # Fixture 13 — an UNLISTED job (fmt) skipped, in the SAME
-    # production-shaped payload as fixture 12 (every job carries an
-    # `outputs` sibling, not just `result` — see fixture 12's comment for
-    # why `outcome` is NOT modeled) -> FAIL closed (rc=1). CRITICAL-3, PR
-    # #671 review round 7: fixture 12 exercises the production shape only
-    # for a PASS case (mutants, legitimately allowlisted) — a mutation
+    # Fixture 13 — an UNLISTED job (fmt) skipped, in a production-shaped
+    # payload (every job carries an `outputs` sibling, not just `result` —
+    # see fixture 12's comment for why `outcome` is NOT modeled) -> FAIL
+    # closed (rc=1). CRITICAL-3, PR #671 review round 7: fixture 12
+    # exercises the production shape only for a PASS case — a mutation
     # keying tolerance on the mere PRESENCE of an `outputs` sibling field
     # (e.g. `is_allowed_skip "${job}" || ... has("outputs")`) rather than
     # on `is_allowed_skip` alone would pass every other fixture here,
     # since none of them combine an UNLISTED skipped job with
-    # production-shaped sibling fields. Reproduced: without this fixture,
-    # that exact mutation left --self-test at 12/12 while the real gate
-    # accepted any skipped job carrying an `outputs` key (i.e. every real
-    # job, since `outputs` is always present).
+    # production-shaped sibling fields. cycle-006 (mutants-ci-sharding,
+    # §6.1 table): SIMPLIFIED — `fmt` skipped is now the ONLY skip in the
+    # payload; no companion legitimately-skipped job exists in the
+    # production shape anymore (production's ALLOWED_SKIPS is empty).
     check_fixture \
         "unlisted-job-skipped-full-production-shape" \
         '{
@@ -1124,13 +1270,31 @@ run_self_test() {
   "clippy": {
     "result": "success",
     "outputs": {}
-  },
-  "mutants": {
-    "result": "success",
-    "outputs": {}
   }
 }' \
         "fail:1"
+
+    # Fixture 14 — the TRUE production `ALLOWED_SKIPS=()` end-to-end (no
+    # local override) with a job reporting `skipped` -> FAIL closed
+    # (rc=1). cycle-006 (mutants-ci-sharding, round-2/round-3): proves
+    # both (a) a genuinely empty `ALLOWED_SKIPS` still fails any `skipped`
+    # result via `is_allowed_skip`'s empty-array guard, and (b) that
+    # guard's `"${ALLOWED_SKIPS[@]}"`-under-`nounset` expansion path is
+    # never reached in the empty case (both `is_allowed_skip` and
+    # `print_allowed_skips` short-circuit before attempting it) — safe on
+    # every bash version this repo's CI runs this script under, including
+    # bash 3.2.57 on `macos-latest`, where the unguarded expansion is a
+    # FATAL "unbound variable" error under `set -euo pipefail`. The
+    # message-substring assertion (4th argument) distinguishes "reached
+    # the correct FAIL decision" from "produced rc=1 via an unrelated
+    # crash" — on an unguarded pre-fix build under bash 3.2, the same
+    # numeric rc=1 could result from a subshell abort instead of
+    # `evaluate_needs()`'s own fail-closed branch.
+    check_fixture \
+        "empty-allowed-skips-any-skip-fails-closed" \
+        '{"fmt":{"result":"skipped"},"clippy":{"result":"success"}}' \
+        "fail:1" \
+        "FAIL  fmt = skipped"
 
     echo
     echo "Self-test summary: $((total - mismatches))/${total} fixtures matched their expected outcome."
@@ -1161,16 +1325,20 @@ run_self_test() {
 
 main() {
     if [ "${1:-}" = "--self-test" ]; then
-        # Both suites always run (never short-circuited) so a developer
-        # sees every failure in one pass rather than fixing one suite at
-        # a time; the combined exit reflects EITHER suite failing (S-626-1
-        # CI-BREAK-1 — see run_jq_trust_self_test's module comment for why
-        # this second suite exists alongside the original decision-fixture
-        # one above it).
-        local decision_rc=0 jq_trust_rc=0
+        # All three suites always run (never short-circuited) so a
+        # developer sees every failure in one pass rather than fixing one
+        # suite at a time; the combined exit reflects ANY suite failing
+        # (S-626-1 CI-BREAK-1 — see run_jq_trust_self_test's module
+        # comment for why the second suite exists alongside the original
+        # decision-fixture one; cycle-006 mutants-ci-sharding round-2
+        # MEDIUM-1 — see run_print_allowed_skips_self_test's module
+        # comment for why the third suite exists).
+        local decision_rc=0 jq_trust_rc=0 print_allowed_skips_rc=0
         run_self_test || decision_rc=$?
         run_jq_trust_self_test || jq_trust_rc=$?
-        if [ "${decision_rc}" -ne 0 ] || [ "${jq_trust_rc}" -ne 0 ]; then
+        run_print_allowed_skips_self_test || print_allowed_skips_rc=$?
+        if [ "${decision_rc}" -ne 0 ] || [ "${jq_trust_rc}" -ne 0 ] \
+            || [ "${print_allowed_skips_rc}" -ne 0 ]; then
             exit 1
         fi
         exit 0

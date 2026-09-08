@@ -1,32 +1,23 @@
 #!/usr/bin/env bash
 # scripts/mutants-aggregate.sh — sharded mutation-test gate aggregator
-# (cycle-006 mutants-ci-sharding).
-#
-# STATUS: SCAFFOLD ONLY (F4 Blocking Precondition 2b,
-# S-cycle6-mutants-ci-sharding.md Task 2). This file exists, parses, is
-# executable, sources the shared trusted-jq resolver, and exposes the
-# `evaluate_mutants_aggregate()` entry point + a `--self-test` dispatch —
-# but its actual Step -1 through Step 6 decision-logic BODY
-# (INV-AGG / INV-COMPLETE / INV-ESCALATE) is deliberately NOT implemented
-# here. Every line of that logic is authored ONLY via the Tasks 10-15
-# RED->GREEN cycle: write the failing `--self-test` fixture first, then
-# the minimum code to pass it. Writing the decision-logic bodies in this
-# scaffold task would make every later fixture GREEN on creation, violating
-# strict TDD's Red Gate (BC-5.38.001/BC-5.38.005) — a fixture must fail
-# before the code that satisfies it exists.
+# (cycle-006 mutants-ci-sharding). Invoked by ci.yml's `mutants-aggregate`
+# job (the `ci-gate.needs` member that replaces the pre-sharding single
+# `mutants` job) as the sole pass/fail arbiter for the sharded mutation
+# gate. Implements Steps -1..6 (INV-AGG / INV-COMPLETE / INV-ESCALATE) per
+# the authoritative design below; every branch was authored via strict
+# TDD's RED->GREEN cycle against this file's own `--self-test` fixture
+# harness (all 20 fixtures GREEN — S-cycle6-mutants-ci-sharding.md Tasks
+# 10-15).
 #
 # See:
 #   - .factory/phase-f2-spec-evolution/cycle-006/ci-yml-design.md §3
-#     (the authoritative Step -1..6 pseudo-bash this file will mirror)
+#     (the authoritative Step -1..6 pseudo-bash this file mirrors)
 #   - .factory/phase-f2-spec-evolution/cycle-006/mutants-sharding-invariants.md
 #     (INV-AGG / INV-COMPLETE / INV-ESCALATE statements)
 #   - .factory/phase-f2-spec-evolution/cycle-006/architecture-delta.md §6.2a
 #     (extraction rationale, --self-test harness shape, dispatcher shape)
 #   - .factory/cycles/cycle-006/phase-f3-stories/S-cycle6-mutants-ci-sharding.md
-#     Task 2 (this scaffold), Tasks 10-15 (the RED->GREEN cycle that fills
-#     this file in)
-#
-# TODO(F4-GREEN): decision logic per ci-yml-design.md §3 + invariants.
+#     (the full story this file implements)
 set -euo pipefail
 
 # Explicit syntax self-check — same repo convention scripts/check-ci-gate.sh
@@ -53,40 +44,265 @@ unset _mutants_agg_self _mutants_agg_dir
 
 # EXPECTED_MUTANTS_AGG_FIXTURES — sibling to check-ci-gate.sh's
 # EXPECTED_FIXTURES fixed-denominator pin (ADV-P61-INFO-006 pattern).
-# Test-writer RED phase (cycle-006 mutants-ci-sharding, Tasks 10/12/14):
 # 20 fixtures are wired below in run_mutants_aggregate_self_test(), well
 # above AC-031's floor of 12 — every FATAL/warning-only arm named in the
 # story's "INV-AGG/INV-COMPLETE Sub-Invariant -> Named RED Fixture"
 # mini-table has its own dedicated fixture (AC-001/002x2/003/006/007/008/
 # 013/014/022/023/036/037/038/039x2, plus the three previously-unnamed
 # per-shard sub-invariant-3/5/6 fixtures, plus a Step-0 push-event no-op
-# regression fixture). Every fixture below is a genuine RED proof today:
-# evaluate_mutants_aggregate() is still the Task-2b scaffold stub (always
-# returns 1 with a generic TODO message), so a "pass"-expecting fixture
-# fails on exit code and a "fail"-expecting fixture fails on its
-# diagnostic-substring assertion (the TODO text never contains the real
-# diagnostic). The implementer re-verifies this count mechanically at F4
-# per AC-031 before relying on it as final.
+# regression fixture). All 20 fixtures are GREEN against the real
+# evaluate_mutants_aggregate() implementation below (S-cycle6-mutants-ci-
+# sharding.md Tasks 10-15's RED->GREEN cycle, verified via
+# `bash scripts/mutants-aggregate.sh --self-test`). A silently deleted or
+# loosened fixture reopens the exact false-green class each one was
+# written to catch — do not shrink this count without confirming no
+# coverage was lost.
 readonly EXPECTED_MUTANTS_AGG_FIXTURES=20
 
 # evaluate_mutants_aggregate — the sole pass/fail arbiter `mutants-aggregate`
-# (ci.yml) invokes. SCAFFOLD STUB ONLY — see the file header above. Every
-# Step -1..6 branch (trusted-jq resolution, the push-event no-op allowlist,
-# the escalation short-circuit, sentinel presence/interpretation, pooled
-# summation, the MUTANT_COUNT reconciliation, the base-ref-drift guard, and
-# the kill-rate computation) is DEFERRED to Tasks 10-15's RED->GREEN cycle.
-# This stub is intentionally a no-op that reports "not yet implemented" —
-# it must never be mistaken for a legitimate PASS or FAIL decision.
+# (ci.yml) invokes. Implements Steps -1..6 (INV-AGG / INV-COMPLETE /
+# INV-ESCALATE) per ci-yml-design.md §3 and mutants-sharding-invariants.md.
+# Reads its inputs from the seven eval-step env vars (EVENT_NAME, ESCALATED,
+# MUTANT_COUNT, OVERALL_DIFF_LINES, PLAN_RESULT, STATUS_DIR, SHARD_DIR) —
+# see ci.yml's `mutants-aggregate` job's "Evaluate sharded mutation gate"
+# step's `env:` mapping for the wiring, byte-pinned in
+# tests/ci_gate_completeness.rs.
 evaluate_mutants_aggregate() {
-  # TODO(F4-GREEN): decision logic per ci-yml-design.md §3 + invariants
-  # (INV-AGG / INV-COMPLETE / INV-ESCALATE). See Tasks 10-15 in
-  # S-cycle6-mutants-ci-sharding.md — every branch below this comment is
-  # authored ONLY once its own failing --self-test fixture exists first.
-  echo "TODO(F4-GREEN): evaluate_mutants_aggregate() is a scaffold stub —" >&2
-  echo "decision logic (INV-AGG/INV-COMPLETE/INV-ESCALATE) is not yet" >&2
-  echo "implemented. See S-cycle6-mutants-ci-sharding.md Task 2b and" >&2
-  echo "Tasks 10-15 for the RED->GREEN cycle that fills this function in." >&2
-  return 1
+  # --- Step -1 (runtime-hardening, architecture-delta.md §6.11): resolve
+  #     the trusted jq binary ONCE, before Step 0, and reuse it for every
+  #     jq invocation below — mirrors check-ci-gate.sh::evaluate_needs's
+  #     own resolve-once-reuse-everywhere discipline (a single TOCTOU-style
+  #     PATH mutation mid-function cannot then make different invocations
+  #     within this same decision see different binaries). Resolved BEFORE
+  #     Step 0's push-event no-op, not lazily at first use in Step 3 — a
+  #     compromised jq on PATH is a red flag regardless of which internal
+  #     branch would otherwise run; check-ci-gate.sh applies the identical
+  #     ordering for the same reason. ---
+  local jq_bin
+  if ! jq_bin=$(resolve_trusted_jq); then
+    return 2
+  fi
+
+  # --- Step 0: push-event no-op (this job's only "skipped"-equivalent
+  #     path — resolved as an ordinary success, NEVER a GHA `skipped`
+  #     conclusion; see the job-level if: always() comment in ci.yml).
+  #
+  #     Fail-CLOSED allowlist case statement: only a KNOWN, explicitly-
+  #     recognized non-PR event exits 0 early; anything else — including
+  #     an empty string, and including any FUTURE ci.yml trigger event
+  #     nobody has added to this case statement yet — falls through to a
+  #     hard FAIL naming the unrecognized value. ---
+  case "${EVENT_NAME}" in
+    pull_request)
+      : # fall through — this is the one event this gate exists for
+      ;;
+    push|schedule|workflow_dispatch)
+      echo "OK: not a pull_request event (${EVENT_NAME}) — mutation gate not applicable, same as the pre-sharding single-job design's push-event skip."
+      return 0
+      ;;
+    *)
+      echo "FAIL: EVENT_NAME ('${EVENT_NAME}') is neither 'pull_request' nor a recognized non-PR event (push, schedule, workflow_dispatch). Treating an empty or unrecognized value as a FAIL, not a pass-through — a malformed EVENT_NAME must never be silently interpreted as 'nothing to do here.' If this is a legitimate new ci.yml trigger event, add it to this case statement's non-PR branch explicitly, in the SAME change that adds the trigger."
+      return 1
+      ;;
+  esac
+
+  # --- Step 0.5 (diagnostics improvement, INV-ESCALATE Residual Risk 5):
+  #     distinguish "mutants-plan itself crashed" from the generic
+  #     missing-shards message, before falling through. ---
+  if [ "${PLAN_RESULT}" != "success" ]; then
+    echo "FAIL: mutants-plan (diff computation + escalation pre-count) reported '${PLAN_RESULT}', not 'success'. The shard matrix could not have received a valid diff file; treat this as a harness failure, not a kill-rate failure. Check the mutants-plan job's own logs."
+    return 1
+  fi
+
+  # --- Step 1: INV-ESCALATE — escalation short-circuits before any
+  #     shard-artifact inspection. ---
+  if [ "${ESCALATED}" = "true" ]; then
+    echo "FAIL: PR generates ${MUTANT_COUNT} in-diff mutants, over the 120-mutant threshold for the sharded per-PR gate."
+    echo ""
+    echo "Two ways forward:"
+    echo "  1. PREFERRED: split this PR into smaller, more focused changes."
+    echo "  2. If genuinely large and reviewed: a repo admin can merge via"
+    echo "     GitHub's branch-protection 'Require approvals' bypass,"
+    echo "     explicitly acknowledging the unverified mutation coverage in"
+    echo "     the PR description (same audited mechanism already used for a"
+    echo "     budget-exceeded cancelled mutants run — see"
+    echo "     docs/specs/cargo-mutants-policy.md §F-2)."
+    echo ""
+    echo "A full, non-diff-scoped run will also occur in the next scheduled"
+    echo "nightly full-mutation run regardless of how this PR is merged."
+    return 1
+  fi
+
+  # ============================================================
+  # Steps 2-5 below replace the pre-sharding single-job design's
+  # count-based "0 artifacts -> non-empty-diff -> exit 0" branch entirely.
+  # See mutants-sharding-invariants.md §INV-COMPLETE for the full
+  # rationale. Ordering is load-bearing: presence (Step 2) ->
+  # interpretation (Step 3) -> reconciliation (Step 4) ->
+  # base-ref-drift/zero-mutant check (Step 5) -> kill-rate (Step 6).
+  # ============================================================
+
+  # --- Step 2: INV-COMPLETE Part B — sentinel presence check.
+  #     This is the SOLE fail-closed completeness gate; it does NOT look
+  #     at outcomes.json at all. STATUS_DIR/SHARD_DIR are read from the
+  #     environment (set by ci.yml's `env:` block). Fail loudly (`:?`)
+  #     rather than silently operating on an empty path if either is
+  #     somehow unset. ---
+  STATUS_DIR="${STATUS_DIR:?STATUS_DIR must be set (see ci.yml's env: block)}"
+  SHARD_DIR="${SHARD_DIR:?SHARD_DIR must be set (see ci.yml's env: block)}"
+  EXPECTED_SHARDS=8  # MUST match ci.yml `mutants` job's
+                      # strategy.matrix.shard list length — update
+                      # both in the SAME commit
+                      # (test_mutants_aggregate_expected_shards_matches_matrix_shard_count
+                      # cross-checks this structurally).
+
+  shopt -s nullglob
+  sentinel_files=("${STATUS_DIR}"/mutants-shard-status-*/shard-status-*.json)
+
+  missing=()
+  for i in $(seq 0 $((EXPECTED_SHARDS - 1))); do
+    f="${STATUS_DIR}/mutants-shard-status-${i}/shard-status-${i}.json"
+    if [ ! -f "${f}" ]; then
+      missing+=("${i}")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "FAIL: missing shard status sentinel for shard index/indices: ${missing[*]}"
+    echo "      Expected exactly ${EXPECTED_SHARDS} status sentinels; found $(( EXPECTED_SHARDS - ${#missing[@]} ))."
+    echo "      A crashed, cancelled, or never-scheduled shard job means its"
+    echo "      mutants were never verified — this gate FAILS CLOSED rather"
+    echo "      than silently excluding them from the denominator."
+    return 1
+  fi
+  actual_sentinel_count="${#sentinel_files[@]}"
+  if [ "${actual_sentinel_count}" -ne "${EXPECTED_SHARDS}" ]; then
+    echo "FAIL: ${actual_sentinel_count} shard status sentinel(s) found, expected exactly ${EXPECTED_SHARDS} (duplicate or stray artifact — investigate a re-run/name collision)."
+    return 1
+  fi
+
+  # --- Step 3: INV-COMPLETE Part C — per-shard interpretation +
+  #     per-shard guards (malformed-JSON, integer-validation, H-1
+  #     schema-drift, M-2 reconciliation) THEN summation
+  #     (INV-AGG). ---
+  caught_total=0; missed_total=0; timeout_total=0; unviable_total=0
+  for i in $(seq 0 $((EXPECTED_SHARDS - 1))); do
+    sentinel="${STATUS_DIR}/mutants-shard-status-${i}/shard-status-${i}.json"
+    run_outcome=$("${jq_bin}" -r '.run_outcome' "${sentinel}")
+    has_outcomes=$("${jq_bin}" -r '.has_outcomes' "${sentinel}")
+    f="${SHARD_DIR}/mutants-shard-outcomes-${i}/outcomes.json"
+
+    if [ "${has_outcomes}" != "true" ]; then
+      if [ "${run_outcome}" = "success" ]; then
+        echo "OK: shard ${i} legitimately produced 0 mutants (run_outcome=success, has_outcomes=false) — contributes 0."
+        continue
+      fi
+      echo "FAIL: shard ${i}'s run-mutants step did not complete successfully (run_outcome=${run_outcome}) and produced no outcomes.json. Treating as a harness crash, not a legitimate 0-mutant shard."
+      return 1
+    fi
+
+    # has_outcomes == true: trust the data regardless of
+    # run_outcome (a non-zero cargo-mutants exit code under
+    # --baseline skip is routine, not evidence of untrustworthy
+    # output) — but first defend against a sentinel/data desync.
+    if [ ! -f "${f}" ]; then
+      echo "FAIL: shard ${i}'s status sentinel claims has_outcomes=true but mutants-shard-outcomes-${i}/outcomes.json was not found in the download. Sentinel/data desync — treating as a failure, not silently skipping."
+      return 1
+    fi
+    if ! "${jq_bin}" empty "${f}" 2>/dev/null; then
+      echo "FAIL: shard ${i}'s outcomes.json exists but is malformed JSON."
+      return 1
+    fi
+
+    caught=$("${jq_bin}" '.caught // 0' "${f}")
+    missed=$("${jq_bin}" '.missed // 0' "${f}")
+    timeout=$("${jq_bin}" '.timeout // 0' "${f}")
+    unviable=$("${jq_bin}" '.unviable // 0' "${f}")
+    total_mutants=$("${jq_bin}" '.total_mutants // 0' "${f}")
+
+    [[ "${caught}"        =~ ^[0-9]+$ ]] || caught=0
+    [[ "${missed}"        =~ ^[0-9]+$ ]] || missed=0
+    [[ "${timeout}"       =~ ^[0-9]+$ ]] || timeout=0
+    [[ "${unviable}"      =~ ^[0-9]+$ ]] || unviable=0
+    [[ "${total_mutants}" =~ ^[0-9]+$ ]] || total_mutants=0
+
+    _outcomes_len=$("${jq_bin}" '(.outcomes // []) | length' "${f}" 2>/dev/null || echo 0)
+    [[ "${_outcomes_len}" =~ ^[0-9]+$ ]] || _outcomes_len=0
+    _sum_check=$((caught + missed + timeout + unviable))
+    if [ "${_sum_check}" -eq 0 ] && { [ "${_outcomes_len}" -gt 0 ] || [ "${total_mutants}" -ne 0 ]; }; then
+      echo "FAIL: shard ${i}'s outcomes.json schema drift detected (non-empty outcomes/total_mutants but all summary keys sum to 0). Pin: cargo-mutants@27.1.0"
+      return 1
+    fi
+    if [ "${total_mutants}" -ne 0 ] && [ "${_sum_check}" -ne "${total_mutants}" ]; then
+      echo "::warning::Schema mismatch on shard ${i}: total_mutants=${total_mutants} but sum of known categories=${_sum_check}."
+    fi
+
+    caught_total=$((caught_total + caught))
+    missed_total=$((missed_total + missed))
+    timeout_total=$((timeout_total + timeout))
+    unviable_total=$((unviable_total + unviable))
+  done
+
+  total_scored=$((caught_total + missed_total + timeout_total + unviable_total))
+  echo "Pooled summary: ${caught_total} caught / ${missed_total} missed / ${timeout_total} timeout / ${unviable_total} unviable (across ${EXPECTED_SHARDS} shards)"
+
+  # --- Step 4: INV-AGG sub-invariant 8 — pooled-total <-> pre-count
+  #     reconciliation. Exact equality, both directions
+  #     (`total_scored != MUTANT_COUNT`, not a directional
+  #     `total_scored >= MUTANT_COUNT`) — an over-count is also treated
+  #     as dangerous, not merely anomalous. This is a HARD FAIL, not a
+  #     `::warning::`. ---
+  [[ "${MUTANT_COUNT}" =~ ^[0-9]+$ ]] || { echo "FAIL: MUTANT_COUNT ('${MUTANT_COUNT}') from mutants-plan is not a valid non-negative integer — cannot reconcile."; return 1; }
+  if [ "${total_scored}" -ne "${MUTANT_COUNT}" ]; then
+    echo "FAIL: Pooled scored-mutant count (${total_scored}) does not reconcile with mutants-plan's pre-count (MUTANT_COUNT=${MUTANT_COUNT})."
+    echo "      This means the mutant set actually examined by the shard matrix differs from the set mutants-plan counted as in-diff-scope — either mutants went missing between planning and shard execution (a dropped, possibly-surviving mutant would silently pass otherwise), or the shard matrix examined more than was planned. Failing closed rather than trusting a partial or over-scoped pooled total. See mutants-sharding-invariants.md §INV-AGG sub-invariant 8's round-5 callout if this fires on a legitimate PR — root-cause before assuming this check is wrong."
+    return 1
+  fi
+
+  # --- Step 5: base-ref-drift guard (moved here per Path B item 5).
+  #     `total_scored` (the shards' OWN pooled total, folded in Step 3
+  #     from their own outcomes.json data — NOT MUTANT_COUNT) is the
+  #     discriminator for "legitimately nothing to gate on" —
+  #     OVERALL_DIFF_LINES is consulted only to explain WHY it is zero,
+  #     never as the primary completeness signal. With Step 4's hard
+  #     fail above, this branch is reachable ONLY when
+  #     `total_scored == MUTANT_COUNT == 0` — Step 4 already returned 1
+  #     for ANY mismatch, including a `MUTANT_COUNT > 0` that reconciled
+  #     down to a `total_scored` of 0 through a dropped-mutant defect. ---
+  [[ "${OVERALL_DIFF_LINES:-0}" =~ ^[0-9]+$ ]] || { echo "FAIL: OVERALL_DIFF_LINES ('${OVERALL_DIFF_LINES:-}') from mutants-plan is not a valid non-negative integer — cannot evaluate the base-ref-drift guard."; return 1; }
+  if [ "${total_scored}" -eq 0 ]; then
+    if [ "${OVERALL_DIFF_LINES:-0}" -eq 0 ]; then
+      echo "FAIL: 0 mutants scored (MUTANT_COUNT=0, already reconciled at Step 4) AND overall diff is EMPTY."
+      echo "      Possible base-ref drift — same F-3 signature as the"
+      echo "      pre-sharding single-job design."
+      return 1
+    fi
+    echo "OK: 0 mutants scored — MUTANT_COUNT=0 (reconciled at Step 4; this is the only way to reach 0 scored mutants under the restored hard fail) — non-empty diff produced no mutable lines in examine_globs files (comment-only, whitespace, docs-only, or non-scoped-file PR)."
+    return 0
+  fi
+
+  # --- Step 6: kill-rate computation (INV-AGG). This step reads only
+  #     caught_total/missed_total/timeout_total/unviable_total, folded in
+  #     Step 3 from the shards' own outcomes.json — it never reads
+  #     MUTANT_COUNT. Step 6 is UNREACHABLE whenever Step 4 finds a
+  #     mismatch (it already `return`ed 1 above): an incomplete or
+  #     unreconciled mutant set is never allowed to reach the kill-rate
+  #     decision at all. ---
+  killable=$((caught_total + missed_total + timeout_total))
+  if [ "${killable}" -eq 0 ]; then
+    echo "OK: ${total_scored} mutant(s) generated, all unviable."
+    return 0
+  fi
+
+  kill_rate=$(( (caught_total * 100) / killable ))
+  echo "Pooled kill rate: ${kill_rate}% (target >= 90%)"
+
+  if [ "${kill_rate}" -lt 90 ]; then
+    echo "FAIL: pooled kill rate ${kill_rate}% is below the 90% target."
+    return 1
+  fi
+
+  echo "OK: sharded cargo-mutants gate passed (pooled kill rate ${kill_rate}% >= 90%)."
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -147,20 +363,18 @@ _agg_write_all_legit_empty() {
     done
 }
 
-# run_mutants_aggregate_self_test — Tasks 10/12/14 RED-phase fixture harness.
-# Mirrors scripts/check-ci-gate.sh::run_self_test's check_fixture harness
-# shape (architecture-delta.md §6.2a): every fixture below is a genuine,
+# run_mutants_aggregate_self_test — the fixture harness proving
+# evaluate_mutants_aggregate()'s decision logic. Mirrors
+# scripts/check-ci-gate.sh::run_self_test's check_fixture harness shape
+# (architecture-delta.md §6.2a): every fixture below is a genuine,
 # same-process call into evaluate_mutants_aggregate() (no subprocess, exactly
 # like check-ci-gate.sh's evaluate_needs) against a synthetic STATUS_DIR/
-# SHARD_DIR filesystem tree plus the seven eval-step env vars. Every fixture
-# is RED today: evaluate_mutants_aggregate() is still the Task-2b scaffold
-# stub (unconditionally returns 1 with a generic TODO message on stderr), so
-# a "pass"-expecting fixture fails on exit code and a "fail"-expecting
-# fixture fails on its diagnostic-substring assertion (the stub's TODO text
-# never contains the real diagnostic). Tasks 11/13/15 fill in
-# evaluate_mutants_aggregate()'s real body to turn these GREEN, one
-# RED->GREEN pair at a time — this file's own fixtures must not be
-# loosened to make that easier.
+# SHARD_DIR filesystem tree plus the seven eval-step env vars. Every
+# fixture was authored RED-before-GREEN (S-cycle6-mutants-ci-sharding.md
+# Tasks 10-15) and is GREEN today against the real
+# evaluate_mutants_aggregate() body above — this file's own fixtures must
+# not be loosened to accommodate a future implementation change; fix the
+# implementation instead.
 run_mutants_aggregate_self_test() {
     echo "=== mutants-aggregate.sh SELF-TEST (cycle-006 mutants-ci-sharding) ==="
     echo
