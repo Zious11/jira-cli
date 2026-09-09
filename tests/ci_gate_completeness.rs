@@ -5055,6 +5055,243 @@ fn test_mutants_shard_step_key_set_pin_rejects_injected_outcomes_rewrite_step() 
     );
 }
 
+/// (cycle-006 F4 review round 4, A-F1, HIGH — CWE-358 sibling of
+/// F-PI-CRITICAL-001/F-PG-MED-001): required real-invocation fragments for
+/// the sharded `mutants` job's "Run mutation tests on this shard" (id:
+/// `run-mutants`) step, scoped to that step's PARSED `run:` scalar via
+/// [`Step::value_of`] — NOT the whole raw job block text AC-033's
+/// presence-only check (`required_invocation_fragments_in_order`, inside
+/// `test_mutants_shard_job_structure_matches_sharded_design` above)
+/// searches. AC-033's check proves the invocation is PRESENT somewhere in
+/// the job block; it does not forbid arbitrary shell appended AFTER the
+/// invocation inside the SAME `run:` scalar — see
+/// `assert_run_mutants_step_content_is_honest` below for the closure.
+const MUTANTS_SHARD_RUN_STEP_REQUIRED_FRAGMENTS: [&str; 7] = [
+    "cargo mutants",
+    "--in-diff",
+    "--shard ${{ matrix.shard }}/8",
+    "--sharding slice",
+    "--jobs 2",
+    "--baseline skip",
+    "--timeout 240",
+];
+
+/// Resolves the sharded `mutants` job's "Run mutation tests on this shard"
+/// (id: `run-mutants`) step's `run:` key to its parsed scalar text
+/// (cycle-006 F4 review round 4, A-F1). `job_block` must be a single-job
+/// block as `extract_job_block` returns it (or an equivalently-shaped
+/// standalone fixture — see
+/// `test_mutants_shard_run_step_rejects_trailing_outcomes_launder`).
+///
+/// # Panics
+///
+/// Panics (naming the missing step, or the unexpected `run:` shape) if
+/// `job_block` has no step named `Run mutation tests on this shard`, or
+/// that step's `run:` value is not a scalar — both indicate a genuine
+/// structural defect in the job block, not something this pin should
+/// silently tolerate.
+fn mutants_shard_run_step_run_text(job_block: &str) -> String {
+    let job = WfDoc::parse_single_job(job_block);
+    let run_step = job
+        .steps
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Run mutation tests on this shard"))
+        .unwrap_or_else(|| {
+            panic!(
+                "FAIL (A-F1): no step named `Run mutation tests on this \
+                 shard` in this job block.\n\
+                 Current job block:\n{job_block}"
+            )
+        });
+    match run_step.value_of("run") {
+        Some(Value::Scalar { text, .. }) => text.clone(),
+        other => panic!(
+            "FAIL (A-F1): `Run mutation tests on this shard`'s `run:` \
+             value is not a plain scalar (found: {other:?}).\n\
+             Current job block:\n{job_block}"
+        ),
+    }
+}
+
+/// (cycle-006 F4 review round 4, A-F1, HIGH): asserts the sharded
+/// `mutants` job's `run-mutants` step's PARSED `run:` scalar contains the
+/// required mutation-invocation fragments IN ORDER, AND that no statement
+/// appearing AFTER the last matched fragment references `outcomes.json` —
+/// closing the trailing-shell-append vector where a PR launders its own
+/// shard's `mutants.out/outcomes.json` (moving `missed`/`timeout` counts
+/// into `caught`, sum-preserving so `mutants-aggregate.sh`'s Step-4
+/// exact-equality reconciliation still passes) via shell appended AFTER
+/// the real `cargo mutants` invocation, inside the SAME step.
+///
+/// The `run-mutants` step's only legitimate job is to invoke `cargo
+/// mutants` — nothing in its real `run:` body ever mentions
+/// `outcomes.json` (that file is read only by LATER, separately-pinned
+/// steps: "Write shard status sentinel" and "Upload shard outcomes"), so a
+/// blanket ban on the substring `outcomes.json` anywhere after the
+/// invocation is a robust, default-deny closure rather than an allowlist
+/// of specific laundering shapes (`jq`/`mv`/`cp`/`tee`/redirect) that a
+/// diff could route around.
+///
+/// Returns `Err` naming the problem; callers turn that into a panic with
+/// full context. Deliberately mirrors
+/// `mutants_plan_compute_step_run_text`'s sibling scoping fix
+/// (F-PI-CRITICAL-001) one job over — see that function's doc comment for
+/// why resolving the SPECIFIC step's parsed scalar (not the raw job block
+/// text) is the load-bearing property here.
+fn assert_run_mutants_step_content_is_honest(run_text: &str) -> Result<(), String> {
+    let mut last_offset = 0usize;
+    for fragment in &MUTANTS_SHARD_RUN_STEP_REQUIRED_FRAGMENTS {
+        match run_text[last_offset..].find(fragment) {
+            Some(offset) => last_offset += offset + fragment.len(),
+            None => return Err(format!("missing or out-of-order fragment `{fragment}`")),
+        }
+    }
+    if run_text[last_offset..].contains("outcomes.json") {
+        return Err(
+            "a statement referencing `outcomes.json` appears AFTER the \
+             real `cargo mutants` invocation in this step — the \
+             run-mutants step's sole legitimate job is to invoke `cargo \
+             mutants`; any post-invocation reference to its own \
+             outcomes.json (e.g. a `jq`/`mv`/`cp`/`tee`/redirect launder \
+             moving missed/timeout counts into caught) is illegitimate \
+             here"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// (cycle-006 F4 review round 4, A-F1): production pin — asserts the REAL
+/// `mutants` shard job's `run-mutants` step is honest per
+/// `assert_run_mutants_step_content_is_honest` above. Parity with
+/// `test_mutants_plan_compute_step_content_is_pinned`'s sibling pin one
+/// job over.
+#[test]
+fn test_mutants_shard_run_step_content_is_pinned() {
+    let ci = read_ci_yml();
+    let mutants_block = extract_job_block(&ci, "mutants").unwrap_or_else(|| {
+        panic!("FAIL (A-F1): `.github/workflows/ci.yml` does not contain a `mutants:` job.")
+    });
+
+    let run_text = mutants_shard_run_step_run_text(mutants_block);
+
+    assert_run_mutants_step_content_is_honest(&run_text).unwrap_or_else(|reason| {
+        panic!(
+            "FAIL (A-F1): `mutants`'s \"Run mutation tests on this shard\" \
+             step's PARSED `run:` scalar is dishonest: {reason}.\n\
+             Parsed run: scalar text:\n{run_text}"
+        )
+    });
+}
+
+/// (cycle-006 F4 review round 4, A-F1 — standing RED regression proof):
+/// see `assert_run_mutants_step_content_is_honest`'s own doc comment for
+/// the full narrative. This test pins BOTH halves of the claim against a
+/// hand-crafted, untracked `mutants` shard job fixture (the tracked
+/// `ci.yml` is never touched):
+///
+/// 1. AC-033's OLD presence-only check (an ordered substring search over
+///    the ENTIRE raw job block, `required_invocation_fragments_in_order`
+///    inside `test_mutants_shard_job_structure_matches_sharded_design`)
+///    is satisfied by this forged fixture: the real invocation is present,
+///    in order, and the check never inspects what comes after it. This
+///    proves the trailing-shell-append exploit was real.
+/// 2. The NEW check (`assert_run_mutants_step_content_is_honest`, scoped
+///    to ONLY the `run-mutants` step's resolved `run:` scalar) correctly
+///    REJECTS the same fixture, because the launder line lives after the
+///    last required fragment and references `outcomes.json`.
+#[test]
+fn test_mutants_shard_run_step_rejects_trailing_outcomes_launder() {
+    let forged_block = r#"  mutants:
+    name: Mutation Testing (Shard)
+    runs-on: ubuntu-latest
+    needs: [mutants-plan]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    if: github.event_name == 'pull_request' && needs.mutants-plan.outputs.escalated != 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@x
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@x
+      - uses: taiki-e/install-action@x
+        with:
+          tool: cargo-mutants@27.1.0
+      - uses: Swatinem/rust-cache@x
+      - name: Download shared diff file
+        uses: actions/download-artifact@x
+        with:
+          name: mutants-diff-file
+          path: /tmp/diff
+      - name: Run mutation tests on this shard
+        id: run-mutants
+        continue-on-error: true
+        run: |
+          DIFF_FILE="/tmp/diff/pr.diff"
+          cargo mutants --in-diff "${DIFF_FILE}" \
+            --shard ${{ matrix.shard }}/8 --sharding slice \
+            --jobs 2 --baseline skip --timeout 240
+          jq '.caught = (.caught + .missed + .timeout) | .missed = 0 | .timeout = 0' mutants.out/outcomes.json > /tmp/o && mv /tmp/o mutants.out/outcomes.json
+      - name: Write shard status sentinel
+        if: always()
+        run: |
+          HAS_OUTCOMES=false
+          [ -f mutants.out/outcomes.json ] && HAS_OUTCOMES=true
+          echo done
+      - name: Upload shard status sentinel
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-status-0
+          path: /tmp/shard-status-0.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload shard outcomes
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-outcomes-0
+          path: mutants.out/outcomes.json
+          if-no-files-found: warn
+          retention-days: 1
+"#;
+
+    // Half 1: the OLD presence-only check (AC-033's ordered-substring
+    // search over the WHOLE raw job block) is satisfied by this forged
+    // block — proving the exploit is real: it never inspects what comes
+    // AFTER the last required fragment.
+    let mut last_offset = 0usize;
+    for fragment in &MUTANTS_SHARD_RUN_STEP_REQUIRED_FRAGMENTS {
+        let offset = forged_block[last_offset..]
+            .find(fragment)
+            .expect(
+                "SETUP INVARIANT VIOLATED: this forged fixture must satisfy \
+                 the OLD presence-only ordered-substring search over the \
+                 whole raw job block — if it does not, the fixture no \
+                 longer reproduces the A-F1 exploit and must be revised.",
+            );
+        last_offset += offset + fragment.len();
+    }
+
+    // Half 2: the NEW check (parsed `run-mutants` `run:` scalar, scanned
+    // for a post-invocation `outcomes.json` reference) must reject it.
+    let run_text = mutants_shard_run_step_run_text(forged_block);
+    let result = assert_run_mutants_step_content_is_honest(&run_text);
+    assert!(
+        result.is_err(),
+        "FAIL (A-F1 RED proof did not hold): the new content pin accepted \
+         a forged `mutants` shard job block whose run-mutants step \
+         launders its own outcomes.json via trailing shell appended after \
+         the real `cargo mutants` invocation — the fix is NOT \
+         default-deny against this exploit.\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // CRITICAL — behavioral closure via PINNED LITERALS (PR #671 review, round
 // 6 — replaces every predicate tried in rounds 3-5).
@@ -8806,7 +9043,20 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// `check_job_and_step_key_sets` helper genuinely rejects that injected
 /// step. Re-verified mechanically (`grep -c '^\s*#\[test\]'
 /// tests/ci_gate_completeness.rs` == 63).
-const EXPECTED_GUARD_TEST_COUNT: usize = 63;
+///
+/// **cycle-006 F4 review round 4 (A-F1, HIGH): +2, 63 -> 65.**
+/// `test_mutants_shard_run_step_content_is_pinned` and
+/// `test_mutants_shard_run_step_rejects_trailing_outcomes_launder` close
+/// the trailing-shell-append vector on the sharded `mutants` job's
+/// `run-mutants` step: AC-033's presence-only ordered-substring search
+/// over the whole raw job block never inspected what came AFTER the real
+/// `cargo mutants` invocation, so a PR could append shell laundering its
+/// own shard's `mutants.out/outcomes.json` (moving `missed`/`timeout`
+/// counts into `caught`, sum-preserving so `mutants-aggregate.sh`'s
+/// exact-equality reconciliation still passes) inside the SAME step. See
+/// `assert_run_mutants_step_content_is_honest`'s doc comment for the full
+/// account.
+const EXPECTED_GUARD_TEST_COUNT: usize = 65;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
