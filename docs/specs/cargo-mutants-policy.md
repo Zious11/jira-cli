@@ -1028,6 +1028,25 @@ the moment this section was written for the sharded design.
 - A genuine empty `.outcomes` array (no mutants scored) AND `total_mutants == 0` has both
   disjuncts false — the condition does not fire.
 
+**Acknowledged residual — empty-shard-slice assumption (cycle-006 F4 review round 4,
+K-OBS-2, not fixed, documented):** the first bullet above ("a genuine zero-mutant shard
+produces no `outcomes.json` at all") is an empirically-grounded assumption about
+`cargo-mutants@27.1.0`'s behavior under `--sharding slice`, not a guarantee this repo
+controls. For a small in-diff mutant set (fewer than 8, the shard count), one or more
+shards legitimately receive an EMPTY `--shard <k>/8 --sharding slice` slice — no mutants
+assigned to that shard index at all. This section's non-false-RED reasoning depends on
+cargo-mutants producing NO `outcomes.json` (or one with `total_mutants=0`) for such an
+empty slice. If a future `cargo-mutants` release instead emits a well-formed
+`outcomes.json` for an empty slice with `total_mutants` set to the FULL undivided count
+(rather than 0 or the file being absent), the H-1 guard above would fire on that shard —
+producing a FALSE-RED (the fail-closed direction; this can never manufacture a
+false-green). This has not been observed against the pinned `cargo-mutants@27.1.0`, but
+it is also not something this policy doc or `mutants-aggregate.sh` independently verifies
+against every possible small-diff shard split — it is a watch item for the first PR that
+lands with a genuinely small (<8-mutant) in-diff set, not a proven-safe invariant. If it
+is ever observed, the fix is in `evaluate_mutants_aggregate`'s H-1 condition (distinguish
+"empty slice, no real work" from "schema drift"), not in this doc.
+
 ### `total_mutants` Reconciliation Warning (M-2)
 
 **Trigger:** for a given shard, `caught + missed + timeout + unviable != total_mutants`
