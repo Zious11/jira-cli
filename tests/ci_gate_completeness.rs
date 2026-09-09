@@ -5221,23 +5221,41 @@ cargo mutants --in-diff "${DIFF_FILE}" \
   --jobs 2 --baseline skip --timeout 240
 "#;
 
-/// (cycle-006 F4 review round 6, D-HIGH): resolves the `run-mutants` step's
-/// `run:` value and validates it is safe to compare byte-for-byte against
-/// `PINNED_MUTANTS_SHARD_RUN_BODY` — rejecting a YAML anchor, a YAML tag,
-/// or any scalar style other than `Literal` (the `|` block-scalar form the
-/// real step uses; a `Folded` (`>`) rewrite would resolve interior
-/// newlines to spaces, silently changing what the shell actually executes
-/// even if a byte-pin against a DIFFERENT expected string happened to
-/// match, so the style itself is part of what this pin enforces — same
-/// AC-004 quoting/style-fidelity discipline `extract_and_normalize_sole_
-/// run_line` and its siblings already apply to single-line pins,
-/// generalized here to a multi-line block scalar). Unlike those siblings,
-/// this function does NOT require `start_line == end_line` — a `Literal`
-/// block scalar spanning many physical source lines is the step's
-/// EXPECTED, correct shape, not a suspicious folded-plain-scalar escape.
-fn extract_and_normalize_mutants_shard_run_body(job_block: &str) -> Result<String, String> {
+/// (cycle-006 F4 review round 6, D-HIGH; generalized round 8, G-HIGH):
+/// resolves the NAMED step's (`step_name`) `run:` value and validates it is
+/// safe to compare byte-for-byte against a pinned literal — rejecting a
+/// YAML anchor, a YAML tag, or any scalar style other than `Literal` (the
+/// `|` block-scalar form the real steps use; a `Folded` (`>`) rewrite
+/// would resolve interior newlines to spaces, silently changing what the
+/// shell actually executes even if a byte-pin against a DIFFERENT expected
+/// string happened to match, so the style itself is part of what this pin
+/// enforces — same AC-004 quoting/style-fidelity discipline
+/// `extract_and_normalize_sole_run_line` and its siblings already apply to
+/// single-line pins, generalized here to a multi-line block scalar).
+/// Unlike those siblings, this function does NOT require
+/// `start_line == end_line` — a `Literal` block scalar spanning many
+/// physical source lines is the step's EXPECTED, correct shape, not a
+/// suspicious folded-plain-scalar escape.
+///
+/// **Invariant this function exists to let the callers below jointly
+/// enforce (round 8, G-HIGH):** every `run:`-bearing step in the `mutants`
+/// shard job is byte-pinned through this one function — currently
+/// `Run mutation tests on this shard` (`extract_and_normalize_mutants_
+/// shard_run_body`) and `Write shard status sentinel`
+/// (`extract_and_normalize_mutants_shard_sentinel_run_body`), the only two
+/// steps in `PINNED_MUTANTS_SHARD_STEP_KEY_SETS` that carry a `run:` key
+/// at all. Combined with that key-set pin (which fails closed on a NEW
+/// step being inserted into the job), no `run:`-bearing step can be added
+/// to this job without also being routed through this function and pinned
+/// in the same change — closing the whole no-code-execution
+/// `outcomes.json`-launder class for the shard job, not just the one step
+/// D-HIGH originally found it on.
+fn extract_and_normalize_run_scalar_for_step(
+    job_block: &str,
+    step_name: &str,
+) -> Result<String, String> {
     let job = WfDoc::parse_single_job(job_block);
-    let run_step = find_sole_step_by_name(&job.steps, "Run mutation tests on this shard")?;
+    let run_step = find_sole_step_by_name(&job.steps, step_name)?;
     match run_step.value_of("run") {
         Some(Value::Scalar {
             text,
@@ -5275,10 +5293,33 @@ fn extract_and_normalize_mutants_shard_run_body(job_block: &str) -> Result<Strin
             Ok(text.clone())
         }
         other => Err(format!(
-            "`Run mutation tests on this shard`'s `run:` value is not a scalar \
-             (found: {other:?})."
+            "`{step_name}`'s `run:` value is not a scalar (found: {other:?})."
         )),
     }
+}
+
+/// Thin, byte-identical-signature wrapper preserving the pre-round-8 name
+/// and call sites — see `extract_and_normalize_run_scalar_for_step`'s doc
+/// comment for the shared implementation and the invariant it backs.
+fn extract_and_normalize_mutants_shard_run_body(job_block: &str) -> Result<String, String> {
+    extract_and_normalize_run_scalar_for_step(job_block, "Run mutation tests on this shard")
+}
+
+/// (cycle-006 F4 review round 8, finding G-HIGH): the `Write shard status
+/// sentinel` step's counterpart to `extract_and_normalize_mutants_shard_
+/// run_body` — see that function's doc comment (and
+/// `extract_and_normalize_run_scalar_for_step`'s shared implementation) for
+/// the full rationale. Closes the exploit where the sentinel step's `run:`
+/// body — which runs `if: always()` after `run-mutants` and legitimately
+/// already references `mutants.out/outcomes.json`, and whose step key set
+/// (`["if", "name", "run"]`) does not change no matter what shell is
+/// appended to it — is used to launder `outcomes.json` instead of
+/// `run-mutants` itself. See `PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY`'s doc
+/// comment for the concrete exploit and
+/// `test_mutants_shard_sentinel_run_step_rejects_outcomes_launder` for the
+/// standing RED regression proof.
+fn extract_and_normalize_mutants_shard_sentinel_run_body(job_block: &str) -> Result<String, String> {
+    extract_and_normalize_run_scalar_for_step(job_block, "Write shard status sentinel")
 }
 
 /// (cycle-006 F4 review round 6, D-HIGH): the `Upload shard outcomes`
@@ -5356,14 +5397,86 @@ fn extract_and_normalize_upload_outcomes_with_value(
     }
 }
 
-/// (cycle-006 F4 review round 6, D-HIGH): production pin — asserts the
-/// REAL `mutants` shard job's `run-mutants` step's `run:` scalar is
-/// byte-for-byte identical to `PINNED_MUTANTS_SHARD_RUN_BODY`, AND that
-/// the sibling "Upload shard outcomes" step's `with.path`/`with.name`
-/// values are byte-for-byte identical to their own pinned literals.
-/// Replaces the substring-denylist call to `assert_run_mutants_step_
-/// content_is_honest` (superseded — see that function's doc comment) that
-/// backed this test before this pass.
+/// (cycle-006 F4 review round 8, finding G-HIGH): the full, human-reviewed
+/// literal text of the `Write shard status sentinel` step's `run:` scalar,
+/// read byte-for-byte from `ci.yml` as of this pass (verified via a
+/// scratch print of the PARSED scalar, not retyped by hand — same
+/// discipline as `PINNED_MUTANTS_SHARD_RUN_BODY`, see that constant's own
+/// doc comment for why a raw string literal is mandatory here rather than
+/// a normal `"..."` literal with `\`-continuations).
+///
+/// **Concrete exploit this closes (G-HIGH):** the sentinel step runs
+/// `if: always()` AFTER `run-mutants` writes `mutants.out/outcomes.json`
+/// and BEFORE "Upload shard outcomes" reads it, and it already
+/// legitimately references `mutants.out/outcomes.json` in its own body —
+/// so appending a sum-preserving `jq` launder to THIS step's `run:` body
+/// (e.g. `jq '.caught=(.caught+.missed+.timeout)|.missed=0|.timeout=0'
+/// mutants.out/outcomes.json > mutants.out/o.tmp && mv mutants.out/o.tmp
+/// mutants.out/outcomes.json`) relabels every surviving mutant as caught
+/// with zero code execution — a plaintext `ci.yml` edit. The step's key
+/// set (`["if", "name", "run"]`, pinned by `PINNED_MUTANTS_SHARD_STEP_
+/// KEY_SETS`) is unchanged by appending shell to an EXISTING key's value,
+/// and the only pre-existing content guard on this step
+/// (`test_mutants_shard_status_sentinel_uses_outcome_not_conclusion`) is a
+/// substring check for `steps.run-mutants.outcome`/`.conclusion` that
+/// never inspects what comes after those substrings — identical shape to
+/// the A-F1 gap `PINNED_MUTANTS_SHARD_RUN_BODY` closed for `run-mutants`
+/// itself. See `test_mutants_shard_sentinel_run_step_rejects_outcomes_
+/// launder` for the standing RED regression proof.
+const PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY: &str = r#"HAS_OUTCOMES=false
+[ -f mutants.out/outcomes.json ] && HAS_OUTCOMES=true
+cat > "${{ runner.temp }}/shard-status-${{ matrix.shard }}.json" <<EOF
+{"shard_index": ${{ matrix.shard }}, "run_outcome": "${{ steps.run-mutants.outcome }}", "has_outcomes": ${HAS_OUTCOMES}}
+EOF
+"#;
+
+/// (cycle-006 F4 review round 8, finding G-HIGH): the OLD, substring-only
+/// semantic check for the sentinel step's `run:` body — asserts it
+/// references `steps.run-mutants.outcome` and never `.conclusion`. This is
+/// NOT a byte-pin: like `assert_run_mutants_step_content_is_honest` before
+/// D-HIGH closed the equivalent gap on `run-mutants`, it has no visibility
+/// into content appended AFTER those substrings, which is exactly the gap
+/// `PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY` (via
+/// `extract_and_normalize_mutants_shard_sentinel_run_body`) closes.
+/// Factored out of `test_mutants_shard_status_sentinel_uses_outcome_not_
+/// conclusion` (which still calls it against the real `ci.yml`, unchanged
+/// behavior) so `test_mutants_shard_sentinel_run_step_rejects_outcomes_
+/// launder` can demonstrate this check alone accepting a forged fixture
+/// the byte-pin correctly rejects.
+fn assert_sentinel_run_step_uses_outcome_not_conclusion(text: &str) -> Result<(), String> {
+    if !text.contains("steps.run-mutants.outcome") {
+        return Err(
+            "does not contain `steps.run-mutants.outcome` — the sole \
+             per-shard completeness signal `mutants-aggregate.sh` trusts \
+             must be sourced from `.outcome`, not `.conclusion`."
+                .to_string(),
+        );
+    }
+    if text.contains("steps.run-mutants.conclusion") {
+        return Err(
+            "reads `steps.run-mutants.conclusion` — this ALWAYS reads \
+             `success` under `run-mutants`'s `continue-on-error: true`, \
+             silently reopening the all-shards-crash false-green class."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// (cycle-006 F4 review round 6, D-HIGH; extended round 8, G-HIGH):
+/// production pin — asserts the REAL `mutants` shard job's `run-mutants`
+/// step's `run:` scalar is byte-for-byte identical to
+/// `PINNED_MUTANTS_SHARD_RUN_BODY`, that the sibling "Upload shard
+/// outcomes" step's `with.path`/`with.name` values are byte-for-byte
+/// identical to their own pinned literals, AND (round 8) that the
+/// "Write shard status sentinel" step's `run:` scalar is byte-for-byte
+/// identical to `PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY`. Replaces the
+/// substring-denylist call to `assert_run_mutants_step_content_is_honest`
+/// (superseded — see that function's doc comment) that backed this test
+/// before this pass. As of round 8, EVERY `run:`-bearing step in the
+/// `mutants` shard job is byte-pinned by this one test — see
+/// `extract_and_normalize_run_scalar_for_step`'s doc comment for that
+/// invariant.
 #[test]
 fn test_mutants_shard_run_step_content_is_pinned() {
     let ci = read_ci_yml();
@@ -5419,6 +5532,135 @@ fn test_mutants_shard_run_step_content_is_pinned() {
         "FAIL (D-HIGH): the \"Upload shard outcomes\" step's `with.name` \
          value does not match the pinned, human-reviewed literal.\n\
          Current mutants block:\n{mutants_block}"
+    );
+
+    let sentinel_run_text = extract_and_normalize_mutants_shard_sentinel_run_body(mutants_block)
+        .unwrap_or_else(|reason| {
+            panic!(
+                "FAIL (G-HIGH): `mutants`'s \"Write shard status sentinel\" \
+                 step {reason}\n\
+                 Current mutants block:\n{mutants_block}"
+            )
+        });
+    assert_eq!(
+        sentinel_run_text, PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY,
+        "FAIL (G-HIGH): the \"Write shard status sentinel\" step's PARSED \
+         `run:` scalar does not byte-for-byte match the pinned, \
+         human-reviewed literal — any deviation (an appended launder \
+         line, a reordered line, a changed byte) fails this pin. If this \
+         is a deliberate, reviewed change, update \
+         PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY in the SAME change.\n\
+         Current mutants block:\n{mutants_block}"
+    );
+}
+
+/// (cycle-006 F4 review round 8, finding G-HIGH — standing RED regression
+/// proof): proves (1) the OLD, substring-only semantic check for the
+/// sentinel step's `run:` body
+/// (`assert_sentinel_run_step_uses_outcome_not_conclusion`) accepts a
+/// forged `mutants` shard job fixture whose sentinel step launders its own
+/// `mutants.out/outcomes.json` via a trailing `jq` append AFTER the
+/// legitimate sentinel body, and (2) the NEW full-scalar byte pin
+/// (`extract_and_normalize_mutants_shard_sentinel_run_body` compared
+/// against `PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY`) correctly rejects the
+/// same fixture. The tracked `ci.yml` is never touched — this is a
+/// hand-crafted, untracked fixture only.
+#[test]
+fn test_mutants_shard_sentinel_run_step_rejects_outcomes_launder() {
+    let forged_block = r#"  mutants:
+    name: Mutation Testing (Shard)
+    runs-on: ubuntu-latest
+    needs: [mutants-plan]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    if: github.event_name == 'pull_request' && needs.mutants-plan.outputs.escalated != 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@x
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@x
+      - uses: taiki-e/install-action@x
+        with:
+          tool: cargo-mutants@27.1.0
+      - uses: Swatinem/rust-cache@x
+      - name: Download shared diff file
+        uses: actions/download-artifact@x
+        with:
+          name: mutants-diff-file
+          path: /tmp/diff
+      - name: Run mutation tests on this shard
+        id: run-mutants
+        continue-on-error: true
+        run: |
+          DIFF_FILE="/tmp/diff/pr.diff"
+          cargo mutants --in-diff "${DIFF_FILE}" \
+            --shard ${{ matrix.shard }}/8 --sharding slice \
+            --jobs 2 --baseline skip --timeout 240
+      - name: Write shard status sentinel
+        if: always()
+        run: |
+          HAS_OUTCOMES=false
+          [ -f mutants.out/outcomes.json ] && HAS_OUTCOMES=true
+          cat > "${{ runner.temp }}/shard-status-${{ matrix.shard }}.json" <<EOF
+          {"shard_index": ${{ matrix.shard }}, "run_outcome": "${{ steps.run-mutants.outcome }}", "has_outcomes": ${HAS_OUTCOMES}}
+          EOF
+          jq '.caught=(.caught+.missed+.timeout)|.missed=0|.timeout=0' mutants.out/outcomes.json > mutants.out/o.tmp && mv mutants.out/o.tmp mutants.out/outcomes.json
+      - name: Upload shard status sentinel
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-status-0
+          path: /tmp/shard-status-0.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload shard outcomes
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-outcomes-0
+          path: mutants.out/outcomes.json
+          if-no-files-found: warn
+          retention-days: 1
+"#;
+
+    let sentinel_run_text = extract_and_normalize_mutants_shard_sentinel_run_body(forged_block)
+        .unwrap_or_else(|reason| {
+            panic!(
+                "SETUP INVARIANT VIOLATED: the forged sentinel step {reason} \
+                 — the fixture must still resolve to a valid `Literal` \
+                 scalar for this RED proof to be meaningful."
+            )
+        });
+
+    // Half 1: the OLD substring-only semantic check accepts this forgery —
+    // it still contains `steps.run-mutants.outcome` and never
+    // `.conclusion`; it has no visibility into the trailing `jq` launder.
+    let old_check_result = assert_sentinel_run_step_uses_outcome_not_conclusion(&sentinel_run_text);
+    assert!(
+        old_check_result.is_ok(),
+        "FAIL (G-HIGH RED proof did not hold): the OLD substring-only \
+         sentinel check unexpectedly REJECTED this forged fixture ({:?}) \
+         — the fixture must satisfy the OLD check to prove it is blind to \
+         the trailing-launder exploit; if it does not, the fixture no \
+         longer reproduces the G-HIGH exploit and must be revised.\n\
+         Resolved sentinel run: scalar text was:\n{sentinel_run_text}",
+        old_check_result.err()
+    );
+
+    // Half 2: the NEW full-scalar byte pin correctly rejects it.
+    let byte_pin_result = extract_and_normalize_mutants_shard_sentinel_run_body(forged_block);
+    assert_ne!(
+        byte_pin_result.as_deref(),
+        Ok(PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY),
+        "FAIL (G-HIGH RED proof did not hold): the new full-scalar byte \
+         pin accepted a forged `mutants` shard job block whose sentinel \
+         step launders its own outcomes.json via trailing shell appended \
+         after the legitimate sentinel body.\n\
+         Resolved sentinel run: scalar text was:\n{sentinel_run_text}"
     );
 }
 
