@@ -18,6 +18,8 @@ use crate::cli::{CommentSubcommand, OutputFormat};
 use crate::error::JrError;
 use crate::output;
 
+use super::mentions;
+
 // ── Comment Add ──────────────────────────────────────────────────────────
 
 /// Add a comment to an issue.
@@ -32,8 +34,9 @@ pub(super) async fn handle_comment_add(
     sub: CommentSubcommand,
     output_format: &OutputFormat,
     client: &JiraClient,
+    no_input: bool,
 ) -> Result<()> {
-    let (key, message, markdown, file, stdin, internal) = match sub {
+    let (key, message, markdown, file, stdin, internal, no_mentions) = match sub {
         CommentSubcommand::Add {
             key,
             message,
@@ -41,12 +44,8 @@ pub(super) async fn handle_comment_add(
             file,
             stdin,
             internal,
-            // S-cycle5-mention-resolution-wiring: `no_mentions` is a
-            // stub-stage field addition only (AC-014) — wiring it (and
-            // `handle_comment_add`'s new `no_input` parameter, AC-011) is
-            // the implementer's TDD work (Step 4), not this pass.
-            no_mentions: _,
-        } => (key, message, markdown, file, stdin, internal),
+            no_mentions,
+        } => (key, message, markdown, file, stdin, internal, no_mentions),
         _ => unreachable!("handle_comment_add called with non-Add variant"),
     };
 
@@ -73,7 +72,12 @@ pub(super) async fn handle_comment_add(
     }
 
     let adf_body = if markdown {
-        adf::markdown_to_adf(&text)?
+        if no_mentions {
+            adf::markdown_to_adf_no_mentions(&text)?
+        } else {
+            let resolutions = mentions::resolve_mentions(client, &text, no_input).await?;
+            adf::markdown_to_adf_with_mentions(&text, &resolutions)?
+        }
     } else {
         adf::text_to_adf(&text)
     };
@@ -362,11 +366,7 @@ pub(super) async fn handle_comment_edit(
         internal,
         public,
         yes,
-        // S-cycle5-mention-resolution-wiring: `no_mentions` is a stub-stage
-        // field addition only (AC-014) — wiring it into this handler
-        // (AC-011/AC-015) is the implementer's TDD work (Step 4), not this
-        // pass.
-        no_mentions: _,
+        no_mentions,
     } = sub
     else {
         unreachable!("handle_comment_edit called with non-Edit variant")
@@ -491,7 +491,12 @@ pub(super) async fn handle_comment_edit(
     let raw = body; // body moved into raw; raw is the original untrimmed content
     let trimmed = raw.trim().to_string();
     let adf_body = if markdown {
-        adf::markdown_to_adf(&trimmed)?
+        if no_mentions {
+            adf::markdown_to_adf_no_mentions(&trimmed)?
+        } else {
+            let resolutions = mentions::resolve_mentions(client, &trimmed, no_input).await?;
+            adf::markdown_to_adf_with_mentions(&trimmed, &resolutions)?
+        }
     } else {
         adf::text_to_adf(&trimmed)
     };

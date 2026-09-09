@@ -94,7 +94,7 @@ pub async fn handle(
             // without exceeding the clippy::too_many_arguments threshold (mirrors
             // handle_comment_edit / handle_move / handle_assign pattern).
             sub @ CommentSubcommand::Add { .. } => {
-                interactions::handle_comment_add(sub, output_format, client).await
+                interactions::handle_comment_add(sub, output_format, client, no_input).await
             }
             CommentSubcommand::Delete { key, id, yes } => {
                 interactions::handle_comment_delete(key, id, yes, output_format, client, no_input)
