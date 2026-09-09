@@ -43,11 +43,6 @@ pub(crate) enum MentionCandidateKind {
 /// `MentionResolutions` key space, and the tree-replacement span (AC-006).
 /// For `AtName`, `span` INCLUDES the leading `@` (see
 /// [`MentionCandidateKind::AtName`]).
-// `#[allow(dead_code)]`: this story's public API (`find_mention_candidates`)
-// is consumed by `src/cli/issue/mentions.rs::resolve_mentions`, which is
-// S-cycle5-mention-resolution-wiring's (Story B's) scope, not this story's —
-// remove once Story B wires that call site.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MentionCandidate {
     pub(crate) kind: MentionCandidateKind,
@@ -59,7 +54,6 @@ pub(crate) struct MentionCandidate {
 /// is a network-cost concern owned by the effectful resolver
 /// (`src/cli/issue/mentions.rs`, Story B), not this pure scanner (ADR-0023
 /// §2).
-#[allow(dead_code)] // see MentionCandidate's #[allow(dead_code)] note above
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct MentionCandidates {
     pub(crate) candidates: Vec<MentionCandidate>,
@@ -972,7 +966,6 @@ fn has_code_mark(node: &Value) -> bool {
 /// arm): skips `codeBlock` content and `code`-marked text nodes (AC-009),
 /// recurses into every other node's `content` array, and appends every
 /// candidate span found in scan order without deduplication.
-#[allow(dead_code)] // see MentionCandidate's #[allow(dead_code)] note above — the sole caller, find_mention_candidates, carries the same note
 fn collect_mention_candidates_walk(
     nodes: &[Value],
     depth: usize,
@@ -1019,9 +1012,6 @@ fn collect_mention_candidates_walk(
 /// parse+`finish()` -> `autolink_bare_urls` -> candidate collection
 /// (collect-only, no mutation). Zero conversion, zero HTTP — parsing text is
 /// not I/O.
-// `#[allow(dead_code)]`: consumed by `src/cli/issue/mentions.rs::resolve_mentions`,
-// S-cycle5-mention-resolution-wiring's (Story B's) scope — remove once wired.
-#[allow(dead_code)]
 pub(crate) fn find_mention_candidates(markdown: &str) -> Result<MentionCandidates, JrError> {
     let protected = protect_mention_escapes(markdown);
     let parser = TextMergeStream::new(Parser::new_ext(&protected, cmark_options()));
