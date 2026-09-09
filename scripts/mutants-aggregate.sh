@@ -6,8 +6,10 @@
 # gate. Implements Steps -1..6 (INV-AGG / INV-COMPLETE / INV-ESCALATE) per
 # the authoritative design below; every branch was authored via strict
 # TDD's RED->GREEN cycle against this file's own `--self-test` fixture
-# harness (all 22 fixtures GREEN — S-cycle6-mutants-ci-sharding.md Tasks
-# 10-15).
+# harness (all 25 fixtures GREEN — S-cycle6-mutants-ci-sharding.md Tasks
+# 10-15; count grown from the initial 22 by cycle-006 F4 review rounds
+# 1/2/4 — see EXPECTED_MUTANTS_AGG_FIXTURES below for the current,
+# self-checked denominator).
 #
 # See:
 #   - .factory/phase-f2-spec-evolution/cycle-006/ci-yml-design.md §3
@@ -44,7 +46,7 @@ unset _mutants_agg_self _mutants_agg_dir
 
 # EXPECTED_MUTANTS_AGG_FIXTURES — sibling to check-ci-gate.sh's
 # EXPECTED_FIXTURES fixed-denominator pin (ADV-P61-INFO-006 pattern).
-# 24 fixtures are wired below in run_mutants_aggregate_self_test(), well
+# 25 fixtures are wired below in run_mutants_aggregate_self_test(), well
 # above AC-031's floor of 12 — every FATAL/warning-only arm named in the
 # story's "INV-AGG/INV-COMPLETE Sub-Invariant -> Named RED Fixture"
 # mini-table has its own dedicated fixture (AC-001/002x2/003/006/007/008/
@@ -54,14 +56,20 @@ unset _mutants_agg_self _mutants_agg_dir
 # Step-6 kill-rate<90% FAIL fixture and its all-unviable-PASS companion,
 # plus (cycle-006 F4 review round 2, F-PD-LOW-002) a malformed-shard-
 # status-sentinel FATAL fixture and a non-numeric-MUTANT_COUNT FATAL
-# fixture — see fixtures 21-24 below). All 24 fixtures are GREEN against
-# the real evaluate_mutants_aggregate() implementation below (S-cycle6-
+# fixture, plus (cycle-006 F4 review round 4, B-F2) an exact-89%
+# boundary fixture one point below the 90% target — see fixtures 21-25
+# below). Before B-F2, Fixture 1 pinned the pass side at exactly 90% and
+# Fixture 21 pinned a FAIL well below it at 80%, leaving the 81-89% band
+# entirely unproven: a `-lt 90` -> `-lt 89` (or `-lt 85`) regression would
+# have silently let a genuinely-89%-kill-rate PR pass while every other
+# fixture stayed green. All 25 fixtures are GREEN against the real
+# evaluate_mutants_aggregate() implementation below (S-cycle6-
 # mutants-ci-sharding.md Tasks 10-15's RED->GREEN cycle, verified via
 # `bash scripts/mutants-aggregate.sh --self-test`). A silently deleted or
 # loosened fixture reopens the exact false-green class each one was
 # written to catch — do not shrink this count without confirming no
 # coverage was lost.
-readonly EXPECTED_MUTANTS_AGG_FIXTURES=24
+readonly EXPECTED_MUTANTS_AGG_FIXTURES=25
 
 # evaluate_mutants_aggregate — the sole pass/fail arbiter `mutants-aggregate`
 # (ci.yml) invokes. Implements Steps -1..6 (INV-AGG / INV-COMPLETE /
@@ -746,6 +754,25 @@ run_mutants_aggregate_self_test() {
         "F-PD-LOW-002 (b): non-numeric MUTANT_COUNT from mutants-plan fails closed at Step 4's numeric guard, not silently coerced" \
         "fail:1" "not a valid non-negative integer"
     AGG_MUTANT_COUNT="100"
+
+    # ==== Fixture 25 (cycle-006 F4 review round 4, B-F2) — the 90%
+    #      threshold's EXACT BOUNDARY, one point below the line. Fixture 1
+    #      pins the pass side at exactly 90% and Fixture 21 pins a FAIL
+    #      well below it at 80% — nothing between the two, so a `-lt 90`
+    #      regression to e.g. `-lt 89` (or `-lt 85`) would silently let a
+    #      genuinely-89%-kill-rate PR pass while every other fixture stayed
+    #      green. caught=89, missed=11, timeout=0 (killable=100) ->
+    #      kill_rate=(89*100)/100=89, one point below the 90% target —
+    #      this fixture hard-fails Step 6 and must keep failing for any
+    #      `-lt 90` boundary. ====
+    AGG_STATUS_DIR=$(_agg_mktemp_dir); AGG_SHARD_DIR=$(_agg_mktemp_dir)
+    for i in 0 1 2 3 4 5 6 7; do _agg_write_sentinel "${AGG_STATUS_DIR}" "${i}" "success" "true"; done
+    _agg_write_outcomes "${AGG_SHARD_DIR}" 0 89 11 0 0 100
+    for i in 1 2 3 4 5 6 7; do _agg_write_outcomes "${AGG_SHARD_DIR}" "${i}" 0 0 0 0 0; done
+    AGG_MUTANT_COUNT="100"
+    agg_check_fixture \
+        "B-F2: reconciled pooled total (100) with 89% kill rate — one point below the 90% target hard-fails Step 6 (boundary pin)" \
+        "fail:1" "below the 90% target"
 
     echo
     if [ "${total}" != "${EXPECTED_MUTANTS_AGG_FIXTURES}" ]; then
