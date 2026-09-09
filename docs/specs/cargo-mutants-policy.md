@@ -1330,10 +1330,20 @@ reconciliation mismatch anywhere to catch it.
 code-execution-in-the-build/test-loop or a fabricated/spoofed artifact; this one requires
 neither — it is a plaintext, semantically-legal edit to a config file plus its paired policy
 doc bullet, and every downstream check (`mutants-plan`, the shard matrix, `mutants-aggregate`)
-computes its numbers *honestly* against the narrowed scope it was handed. The existing
-`tests/mutants_glob_existence.rs` guard (DEC-150 Guard 3) does not catch this either — it
-only asserts every EXISTING `examine_globs` entry resolves to ≥1 real file; it has no opinion
-on whether an entry that SHOULD be present is missing.
+computes its numbers *honestly* against the narrowed scope it was handed.
+
+**`tests/mutants_glob_existence.rs` (DEC-150 Guard 3) narrows this residual but does not
+close it.** Its `test_resolve_all_examine_globs_entries_to_real_files` asserts every EXISTING
+`examine_globs` entry resolves to ≥1 real file (no opinion on an entry that SHOULD be present
+but is missing), and its `assert_examine_globs_coverage_floor` helper additionally enforces a
+hard-coded numeric floor (`const FLOOR: usize = 11`, "MED-1-P22 FIX") on the total entry
+count. That floor guard genuinely fires for a wholesale gutting of the list, but it is coarse
+relative to the list's actual size: `examine_globs` currently carries 22 entries, so removing
+any 1–11 of them (including a single, deliberately targeted, security-relevant file) leaves
+the count at 11–21 — at or above the floor — and the guard stays silent. The floor is a
+blunt backstop against catastrophic scope collapse, not a per-file "this specific entry must
+remain present" check, so the single-entry-removal attack this section describes is not
+caught by it.
 
 **Blast radius: mutation-quality signal only**, same as the two residuals above — no secret
 or `GITHUB_TOKEN` reference exists on this path, and the change is fully visible in the PR's
@@ -1344,25 +1354,28 @@ same posture as this document's other residuals — a reviewer who notices a cha
 disappearing without a corresponding "this file was deleted/merged" justification) catches
 it before merge.
 
-**Considered and deliberately NOT added: a floor/minimum-membership guard test.** A test
-asserting `examine_globs` contains at least some fixed set of "known-required" paths (or a
-minimum count) was evaluated and rejected as higher-maintenance than it's worth for a
-residual this narrow: `examine_globs` has grown by a handful of entries in nearly every
-cycle that touched security- or bulk-write-relevant code (see the Changelog table below —
-16 → 18 → 20 → the current list, each bump its own dated entry), so a hard-coded floor set
-would need a matching update in the SAME commit as any future legitimate addition, adding
-review friction without closing the actual gap: a floor guard only catches a member DROPPING
-below a previously-pinned set — it says nothing about a file that should have been added at
-creation time but never was (the exact "new CLI handler file → add to mutants.toml at
-creation" drift class already named at P22-001/DEC-149/S-MUTANTS-SCOPE-1, which is a
-recurring, independently-tracked process gap, not something a static floor list can enforce).
-A floor guard also cannot distinguish a legitimate removal (the file was deleted, or its
-mutation-relevant logic was fully relocated elsewhere and the new location is already listed)
-from a malicious one — both look identical to a membership-count check. This residual is
-therefore left as a documented, code-review-controlled gap rather than backstopped by a new
-test; a follow-up story (provenance- or diff-aware `examine_globs` change review, e.g. a CI
-check that flags an `examine_globs` removal for extra scrutiny without hard-blocking
-legitimate refactors) is tracked separately, not opened by this round.
+**Considered and deliberately NOT added: a tighter floor, or a named-membership guard
+test.** Two strengthenings of the existing `assert_examine_globs_coverage_floor` were
+considered — (a) ratcheting `FLOOR` up to track the list's actual size (e.g. "current count
+minus a small slack" instead of the static `11`), and (b) a test asserting `examine_globs`
+contains at least a fixed, named set of "known-required" paths — and both were rejected as
+higher-maintenance than they're worth for a residual this narrow: `examine_globs` has grown
+by a handful of entries in nearly every cycle that touched security- or bulk-write-relevant
+code (see the Changelog table below — 16 → 18 → 20 → the current 22, each bump its own
+dated entry), so either strengthening would need a matching update in the SAME commit as any
+future legitimate addition, adding review friction without closing the actual gap: neither
+form catches a file that should have been added at creation time but never was (the exact
+"new CLI handler file → add to mutants.toml at creation" drift class already named at
+P22-001/DEC-149/S-MUTANTS-SCOPE-1, which is a recurring, independently-tracked process gap,
+not something a static floor or named-membership list can enforce), and neither can
+distinguish a legitimate removal (the file was deleted, or its mutation-relevant logic was
+fully relocated elsewhere and the new location is already listed) from a malicious one — both
+look identical to a membership check. This residual is therefore left as a documented,
+code-review-controlled gap, backstopped only by the existing coarse `FLOOR = 11` (which
+remains valuable against a wholesale gutting, just not a targeted single-entry removal) —
+rather than a new, tighter test; a follow-up story (provenance- or diff-aware `examine_globs`
+change review, e.g. a CI check that flags an `examine_globs` removal for extra scrutiny
+without hard-blocking legitimate refactors) is tracked separately, not opened by this round.
 
 ## Future Path: Job Sharding (Path B) — LANDED (cycle-006, 2026-09-07)
 
