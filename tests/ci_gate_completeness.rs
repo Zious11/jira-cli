@@ -9639,7 +9639,20 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// and to also pin the upload step's `with.path`/`with.name` against
 /// `PINNED_MUTANTS_SHARD_UPLOAD_OUTCOMES_WITH_PATH`/`_WITH_NAME`.
 /// Re-verified mechanically (this file's own `#[test]`-line count == 68).
-const EXPECTED_GUARD_TEST_COUNT: usize = 68;
+/// **cycle-006 F4 review round 6 (finding F-HIGH, VP-MUTANTS-SHARD-024/
+/// 025): +2, 68 -> 70.** `test_check_ci_gate_sh_and_mutants_aggregate_sh_
+/// source_shared_trusted_jq_helper` and `test_check_ci_gate_sh_and_
+/// mutants_aggregate_sh_have_no_bare_jq_invocations` are the two mandated
+/// `#[test]` functions the story's ACs 024/025 required but that did not
+/// exist anywhere in `tests/` before this pass — the underlying property
+/// (both scripts route every jq call through `scripts/lib/trusted-jq.sh`'s
+/// `resolve_trusted_jq`) already held, so these are REGRESSION guards, not
+/// fixes for an active bug. VP-025 specifically closes the `$GITHUB_PATH`
+/// jq-shim false-green for the sharded mutation gate
+/// (`mutants-aggregate.sh`), mirroring the guard `check-ci-gate.sh`'s own
+/// jq-identity self-test already provided. Re-verified mechanically (this
+/// file's own `#[test]`-line count == 70).
+const EXPECTED_GUARD_TEST_COUNT: usize = 70;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
@@ -11400,5 +11413,305 @@ fn test_mutants_nightly_workflow_does_not_declare_a_job_named_ci_gate() {
         "FAIL: `.github/workflows/mutants-nightly.yml` has no jobs at all \
          — the scaffold's `mutants-full`/`mutants-nightly-report` jobs are \
          missing or the file failed to parse as expected."
+    );
+}
+
+// =============================================================================
+// cycle-006 F4 review round 6, finding F-HIGH: shared trusted-jq helper
+// regression guards (VP-MUTANTS-SHARD-024 / VP-MUTANTS-SHARD-025)
+//
+// Both `scripts/check-ci-gate.sh` and `scripts/mutants-aggregate.sh` route
+// every real invocation of the `jq` binary through a single shared
+// resolver, `scripts/lib/trusted-jq.sh::resolve_trusted_jq` — a
+// PATH-shim-resistant lookup (see that file's own module comment and
+// CLAUDE.md's "CI Gate — SCOPE SUMMARY" `$GITHUB_PATH` residual) that
+// closes the class of attack where an earlier workflow step prepends a
+// malicious `jq` shim to `$PATH` ahead of the real system binary. Neither
+// script is supposed to call the bare `jq` name directly — every call site
+// goes through `"${jq_bin}"`, the resolved absolute path
+// `resolve_trusted_jq` returns. VP-024/VP-025 (story ACs 024/025) mandate
+// standing tests proving this property holds; before this pass, no such
+// test existed anywhere in `tests/`, even though the underlying property
+// already held in both scripts — these are REGRESSION guards, not fixes
+// for an active bug. VP-025 specifically is the load-bearing half closing
+// the `$GITHUB_PATH` jq-shim false-green for the MUTATION gate
+// (`mutants-aggregate.sh`), mirroring the guard `check-ci-gate.sh`'s own
+// jq-identity self-test already provides for the CI gate.
+// =============================================================================
+
+/// Read `scripts/lib/trusted-jq.sh` relative to the repo root. Mirrors
+/// `read_check_ci_gate_sh`/`read_mutants_aggregate_sh`'s CRLF-normalization
+/// convention.
+fn read_trusted_jq_sh() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/lib/trusted-jq.sh");
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
+    raw.replace("\r\n", "\n")
+}
+
+/// Strip a trailing shell comment from `line`: the whole line becomes
+/// empty if its trimmed form starts with `#` (a full-line comment,
+/// possibly indented); otherwise everything from the first literal `" #"`
+/// onward is dropped (this repo's own bash style always precedes an
+/// inline comment with whitespace). Deliberately a simple heuristic, not
+/// a shell-quoting-aware parser — sufficient for scanning these two
+/// specific, hand-reviewed scripts for a bare `jq` word, not a general
+/// bash-comment stripper.
+fn strip_trailing_shell_comment(line: &str) -> &str {
+    if line.trim_start().starts_with('#') {
+        return "";
+    }
+    match line.find(" #") {
+        Some(idx) => &line[..idx],
+        None => line,
+    }
+}
+
+/// True if `text` contains `jq` in shell COMMAND POSITION — i.e. a real
+/// invocation of the `jq` binary by its bare, PATH-resolved name — as
+/// opposed to `jq` appearing as: part of a longer identifier (`jq_bin`,
+/// `jq_status`, `resolve_trusted_jq`, `trusted_jq_dirs_for`,
+/// `is_trusted_jq_dir`), part of a hyphenated filename or test-case label
+/// (`trusted-jq.sh`, `jq-trust`, `reject-relative-path-jq-regardless-of-
+/// mode`), inside the resolved-variable expansion `${jq_bin}`, or as an
+/// ordinary English word inside a quoted prose string (`"ERROR: jq failed
+/// while..."`, `"one of the trusted system jq directories"` — both real
+/// strings in `check-ci-gate.sh` today, neither a jq invocation).
+///
+/// `text` is split on whitespace into tokens (deliberately NOT further
+/// split on `-`/`.`/`_`, so a hyphenated or dotted token stays one unit
+/// and never collapses to bare `jq`). A token counts as a real invocation
+/// only if, after trimming a LEADING shell operator/opener (`|`, `&`,
+/// `;`, `(`, `` ` ``, `$`) and a TRAILING one (`)`, `;`, `&`, `|`, `` ` ``),
+/// it equals exactly `"jq"`, AND it is in COMMAND POSITION: either it is
+/// the first token on the line, the operator-trim actually removed a
+/// leading character (so the raw token was `` `jq ``/`$(jq`/`|jq`/etc.,
+/// with no whitespace before the operator), or the PRECEDING
+/// whitespace-separated token itself ends in one of `|`/`&`/`;`/`(`. This
+/// is what rejects the prose false positives above: in "ERROR: jq
+/// failed", the token immediately before "jq" is "ERROR:" — an ordinary
+/// word, not an operator — so it is correctly NOT in command position.
+fn contains_bare_jq_invocation(text: &str) -> bool {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    for (i, raw_token) in tokens.iter().enumerate() {
+        let trimmed = raw_token
+            .trim_start_matches(['|', '&', ';', '(', '`', '$'])
+            .trim_end_matches([')', ';', '&', '|', '`']);
+        if trimmed != "jq" {
+            continue;
+        }
+        let operator_prefix_trimmed = *raw_token != "jq";
+        let prev_ends_with_operator = i > 0
+            && tokens[i - 1]
+                .chars()
+                .next_back()
+                .is_some_and(|c| matches!(c, '|' | '&' | ';' | '('));
+        if i == 0 || operator_prefix_trimmed || prev_ends_with_operator {
+            return true;
+        }
+    }
+    false
+}
+
+/// Count non-comment lines in `script` (after
+/// [`strip_trailing_shell_comment`]) containing a command-position `jq`
+/// invocation per [`contains_bare_jq_invocation`].
+fn count_bare_jq_invocation_lines(script: &str) -> usize {
+    script
+        .lines()
+        .map(strip_trailing_shell_comment)
+        .filter(|l| contains_bare_jq_invocation(l))
+        .count()
+}
+
+/// (cycle-006 F4 review round 6, F-HIGH, VP-MUTANTS-SHARD-024): asserts
+/// both `scripts/check-ci-gate.sh` and `scripts/mutants-aggregate.sh`
+/// `source` (or `.`-dot-source) `scripts/lib/trusted-jq.sh`, and that
+/// `trusted-jq.sh` itself defines the three functions both scripts (and
+/// `check-ci-gate.sh`'s own jq-identity self-test, `run_jq_trust_self_
+/// test`) depend on: `trusted_jq_dirs_for`, `is_trusted_jq_dir`, and
+/// `resolve_trusted_jq`.
+#[test]
+fn test_check_ci_gate_sh_and_mutants_aggregate_sh_source_shared_trusted_jq_helper() {
+    let gate = read_check_ci_gate_sh();
+    let agg = read_mutants_aggregate_sh();
+    let trusted = read_trusted_jq_sh();
+
+    let sources_helper = |script: &str| -> bool {
+        script.lines().map(strip_trailing_shell_comment).any(|l| {
+            let t = l.trim_start();
+            (t.starts_with("source ") || t.starts_with(". ")) && t.contains("lib/trusted-jq.sh")
+        })
+    };
+
+    assert!(
+        sources_helper(&gate),
+        "FAIL (VP-024): `scripts/check-ci-gate.sh` does not contain a \
+         `source`/`.`-dot-source line pulling in `lib/trusted-jq.sh` — \
+         every jq invocation on the decision path must resolve `jq` \
+         through the shared, PATH-shim-resistant resolver, not \
+         independently re-implement or skip it."
+    );
+    assert!(
+        sources_helper(&agg),
+        "FAIL (VP-024): `scripts/mutants-aggregate.sh` does not contain a \
+         `source`/`.`-dot-source line pulling in `lib/trusted-jq.sh` — \
+         same requirement as `check-ci-gate.sh`, one job over."
+    );
+
+    for func in [
+        "trusted_jq_dirs_for",
+        "is_trusted_jq_dir",
+        "resolve_trusted_jq",
+    ] {
+        let def_line = format!("{func}() {{");
+        assert!(
+            trusted
+                .lines()
+                .map(strip_trailing_shell_comment)
+                .any(|l| l.trim_start() == def_line),
+            "FAIL (VP-024): `scripts/lib/trusted-jq.sh` does not define the \
+             expected function `{func}` (looked for the exact line \
+             `{def_line}`) — both `check-ci-gate.sh` and \
+             `mutants-aggregate.sh` depend on this shared resolver \
+             existing with this exact function surface."
+        );
+    }
+}
+
+/// (cycle-006 F4 review round 6, F-HIGH, VP-MUTANTS-SHARD-025): asserts
+/// neither `scripts/check-ci-gate.sh` nor `scripts/mutants-aggregate.sh`
+/// contains a bare, decision-path invocation of `jq` by its PATH-resolved
+/// name — every real jq call in both scripts must route through
+/// `"${jq_bin}"` (the absolute path `resolve_trusted_jq` returns), closing
+/// the `$GITHUB_PATH` jq-shim false-green class for BOTH gates (this is
+/// the load-bearing half for the sharded MUTATION gate specifically —
+/// `mutants-aggregate.sh` had no jq-identity self-test at all before
+/// cycle-006, unlike `check-ci-gate.sh`'s pre-existing
+/// `run_jq_trust_self_test`). Also asserts the one legitimate real
+/// invocation of `jq` by its bare name — `command -v jq`, used to LOCATE
+/// the trusted binary in the first place — appears only inside
+/// `trusted-jq.sh` itself, never in either caller script.
+#[test]
+fn test_check_ci_gate_sh_and_mutants_aggregate_sh_have_no_bare_jq_invocations() {
+    let gate = read_check_ci_gate_sh();
+    let agg = read_mutants_aggregate_sh();
+    let trusted = read_trusted_jq_sh();
+
+    // RED sanity check (not a fix-verifying assertion — proves the scan
+    // mechanism itself is capable of catching what it claims to catch,
+    // and does not false-positive on legitimate `${jq_bin}`-routed code
+    // or on ordinary prose containing the word "jq"). Neither of these
+    // touches a real script file.
+    assert!(
+        contains_bare_jq_invocation("cat mutants.out/outcomes.json | jq -r '.caught'"),
+        "SETUP INVARIANT VIOLATED: contains_bare_jq_invocation must detect \
+         a bare `jq` invocation in a scratch string — if it does not, the \
+         VP-025 scan mechanism itself is broken and this test's negative \
+         assertions below are meaningless."
+    );
+    assert!(
+        contains_bare_jq_invocation("jq -r 'keys[]'"),
+        "SETUP INVARIANT VIOLATED: contains_bare_jq_invocation must detect \
+         a bare `jq` invocation as the FIRST token on a line."
+    );
+    assert!(
+        !contains_bare_jq_invocation("local jq_bin"),
+        "SETUP INVARIANT VIOLATED: contains_bare_jq_invocation must NOT \
+         flag a `jq_bin` variable declaration as a bare `jq` invocation."
+    );
+    assert!(
+        !contains_bare_jq_invocation("if ! jq_bin=$(resolve_trusted_jq); then"),
+        "SETUP INVARIANT VIOLATED: contains_bare_jq_invocation must NOT \
+         flag a `resolve_trusted_jq` call as a bare `jq` invocation."
+    );
+    assert!(
+        !contains_bare_jq_invocation("caught=$(\"${jq_bin}\" '.caught // 0' \"${f}\")"),
+        "SETUP INVARIANT VIOLATED: contains_bare_jq_invocation must NOT \
+         flag a `\"${{jq_bin}}\"`-routed call as a bare `jq` invocation."
+    );
+    assert!(
+        !contains_bare_jq_invocation("source \"${_check_ci_gate_dir}/lib/trusted-jq.sh\""),
+        "SETUP INVARIANT VIOLATED: contains_bare_jq_invocation must NOT \
+         flag the `trusted-jq.sh` FILENAME as a bare `jq` invocation."
+    );
+    assert!(
+        !contains_bare_jq_invocation(
+            "        echo \"ERROR: jq failed while extracting job names from the needs\" >&2"
+        ),
+        "SETUP INVARIANT VIOLATED: contains_bare_jq_invocation must NOT \
+         flag the ordinary English word \"jq\" inside a quoted error \
+         message as a bare `jq` invocation — this is a REAL line in \
+         `scripts/check-ci-gate.sh` today and must never false-positive."
+    );
+    assert!(
+        !contains_bare_jq_invocation("        \"one of the trusted system jq directories\""),
+        "SETUP INVARIANT VIOLATED: contains_bare_jq_invocation must NOT \
+         flag the word \"jq\" inside this quoted test-fixture label as a \
+         bare `jq` invocation — this is a REAL line in \
+         `scripts/check-ci-gate.sh` today and must never false-positive."
+    );
+    assert!(
+        !contains_bare_jq_invocation(
+            "    echo \"${jq_trust_total}/${EXPECTED_JQ_TRUST_CHECKS} jq-trust checks run,\" \\"
+        ),
+        "SETUP INVARIANT VIOLATED: contains_bare_jq_invocation must NOT \
+         flag the hyphenated label \"jq-trust\" as a bare `jq` invocation."
+    );
+
+    let gate_count = count_bare_jq_invocation_lines(&gate);
+    assert_eq!(
+        gate_count, 0,
+        "FAIL (VP-025): `scripts/check-ci-gate.sh` contains {gate_count} \
+         non-comment line(s) with a command-position `jq` invocation — \
+         every real jq invocation on the decision path must route through \
+         the `\"${{jq_bin}}\"` variable `resolve_trusted_jq()` resolves, \
+         not the bare name (which a `$GITHUB_PATH`-prepended shim could \
+         shadow)."
+    );
+
+    let agg_count = count_bare_jq_invocation_lines(&agg);
+    assert_eq!(
+        agg_count, 0,
+        "FAIL (VP-025): `scripts/mutants-aggregate.sh` contains \
+         {agg_count} non-comment line(s) with a command-position `jq` \
+         invocation — same requirement as `check-ci-gate.sh`, one gate \
+         over. \
+         This is the load-bearing half of VP-025 for the sharded mutation \
+         gate specifically."
+    );
+
+    // `command -v jq` is the one legitimate real invocation of the bare
+    // name — it is how `resolve_trusted_jq` LOCATES the trusted binary in
+    // the first place. It must exist in trusted-jq.sh (a sanity floor —
+    // if it's gone, the resolver has been rewritten and this whole test
+    // needs re-review) and must NOT appear in either caller script.
+    let command_v_count = |script: &str| -> usize {
+        script
+            .lines()
+            .map(strip_trailing_shell_comment)
+            .filter(|l| l.contains("command -v jq"))
+            .count()
+    };
+    assert!(
+        command_v_count(&trusted) >= 1,
+        "FAIL (VP-025 sanity floor): `scripts/lib/trusted-jq.sh` does not \
+         contain the expected `command -v jq` resolution call at all — \
+         has the resolver been rewritten to locate `jq` some other way? \
+         If so, this test needs re-review, not a silent pass."
+    );
+    assert_eq!(
+        command_v_count(&gate),
+        0,
+        "FAIL (VP-025): `scripts/check-ci-gate.sh` contains its own \
+         `command -v jq` call — jq LOCATION is `trusted-jq.sh`'s sole \
+         responsibility; a second, independent lookup in the caller \
+         script is itself a bypass of the shared resolver."
+    );
+    assert_eq!(
+        command_v_count(&agg),
+        0,
+        "FAIL (VP-025): `scripts/mutants-aggregate.sh` contains its own \
+         `command -v jq` call — same requirement as `check-ci-gate.sh`."
     );
 }
