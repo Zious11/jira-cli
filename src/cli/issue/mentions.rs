@@ -238,7 +238,41 @@ pub(super) async fn resolve_mentions(
     }
 
     for span in &unique_at_names {
-        if let Err(e) = resolve_at_name_candidate(client, span, no_input, &mut resolutions).await {
+        // F2 (adversarial-review finding, LOW): once an earlier candidate
+        // (bracket-form or `@Name`) has already failed, this call's outcome
+        // is discarded regardless of what it resolves to — the whole write
+        // fails on `first_err` either way (AC-007's all-or-nothing
+        // guarantee). Forcing `no_input=true` here skips a live TTY
+        // `dialoguer::Select` prompt that would otherwise block waiting for
+        // an answer nobody needs, while still ISSUING the
+        // `client.search_users` validation call for every remaining
+        // candidate (never short-circuiting the loop) so the
+        // every-candidate-attempted, zero-mutation observable stays intact.
+        // Non-interactive callers (`--no-input` / non-TTY) are unaffected —
+        // `no_input` is already `true` for them.
+        //
+        // Not covered by a black-box CLI regression test: once `first_err`
+        // is `Some`, THIS candidate's own `Err` (whether it came from a
+        // discarded `dialoguer::Select` failure pre-fix, or the
+        // non-interactive hard-error path post-fix) is discarded by the
+        // `if first_err.is_none()` guard below either way — the process's
+        // final exit code and stderr are determined entirely by the
+        // earlier candidate's error, identically whether or not this line
+        // is present. Verified empirically (subprocess probe, not
+        // committed): under a piped/non-TTY stdin, `dialoguer::Select::interact()`
+        // fails fast (no hang) with a generic `JrError::Internal` — so the
+        // discarded prompt attempt was never itself a hang risk, only a
+        // pointless blocking wait, but its absence produces no externally
+        // observable diff from the CLI's exit code/stdout/stderr in this
+        // scenario. Distinguishing "prompt attempted" from "prompt skipped"
+        // black-box would require either a dedicated debug-only
+        // instrumentation seam (not warranted for a LOW-severity finding)
+        // or a `pub(super)`-visibility unit test exercising `resolve_mentions`
+        // directly with a fake interactive harness — out of scope here.
+        let effective_no_input = no_input || first_err.is_some();
+        if let Err(e) =
+            resolve_at_name_candidate(client, span, effective_no_input, &mut resolutions).await
+        {
             if first_err.is_none() {
                 first_err = Some(e);
             }
