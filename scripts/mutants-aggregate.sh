@@ -129,7 +129,14 @@ evaluate_mutants_aggregate() {
   # --- Step 1: INV-ESCALATE — escalation short-circuits before any
   #     shard-artifact inspection. ---
   if [ "${ESCALATED}" = "true" ]; then
-    echo "FAIL: PR generates ${MUTANT_COUNT} in-diff mutants, over the 120-mutant threshold for the sharded per-PR gate."
+    # Deliberately threshold-agnostic (H-F2, cycle-006 F4 review round 8):
+    # this script receives only the ESCALATED bool from mutants-plan, not
+    # the numeric ESCALATION_THRESHOLD itself — the authoritative value
+    # lives solely in ci.yml's `mutants-plan` job (`ESCALATION_THRESHOLD=120`
+    # as of this pass). A literal "120" duplicated here would silently go
+    # stale the next time that value is tuned without a reason to touch
+    # this file in the same commit.
+    echo "FAIL: PR generates ${MUTANT_COUNT} in-diff mutants, over this gate's configured escalation threshold for the sharded per-PR gate (see ci.yml's mutants-plan job for the exact value)."
     echo ""
     echo "Two ways forward:"
     echo "  1. PREFERRED: split this PR into smaller, more focused changes."
@@ -663,7 +670,7 @@ run_mutants_aggregate_self_test() {
     AGG_ESCALATED="true"; AGG_MUTANT_COUNT="281"; AGG_OVERALL_DIFF_LINES="500"
     agg_check_fixture \
         "AC-003: ESCALATED=true short-circuits before shard-sentinel inspection, ordinary failure not skip" \
-        "fail:1" "over the 120-mutant threshold" "missing shard status sentinel"
+        "fail:1" "over this gate's configured escalation threshold" "missing shard status sentinel"
     AGG_ESCALATED="false"
 
     # ==== Fixture 18 (AC-038) — Step 0.5 PLAN_RESULT != success short-circuits BEFORE Step 2 ====
