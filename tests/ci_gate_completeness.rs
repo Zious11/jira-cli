@@ -4876,15 +4876,15 @@ const PINNED_MUTANTS_SHARD_JOB_KEY_SET: &[&str] = &[
 
 /// See `PINNED_MUTANTS_SHARD_JOB_KEY_SET`'s doc comment immediately above.
 const PINNED_MUTANTS_SHARD_STEP_KEY_SETS: &[&[&str]] = &[
-    &["name", "uses", "with"],                     // Harden the runner (Audit all outbound calls)
-    &["uses"],                                      // actions/checkout
-    &["uses", "with"],                              // taiki-e/install-action (cargo-mutants@27.1.0)
-    &["uses"],                                      // Swatinem/rust-cache
-    &["name", "uses", "with"],                      // Download shared diff file
-    &["continue-on-error", "id", "name", "run"],    // Run mutation tests on this shard
-    &["if", "name", "run"],                         // Write shard status sentinel
-    &["if", "name", "uses", "with"],                // Upload shard status sentinel
-    &["if", "name", "uses", "with"],                // Upload shard outcomes
+    &["name", "uses", "with"], // Harden the runner (Audit all outbound calls)
+    &["uses"],                 // actions/checkout
+    &["uses", "with"],         // taiki-e/install-action (cargo-mutants@27.1.0)
+    &["uses"],                 // Swatinem/rust-cache
+    &["name", "uses", "with"], // Download shared diff file
+    &["continue-on-error", "id", "name", "run"], // Run mutation tests on this shard
+    &["if", "name", "run"],    // Write shard status sentinel
+    &["if", "name", "uses", "with"], // Upload shard status sentinel
+    &["if", "name", "uses", "with"], // Upload shard outcomes
 ];
 
 /// Compares `job_block`'s job-level key set and per-step key-set SEQUENCE
