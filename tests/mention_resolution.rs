@@ -5,7 +5,7 @@
 //! (both `todo!()` stubs as of this commit) and their wiring into the four
 //! write-command call sites: `issue create` (platform), `issue edit` (dry-run
 //! + live), `issue comment add`/`issue comment edit`, and JSM
-//! `issue create --request-type`.
+//!   `issue create --request-type`.
 //!
 //! `resolve_mentions`/`filter_by_name_match` are `pub(super)` — inaccessible
 //! from this file — so every assertion here goes through the `jr` binary via
@@ -1422,9 +1422,15 @@ async fn test_h_new_mention_008_jsm_create_resolves_mention_before_synchronous_b
         .mount(&server)
         .await;
 
+    // Query "smith" (not "jsmith") — a fuzzy, non-name-matching single hit
+    // (e.g. "jsmith" -> sole hit "John Smith") is the dedicated hard-error
+    // scenario `test_h_new_mention_012_single_non_name_matching_result_hard_errors_no_deactivated_hint`
+    // exercises via BC-X.7.007's EC-X.7.007-5 tightening (`filter_by_name_match`);
+    // this test's own subject is the JSM wiring's happy-path ordering/body
+    // shape, so its fixture must actually name-match to reach that path.
     mount_search(
         &server,
-        "jsmith",
+        "smith",
         json!([{"accountId": "acc-1", "displayName": "John Smith", "active": true}]),
         Some(1),
     )
@@ -1449,7 +1455,7 @@ async fn test_h_new_mention_008_jsm_create_resolves_mention_before_synchronous_b
             "--summary",
             "Need help",
             "--description",
-            "cc @jsmith for context",
+            "cc @smith for context",
             "--markdown",
             "--no-input",
             "--output",
