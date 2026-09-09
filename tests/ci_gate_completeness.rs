@@ -11016,6 +11016,289 @@ fn test_mutants_plan_compute_step_content_pin_rejects_decoy_comment_forgery() {
     );
 }
 
+/// (cycle-006 F4 review round 4, J-CRITICAL): the full, human-reviewed
+/// literal text of `mutants-plan`'s "Compute diff and mutation plan" step's
+/// `run:` scalar, read byte-for-byte from `ci.yml` as of this pass (the
+/// PARSED scalar was printed via a scratch test and copy-pasted here — the
+/// SAME discipline `PINNED_MUTANTS_SHARD_RUN_BODY`'s doc comment mandates
+/// and explains: a raw string literal is REQUIRED, not a normal `"..."`
+/// literal with `\`-continuations, because Rust's own line-continuation
+/// escape would silently eat the leading indentation of every continuation
+/// line and desync the pin from what `saphyr-parser` actually resolves this
+/// `|` block-literal scalar to).
+///
+/// **Concrete exploit this closes (J-CRITICAL):** `find_fragments_in_order`
+/// (backing `test_mutants_plan_compute_step_content_is_pinned`, even after
+/// round 3 correctly scoped it to this ONE step's resolved `run:` scalar)
+/// is an ORDERED-SUBSTRING search — it has no notion of what happens
+/// BETWEEN two consecutive required fragments, or AFTER the last one. A
+/// one-line insertion between the `OVERALL_DIFF_LINES=$(wc -l < ...)`
+/// fragment and the `cargo mutants --list --in-diff "${DIFF_FILE}"`
+/// fragment —
+///
+/// ```text
+/// : > "${DIFF_FILE}"        # truncate the shared diff AFTER OVERALL_DIFF_LINES is captured
+/// ```
+///
+/// — still contains all ten required fragments, in the same relative
+/// order, so the fragment pin (scoped or not) is satisfied. This step runs
+/// under `set -uo pipefail` (deliberately no `-e`, per this step's own
+/// `ci.yml` comment), so `: >` truncating the file does not abort the
+/// script. Consequence: `OVERALL_DIFF_LINES` is still computed from the
+/// REAL (non-empty) diff before truncation — so a genuinely large PR diff
+/// still reports a non-zero `overall_diff_lines`, dodging
+/// `mutants-aggregate.sh`'s base-ref-drift guard — but `cargo mutants
+/// --list --in-diff` then runs against the now-EMPTY file, so
+/// `MUTANT_COUNT=0` and `escalated=false` regardless of the PR's real
+/// size. Every shard then runs `--in-diff` against the same emptied file,
+/// legitimately produces zero scored mutants, `mutants-aggregate.sh`'s
+/// Step 4 reconciles `0 == MUTANT_COUNT(0)` cleanly (both sides derive
+/// from the identical truncated diff, so reconciliation cannot catch it),
+/// and Step 5's "non-empty diff, 0 mutants → OK" branch (a LEGITIMATE
+/// pass for a genuine comment/docs-only PR, which is exactly why that
+/// branch must stay a pass and cannot be hardened against on the
+/// `mutants-aggregate.sh` side — see this constant's sibling test's doc
+/// comment) returns 0. `ci-gate` goes GREEN with mutation testing entirely
+/// disabled, for a PR of ANY size, with a ONE-LINE plaintext `ci.yml` edit
+/// and zero `cargo mutants`/code-execution involvement.
+///
+/// **The fix:** exact byte-equality against this pinned literal, via
+/// [`extract_and_normalize_run_scalar_for_step`] (the SAME shared helper
+/// `PINNED_MUTANTS_SHARD_RUN_BODY`/`PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY`
+/// already use one job over), leaves no gap between fragments for an
+/// inserted line to hide in — ANY byte added, removed, or reordered in
+/// this step's `run:` scalar fails this pin. See
+/// `test_mutants_plan_compute_step_content_pin_rejects_diff_truncation_
+/// insertion` for the standing RED regression proof, and
+/// `test_mutants_plan_compute_step_run_body_is_byte_pinned` for the
+/// production assertion against the real `ci.yml`.
+///
+/// **Deliberately NOT a replacement for `find_fragments_in_order`'s check
+/// above** — `test_mutants_plan_compute_step_content_is_pinned` and
+/// `test_mutants_plan_compute_step_content_pin_rejects_decoy_comment_
+/// forgery` stay in place unchanged: the fragment pin's readable,
+/// per-fragment failure messages remain useful for a reviewer diagnosing
+/// WHICH real command went missing, while this byte pin is the actual
+/// default-deny backstop. The residual documented on
+/// `find_fragments_in_order` itself (a bash-comment-out-in-place launder)
+/// is fully subsumed by this byte pin too — any such launder changes the
+/// scalar's bytes and fails here.
+const PINNED_MUTANTS_PLAN_COMPUTE_BODY: &str = r#"set -uo pipefail  # deliberately NOT -e here — see the F-4 note below
+
+DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
+# F-4 (carried from the pre-sharding single-job design, unchanged
+# rationale): || true so a base-ref resolution failure does not abort
+# before OVERALL_DIFF_LINES is computed — an empty DIFF_FILE still
+# correctly routes through the base-ref-drift branch downstream in
+# mutants-aggregate, never a silent false-green.
+git diff origin/${{ github.base_ref }}...HEAD > "${DIFF_FILE}" || true
+
+OVERALL_DIFF_LINES=$(wc -l < "${DIFF_FILE}" | tr -d ' ')
+echo "Overall diff lines: ${OVERALL_DIFF_LINES}"
+
+# Pre-count in-diff mutants for the escape hatch (INV-ESCALATE) AND
+# for mutants-aggregate's pooled-total reconciliation (INV-AGG
+# sub-invariant 8). `cargo mutants --list` exits 0 even on an empty
+# diff (0 lines listed) — no special-casing needed for that case.
+#
+# This step's own `set -uo pipefail` (no `-e`) means `--list`'s exit
+# status is NOT automatically fatal — captured and checked explicitly
+# instead of letting a genuine tooling failure (bad base-ref, an
+# examine_globs/.cargo/mutants.toml misconfiguration, a
+# cargo-mutants@27.1.0 regression) silently coerce to
+# MUTANT_COUNT=0, indistinguishable from a legitimate zero-mutant PR.
+LIST_OUTPUT="${{ runner.temp }}/mutant-list.txt"
+LIST_STDERR="${{ runner.temp }}/mutant-list.stderr"
+if ! cargo mutants --list --in-diff "${DIFF_FILE}" \
+       > "${LIST_OUTPUT}" 2> "${LIST_STDERR}"; then
+  echo "FAIL: 'cargo mutants --list --in-diff' exited non-zero —"
+  echo "      cannot reliably pre-count in-diff mutants. This is a"
+  echo "      tooling failure (bad base-ref, examine_globs"
+  echo "      misconfiguration, or a cargo-mutants regression),"
+  echo "      NOT a legitimate zero-mutant result. Failing this"
+  echo "      job closed rather than silently treating this as"
+  echo "      MUTANT_COUNT=0 (see mutants-sharding-invariants.md"
+  echo "      §INV-AGG sub-invariant 8's residual-risk note)."
+  echo "      --- cargo mutants --list stderr ---"
+  cat "${LIST_STDERR}"
+  exit 1
+fi
+MUTANT_COUNT=$(wc -l < "${LIST_OUTPUT}" | tr -d ' ')
+echo "In-diff mutant count: ${MUTANT_COUNT}"
+
+# Human-reviewed literal (mutants-sharding-invariants.md
+# §Threshold Derivation) — update in the SAME commit as any
+# deliberate change to shard count N or per-shard --timeout.
+ESCALATION_THRESHOLD=120
+if [ "${MUTANT_COUNT}" -gt "${ESCALATION_THRESHOLD}" ]; then
+  ESCALATED=true
+  echo "::warning::PR generates ${MUTANT_COUNT} in-diff mutants (> ${ESCALATION_THRESHOLD}) — escalating (see mutants-aggregate's own log for the actionable message)."
+else
+  ESCALATED=false
+fi
+
+echo "escalated=${ESCALATED}" >> "${GITHUB_OUTPUT}"
+echo "mutant_count=${MUTANT_COUNT}" >> "${GITHUB_OUTPUT}"
+echo "overall_diff_lines=${OVERALL_DIFF_LINES}" >> "${GITHUB_OUTPUT}"
+"#;
+
+/// (cycle-006 F4 review round 4, J-CRITICAL — production pin): asserts the
+/// REAL `mutants-plan` job's "Compute diff and mutation plan" step's
+/// `run:` scalar is byte-for-byte identical to
+/// `PINNED_MUTANTS_PLAN_COMPUTE_BODY`, mirroring
+/// `test_mutants_shard_run_step_content_is_pinned`'s idiom for the sibling
+/// `mutants` shard job. See `PINNED_MUTANTS_PLAN_COMPUTE_BODY`'s own doc
+/// comment for the exploit this closes.
+#[test]
+fn test_mutants_plan_compute_step_run_body_is_byte_pinned() {
+    let ci = read_ci_yml();
+    let plan_block = extract_job_block(&ci, "mutants-plan").unwrap_or_else(|| {
+        panic!(
+            "FAIL (J-CRITICAL): `.github/workflows/ci.yml` does not \
+             contain a `mutants-plan:` job yet."
+        )
+    });
+
+    let run_text = extract_and_normalize_run_scalar_for_step(
+        plan_block,
+        "Compute diff and mutation plan",
+    )
+    .unwrap_or_else(|reason| {
+        panic!(
+            "FAIL (J-CRITICAL): `mutants-plan`'s \"Compute diff and \
+             mutation plan\" step {reason}\n\
+             Current mutants-plan block:\n{plan_block}"
+        )
+    });
+    assert_eq!(
+        run_text, PINNED_MUTANTS_PLAN_COMPUTE_BODY,
+        "FAIL (J-CRITICAL): the \"Compute diff and mutation plan\" step's \
+         PARSED `run:` scalar does not byte-for-byte match the pinned, \
+         human-reviewed literal — any deviation (an inserted diff-\
+         truncation line, an appended launder line, a reordered line, a \
+         changed byte) fails this pin. If this is a deliberate, reviewed \
+         change, update PINNED_MUTANTS_PLAN_COMPUTE_BODY in the SAME \
+         change.\n\
+         Current mutants-plan block:\n{plan_block}"
+    );
+}
+
+/// (cycle-006 F4 review round 4, J-CRITICAL — standing RED regression
+/// proof): see `PINNED_MUTANTS_PLAN_COMPUTE_BODY`'s doc comment for the
+/// full exploit narrative. This test pins BOTH halves of the claim against
+/// a hand-crafted, untracked `mutants-plan` fixture (the tracked `ci.yml`
+/// is never touched):
+///
+/// 1. The OLD check (`find_fragments_in_order`, scoped to the isolated
+///    `run:` scalar exactly as round 3 left it) is satisfied by a
+///    diff-truncation line (`: > "${DIFF_FILE}"`) inserted BETWEEN the
+///    `OVERALL_DIFF_LINES` fragment and the `cargo mutants --list`
+///    fragment — proving the ordered-substring shape itself (not just the
+///    "which text node" scoping bug round 3 fixed) is gate-bypassable.
+/// 2. The NEW check (exact byte-equality against
+///    `PINNED_MUTANTS_PLAN_COMPUTE_BODY`) correctly REJECTS the same
+///    fixture, because the inserted line is a real, additional byte
+///    sequence the pinned literal does not contain.
+#[test]
+fn test_mutants_plan_compute_step_content_pin_rejects_diff_truncation_insertion() {
+    let forged_block = r#"  mutants-plan:
+    name: Mutation Test Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'pull_request'
+    outputs:
+      escalated: ${{ steps.plan.outputs.escalated }}
+      mutant_count: ${{ steps.plan.outputs.mutant_count }}
+      overall_diff_lines: ${{ steps.plan.outputs.overall_diff_lines }}
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@x
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@x
+        with:
+          fetch-depth: 0
+      - uses: taiki-e/install-action@x
+        with:
+          tool: cargo-mutants@27.1.0
+      - uses: Swatinem/rust-cache@x
+      - name: Compute diff and mutation plan
+        id: plan
+        run: |
+          set -uo pipefail  # deliberately NOT -e here — see the F-4 note below
+
+          DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
+          git diff origin/${{ github.base_ref }}...HEAD > "${DIFF_FILE}" || true
+
+          OVERALL_DIFF_LINES=$(wc -l < "${DIFF_FILE}" | tr -d ' ')
+          : > "${DIFF_FILE}"        # truncate the shared diff AFTER OVERALL_DIFF_LINES is captured
+          echo "Overall diff lines: ${OVERALL_DIFF_LINES}"
+
+          LIST_OUTPUT="${{ runner.temp }}/mutant-list.txt"
+          LIST_STDERR="${{ runner.temp }}/mutant-list.stderr"
+          if ! cargo mutants --list --in-diff "${DIFF_FILE}" \
+                 > "${LIST_OUTPUT}" 2> "${LIST_STDERR}"; then
+            echo "FAIL: 'cargo mutants --list --in-diff' exited non-zero —"
+            echo "      cannot reliably pre-count in-diff mutants. This is a"
+            echo "      tooling failure (bad base-ref, examine_globs"
+            echo "      misconfiguration, or a cargo-mutants regression),"
+            echo "      NOT a legitimate zero-mutant result. Failing this"
+            echo "      job closed rather than silently treating this as"
+            echo "      MUTANT_COUNT=0 (see mutants-sharding-invariants.md"
+            echo "      §INV-AGG sub-invariant 8's residual-risk note)."
+            echo "      --- cargo mutants --list stderr ---"
+            cat "${LIST_STDERR}"
+            exit 1
+          fi
+          MUTANT_COUNT=$(wc -l < "${LIST_OUTPUT}" | tr -d ' ')
+          echo "In-diff mutant count: ${MUTANT_COUNT}"
+
+          ESCALATION_THRESHOLD=120
+          if [ "${MUTANT_COUNT}" -gt "${ESCALATION_THRESHOLD}" ]; then
+            ESCALATED=true
+            echo "::warning::PR generates ${MUTANT_COUNT} in-diff mutants (> ${ESCALATION_THRESHOLD}) — escalating (see mutants-aggregate's own log for the actionable message)."
+          else
+            ESCALATED=false
+          fi
+
+          echo "escalated=${ESCALATED}" >> "${GITHUB_OUTPUT}"
+          echo "mutant_count=${MUTANT_COUNT}" >> "${GITHUB_OUTPUT}"
+          echo "overall_diff_lines=${OVERALL_DIFF_LINES}" >> "${GITHUB_OUTPUT}"
+      - name: Upload diff file (shared across all shards)
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-diff-file
+          path: /tmp/pr.diff
+          if-no-files-found: error
+          retention-days: 1
+"#;
+
+    // Half 1: the OLD fragment-ordering check, scoped to this ONE step's
+    // resolved `run:` scalar (round 3's fix), is STILL satisfied — the
+    // inserted truncation line sits BETWEEN two required fragments, which
+    // an ordered-substring search has no way to forbid.
+    let run_text = mutants_plan_compute_step_run_text(forged_block);
+    find_fragments_in_order(&run_text, &MUTANTS_PLAN_COMPUTE_STEP_REQUIRED_FRAGMENTS).expect(
+        "SETUP INVARIANT VIOLATED: this forged fixture must satisfy the \
+         scoped, ordered-substring fragment search (via the inserted \
+         truncation line sitting between two required fragments) — if it \
+         does not, the fixture no longer reproduces the J-CRITICAL exploit \
+         and must be revised.",
+    );
+
+    // Half 2: the NEW byte-equality check correctly rejects the same
+    // fixture — the inserted line is real, additional content the pinned
+    // literal does not contain.
+    assert_ne!(
+        run_text, PINNED_MUTANTS_PLAN_COMPUTE_BODY,
+        "FAIL (J-CRITICAL RED proof did not hold): the byte-equality check \
+         accepted a forged `mutants-plan` compute step whose body was \
+         truncating the shared diff file mid-script — the fix is NOT \
+         default-deny against this exploit.\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
+}
+
 /// AC-010 (functional half, Task 6): `mutants-plan`'s `outputs.escalated`
 /// is byte-wired to `${{ steps.plan.outputs.escalated }}` — a mistyped
 /// step id/output name degrades gracefully to empty at the consumer, so
