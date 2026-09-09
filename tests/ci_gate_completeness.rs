@@ -4825,6 +4825,236 @@ fn test_mutants_shard_status_sentinel_uses_outcome_not_conclusion() {
     }
 }
 
+/// (cycle-006 F4 review round 3, F-PG-MED-001, MED): the shard `mutants`
+/// job's step list was OPEN. `PINNED_GATE_EXCLUDED_JOBS` lists `mutants`
+/// (it is not an always-run, unconditional `ci-gate.needs` member — it is
+/// skipped on push events and on escalation), and unlike its siblings on
+/// the required-gate decision path — `mutants-plan`
+/// (`PINNED_MUTANTS_PLAN_JOB_KEY_SET`/`PINNED_MUTANTS_PLAN_STEP_KEY_SETS`)
+/// and `mutants-aggregate` (`PINNED_MUTANTS_AGGREGATE_ENV_KEYS` and
+/// siblings) — the `mutants` shard job itself had NO job-level or
+/// per-step key-set pin at all before this fix.
+///
+/// **Concrete exploit this closes:** a `ci.yml` diff appends a NEW step to
+/// the `mutants` job, positioned AFTER `run-mutants` but BEFORE "Upload
+/// shard outcomes", that overwrites `mutants.out/outcomes.json` with a
+/// forged, always-100%-kill-rate summary (e.g. `{"caught": 999, "missed":
+/// 0, "timeout": 0, "unviable": 0}`). Every per-shard total the "Upload
+/// shard outcomes" step then uploads is fabricated, with ZERO code
+/// execution beyond a single `echo`/`cat` — `mutants-aggregate`'s pooled-
+/// total reconciliation (Step 4) is UNRECONCILED against per-shard
+/// CONTENT (only against the pre-counted `MUTANT_COUNT` total across all
+/// 8 shards combined), so a forged 100% kill rate on even one shard is
+/// invisible to it as long as the pooled total mutant count still adds
+/// up. Before this fix, nothing in this file asserted the `mutants` job's
+/// step SEQUENCE was closed, so this injected step was structurally
+/// unpinned — see `test_mutants_shard_step_key_set_pin_rejects_injected_
+/// outcomes_rewrite_step` below for the standing RED regression proof.
+///
+/// **Fix:** pin the shard job's COMPLETE, ORDERED step-key-set sequence
+/// (mirroring `PINNED_MUTANTS_PLAN_STEP_KEY_SETS`'s idiom exactly) — any
+/// appended, removed, reordered, or key-mutated step fails this pin,
+/// closing the "select the right steps, but an extra one also runs"
+/// class this test's sibling pins already close for `mutants-plan` and
+/// the seven always-run `ci-gate.needs` jobs.
+///
+/// Step order, per `ci.yml`'s `mutants` job as of this pass: harden-
+/// runner, checkout, install-action (cargo-mutants), rust-cache, download
+/// shared diff file, run mutation tests on this shard (id: run-mutants,
+/// `continue-on-error: true`), write shard status sentinel (`if:
+/// always()`), upload shard status sentinel (`if: always()`), upload
+/// shard outcomes (`if: always()`).
+const PINNED_MUTANTS_SHARD_JOB_KEY_SET: &[&str] = &[
+    "if",
+    "name",
+    "needs",
+    "runs-on",
+    "steps",
+    "strategy",
+    "timeout-minutes",
+];
+
+/// See `PINNED_MUTANTS_SHARD_JOB_KEY_SET`'s doc comment immediately above.
+const PINNED_MUTANTS_SHARD_STEP_KEY_SETS: &[&[&str]] = &[
+    &["name", "uses", "with"],                     // Harden the runner (Audit all outbound calls)
+    &["uses"],                                      // actions/checkout
+    &["uses", "with"],                              // taiki-e/install-action (cargo-mutants@27.1.0)
+    &["uses"],                                      // Swatinem/rust-cache
+    &["name", "uses", "with"],                      // Download shared diff file
+    &["continue-on-error", "id", "name", "run"],    // Run mutation tests on this shard
+    &["if", "name", "run"],                         // Write shard status sentinel
+    &["if", "name", "uses", "with"],                // Upload shard status sentinel
+    &["if", "name", "uses", "with"],                // Upload shard outcomes
+];
+
+/// Compares `job_block`'s job-level key set and per-step key-set SEQUENCE
+/// against `expected_job_keys`/`expected_step_sets` (both order-tolerant
+/// on input — this function sorts each set before comparing, but the
+/// STEP SEQUENCE itself — one entry per step, in step order — is never
+/// reordered). Returns `Ok(())` on an exact match on both, or
+/// `Err(String)` describing the first mismatch found (job-level key set
+/// checked first, then the step-key-set sequence).
+///
+/// Shared by `test_mutants_plan_job_and_step_key_sets_are_pinned`'s sibling
+/// for the `mutants` shard job (`test_mutants_shard_job_and_step_key_sets_
+/// are_pinned`) and by that test's own standing RED regression proof
+/// (`test_mutants_shard_step_key_set_pin_rejects_injected_outcomes_rewrite_
+/// step`, F-PG-MED-001), so the exact same comparison logic both jobs are
+/// exercised through in production is what the regression test proves is
+/// genuinely default-deny.
+fn check_job_and_step_key_sets(
+    job_block: &str,
+    expected_job_keys: &[&str],
+    expected_step_sets: &[&[&str]],
+) -> Result<(), String> {
+    let mut expected_job: Vec<String> = expected_job_keys.iter().map(|s| s.to_string()).collect();
+    expected_job.sort();
+    let actual_job = extract_job_level_key_set(job_block);
+    if actual_job != expected_job {
+        return Err(format!(
+            "job-level key set ({actual_job:?}) does not match the \
+             pinned set ({expected_job:?})"
+        ));
+    }
+
+    let expected_steps: Vec<Vec<String>> = expected_step_sets
+        .iter()
+        .map(|set| {
+            let mut v: Vec<String> = set.iter().map(|s| s.to_string()).collect();
+            v.sort();
+            v
+        })
+        .collect();
+    let actual_steps = extract_gate_step_key_sets(job_block);
+    if actual_steps != expected_steps {
+        return Err(format!(
+            "per-step key-set sequence ({actual_steps:?}) does not match \
+             the pinned, human-reviewed sequence ({expected_steps:?}) — \
+             an added, removed, reordered, or key-mutated step changes \
+             this"
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_mutants_shard_job_and_step_key_sets_are_pinned() {
+    let ci = read_ci_yml();
+    let mutants_block = extract_job_block(&ci, "mutants").unwrap_or_else(|| {
+        panic!("FAIL (F-PG-MED-001): `.github/workflows/ci.yml` does not contain a `mutants:` job.")
+    });
+
+    check_job_and_step_key_sets(
+        mutants_block,
+        PINNED_MUTANTS_SHARD_JOB_KEY_SET,
+        PINNED_MUTANTS_SHARD_STEP_KEY_SETS,
+    )
+    .unwrap_or_else(|err| {
+        panic!(
+            "FAIL (F-PG-MED-001): the sharded `mutants` job's job-level \
+             and/or per-step key sets do not match the pinned, human- \
+             reviewed sets — {err}. Most importantly, a step appended \
+             AFTER `run-mutants` could rewrite `mutants.out/outcomes.json` \
+             before the \"Upload shard outcomes\" step reads it, forging \
+             a shard's kill rate with no code execution — see this \
+             constant's own doc comment for the concrete exploit. If this \
+             is a deliberate, reviewed change, update \
+             PINNED_MUTANTS_SHARD_JOB_KEY_SET/PINNED_MUTANTS_SHARD_STEP_\
+             KEY_SETS in the SAME change.\n\
+             Current mutants block:\n{mutants_block}"
+        )
+    });
+}
+
+/// (cycle-006 F4 review round 3, F-PG-MED-001 — standing RED regression
+/// proof): a hand-crafted, untracked `mutants` shard job block (the
+/// tracked `ci.yml` is never touched) appends a step AFTER `run-mutants`
+/// — and BEFORE the pinned "Write shard status sentinel"/"Upload shard
+/// outcomes" steps — that overwrites `mutants.out/outcomes.json` to fake
+/// a 100% kill rate before it is uploaded. This is the exact exploit
+/// `PINNED_MUTANTS_SHARD_STEP_KEY_SETS` above exists to close; this test
+/// asserts `check_job_and_step_key_sets` — the SAME function the
+/// production pin test uses — genuinely rejects it, rather than merely
+/// documenting the intent to.
+#[test]
+fn test_mutants_shard_step_key_set_pin_rejects_injected_outcomes_rewrite_step() {
+    let forged_block = r#"  mutants:
+    name: Mutation Testing (Shard)
+    runs-on: ubuntu-latest
+    needs: [mutants-plan]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    if: github.event_name == 'pull_request' && needs.mutants-plan.outputs.escalated != 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@x
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@x
+      - uses: taiki-e/install-action@x
+        with:
+          tool: cargo-mutants@27.1.0
+      - uses: Swatinem/rust-cache@x
+      - name: Download shared diff file
+        uses: actions/download-artifact@x
+        with:
+          name: mutants-diff-file
+          path: /tmp/diff
+      - name: Run mutation tests on this shard
+        id: run-mutants
+        continue-on-error: true
+        run: |
+          cargo mutants --in-diff /tmp/diff/pr.diff \
+            --shard 0/8 --sharding slice \
+            --jobs 2 --baseline skip --timeout 240
+      - name: Forge a passing outcomes.json (F-PG-MED-001 RED reproduction)
+        run: |
+          mkdir -p mutants.out
+          echo '{"caught": 999, "missed": 0, "timeout": 0, "unviable": 0}' > mutants.out/outcomes.json
+      - name: Write shard status sentinel
+        if: always()
+        run: |
+          HAS_OUTCOMES=false
+          [ -f mutants.out/outcomes.json ] && HAS_OUTCOMES=true
+          echo done
+      - name: Upload shard status sentinel
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-status-0
+          path: /tmp/shard-status-0.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload shard outcomes
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-outcomes-0
+          path: mutants.out/outcomes.json
+          if-no-files-found: warn
+          retention-days: 1
+"#;
+
+    let result = check_job_and_step_key_sets(
+        forged_block,
+        PINNED_MUTANTS_SHARD_JOB_KEY_SET,
+        PINNED_MUTANTS_SHARD_STEP_KEY_SETS,
+    );
+
+    assert!(
+        result.is_err(),
+        "FAIL (F-PG-MED-001 RED proof did not hold): the pinned step-key- \
+         set check accepted a forged `mutants` shard job block with an \
+         extra, unpinned step injected AFTER `run-mutants` that rewrites \
+         `mutants.out/outcomes.json` before it is uploaded — the pin is \
+         NOT default-deny against this exploit."
+    );
+}
+
 // ---------------------------------------------------------------------------
 // CRITICAL — behavioral closure via PINNED LITERALS (PR #671 review, round
 // 6 — replaces every predicate tried in rounds 3-5).
@@ -8563,7 +8793,20 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// existing `value_of("run")` -> `Value::Scalar` idiom). Re-verified
 /// mechanically (`grep -c '^\s*#\[test\]' tests/ci_gate_completeness.rs`
 /// == 61).
-const EXPECTED_GUARD_TEST_COUNT: usize = 61;
+///
+/// **cycle-006 F4 review round 3 (F-PG-MED-001, MED): +2, 61 -> 63.**
+/// `test_mutants_shard_job_and_step_key_sets_are_pinned` closes the
+/// previously-OPEN `mutants` shard job step list (mirroring
+/// `PINNED_MUTANTS_PLAN_STEP_KEY_SETS`'s idiom for the sibling
+/// `mutants-plan` job) — an appended step after `run-mutants` could
+/// otherwise rewrite `mutants.out/outcomes.json` before it is uploaded,
+/// forging a shard's kill rate with zero code execution.
+/// `test_mutants_shard_step_key_set_pin_rejects_injected_outcomes_rewrite_
+/// step` is the standing RED regression proof that the shared
+/// `check_job_and_step_key_sets` helper genuinely rejects that injected
+/// step. Re-verified mechanically (`grep -c '^\s*#\[test\]'
+/// tests/ci_gate_completeness.rs` == 63).
+const EXPECTED_GUARD_TEST_COUNT: usize = 63;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
