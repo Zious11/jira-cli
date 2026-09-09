@@ -9909,6 +9909,22 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// `NAME=jq` variable-indirection assignment — none of which the round-6
 /// scan detected. Re-verified mechanically (this file's own `#[test]`-line
 /// count == 72).
+/// **cycle-006 F4 review round 8 (finding J-CRITICAL and finding J-O1):
+/// +3, 72 -> 75.** `test_mutants_plan_compute_step_run_body_is_byte_pinned`
+/// and `test_mutants_plan_compute_step_content_pin_rejects_diff_truncation_
+/// insertion` (J-CRITICAL, trace AC-004) are standing RED regression proofs
+/// that `mutants-plan`'s compute step `run:` body is byte-pinned in full
+/// (not merely checked for ten required substrings in order, which left a
+/// gap where an inserted shell command between two pinned fragments — e.g.
+/// silently truncating the `git diff` before it reaches `cargo mutants
+/// --list`) — closing that insertion vector.
+/// `test_contains_bare_jq_invocation_catches_wrapper_introducers_and_
+/// quoted_relative_spellings` (J-O1, trace AC-025/VP-MUTANTS-SHARD-025) is
+/// the standing regression proof that `contains_bare_jq_invocation` also
+/// catches wrapper-introducer command forms (e.g. `nohup`/`nice`/`time`
+/// prefixing a `jq` call) and quoted-relative jq spellings (e.g.
+/// `"./jq"`/`'./jq'`) that the round-8 G-MED scan (above) did not detect.
+/// Re-verified mechanically (this file's own `#[test]`-line count == 75).
 const EXPECTED_GUARD_TEST_COUNT: usize = 75;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
