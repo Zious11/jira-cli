@@ -9892,7 +9892,24 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// (`mutants-aggregate.sh`), mirroring the guard `check-ci-gate.sh`'s own
 /// jq-identity self-test already provided. Re-verified mechanically (this
 /// file's own `#[test]`-line count == 70).
-const EXPECTED_GUARD_TEST_COUNT: usize = 70;
+/// **cycle-006 F4 review round 8 (findings G-HIGH, G-MED): +2, 70 -> 72.**
+/// `test_mutants_shard_sentinel_run_step_rejects_outcomes_launder` (G-HIGH)
+/// is the standing RED regression proof that the `Write shard status
+/// sentinel` step's `run:` body is now byte-pinned
+/// (`PINNED_MUTANTS_SHARD_SENTINEL_RUN_BODY`, via `extract_and_normalize_
+/// mutants_shard_sentinel_run_body`) — closing a launder vector on the
+/// ONE OTHER `run:`-bearing step in the `mutants` shard job that
+/// `PINNED_MUTANTS_SHARD_RUN_BODY` (round 6, D-HIGH) did not cover.
+/// `test_contains_bare_jq_invocation_catches_command_introducers_and_
+/// process_substitution` (G-MED) is the standing regression proof that
+/// `contains_bare_jq_invocation` (backing `test_check_ci_gate_sh_and_
+/// mutants_aggregate_sh_have_no_bare_jq_invocations`, round 6 F-HIGH) now
+/// also catches `eval`/`command`/`exec`/`xargs`/`env`/`builtin`
+/// command-introducers, process-substitution `<(`/`>(` openers, and a
+/// `NAME=jq` variable-indirection assignment — none of which the round-6
+/// scan detected. Re-verified mechanically (this file's own `#[test]`-line
+/// count == 72).
+const EXPECTED_GUARD_TEST_COUNT: usize = 72;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
