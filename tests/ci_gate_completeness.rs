@@ -4539,15 +4539,15 @@ fn test_spec_guard_contains_check_ci_gate_self_test_step() {
 // AC-033) from `test_mutants_job_structure_unchanged_by_cigate2_option_c`.
 // The old name/body asserted the PRE-sharding single-job `mutants` shape
 // (Option C's "leave `mutants` entirely unchanged" contract, S-CIGATE-2).
-// This story's design REPLACES that shape: `mutants` becomes an 8-shard
+// This story's design REPLACES that shape: `mutants` is now an 8-shard
 // `strategy.matrix.shard` job depending on `mutants-plan`, with THREE
-// step-level `if: always()` occurrences (not one) on the two new sentinel
+// step-level `if: always()` occurrences (not one) on the two sentinel
 // steps plus the outcomes-upload step — the "3-count steps_with_if
-// cardinality inversion" the story's Task 8 names explicitly. This test is
-// therefore rewritten, not merely renamed, to assert the NEW sharded
-// design per `ci-yml-design.md §2`'s authoritative shape — it is EXPECTED
-// to fail (RED) until Task 9 (implementer, GREEN phase) reshapes the real
-// `mutants` job in `ci.yml` to match.
+// cardinality inversion" the story's Task 8 names explicitly. This test
+// was rewritten, not merely renamed, to assert the sharded design per
+// `ci-yml-design.md §2`'s authoritative shape; the implementer's Task 9
+// (GREEN phase) reshaped the real `mutants` job in `ci.yml` to match, and
+// this test now passes as a standing structural regression proof.
 #[test]
 fn test_mutants_shard_job_structure_matches_sharded_design() {
     let ci = read_ci_yml();
@@ -10521,37 +10521,33 @@ fn test_b1_needs_line_rejects_value_side_tag() {
 }
 
 // =============================================================================
-// cycle-006 mutants-ci-sharding (S-cycle6-mutants-ci-sharding.md) — RED-phase
-// guard tests (test-writer, Tasks 6/8/17-23 write-test halves).
+// cycle-006 mutants-ci-sharding (S-cycle6-mutants-ci-sharding.md) — guard
+// tests (test-writer, Tasks 6/8/17-23 write-test halves).
 //
-// Every test below is EXPECTED TO FAIL until the implementer's GREEN-phase
-// work lands: `mutants-plan`/`mutants-aggregate` do not yet exist in
-// `.github/workflows/ci.yml`, the `mutants` job has not yet been reshaped
-// into the 8-shard matrix (see `test_mutants_shard_job_structure_matches_
-// sharded_design` above, RENAMED/rewritten for the same reason), and
-// `scripts/mutants-aggregate.sh`'s decision logic is still the Task-2b
-// scaffold stub. This is genuine RED-before-GREEN, not a false failure:
-// each assertion below names a specific AC from `S-cycle6-mutants-ci-
-// sharding.md` and is written against the exact job/step shapes in
-// `.factory/phase-f2-spec-evolution/cycle-006/ci-yml-design.md`.
+// GREEN-tree status (corrected during F4 adversarial review round-8+9
+// doc-hygiene pass, finding O-LOW; originally authored RED-first per this
+// story's TDD discipline): the implementer's GREEN-phase work has since
+// landed — `mutants-plan`/`mutants-aggregate` both exist in
+// `.github/workflows/ci.yml`, the `mutants` job has been reshaped into the
+// 8-shard matrix (see `test_mutants_shard_job_structure_matches_sharded_
+// design` above), and `scripts/mutants-aggregate.sh`'s decision logic is
+// the real reconciliation implementation, not the Task-2b scaffold stub.
+// Every test below now PASSES against that GREEN tree. Each assertion
+// names a specific AC from `S-cycle6-mutants-ci-sharding.md` and is
+// written against the exact job/step shapes in
+// `.factory/phase-f2-spec-evolution/cycle-006/ci-yml-design.md` — that
+// traceability is unchanged from the original RED-phase authoring; only
+// this banner's narrated STATE was stale and has been corrected here.
 //
-// Deliberately OUT OF SCOPE for this RED-phase pass (left for the
-// implementer's GREEN-phase Task 20, which lands the ci.yml retarget and
-// the corresponding test-constant update in the SAME commit, per this
-// story's own "AC -> Task Coverage Audit" table): AC-032's `ci-gate.needs`
-// retarget (`PINNED_GATE_NEEDS_LINE` / `test_ci_gate_needs_exactly_the_
-// required_jobs`'s expected set) and `PINNED_GATE_EXCLUDED_JOBS`'s
-// `mutants`/`mutants-plan` admission — touching either now, ahead of the
-// real `ci.yml` edit, would either be inert (an unused literal) or would
-// retarget a currently-PASSING pre-existing test to fail for a reason
-// unrelated to a fixture this pass authored, muddying the RED signal this
-// section exists to produce cleanly. `EXPECTED_GUARD_TEST_COUNT` above is
-// likewise NOT bumped here (F4 Blocking Precondition / AC-031 is a
-// GREEN-phase process gate, Task 25) — `test_this_file_test_count_matches_
-// expected_denominator` is therefore EXPECTED to fail too, for the entirely
-// legitimate reason that this file now has more `#[test]` fns than that
-// stale counter says; this is reported as a known, intentional RED side
-// effect, not a defect in this pass's own new tests.
+// AC-032's `ci-gate.needs` retarget (`PINNED_GATE_NEEDS_LINE` /
+// `test_ci_gate_needs_exactly_the_required_jobs`'s expected set) and
+// `PINNED_GATE_EXCLUDED_JOBS`'s `mutants`/`mutants-plan` admission landed
+// in the implementer's GREEN-phase Task 20 commit, alongside the ci.yml
+// retarget itself, per this story's "AC -> Task Coverage Audit" table.
+// `EXPECTED_GUARD_TEST_COUNT` above was bumped in the same GREEN-phase
+// process-gate pass (F4 Blocking Precondition / AC-031, Task 25) and is
+// now current (see the ledger doc comment above the constant) —
+// `test_this_file_test_count_matches_expected_denominator` passes.
 // =============================================================================
 
 /// Read `scripts/mutants-aggregate.sh` relative to the repo root. Mirrors
@@ -10574,9 +10570,10 @@ fn test_mutants_plan_job_structural_shape() {
     let plan_block = extract_job_block(&ci, "mutants-plan").unwrap_or_else(|| {
         panic!(
             "FAIL (AC-004): `.github/workflows/ci.yml` does not contain a \
-             `mutants-plan:` job yet — this is the RED-phase proof for \
-             AC-004 (mutants-plan job structural pin); Task 7 (implementer, \
-             GREEN phase) adds it."
+             `mutants-plan:` job — this is the standing structural-shape \
+             regression proof for AC-004 (mutants-plan job structural pin); \
+             a `ci.yml` edit that removes or renames the job trips this \
+             failure."
         )
     });
 
@@ -11365,9 +11362,12 @@ fn test_mutants_plan_escalated_output_wired_to_step_output() {
 
 /// AC-005: `scripts/mutants-aggregate.sh`'s `EXPECTED_SHARDS` constant
 /// cross-checked against `mutants`'s `strategy.matrix.shard` sequence
-/// length — both currently absent (the script's Step 2 body is still the
-/// Task-2b stub; `mutants`'s matrix does not yet exist), so this is a
-/// genuine RED proof of the cross-check itself, not merely of one side.
+/// length — both now exist in the GREEN tree (the script's Step 2 body is
+/// the real reconciliation implementation; `mutants`'s 8-entry shard
+/// matrix is live in `.github/workflows/ci.yml`), so this is a standing
+/// regression proof of the cross-check itself, not merely of one side:
+/// if a future edit changes the matrix's shard count without updating
+/// `EXPECTED_SHARDS` (or vice versa), this test fails loudly.
 #[test]
 fn test_mutants_aggregate_expected_shards_matches_matrix_shard_count() {
     let ci = read_ci_yml();
@@ -11381,8 +11381,8 @@ fn test_mutants_aggregate_expected_shards_matches_matrix_shard_count() {
     .unwrap_or_else(|| {
         panic!(
             "FAIL (AC-005): `mutants` has no `strategy.matrix.shard` \
-             sequence yet — AC-033/Task 9 (implementer) adds the 8-shard \
-             matrix.\n\
+             sequence — AC-033's 8-shard matrix is required for this \
+             cross-check to run.\n\
              Current mutants block:\n{mutants_block}"
         )
     });
@@ -11394,9 +11394,9 @@ fn test_mutants_aggregate_expected_shards_matches_matrix_shard_count() {
         .unwrap_or_else(|| {
             panic!(
                 "FAIL (AC-005): `scripts/mutants-aggregate.sh` has no \
-                 `EXPECTED_SHARDS=` assignment yet — this is the Step 2 \
-                 body Tasks 10/11 (RED->GREEN cycle) will author; the \
-                 Task-2b scaffold deliberately does not implement it."
+                 `EXPECTED_SHARDS=` assignment — this is the Step 2 \
+                 reconciliation constant this cross-check pins against \
+                 `mutants`'s matrix shard count."
             )
         });
     let digits: String = expected_shards_line
@@ -11467,8 +11467,9 @@ fn test_mutants_aggregate_run_line_is_byte_pinned() {
     let agg_block = extract_job_block(&ci, "mutants-aggregate").unwrap_or_else(|| {
         panic!(
             "FAIL (AC-017): `.github/workflows/ci.yml` does not contain a \
-             `mutants-aggregate:` job yet — this is the RED-phase proof for \
-             AC-017; Task 16 (implementer, GREEN phase) adds it."
+             `mutants-aggregate:` job — this is the standing byte-pin \
+             regression proof for AC-017; a `ci.yml` edit that removes or \
+             renames the job trips this failure."
         )
     });
     let run_line =
@@ -11773,9 +11774,10 @@ fn assert_mutants_aggregate_env_value_pin(agg_block: &str, key: &str, expected: 
         }
         other => panic!(
             "FAIL: `mutants-aggregate`'s eval-step env `{key}:` is missing \
-             or not a plain scalar (found: {other:?}) — this is the \
-             RED-phase proof: the `mutants-aggregate` job does not exist \
-             yet in ci.yml.\n\
+             or not a plain scalar (found: {other:?}) — either the \
+             `mutants-aggregate` job is missing from ci.yml, or its \
+             eval-step `env:` block no longer wires this key the way this \
+             pin expects.\n\
              Current mutants-aggregate block:\n{agg_block}"
         ),
     }
