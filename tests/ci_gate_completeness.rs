@@ -11159,17 +11159,15 @@ fn test_mutants_plan_compute_step_run_body_is_byte_pinned() {
         )
     });
 
-    let run_text = extract_and_normalize_run_scalar_for_step(
-        plan_block,
-        "Compute diff and mutation plan",
-    )
-    .unwrap_or_else(|reason| {
-        panic!(
-            "FAIL (J-CRITICAL): `mutants-plan`'s \"Compute diff and \
+    let run_text =
+        extract_and_normalize_run_scalar_for_step(plan_block, "Compute diff and mutation plan")
+            .unwrap_or_else(|reason| {
+                panic!(
+                    "FAIL (J-CRITICAL): `mutants-plan`'s \"Compute diff and \
              mutation plan\" step {reason}\n\
              Current mutants-plan block:\n{plan_block}"
-        )
-    });
+                )
+            });
     assert_eq!(
         run_text, PINNED_MUTANTS_PLAN_COMPUTE_BODY,
         "FAIL (J-CRITICAL): the \"Compute diff and mutation plan\" step's \
