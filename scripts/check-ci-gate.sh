@@ -41,8 +41,9 @@
 # member that legitimately needs skip-tolerance — it is not dead code.
 #
 # TOOLING CHOICE: `jq` — pre-installed on `ubuntu-latest`, already an assumed
-# dependency of this exact file (`.github/workflows/ci.yml :: mutants §
-# "Check kill rate"` uses it). No new tooling assumption is introduced.
+# dependency of this exact file (`scripts/mutants-aggregate.sh`, invoked by
+# the `mutants-aggregate` job, uses it). No new tooling assumption is
+# introduced.
 #
 # INPUT: JSON payload shaped like GitHub Actions' `toJSON(needs)`, e.g.:
 #   {"fmt":{"result":"success",...},"mutants":{"result":"skipped",...}}
