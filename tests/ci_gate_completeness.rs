@@ -8550,7 +8550,20 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// (MED, the VP-006 F5 hand-off residual, closed early). Re-verified
 /// mechanically (`grep -c '^\s*#\[test\]' tests/ci_gate_completeness.rs`
 /// == 60).
-const EXPECTED_GUARD_TEST_COUNT: usize = 60;
+///
+/// **cycle-006 F4 review round 3 (F-PI-CRITICAL-001, CWE-358): +1, 60 ->
+/// 61.** `test_mutants_plan_compute_step_content_pin_rejects_decoy_
+/// comment_forgery` is the standing RED regression proof for the fix to
+/// `test_mutants_plan_compute_step_content_is_pinned` (rescoped from an
+/// ordered-substring search over the WHOLE raw `mutants-plan` job block —
+/// itself forgeable via a decoy YAML comment placed anywhere else in the
+/// job — to the same search scoped to the specific "Compute diff and
+/// mutation plan" step's PARSED `run:` scalar only, mirroring
+/// `test_mutants_shard_status_sentinel_uses_outcome_not_conclusion`'s
+/// existing `value_of("run")` -> `Value::Scalar` idiom). Re-verified
+/// mechanically (`grep -c '^\s*#\[test\]' tests/ci_gate_completeness.rs`
+/// == 61).
+const EXPECTED_GUARD_TEST_COUNT: usize = 61;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
@@ -9351,28 +9364,28 @@ fn test_mutants_plan_job_and_step_key_sets_are_pinned() {
 }
 
 /// (cycle-006 F4 review round 2, F-PF-HIGH-001 — HIGH-severity gate-bypass
-/// fix): closes the untrusted-`mutants-plan`-output vector.
+/// fix; hardened cycle-006 F4 review round 3, F-PI-CRITICAL-001, CWE-358):
+/// closes the untrusted-`mutants-plan`-output vector.
 /// `mutants-plan`'s three outputs (`escalated`/`mutant_count`/
 /// `overall_diff_lines`) are trusted, UNRECONCILED inputs to
 /// `mutants-aggregate`'s Step 1 escalation short-circuit and Step 4
 /// exact-equality reconciliation — `mutants-aggregate` never re-derives
-/// them independently. Before this test, `mutants-plan` had structural
-/// pins (AC-004's `outputs:` key set + job-level `if:`, and — as of this
-/// same review round — `test_mutants_plan_job_and_step_key_sets_are_
-/// pinned`'s job/step key-set sweep) but NOTHING asserted the "Compute
-/// diff and mutation plan" step's `run:` BODY actually derives those
-/// outputs from real `git diff`/`cargo mutants --list` invocations rather
-/// than fabricating them outright — a content-level gap neither a key-set
-/// pin (which only sees KEYS, never a scalar's own multi-line VALUE) nor
-/// AC-004's `outputs.escalated` wiring pin (which only proves the output
-/// is wired to `steps.plan.outputs.escalated`, not that `steps.plan`
-/// computed it honestly) can close.
+/// them independently. Before the round-2 fix, `mutants-plan` had
+/// structural pins (AC-004's `outputs:` key set + job-level `if:`, and —
+/// as of that same review round — `test_mutants_plan_job_and_step_key_
+/// sets_are_pinned`'s job/step key-set sweep) but NOTHING asserted the
+/// "Compute diff and mutation plan" step's `run:` BODY actually derives
+/// those outputs from real `git diff`/`cargo mutants --list` invocations
+/// rather than fabricating them outright — a content-level gap neither a
+/// key-set pin (which only sees KEYS, never a scalar's own multi-line
+/// VALUE) nor AC-004's `outputs.escalated` wiring pin (which only proves
+/// the output is wired to `steps.plan.outputs.escalated`, not that
+/// `steps.plan` computed it honestly) can close.
 ///
-/// **Concrete exploit this closes** (RED-proven this session against a
+/// **Concrete exploit round 2 closed** (RED-proven that session against a
 /// temporary, untracked reproduction of `ci.yml` — the tracked file was
-/// never modified; see this story's completion report for the exact diff
-/// applied and reverted): replace the ENTIRE "Compute diff and mutation
-/// plan" step's `run:` body with
+/// never modified): replace the ENTIRE "Compute diff and mutation plan"
+/// step's `run:` body with
 /// `echo "escalated=false" >> "$GITHUB_OUTPUT"; echo "mutant_count=0" >>
 /// "$GITHUB_OUTPUT"; echo "overall_diff_lines=1" >> "$GITHUB_OUTPUT"`
 /// (plus a placeholder file write so the "Upload diff file" step's
@@ -9385,20 +9398,146 @@ fn test_mutants_plan_job_and_step_key_sets_are_pinned() {
 /// required `ci-gate` goes GREEN with zero `cargo mutants` invocation and
 /// zero code execution, for ANY PR diff size.
 ///
-/// **Fix:** the step's `run:` body is a multi-line block scalar
-/// (`run: |`), so — mirroring `test_mutants_shard_job_structure_matches_
-/// sharded_design`'s own justification for the identical shape one job
-/// over — this is an ORDERED-substring check over the whole job block,
-/// not the single-physical-line byte-pin extractor used elsewhere in this
-/// file (which explicitly rejects non-single-line scalars; see
-/// `extract_and_normalize_step_run_line_by_name`'s own doc comment). Every
-/// fragment below ties a REQUIRED real command/variable to the SPECIFIC
-/// output it feeds, in the ORDER those computations must occur — the
-/// all-`echo` exploit above satisfies NONE of them: it invokes neither
-/// `git diff` nor `cargo mutants --list --in-diff`, and assigns
-/// `mutant_count`/`overall_diff_lines` from LITERAL numbers rather than
-/// `wc -l`-derived shell variables, so this test fails at the very FIRST
-/// fragment (`git diff origin/...`) against that reproduction.
+/// **Round-2 fix, and round-3's CWE-358 correction to it
+/// (F-PI-CRITICAL-001):** the step's `run:` body is a multi-line block
+/// scalar (`run: |`), so a byte pin (which requires a single-line scalar
+/// — see `extract_and_normalize_step_run_line_by_name`'s own doc comment)
+/// cannot be used directly. Round 2 instead ran an ORDERED-substring
+/// search over the ENTIRE raw job block text `extract_job_block` returns
+/// — mirroring `test_mutants_shard_job_structure_matches_sharded_design`'s
+/// justification for the identical shape one job over. That round-2
+/// choice was itself a gate-bypass: `extract_job_block`'s raw text
+/// includes every YAML comment anywhere in the job block, not just this
+/// one step's `run:` value, so a `ci.yml` diff could relocate the ten
+/// required fragments below into an inert YAML comment ANYWHERE ELSE in
+/// the job (e.g. between two unrelated steps) — commenting out the real
+/// script "for real" at the YAML level, not merely wrapping it in a bash
+/// `#` inside the executed scalar — while the "Compute diff and mutation
+/// plan" step's ACTUAL `run:` value held only three hardcoded `echo`
+/// lines. The ordered substring search, having no notion of WHICH node a
+/// piece of text belongs to, was satisfied by the decoy exactly as
+/// happily as by the real script, so round 2's own protection was itself
+/// forgeable with zero code execution — see
+/// `test_mutants_plan_compute_step_content_pin_rejects_decoy_comment_forgery`
+/// below for the persisted, standing RED proof of both halves of this
+/// claim.
+///
+/// The fix mirrors `test_mutants_shard_status_sentinel_uses_outcome_not_
+/// conclusion`'s existing robust idiom EXACTLY: resolve the SPECIFIC
+/// step's `run:` key to its parsed [`Value::Scalar`] via
+/// [`Step::value_of`] (`mutants_plan_compute_step_run_text` below) and
+/// search only ITS resolved `text` — content that lives outside that one
+/// scalar node (including a decoy YAML comment anywhere else in the job)
+/// is never part of what a real YAML parser resolves that key's value to,
+/// so it can no longer satisfy this pin. Every fragment below ties a
+/// REQUIRED real command/variable to the SPECIFIC output it feeds, in the
+/// ORDER those computations must occur — the all-`echo` exploit above
+/// satisfies NONE of them: it invokes neither `git diff` nor `cargo
+/// mutants --list --in-diff`, and assigns `mutant_count`/
+/// `overall_diff_lines` from LITERAL numbers rather than `wc -l`-derived
+/// shell variables, so this test fails at the very FIRST fragment (`git
+/// diff origin/...`) against that reproduction.
+///
+/// **Residual, honestly documented (NOT closed by this fix):** this pin
+/// (like `test_mutants_shard_status_sentinel_uses_outcome_not_conclusion`'s
+/// simple `.contains()` idiom it mirrors) is still an ordered-substring
+/// search WITHIN the resolved scalar text — it cannot distinguish a
+/// fragment appearing as EXECUTABLE bash from the identical text appearing
+/// as a bash `#`-prefixed comment INSIDE that same `run: |` block scalar
+/// (YAML has no comment syntax inside a literal block scalar; every byte
+/// is literal content). A `ci.yml` diff that bash-comments out the real
+/// script IN PLACE — within the same `run:` value, immediately followed by
+/// hardcoded `echo` lines — would still satisfy this pin. That specific
+/// variant reads, in a diff, as an obviously-gutted script (every real
+/// line prefixed with `#`, sitting right next to a suspiciously trivial
+/// replacement) rather than as an innocuous-looking change scattered
+/// elsewhere in the job, which is why it remains a code-review control
+/// rather than a structural one — the same class of residual this file's
+/// CI-Gate SCOPE SUMMARY already documents for other pins (see CLAUDE.md).
+const MUTANTS_PLAN_COMPUTE_STEP_REQUIRED_FRAGMENTS: [&str; 10] = [
+    // OVERALL_DIFF_LINES is computed from a REAL `git diff` against the
+    // PR's base ref, not a literal.
+    "git diff origin/${{ github.base_ref }}...HEAD",
+    r#"OVERALL_DIFF_LINES=$(wc -l < "${DIFF_FILE}""#,
+    // MUTANT_COUNT is computed from a REAL `cargo mutants --list`
+    // invocation scoped to that same diff file; a non-zero exit from
+    // it is a hard FAIL, not silently coerced to MUTANT_COUNT=0
+    // (mutants-sharding-invariants.md §INV-AGG sub-invariant 8's
+    // residual-risk note, cited in this step's own ci.yml comment).
+    r#"if ! cargo mutants --list --in-diff "${DIFF_FILE}""#,
+    "cannot reliably pre-count in-diff mutants",
+    r#"MUTANT_COUNT=$(wc -l < "${LIST_OUTPUT}""#,
+    // The escalation threshold is the human-reviewed literal,
+    // compared against the REAL MUTANT_COUNT computed above — not
+    // against a fabricated value.
+    "ESCALATION_THRESHOLD=120",
+    r#"if [ "${MUTANT_COUNT}" -gt "${ESCALATION_THRESHOLD}" ]"#,
+    // The three GITHUB_OUTPUT writes are wired to the VARIABLES
+    // computed above, not to literal values — an all-`echo` exploit
+    // writing e.g. `escalated=false` directly satisfies none of these.
+    r#"echo "escalated=${ESCALATED}" >> "${GITHUB_OUTPUT}""#,
+    r#"echo "mutant_count=${MUTANT_COUNT}" >> "${GITHUB_OUTPUT}""#,
+    r#"echo "overall_diff_lines=${OVERALL_DIFF_LINES}" >> "${GITHUB_OUTPUT}""#,
+];
+
+/// Ordered-substring search: returns `Ok(())` if every entry of
+/// `fragments` is found in `text`, in order (each search starts at the
+/// byte offset immediately after the previous match), or `Err(fragment)`
+/// naming the first fragment that could not be found at or after that
+/// position.
+///
+/// Deliberately generic over WHAT `text` is — the security property this
+/// story's fixes rely on (F-PI-CRITICAL-001, F-PG-MED-001) comes entirely
+/// from what the CALLER passes as `text` (a specific resolved scalar
+/// value, never a whole raw job block), not from anything this function
+/// does internally.
+fn find_fragments_in_order<'a>(text: &str, fragments: &[&'a str]) -> Result<(), &'a str> {
+    let mut last_offset = 0usize;
+    for fragment in fragments {
+        match text[last_offset..].find(fragment) {
+            Some(offset) => last_offset += offset + fragment.len(),
+            None => return Err(fragment),
+        }
+    }
+    Ok(())
+}
+
+/// Resolves `mutants-plan`'s "Compute diff and mutation plan" step's
+/// `run:` key to its parsed scalar text (F-PI-CRITICAL-001). `job_block`
+/// must be a single-job block as `extract_job_block` returns it (or an
+/// equivalently-shaped standalone fixture — see
+/// `test_mutants_plan_compute_step_content_pin_rejects_decoy_comment_forgery`).
+///
+/// # Panics
+///
+/// Panics (naming the missing step, or the unexpected `run:` shape) if
+/// `job_block` has no step named `Compute diff and mutation plan`, or
+/// that step's `run:` value is not a scalar — both indicate a genuine
+/// structural defect in the job block, not something this pin should
+/// silently tolerate.
+fn mutants_plan_compute_step_run_text(job_block: &str) -> String {
+    let job = WfDoc::parse_single_job(job_block);
+    let compute_step = job
+        .steps
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Compute diff and mutation plan"))
+        .unwrap_or_else(|| {
+            panic!(
+                "FAIL (F-PI-CRITICAL-001): no step named `Compute diff \
+                 and mutation plan` in this job block.\n\
+                 Current job block:\n{job_block}"
+            )
+        });
+    match compute_step.value_of("run") {
+        Some(Value::Scalar { text, .. }) => text.clone(),
+        other => panic!(
+            "FAIL (F-PI-CRITICAL-001): `Compute diff and mutation plan`'s \
+             `run:` value is not a plain scalar (found: {other:?}).\n\
+             Current job block:\n{job_block}"
+        ),
+    }
+}
+
 #[test]
 fn test_mutants_plan_compute_step_content_is_pinned() {
     let ci = read_ci_yml();
@@ -9409,50 +9548,126 @@ fn test_mutants_plan_compute_step_content_is_pinned() {
         )
     });
 
-    let required_fragments_in_order: [&str; 10] = [
-        // OVERALL_DIFF_LINES is computed from a REAL `git diff` against the
-        // PR's base ref, not a literal.
-        "git diff origin/${{ github.base_ref }}...HEAD",
-        r#"OVERALL_DIFF_LINES=$(wc -l < "${DIFF_FILE}""#,
-        // MUTANT_COUNT is computed from a REAL `cargo mutants --list`
-        // invocation scoped to that same diff file; a non-zero exit from
-        // it is a hard FAIL, not silently coerced to MUTANT_COUNT=0
-        // (mutants-sharding-invariants.md §INV-AGG sub-invariant 8's
-        // residual-risk note, cited in this step's own ci.yml comment).
-        r#"if ! cargo mutants --list --in-diff "${DIFF_FILE}""#,
-        "cannot reliably pre-count in-diff mutants",
-        r#"MUTANT_COUNT=$(wc -l < "${LIST_OUTPUT}""#,
-        // The escalation threshold is the human-reviewed literal,
-        // compared against the REAL MUTANT_COUNT computed above — not
-        // against a fabricated value.
-        "ESCALATION_THRESHOLD=120",
-        r#"if [ "${MUTANT_COUNT}" -gt "${ESCALATION_THRESHOLD}" ]"#,
-        // The three GITHUB_OUTPUT writes are wired to the VARIABLES
-        // computed above, not to literal values — an all-`echo` exploit
-        // writing e.g. `escalated=false` directly satisfies none of these.
-        r#"echo "escalated=${ESCALATED}" >> "${GITHUB_OUTPUT}""#,
-        r#"echo "mutant_count=${MUTANT_COUNT}" >> "${GITHUB_OUTPUT}""#,
-        r#"echo "overall_diff_lines=${OVERALL_DIFF_LINES}" >> "${GITHUB_OUTPUT}""#,
-    ];
-    let mut last_offset = 0usize;
-    for fragment in &required_fragments_in_order {
-        let offset = plan_block[last_offset..].find(fragment).unwrap_or_else(|| {
+    let run_text = mutants_plan_compute_step_run_text(plan_block);
+
+    find_fragments_in_order(&run_text, &MUTANTS_PLAN_COMPUTE_STEP_REQUIRED_FRAGMENTS)
+        .unwrap_or_else(|missing_fragment| {
             panic!(
-                "FAIL (F-PF-HIGH-001, HIGH-severity gate-bypass): \
-                 `mutants-plan`'s \"Compute diff and mutation plan\" step \
-                 is missing the fragment `{fragment}`, or it appears out \
-                 of order relative to the previously-matched fragment(s) \
-                 — this step's `run:` body must compute \
-                 `escalated`/`mutant_count`/`overall_diff_lines` from REAL \
-                 `git diff`/`cargo mutants --list` invocations, not \
-                 fabricate them (the exact gate-bypass this test exists to \
-                 catch — see this test's own doc comment for the concrete \
+                "FAIL (F-PI-CRITICAL-001 / F-PF-HIGH-001, gate-bypass): \
+                 `mutants-plan`'s \"Compute diff and mutation plan\" \
+                 step's PARSED `run:` scalar is missing the fragment \
+                 `{missing_fragment}`, or it appears out of order \
+                 relative to the previously-matched fragment(s) — this \
+                 step's `run:` body must compute `escalated`/ \
+                 `mutant_count`/`overall_diff_lines` from REAL `git \
+                 diff`/`cargo mutants --list` invocations, not fabricate \
+                 them (the exact gate-bypass this test exists to catch — \
+                 see this test's own doc comment for the concrete \
                  exploit).\n\
-                 Current mutants-plan block:\n{plan_block}"
+                 Parsed run: scalar text:\n{run_text}"
             )
         });
-        last_offset += offset + fragment.len();
-    }
+}
+
+/// (cycle-006 F4 review round 3, F-PI-CRITICAL-001, CWE-358 — standing RED
+/// regression proof): see `test_mutants_plan_compute_step_content_is_
+/// pinned`'s own doc comment above for the full narrative. This test
+/// pins BOTH halves of the claim against a hand-crafted, untracked
+/// `mutants-plan` fixture (the tracked `ci.yml` is never touched):
+///
+/// 1. The OLD (round-2) check — an ordered substring search over the
+///    ENTIRE raw job block — is satisfied by a decoy: the ten required
+///    fragments relocated into an inert YAML comment that sits BETWEEN
+///    two unrelated steps, entirely outside the "Compute diff and
+///    mutation plan" step's own `run:` scalar. This proves the
+///    round-2-closed exploit was real (a diff review that skimmed for
+///    "does this text still appear somewhere" would have seen it).
+/// 2. The NEW (round-3) check — the same ordered substring search, but
+///    scoped to ONLY that step's resolved `run:` scalar via
+///    `mutants_plan_compute_step_run_text` — correctly REJECTS the same
+///    fixture, because a real YAML parser never includes a comment living
+///    outside a scalar node when resolving that node's value.
+#[test]
+fn test_mutants_plan_compute_step_content_pin_rejects_decoy_comment_forgery() {
+    let forged_block = r#"  mutants-plan:
+    name: Mutation Test Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'pull_request'
+    outputs:
+      escalated: ${{ steps.plan.outputs.escalated }}
+      mutant_count: ${{ steps.plan.outputs.mutant_count }}
+      overall_diff_lines: ${{ steps.plan.outputs.overall_diff_lines }}
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@x
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@x
+        with:
+          fetch-depth: 0
+      - uses: taiki-e/install-action@x
+        with:
+          tool: cargo-mutants@27.1.0
+      - uses: Swatinem/rust-cache@x
+      # FORGERY (F-PI-CRITICAL-001 RED reproduction): the real script is
+      # "commented out" by relocating it here, as an ordinary YAML
+      # comment entirely OUTSIDE the "Compute diff and mutation plan"
+      # step's `run:` scalar below -- a real YAML parser drops this
+      # when resolving that step's `run:` value, but the OLD
+      # ordered-substring-over-the-whole-block check could not tell
+      # the difference.
+      #   git diff origin/${{ github.base_ref }}...HEAD
+      #   OVERALL_DIFF_LINES=$(wc -l < "${DIFF_FILE}"
+      #   if ! cargo mutants --list --in-diff "${DIFF_FILE}"
+      #   cannot reliably pre-count in-diff mutants
+      #   MUTANT_COUNT=$(wc -l < "${LIST_OUTPUT}"
+      #   ESCALATION_THRESHOLD=120
+      #   if [ "${MUTANT_COUNT}" -gt "${ESCALATION_THRESHOLD}" ]
+      #   echo "escalated=${ESCALATED}" >> "${GITHUB_OUTPUT}"
+      #   echo "mutant_count=${MUTANT_COUNT}" >> "${GITHUB_OUTPUT}"
+      #   echo "overall_diff_lines=${OVERALL_DIFF_LINES}" >> "${GITHUB_OUTPUT}"
+      - name: Compute diff and mutation plan
+        id: plan
+        run: |
+          echo "escalated=false" >> "$GITHUB_OUTPUT"
+          echo "mutant_count=0" >> "$GITHUB_OUTPUT"
+          echo "overall_diff_lines=1" >> "$GITHUB_OUTPUT"
+      - name: Upload diff file (shared across all shards)
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-diff-file
+          path: /tmp/pr.diff
+          if-no-files-found: error
+          retention-days: 1
+"#;
+
+    // Half 1: the OLD, now-replaced check (ordered substring search over
+    // the ENTIRE raw job block) is satisfied by the decoy comment above —
+    // proving the exploit this test guards against was real, not
+    // hypothetical. If this expectation ever fails, the fixture itself
+    // has drifted and must be revised to keep reproducing the exploit.
+    find_fragments_in_order(forged_block, &MUTANTS_PLAN_COMPUTE_STEP_REQUIRED_FRAGMENTS).expect(
+        "SETUP INVARIANT VIOLATED: this forged fixture must satisfy the \
+         OLD raw-block ordered-substring search (via its decoy comment) — \
+         if it does not, the fixture no longer reproduces the \
+         F-PI-CRITICAL-001 exploit and must be revised.",
+    );
+
+    // Half 2: the NEW check (parsed `run:` scalar of the SPECIFIC step,
+    // only) must NOT find the fragments — they were never part of what
+    // that step's `run:` key resolves to.
+    let run_text = mutants_plan_compute_step_run_text(forged_block);
+    let result = find_fragments_in_order(&run_text, &MUTANTS_PLAN_COMPUTE_STEP_REQUIRED_FRAGMENTS);
+    assert!(
+        result.is_err(),
+        "FAIL (F-PI-CRITICAL-001 RED proof did not hold): the parsed- \
+         `run:`-scalar check accepted a forged `mutants-plan` block whose \
+         real script was relocated to a decoy YAML comment OUTSIDE the \
+         \"Compute diff and mutation plan\" step's `run:` value — the fix \
+         is NOT default-deny against this exploit.\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
 }
 
 /// AC-010 (functional half, Task 6): `mutants-plan`'s `outputs.escalated`
