@@ -1308,6 +1308,62 @@ Same documentation posture as this repo's other accepted CI-gate residuals (the 
 and the two unpinned `uses:` values on the `ci-gate` decision path — see CLAUDE.md's
 "CI Gate — SCOPE SUMMARY"): documented and reasoned about, not fixed in this round.
 
+### A third residual, orthogonal to the two above: `examine_globs` shrinkage (cycle-006 F4 review round 8+9, finding M-LOW)
+
+A separate, PRE-EXISTING residual in the same whitelist-scoped mutation model, named here for
+the first time even though the underlying property predates cycle-006: `.cargo/mutants.toml`'s
+`examine_globs` list is a plain, human-edited allowlist of files `cargo mutants --list`
+considers at all. A plaintext, zero-code-execution PR that removes an entry from
+`examine_globs` (paired with the matching `docs/specs/cargo-mutants-policy.md` §Scope
+bullet, so `scripts/check-cargo-mutants-policy-citations.sh`'s citation-parity check still
+passes) drops that file out of mutation scope entirely. Concretely, for a changed file no
+longer listed: `cargo mutants --list --in-diff <diff>` reports zero mutants for it,
+`mutants-plan`'s `MUTANT_COUNT` is computed honestly against the now-narrower scope, every
+shard's `cargo mutants --in-diff … --shard <k>/8` run also sees zero mutants for that file,
+and `mutants-aggregate.sh`'s Step 4 reconciliation (pooled total vs. `MUTANT_COUNT`) still
+holds — both sides agree, because both were computed from the same shrunken `examine_globs`.
+The gate goes green via Step 5's legitimate "non-empty diff, 0 mutants examined → OK" branch,
+with the changed code inside the removed file completely untested by mutation testing, and no
+reconciliation mismatch anywhere to catch it.
+
+**This is not the same mechanism as the two residuals above.** Those require either
+code-execution-in-the-build/test-loop or a fabricated/spoofed artifact; this one requires
+neither — it is a plaintext, semantically-legal edit to a config file plus its paired policy
+doc bullet, and every downstream check (`mutants-plan`, the shard matrix, `mutants-aggregate`)
+computes its numbers *honestly* against the narrowed scope it was handed. The existing
+`tests/mutants_glob_existence.rs` guard (DEC-150 Guard 3) does not catch this either — it
+only asserts every EXISTING `examine_globs` entry resolves to ≥1 real file; it has no opinion
+on whether an entry that SHOULD be present is missing.
+
+**Blast radius: mutation-quality signal only**, same as the two residuals above — no secret
+or `GITHUB_TOKEN` reference exists on this path, and the change is fully visible in the PR's
+`ci.yml`-adjacent diff (`.cargo/mutants.toml` plus the paired policy-doc bullet, both
+plaintext, both reviewable). **Control: code review of the `.cargo/mutants.toml` diff**,
+same posture as this document's other residuals — a reviewer who notices a changed
+`src/` file is no longer paired with an `examine_globs`/§Scope entry (or notices an entry
+disappearing without a corresponding "this file was deleted/merged" justification) catches
+it before merge.
+
+**Considered and deliberately NOT added: a floor/minimum-membership guard test.** A test
+asserting `examine_globs` contains at least some fixed set of "known-required" paths (or a
+minimum count) was evaluated and rejected as higher-maintenance than it's worth for a
+residual this narrow: `examine_globs` has grown by a handful of entries in nearly every
+cycle that touched security- or bulk-write-relevant code (see the Changelog table below —
+16 → 18 → 20 → the current list, each bump its own dated entry), so a hard-coded floor set
+would need a matching update in the SAME commit as any future legitimate addition, adding
+review friction without closing the actual gap: a floor guard only catches a member DROPPING
+below a previously-pinned set — it says nothing about a file that should have been added at
+creation time but never was (the exact "new CLI handler file → add to mutants.toml at
+creation" drift class already named at P22-001/DEC-149/S-MUTANTS-SCOPE-1, which is a
+recurring, independently-tracked process gap, not something a static floor list can enforce).
+A floor guard also cannot distinguish a legitimate removal (the file was deleted, or its
+mutation-relevant logic was fully relocated elsewhere and the new location is already listed)
+from a malicious one — both look identical to a membership-count check. This residual is
+therefore left as a documented, code-review-controlled gap rather than backstopped by a new
+test; a follow-up story (provenance- or diff-aware `examine_globs` change review, e.g. a CI
+check that flags an `examine_globs` removal for extra scrutiny without hard-blocking
+legitimate refactors) is tracked separately, not opened by this round.
+
 ## Future Path: Job Sharding (Path B) — LANDED (cycle-006, 2026-09-07)
 
 **This is no longer a future path — it is the current design.** Path A's 240-minute
