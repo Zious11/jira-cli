@@ -429,7 +429,8 @@ is unchanged.
 pre-cycle-006 single-job budget (a ~400+ mutant PR timing out a single 240-minute job).
 Under the sharded design, the primary forcing function for an oversized diff is the
 `>120`-in-diff-mutant escalation threshold (`ESCALATION_THRESHOLD=120`, INV-ESCALATE —
-see **Sharded Mutation Gate (cycle-006)** below), reached at 120 mutants, not ~400, and
+see **Sharded Mutation Gate (cycle-006)** below) — the comparison is `-gt 120`, so
+escalation begins at 121+ in-diff mutants (120 itself does not escalate), not ~400 — and
 resolved by `mutants-aggregate`'s Step 1 as an ordinary CI failure BEFORE any shard job is
 even scheduled — not by a job timing out after running. A single shard job's own
 `timeout-minutes: 60` budget being exceeded (a genuinely slow shard, independent of the
