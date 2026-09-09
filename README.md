@@ -475,6 +475,21 @@ jr completion fish | source
 | 124 | Timeout / deadline exceeded |
 | 130 | Interrupted (Ctrl+C) |
 
+## Mutation testing
+
+Test-suite quality is enforced two ways:
+
+- **Per-PR (required CI, reflected by the CI badge above):** every pull request is gated
+  by a diff-scoped [cargo-mutants](https://mutants.rs/) run — mutations are generated only
+  against lines changed in the PR, sharded across parallel jobs, and reconciled by
+  `mutants-aggregate` as a required `CI Gate` check. See
+  [`docs/specs/cargo-mutants-policy.md`](docs/specs/cargo-mutants-policy.md).
+- **Nightly (advisory, full-scope):**
+  [`mutants-nightly.yml`](.github/workflows/mutants-nightly.yml) runs a full-scope mutation
+  sweep across the whole codebase (not just PR diffs) on a schedule. Its pooled kill rate is
+  published to that workflow run's **Actions job summary** — it never gates a merge and is
+  not a required check.
+
 ## License
 
 MIT

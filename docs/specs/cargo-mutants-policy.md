@@ -658,7 +658,10 @@ and reviewed) a repo admin merges via GitHub's branch-protection "Require approv
 bypass, explicitly acknowledging the unverified mutation coverage in the PR description.
 An advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=16,
 non-blocking) still exercises the full mutation surface regardless of how an escalated PR
-is merged.
+is merged. Maintainers checking the current full-scope pooled kill rate should read the
+**Actions job summary** of the latest `Mutants Nightly (Full Scope)` workflow run (the
+`mutants-nightly-report` job's summary write) rather than scraping logs — this is advisory
+visibility only, not a status check.
 
 ## Whitelist Convention
 
