@@ -21,6 +21,7 @@ use super::field_resolve::FieldMetaSource;
 use super::format;
 use super::helpers;
 use super::json_output;
+use super::mentions;
 
 /// Number of issues above which a `--jql`-driven bulk edit requires explicit
 /// `--yes` (or `--no-input` implicit-yes) to proceed. Below this threshold the
@@ -68,11 +69,7 @@ pub(super) async fn handle_edit(
         description_stdin,
         markdown,
         field: field_raw,
-        // S-cycle5-mention-resolution-wiring: `no_mentions` is a stub-stage
-        // field addition only (AC-014) — wiring it into this handler (both
-        // the dry-run and live call sites, AC-009/AC-010/AC-015) is the
-        // implementer's TDD work (Step 4), not this pass.
-        no_mentions: _,
+        no_mentions,
     } = command
     else {
         unreachable!()
@@ -246,6 +243,9 @@ pub(super) async fn handle_edit(
         if markdown {
             conflicting.push("--markdown");
         }
+        if no_mentions {
+            conflicting.push("--no-mentions");
+        }
         if !field_pairs.is_empty() {
             conflicting.push("--field");
         }
@@ -396,6 +396,9 @@ pub(super) async fn handle_edit(
         }
         if markdown {
             unsupported.push("--markdown");
+        }
+        if no_mentions {
+            unsupported.push("--no-mentions");
         }
         if !field_pairs.is_empty() {
             unsupported.push("--field");
@@ -599,9 +602,23 @@ pub(super) async fn handle_edit(
         } else {
             description.clone()
         };
+        // S-cycle5-mention-resolution-wiring (AC-009/AC-010): the dry-run
+        // preview forces `no_input = true` UNCONDITIONALLY when resolving
+        // mentions, regardless of the invocation's own ambient `no_input` —
+        // an ambiguous `@Name` during `--dry-run` always takes the
+        // non-interactive exit-64-with-candidates path, never a
+        // `dialoguer::Select` prompt, even at an interactive TTY. This
+        // `Err` propagates via `?` BEFORE any per-field `println!` below,
+        // preserving the "stdout EMPTY on error, in both modes"
+        // postcondition (VP-692-002/-004).
         let dr_desc_adf: Option<serde_json::Value> = match &dr_desc_text {
             Some(text) => Some(if markdown {
-                adf::markdown_to_adf(text)?
+                if no_mentions {
+                    adf::markdown_to_adf_no_mentions(text)?
+                } else {
+                    let resolutions = mentions::resolve_mentions(client, text, true).await?;
+                    adf::markdown_to_adf_with_mentions(text, &resolutions)?
+                }
             } else {
                 adf::text_to_adf(text)
             }),
@@ -968,7 +985,12 @@ pub(super) async fn handle_edit(
 
     if let Some(ref text) = desc_text {
         let adf_body = if markdown {
-            adf::markdown_to_adf(text)?
+            if no_mentions {
+                adf::markdown_to_adf_no_mentions(text)?
+            } else {
+                let resolutions = mentions::resolve_mentions(client, text, no_input).await?;
+                adf::markdown_to_adf_with_mentions(text, &resolutions)?
+            }
         } else {
             adf::text_to_adf(text)
         };
@@ -2558,6 +2580,8 @@ mod tests {
             "description",
             "description_stdin",
             "markdown",
+            "no_mentions", // --no-mentions (S-cycle5-mention-resolution-wiring): only meaningful
+            // alongside --markdown/--description, both single-key-only
             "field",     // --field NAME=VALUE (S-396): single-key only (BC-3.4.017 Gate A)
             "component", // --component add:/remove: (S-605-1): single-key only (BC-3.4.022)
         ]
@@ -2872,6 +2896,7 @@ pub enum IssueCommand {
             "--description",
             "--description-stdin", // description_stdin → description-stdin
             "--markdown",
+            "--no-mentions", // no_mentions → no-mentions (S-cycle5-mention-resolution-wiring)
             "--field",
             "--component", // component (S-605-1): BC-3.4.020 amendment, AC-015
         ]
@@ -2897,20 +2922,21 @@ pub enum IssueCommand {
         );
     }
 
-    /// R2 pin: the `conflicting.push` extractor correctly identifies exactly 13 flags
+    /// R2 pin: the `conflicting.push` extractor correctly identifies exactly 14 flags
     /// from the current source of edit.rs. This test pins the extractor against the
     /// actual file — if the extraction logic regresses (e.g., formatting drift changes
     /// the pattern), this fails distinctly from the set-equality meta-test.
     ///
-    /// The 13 expected members are:
+    /// The 14 expected members are:
     ///   --field, --summary, --priority, --type, --team, --points, --no-points,
     ///   --parent, --no-parent, --description, --description-stdin, --markdown,
-    ///   --component
+    ///   --no-mentions, --component
     ///
     /// Closes EC-3.4.017-14 (R2 pin, S-407 AC-013). Extended to 13 by S-605-1
-    /// (BC-3.4.020 amendment, AC-015).
+    /// (BC-3.4.020 amendment, AC-015); extended to 14 by
+    /// S-cycle5-mention-resolution-wiring (`--no-mentions`, AC-014/AC-015).
     #[test]
-    fn test_label_conflict_block_extractor_pin_13_members() {
+    fn test_label_conflict_block_extractor_pin_14_members() {
         let source = include_str!("edit.rs");
 
         let extracted: BTreeSet<String> = source
@@ -2928,9 +2954,10 @@ pub enum IssueCommand {
             })
             .collect();
 
-        // The 13 current --label conflict block entries (as of S-605-1).
-        // If the count changes, update both this test AND the meta-test above.
-        let expected_13: BTreeSet<String> = [
+        // The 14 current --label conflict block entries (as of
+        // S-cycle5-mention-resolution-wiring). If the count changes, update
+        // both this test AND the meta-test above.
+        let expected_14: BTreeSet<String> = [
             "--field",
             "--summary",
             "--priority",
@@ -2943,6 +2970,7 @@ pub enum IssueCommand {
             "--description",
             "--description-stdin",
             "--markdown",
+            "--no-mentions",
             "--component",
         ]
         .iter()
@@ -2951,18 +2979,18 @@ pub enum IssueCommand {
 
         assert_eq!(
             extracted.len(),
-            13,
-            "R2 pin: expected exactly 13 conflicting.push entries in edit.rs, found {}.\n\
+            14,
+            "R2 pin: expected exactly 14 conflicting.push entries in edit.rs, found {}.\n\
              Current extracted set: {:?}",
             extracted.len(),
             extracted,
         );
 
         assert_eq!(
-            extracted, expected_13,
-            "R2 pin: extracted flag set does not match the 13 expected members.\n\
+            extracted, expected_14,
+            "R2 pin: extracted flag set does not match the 14 expected members.\n\
              Extracted: {:?}\nExpected: {:?}",
-            extracted, expected_13,
+            extracted, expected_14,
         );
     }
 }
