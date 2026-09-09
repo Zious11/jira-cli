@@ -77,7 +77,11 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["issue", "view"], &["--output"]),
     // issue create  (--request-type added in S-JSM-E2E-1 Scenarios 5+6;
     //                --description/--description-stdin/--markdown/--points/--parent added in E2E-HV-2;
-    //                --component added in S-COMP-E2E-1 AC-009 single-key live test)
+    //                --component added in S-COMP-E2E-1 AC-009 single-key live test;
+    //                --no-mentions added in S-cycle5-mention-resolution-wiring AC-014/AC-020,
+    //                issue #674 — declared on the real clap surface, not yet exercised by
+    //                e2e_live.rs's mention round-trip tests, which resolve mentions rather
+    //                than suppress them)
     (
         &["issue", "create"],
         &[
@@ -90,6 +94,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--description",
             "--description-stdin",
             "--markdown",
+            "--no-mentions",
             "--points",
             "--parent",
             "--component",
@@ -98,7 +103,9 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     // issue edit  (--priority added: used in e2e_live.rs priority round-trip test;
     //              --description-stdin/--markdown/--points/--no-points/--parent/--no-parent/--field
     //              added in E2E-HV-2; --component added in S-605-2 AC-010 bulk
-    //              multiselectComponents live smoke test, DEC-280)
+    //              multiselectComponents live smoke test, DEC-280;
+    //              --no-mentions added in S-cycle5-mention-resolution-wiring AC-014/AC-020,
+    //              issue #674 — see the issue-create row's note above)
     (
         &["issue", "edit"],
         &[
@@ -112,6 +119,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--no-input",
             "--description-stdin",
             "--markdown",
+            "--no-mentions",
             "--points",
             "--no-points",
             "--parent",
@@ -122,15 +130,24 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     ),
     // issue comment add  (S-577-1 subcommand refactor: flat form → add/delete/edit/view)
     //   --internal added in S-JSM-E2E-1 Scenario 5;
-    //   --file/--stdin/--markdown added in E2E-HV-2 comment-channels test
+    //   --file/--stdin/--markdown added in E2E-HV-2 comment-channels test;
+    //   --no-mentions added in S-cycle5-mention-resolution-wiring AC-014/AC-020, issue #674
     (
         &["issue", "comment", "add"],
-        &["--output", "--internal", "--file", "--stdin", "--markdown"],
+        &[
+            "--output",
+            "--internal",
+            "--file",
+            "--stdin",
+            "--markdown",
+            "--no-mentions",
+        ],
     ),
     // issue comment delete (stub — S-577-3; SURFACE row added by S-577-1 AC-007)
     (&["issue", "comment", "delete"], &["--id", "--yes"]),
     // issue comment edit (stub — S-577-4/5; SURFACE row added by S-577-1 AC-007)
-    //   --output added in S-577-5 MERGE semantics e2e probe
+    //   --output added in S-577-5 MERGE semantics e2e probe;
+    //   --no-mentions added in S-cycle5-mention-resolution-wiring AC-014/AC-020, issue #674
     (
         &["issue", "comment", "edit"],
         &[
@@ -138,6 +155,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--file",
             "--stdin",
             "--markdown",
+            "--no-mentions",
             "--internal",
             "--public",
             "--yes",

@@ -13362,3 +13362,464 @@ fn test_e2e_jsm_attachment_upload_no_flag() {
         "AC-004: list must contain uploaded AID={the_aid} (BC-3.9.002); got: {list_stdout}"
     );
 }
+
+// ===========================================================================
+// Mention resolution round-trip E2E (S-cycle5-mention-resolution-wiring, #674)
+// ===========================================================================
+//
+// Four `JR_RUN_E2E`-gated round-trip scenarios (VP-674-014/015/016/017,
+// H-NEW-MENTION-009): comment add (PRIMARY per the human-approved scope),
+// issue create (platform), issue edit, and JSM `issue create --request-type`.
+// Each posts a bracket-form `[~accountid:<id>]` mention against a real Jira
+// user, fetches the object back via the raw REST API (`jr api`, bypassing
+// any `jr`-side rendering), and asserts the fetched ADF contains a `mention`
+// node whose `attrs.id` equals the controlled test account's REAL accountId
+// — proving the full round trip end-to-end against live Jira, not a
+// wiremock fixture (no wiremock fixture can prove Jira's real `mention` node
+// schema accepts the emitted shape).
+//
+// Gated additionally on `JR_E2E_MENTION_ACCOUNT_ID` — an optional env var
+// naming a CONTROLLED test account's accountId to mention (never a real
+// person). Clean-skips (early return) when unset, per the "reuse the
+// existing account, or add a dedicated seam" F4 implementation choice
+// (verification-delta-674.md §11 item 4) — this suite takes the dedicated
+// named-seam option for determinism (bracket-form mentions need an
+// accountId directly; `@Name` mentions would additionally need the
+// account's exact display name and risk ambiguous ExactMultiple/Ambiguous
+// ONLY-MATCH failures against a shared, live, multi-user Jira org, which
+// bracket-form sidesteps entirely). Documented in
+// `docs/specs/e2e-live-jira-testing.md` §8 in this same commit.
+
+/// Returns the controlled mention-target accountId from
+/// `JR_E2E_MENTION_ACCOUNT_ID`, or `None` when unset/empty (clean-skip
+/// signal for all four mention round-trip tests below).
+fn mention_account_id() -> Option<String> {
+    match env::var("JR_E2E_MENTION_ACCOUNT_ID") {
+        Ok(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// Fetch a JSON value via `jr api <path>` — a raw REST passthrough used to
+/// inspect the real, stored ADF shape without going through any `jr`-side
+/// rendering (`issue view`/`comment view` render to human text and would
+/// lose the `mention` node's structure).
+///
+/// Returns `None` on any spawn/exit/parse failure — callers should `expect`
+/// with a descriptive message, since a `None` here means the round-trip
+/// itself could not be verified (a real failure, not a clean-skip — the
+/// env-gate clean-skip already happened before this is called).
+fn fetch_raw(h: &E2eHarness, path: &str) -> Option<Value> {
+    let out = h.cmd().args(["api", path]).output().ok()?;
+    if !out.status.success() {
+        eprintln!(
+            "[WARN] fetch_raw: `jr api {path}` exited non-zero (exit {:?}): {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        return None;
+    }
+    serde_json::from_slice(&out.stdout).ok()
+}
+
+/// Recursively search an ADF value for a `mention` node whose `attrs.id`
+/// equals `id`. Mirrors `tests/mention_resolution.rs::has_mention_with_id`,
+/// duplicated here (not shared) since `e2e_live.rs` and
+/// `mention_resolution.rs` are independent integration-test binaries with
+/// no shared non-`common` module.
+fn adf_contains_mention_id(v: &Value, id: &str) -> bool {
+    if v.get("type").and_then(Value::as_str) == Some("mention")
+        && v["attrs"]["id"].as_str() == Some(id)
+    {
+        return true;
+    }
+    if let Some(children) = v.get("content").and_then(Value::as_array) {
+        return children.iter().any(|c| adf_contains_mention_id(c, id));
+    }
+    false
+}
+
+/// Best-effort `Drop`-guard for the comment-add mention round-trip test
+/// (VP-674-016, PRIMARY scenario) — mirrors `AttachmentDropGuard`/
+/// `ComponentDropGuard`'s convention (populate fields immediately after
+/// each creation call succeeds; `drop()` never panics; a fresh
+/// `E2eHarness::new()` is used since the outer harness borrow would not
+/// survive a panic-unwind).
+struct MentionCommentDropGuard {
+    key: Option<String>,
+    comment_id: Option<String>,
+}
+
+impl MentionCommentDropGuard {
+    fn new() -> Self {
+        Self {
+            key: None,
+            comment_id: None,
+        }
+    }
+}
+
+impl Drop for MentionCommentDropGuard {
+    fn drop(&mut self) {
+        if let (Some(key), Some(id)) = (&self.key, &self.comment_id) {
+            let h = E2eHarness::new();
+            match h
+                .cmd()
+                .args(["issue", "comment", "delete", key, "--id", id, "--yes"])
+                .output()
+            {
+                Ok(o) if o.status.success() => {}
+                Ok(o) => eprintln!(
+                    "[WARN] MentionCommentDropGuard Drop: delete comment {id} on {key} failed \
+                     (exit {:?}): {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                Err(e) => {
+                    eprintln!("[WARN] MentionCommentDropGuard Drop: delete spawn error: {e}")
+                }
+            }
+        }
+        if let Some(ref key) = self.key {
+            let h = E2eHarness::new();
+            best_effort_close(&h, key);
+        }
+    }
+}
+
+/// VP-674-016 (PRIMARY E2E acceptance scenario, per the human-approved scope
+/// naming comment add first in scope item 9's example). Pins BC-3.5.013.
+///
+/// `jr issue comment add <key> "cc [~accountid:<id>]" --markdown` →
+/// `GET /rest/api/3/issue/{key}/comment/{id}` (via `jr api`) → assert a
+/// `mention` node with the resolved accountId in the comment's ADF body.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run"]
+fn test_e2e_mention_comment_add_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let Some(account_id) = mention_account_id() else {
+        eprintln!(
+            "[SKIP] JR_E2E_MENTION_ACCOUNT_ID not set — skipping mention comment-add round-trip \
+             (VP-674-016)"
+        );
+        return;
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+    let mut guard = MentionCommentDropGuard::new();
+
+    let key = seed_issue(
+        &h,
+        &format!("e2e-{run_id}"),
+        &format!("[e2e-mention {run_id}] comment add round-trip"),
+    );
+    guard.key = Some(key.clone());
+
+    let text = format!("cc [~accountid:{account_id}] please review");
+    let out = h
+        .cmd()
+        .args([
+            "issue",
+            "comment",
+            "add",
+            &key,
+            &text,
+            "--markdown",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for mention comment add");
+    assert!(
+        out.status.success(),
+        "VP-674-016: comment add with a mention must exit 0; stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let created: Value = serde_json::from_slice(&out.stdout)
+        .expect("VP-674-016: comment add --output json must be valid JSON");
+    let comment_id = created
+        .get("id")
+        .and_then(Value::as_str)
+        .expect("VP-674-016: created comment JSON must carry an 'id' field")
+        .to_string();
+    guard.comment_id = Some(comment_id.clone());
+
+    let fetched = fetch_raw(&h, &format!("/rest/api/3/issue/{key}/comment/{comment_id}"))
+        .expect("VP-674-016: failed to fetch the created comment back via `jr api`");
+    let body = fetched.get("body").cloned().unwrap_or(Value::Null);
+    assert!(
+        adf_contains_mention_id(&body, &account_id),
+        "VP-674-016: fetched comment ADF must contain a mention node with \
+         attrs.id == {account_id}; body={body}"
+    );
+}
+
+/// VP-674-014. Pins BC-3.3.012 (platform `issue create` mention wiring).
+///
+/// `jr issue create --description "cc [~accountid:<id>]" --markdown` →
+/// `GET /rest/api/3/issue/{key}` (via `jr api`) → assert a `mention` node
+/// with `attrs.id == <id>` in the description ADF.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run"]
+fn test_e2e_mention_issue_create_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let Some(account_id) = mention_account_id() else {
+        eprintln!(
+            "[SKIP] JR_E2E_MENTION_ACCOUNT_ID not set — skipping mention issue-create \
+             round-trip (VP-674-014)"
+        );
+        return;
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+    let itype = issue_type();
+    let text = format!("cc [~accountid:{account_id}]");
+
+    let out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &project(),
+            "--type",
+            &itype,
+            "--summary",
+            &format!("[e2e-mention {run_id}] create round-trip"),
+            "--label",
+            &format!("e2e-{run_id}"),
+            "--description",
+            &text,
+            "--markdown",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for mention issue create");
+    assert!(
+        out.status.success(),
+        "VP-674-014: issue create with a mention description must exit 0; stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let created: Value = serde_json::from_slice(&out.stdout)
+        .expect("VP-674-014: issue create --output json must be valid JSON");
+    let key = created
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("VP-674-014: created issue JSON must carry a 'key' field")
+        .to_string();
+    let _ = poll_view(&key, &h);
+
+    let fetched = fetch_raw(&h, &format!("/rest/api/3/issue/{key}?fields=description"))
+        .expect("VP-674-014: failed to fetch the created issue back via `jr api`");
+    let desc = fetched
+        .get("fields")
+        .and_then(|f| f.get("description"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    assert!(
+        adf_contains_mention_id(&desc, &account_id),
+        "VP-674-014: fetched issue description ADF must contain a mention node \
+         with attrs.id == {account_id}; desc={desc}"
+    );
+
+    best_effort_close(&h, &key);
+}
+
+/// VP-674-015. Pins BC-3.4.032 (`issue edit` mention wiring, live path).
+///
+/// `jr issue edit <key> --description "cc [~accountid:<id>]" --markdown` on
+/// a throwaway issue → fetch back via `jr api` → assert the resolved
+/// mention node.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run"]
+fn test_e2e_mention_issue_edit_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let Some(account_id) = mention_account_id() else {
+        eprintln!(
+            "[SKIP] JR_E2E_MENTION_ACCOUNT_ID not set — skipping mention issue-edit round-trip \
+             (VP-674-015)"
+        );
+        return;
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    let key = seed_issue(
+        &h,
+        &format!("e2e-{run_id}"),
+        &format!("[e2e-mention {run_id}] edit round-trip"),
+    );
+
+    let text = format!("cc [~accountid:{account_id}]");
+    let out = h
+        .cmd()
+        .args(["issue", "edit", &key, "--description", &text, "--markdown"])
+        .output()
+        .expect("failed to spawn jr for mention issue edit");
+    let edit_ok = out.status.success();
+    if edit_ok {
+        let fetched = fetch_raw(&h, &format!("/rest/api/3/issue/{key}?fields=description"))
+            .expect("VP-674-015: failed to fetch the edited issue back via `jr api`");
+        let desc = fetched
+            .get("fields")
+            .and_then(|f| f.get("description"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        best_effort_close(&h, &key);
+        assert!(
+            adf_contains_mention_id(&desc, &account_id),
+            "VP-674-015: fetched issue description ADF must contain a mention node \
+             with attrs.id == {account_id}; desc={desc}"
+        );
+    } else {
+        best_effort_close(&h, &key);
+        panic!(
+            "VP-674-015: issue edit with a mention description must exit 0; stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// VP-674-017. Pins BC-3.8.018 (JSM `issue create --request-type` mention
+/// wiring). Gated additionally on `JR_E2E_JSM_PROJECT`.
+///
+/// `jr issue create --request-type <RT> --description "cc
+/// [~accountid:<id>]" --markdown` against a JSM project → fetch the
+/// resulting issue back via `jr api` → assert a mention node in the
+/// description ADF (the platform `description` field IS
+/// `requestFieldValues.description`'s storage — same underlying issue,
+/// same ADF document). Self-closes via `jsm_self_close` (S-JSM-E2E-2/3
+/// convention — EJ's JSM workflow has no "Done"-named transition).
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run"]
+fn test_e2e_mention_jsm_create_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let Some(account_id) = mention_account_id() else {
+        eprintln!(
+            "[SKIP] JR_E2E_MENTION_ACCOUNT_ID not set — skipping mention JSM-create \
+             round-trip (VP-674-017)"
+        );
+        return;
+    };
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!("[SKIP] JR_E2E_JSM_PROJECT not set — skipping mention JSM-create round-trip");
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for requesttype list");
+    if !list_out.status.success() {
+        let stderr = String::from_utf8_lossy(&list_out.stderr);
+        eprintln!("[SKIP] requesttype list failed ({stderr}) — skipping mention JSM round-trip");
+        return;
+    }
+    let rts: Vec<Value> = match serde_json::from_slice(&list_out.stdout) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("[SKIP] requesttype list did not parse — skipping mention JSM round-trip");
+            return;
+        }
+    };
+    if rts.is_empty() {
+        eprintln!("[SKIP] No request types on {jsm_project} — skipping mention JSM round-trip");
+        return;
+    }
+    let first_rt_id = match rts[0]["id"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| rts[0]["id"].as_i64().map(|n| n.to_string()))
+    {
+        Some(s) if s.chars().all(|c| c.is_ascii_digit()) => s,
+        _ => {
+            eprintln!("[SKIP] rts[0].id is not a usable numeric id — skipping");
+            return;
+        }
+    };
+
+    let text = format!("cc [~accountid:{account_id}]");
+    let out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &format!("[e2e-mention {run_id}] jsm create round-trip"),
+            "--description",
+            &text,
+            "--markdown",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for mention JSM create");
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.contains("403") {
+            eprintln!("[SKIP] JSM create returned 403 — skipping mention JSM round-trip");
+            return;
+        }
+        panic!(
+            "VP-674-017: JSM issue create with a mention description must exit 0; \
+             stdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    let created: Value = serde_json::from_slice(&out.stdout)
+        .expect("VP-674-017: JSM create --output json must be valid JSON");
+    let key = created
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("VP-674-017: created JSM request JSON must carry a 'key' field")
+        .to_string();
+
+    let fetched = fetch_raw(&h, &format!("/rest/api/3/issue/{key}?fields=description"))
+        .expect("VP-674-017: failed to fetch the created JSM issue back via `jr api`");
+    let desc = fetched
+        .get("fields")
+        .and_then(|f| f.get("description"))
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    jsm_self_close(&key, &h);
+
+    assert!(
+        adf_contains_mention_id(&desc, &account_id),
+        "VP-674-017: fetched JSM request description ADF must contain a mention \
+         node with attrs.id == {account_id}; desc={desc}"
+    );
+}
