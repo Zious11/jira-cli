@@ -369,9 +369,10 @@ evaluate_mutants_aggregate() {
 }
 
 # ---------------------------------------------------------------------------
-# --self-test fixture-tree helpers (Tasks 10/12/14 RED phase). Build a
+# --self-test fixture-tree helpers (originally scaffolded in Tasks 10/12/14's
+# RED phase; evaluate_mutants_aggregate() is now fully implemented). Build a
 # synthetic STATUS_DIR/SHARD_DIR tree matching the exact layout
-# evaluate_mutants_aggregate()'s Step 2/3 will read once implemented
+# evaluate_mutants_aggregate()'s Step 2/3 reads
 # (ci-yml-design.md §3: STATUS_DIR/mutants-shard-status-<i>/shard-status-<i>.json,
 # SHARD_DIR/mutants-shard-outcomes-<i>/outcomes.json).
 # ---------------------------------------------------------------------------
@@ -803,8 +804,9 @@ run_mutants_aggregate_self_test() {
 }
 
 # main <args...> — real invocation runs the evaluator once and exits with
-# its return code; `--self-test` instead runs the (currently stubbed)
-# fixture harness. Mirrors scripts/check-ci-gate.sh::main's dispatch shape.
+# its return code; `--self-test` instead runs the fixture harness
+# (run_mutants_aggregate_self_test, EXPECTED_MUTANTS_AGG_FIXTURES fixtures).
+# Mirrors scripts/check-ci-gate.sh::main's dispatch shape.
 main() {
     if [ "${1:-}" = "--self-test" ]; then
         run_mutants_aggregate_self_test
