@@ -1010,6 +1010,41 @@ reachable from a `cargo mutants`/`cargo build`/`cargo test` invocation) and the
 spoofed-sibling-artifact / canceling-errors / set-identity residuals described below — not
 a trailing-shell-append inside the shard's own `run-mutants` step, which this fix closes.
 
+**Correction (cycle-006 F4 review round 6, finding D-HIGH): the round-4 fix above was
+itself a substring DENYLIST, not default-deny, and a THIRD no-code-execution variant on
+the sibling upload step was never checked at all — all three are now CLOSED.**
+`assert_run_mutants_step_content_is_honest`'s ban on the CONTIGUOUS LITERAL
+`outcomes.json` appearing after the invocation was bypassable by any construction that
+references the file without spelling that exact literal: (1) shell variable indirection
+(`n=outcomes; ... > "mutants.out/${n}.json"`), or (2) a glob/loop that names the file only
+via a wildcard or loop variable (`for f in mutants.out/*.json; do … "$f" …; done`) — neither
+contains the substring `outcomes.json` anywhere in the scanned text. (3) A THIRD variant
+needed no change to `run-mutants` at all: repointing the sibling "Upload shard outcomes"
+step's `with.path`/`with.name` to a forged file — `PINNED_MUTANTS_SHARD_STEP_KEY_SETS` pins
+that step's own key set (`if`/`name`/`uses`/`with`) but has no visibility into `with:`'s
+CHILDREN, and nothing else in this file checked them either. All three were sum-preserving
+launders (or, for variant 3, bypassed the reconciliation entirely by uploading a
+fully-fabricated file), so `mutants-aggregate.sh`'s Step 4 exact-equality reconciliation and
+Step 6 kill-rate check both still passed. **Fixed** by replacing the substring-denylist call
+in `test_mutants_shard_run_step_content_is_pinned` with a FULL byte-for-byte comparison of
+the `run-mutants` step's entire parsed `run:` scalar against a reviewed literal
+(`PINNED_MUTANTS_SHARD_RUN_BODY` in `tests/ci_gate_completeness.rs`, via
+`extract_and_normalize_mutants_shard_run_body` — also rejecting a YAML anchor, tag, or any
+scalar style other than the real `Literal` (`|`) block form), and by adding a TARGETED,
+justified exception to this file's general "`with:` block CONTENTS are out of scope"
+boundary for this one security-critical step: `PINNED_MUTANTS_SHARD_UPLOAD_OUTCOMES_WITH_
+PATH`/`_WITH_NAME` pin the "Upload shard outcomes" step's `with.path`/`with.name` values
+byte-for-byte, via `extract_and_normalize_upload_outcomes_with_value`. `assert_run_mutants_
+step_content_is_honest` (the OLD substring-denylist function) is retained, unchanged, only
+so three standing RED regression tests — `test_mutants_shard_run_step_rejects_variable_
+indirection_launder`, `test_mutants_shard_run_step_rejects_glob_loop_launder`, and
+`test_mutants_shard_upload_outcomes_pin_rejects_repointed_path` — can demonstrate what it
+used to accept; its own doc comment states plainly that it is superseded and is no longer
+called by the production pin. What remains open, accurately stated, is narrower than
+before this round: the **code-execution-required** path and the spoofed-sibling-artifact /
+canceling-errors / set-identity residuals described below — not any of the three
+plaintext-`ci.yml`-edit, no-code-execution variants this round closes.
+
 ### A second forgery path: spoofed sibling-job artifacts (cycle-006 F4 review round 2, F-PF-LOW-002)
 
 A second, arguably *easier* forgery mechanism exists alongside the build.rs/proc-macro path
