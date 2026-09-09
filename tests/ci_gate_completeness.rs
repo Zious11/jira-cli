@@ -5126,11 +5126,38 @@ fn mutants_shard_run_step_run_text(job_block: &str) -> String {
 /// The `run-mutants` step's only legitimate job is to invoke `cargo
 /// mutants` — nothing in its real `run:` body ever mentions
 /// `outcomes.json` (that file is read only by LATER, separately-pinned
-/// steps: "Write shard status sentinel" and "Upload shard outcomes"), so a
-/// blanket ban on the substring `outcomes.json` anywhere after the
-/// invocation is a robust, default-deny closure rather than an allowlist
-/// of specific laundering shapes (`jq`/`mv`/`cp`/`tee`/redirect) that a
-/// diff could route around.
+/// steps: "Write shard status sentinel" and "Upload shard outcomes").
+///
+/// **SUPERSEDED (cycle-006 F4 review round 6, finding D-HIGH) — this is
+/// NOT a "robust, default-deny closure" as an earlier revision of this
+/// comment claimed.** A blanket ban on the CONTIGUOUS LITERAL
+/// `outcomes.json` is a substring DENYLIST, not default-deny: it is
+/// bypassed by any construction that references the file without ever
+/// spelling that exact literal after the invocation, e.g. (1) shell
+/// variable indirection (`n=outcomes; ... > "mutants.out/${n}.json"`), or
+/// (2) a glob/loop that names the file only via a wildcard or loop
+/// variable (`for f in mutants.out/*.json; do … "$f" …; done`). Neither
+/// contains the substring `outcomes.json` anywhere in the scanned text, so
+/// this check accepts both — see
+/// `test_mutants_shard_run_step_rejects_variable_indirection_launder` and
+/// `test_mutants_shard_run_step_rejects_glob_loop_launder` for standing RED
+/// proofs that this function specifically (not the production pin) accepts
+/// them. A third bypass needs no change to this step's `run:` body at all:
+/// repointing the sibling "Upload shard outcomes" step's `with.path`/
+/// `with.name` — this function has no visibility into that step whatsoever
+/// — see `test_mutants_shard_upload_outcomes_pin_rejects_repointed_path`.
+///
+/// This function is RETAINED, unchanged, ONLY so the three RED tests above
+/// can demonstrate what the OLD mechanism accepted. The production pin
+/// (`test_mutants_shard_run_step_content_is_pinned`) no longer calls it —
+/// it now compares the step's PARSED `run:` scalar against a full,
+/// human-reviewed byte-for-byte literal
+/// (`PINNED_MUTANTS_SHARD_RUN_BODY`, via
+/// `extract_and_normalize_mutants_shard_run_body`), which is genuinely
+/// default-deny: ANY deviation from the reviewed text — an appended line in
+/// any spelling, a reordered line, a single changed byte — fails the
+/// comparison, because it is exact-equality against the whole scalar, not
+/// a search for one banned shape within it.
 ///
 /// Returns `Err` naming the problem; callers turn that into a panic with
 /// full context. Deliberately mirrors
@@ -5159,27 +5186,240 @@ fn assert_run_mutants_step_content_is_honest(run_text: &str) -> Result<(), Strin
     Ok(())
 }
 
-/// (cycle-006 F4 review round 4, A-F1): production pin — asserts the REAL
-/// `mutants` shard job's `run-mutants` step is honest per
-/// `assert_run_mutants_step_content_is_honest` above. Parity with
-/// `test_mutants_plan_compute_step_content_is_pinned`'s sibling pin one
-/// job over.
+/// (cycle-006 F4 review round 6, D-HIGH): the full, human-reviewed literal
+/// text of the `run-mutants` step's `run:` scalar, read byte-for-byte from
+/// `ci.yml` as of this pass (verified via a scratch print of the PARSED
+/// scalar, not retyped by hand from the raw YAML source — the `#`-prefixed
+/// lines inside this block are literal shell comments INSIDE the `|`
+/// block-literal scalar, not YAML comments, so they are part of the
+/// resolved text and must be pinned along with the two `cargo mutants`
+/// invocation lines). ANY deviation — an appended line in any spelling, a
+/// reordered line, a single changed byte — fails
+/// `test_mutants_shard_run_step_content_is_pinned` below. This is what
+/// closes finding D-HIGH: unlike `assert_run_mutants_step_content_is_
+/// honest`'s substring denylist (superseded, see that function's doc
+/// comment), an exact-equality comparison against the WHOLE scalar has no
+/// unbanned shape left for a launder to hide in.
+// NOTE: this is a RAW string literal, deliberately — a normal `"..."`
+// literal using `\<newline>` continuations to span multiple source lines
+// would have Rust's own line-continuation escape strip the leading
+// whitespace of each continuation line, silently eating the 2-space
+// indent the real `--shard`/`--jobs` continuation lines carry (this was
+// caught RED: an earlier revision of this constant used that form and
+// produced a byte-pin that never matched the real, correctly-indented
+// `ci.yml`). A raw string's embedded newlines and leading whitespace are
+// both preserved verbatim, matching exactly what `saphyr-parser` resolves
+// this `|` block-literal scalar to.
+const PINNED_MUTANTS_SHARD_RUN_BODY: &str = r#"DIFF_FILE="${{ runner.temp }}/diff/pr-${{ github.run_id }}.diff"
+# --baseline skip: legitimate here because `test` (ci-gate.needs
+# member) already proves the suite green before mutants ever runs;
+# --timeout 240 is REQUIRED explicitly under skip (no
+# timeout_multiplier fallback — see docs/specs/cargo-mutants-
+# policy.md §--baseline=skip and Path B).
+cargo mutants --in-diff "${DIFF_FILE}" \
+  --shard ${{ matrix.shard }}/8 --sharding slice \
+  --jobs 2 --baseline skip --timeout 240
+"#;
+
+/// (cycle-006 F4 review round 6, D-HIGH): resolves the `run-mutants` step's
+/// `run:` value and validates it is safe to compare byte-for-byte against
+/// `PINNED_MUTANTS_SHARD_RUN_BODY` — rejecting a YAML anchor, a YAML tag,
+/// or any scalar style other than `Literal` (the `|` block-scalar form the
+/// real step uses; a `Folded` (`>`) rewrite would resolve interior
+/// newlines to spaces, silently changing what the shell actually executes
+/// even if a byte-pin against a DIFFERENT expected string happened to
+/// match, so the style itself is part of what this pin enforces — same
+/// AC-004 quoting/style-fidelity discipline `extract_and_normalize_sole_
+/// run_line` and its siblings already apply to single-line pins,
+/// generalized here to a multi-line block scalar). Unlike those siblings,
+/// this function does NOT require `start_line == end_line` — a `Literal`
+/// block scalar spanning many physical source lines is the step's
+/// EXPECTED, correct shape, not a suspicious folded-plain-scalar escape.
+fn extract_and_normalize_mutants_shard_run_body(job_block: &str) -> Result<String, String> {
+    let job = WfDoc::parse_single_job(job_block);
+    let run_step = find_sole_step_by_name(&job.steps, "Run mutation tests on this shard")?;
+    match run_step.value_of("run") {
+        Some(Value::Scalar {
+            text,
+            style,
+            tag,
+            has_anchor,
+            ..
+        }) => {
+            if *has_anchor {
+                return Err(
+                    "has a `run:` value carrying a YAML anchor (`&...`) — a node \
+                     property on a pinned key's VALUE is rejected outright rather \
+                     than resolved and trusted, the same as a value-side tag."
+                        .to_string(),
+                );
+            }
+            if tag.is_some() {
+                return Err(format!(
+                    "has a `run:` value carrying a YAML tag ({tag:?}) — a node \
+                     property on a pinned key's VALUE is rejected outright rather \
+                     than resolved and trusted."
+                ));
+            }
+            if *style != ScalarStyle::Literal {
+                return Err(format!(
+                    "has a `run:` value written in a non-literal-block YAML \
+                     scalar style ({style:?}) — this pin requires the `|` \
+                     block-literal form (ci.yml's current spelling); a `Folded` \
+                     (`>`) rewrite would resolve interior newlines to spaces, \
+                     changing what the shell actually executes, and a quoted \
+                     form would need re-escaping this pin does not attempt to \
+                     interpret."
+                ));
+            }
+            Ok(text.clone())
+        }
+        other => Err(format!(
+            "`Run mutation tests on this shard`'s `run:` value is not a scalar \
+             (found: {other:?})."
+        )),
+    }
+}
+
+/// (cycle-006 F4 review round 6, D-HIGH): the `Upload shard outcomes`
+/// step's `with.path` value — human-reviewed, read byte-for-byte from
+/// `ci.yml` as of this pass. Repointing this value (leaving the
+/// `run-mutants` step untouched) is the third D-HIGH bypass — see
+/// `test_mutants_shard_upload_outcomes_pin_rejects_repointed_path`.
+const PINNED_MUTANTS_SHARD_UPLOAD_OUTCOMES_WITH_PATH: &str = "mutants.out/outcomes.json";
+
+/// (cycle-006 F4 review round 6, D-HIGH): the `Upload shard outcomes`
+/// step's `with.name` value — human-reviewed, read byte-for-byte from
+/// `ci.yml` as of this pass. Pinned alongside `with.path` above because a
+/// repointed `name:` (uploading the real path under a name
+/// `mutants-aggregate.sh` does not download, or a name colliding with a
+/// different shard) is an equally viable way to desynchronize what the
+/// aggregator downloads from what this job block visibly claims to
+/// produce.
+const PINNED_MUTANTS_SHARD_UPLOAD_OUTCOMES_WITH_NAME: &str =
+    "mutants-shard-outcomes-${{ matrix.shard }}";
+
+/// (cycle-006 F4 review round 6, D-HIGH): resolves ONE named `with:` child
+/// (`child_key`, `"path"` or `"name"`) of the `Upload shard outcomes`
+/// step, validated the same way as `extract_and_normalize_mutants_shard_
+/// run_body` above (no anchor, no tag, `ScalarStyle::Plain` — this value
+/// is a short, single-line plain scalar in the real file, unlike the
+/// run-mutants step's block-literal `run:`).
+///
+/// This is a TARGETED, justified exception to this file's general
+/// "`with:` block CONTENTS are out of scope" boundary (see the CI-Gate
+/// SCOPE SUMMARY in `CLAUDE.md`) — narrowly for this one
+/// security-critical upload step, whose `with.path`/`with.name` values
+/// are exactly as load-bearing to the sharded mutation gate's integrity as
+/// the `run-mutants` step's own `run:` body.
+fn extract_and_normalize_upload_outcomes_with_value(
+    job_block: &str,
+    child_key: &str,
+) -> Result<String, String> {
+    let job = WfDoc::parse_single_job(job_block);
+    let upload_step = find_sole_step_by_name(&job.steps, "Upload shard outcomes")?;
+    match common::wf::step_mapping_child_value_for_step(job_block, upload_step, "with", child_key) {
+        Some(Value::Scalar {
+            text,
+            style,
+            tag,
+            has_anchor,
+            ..
+        }) => {
+            if has_anchor {
+                return Err(format!(
+                    "has a `with.{child_key}` value carrying a YAML anchor \
+                     (`&...`) — rejected outright rather than resolved and \
+                     trusted."
+                ));
+            }
+            if tag.is_some() {
+                return Err(format!(
+                    "has a `with.{child_key}` value carrying a YAML tag \
+                     ({tag:?}) — rejected outright rather than resolved and \
+                     trusted."
+                ));
+            }
+            if style != ScalarStyle::Plain {
+                return Err(format!(
+                    "has a `with.{child_key}` value written in a non-plain \
+                     YAML scalar style ({style:?}) — this pin requires the \
+                     plain (unquoted) form (ci.yml's current spelling)."
+                ));
+            }
+            Ok(text)
+        }
+        other => Err(format!(
+            "`Upload shard outcomes`'s `with.{child_key}` value is not a \
+             scalar (found: {other:?})."
+        )),
+    }
+}
+
+/// (cycle-006 F4 review round 6, D-HIGH): production pin — asserts the
+/// REAL `mutants` shard job's `run-mutants` step's `run:` scalar is
+/// byte-for-byte identical to `PINNED_MUTANTS_SHARD_RUN_BODY`, AND that
+/// the sibling "Upload shard outcomes" step's `with.path`/`with.name`
+/// values are byte-for-byte identical to their own pinned literals.
+/// Replaces the substring-denylist call to `assert_run_mutants_step_
+/// content_is_honest` (superseded — see that function's doc comment) that
+/// backed this test before this pass.
 #[test]
 fn test_mutants_shard_run_step_content_is_pinned() {
     let ci = read_ci_yml();
     let mutants_block = extract_job_block(&ci, "mutants").unwrap_or_else(|| {
-        panic!("FAIL (A-F1): `.github/workflows/ci.yml` does not contain a `mutants:` job.")
+        panic!("FAIL (A-F1/D-HIGH): `.github/workflows/ci.yml` does not contain a `mutants:` job.")
     });
 
-    let run_text = mutants_shard_run_step_run_text(mutants_block);
+    let run_text =
+        extract_and_normalize_mutants_shard_run_body(mutants_block).unwrap_or_else(|reason| {
+            panic!(
+                "FAIL (D-HIGH): `mutants`'s \"Run mutation tests on this \
+                 shard\" step {reason}\n\
+                 Current mutants block:\n{mutants_block}"
+            )
+        });
+    assert_eq!(
+        run_text, PINNED_MUTANTS_SHARD_RUN_BODY,
+        "FAIL (D-HIGH): the `run-mutants` step's PARSED `run:` scalar does \
+         not byte-for-byte match the pinned, human-reviewed literal — any \
+         deviation (an appended launder line, a reordered line, a changed \
+         byte) fails this pin. If this is a deliberate, reviewed change, \
+         update PINNED_MUTANTS_SHARD_RUN_BODY in the SAME change.\n\
+         Current mutants block:\n{mutants_block}"
+    );
 
-    assert_run_mutants_step_content_is_honest(&run_text).unwrap_or_else(|reason| {
-        panic!(
-            "FAIL (A-F1): `mutants`'s \"Run mutation tests on this shard\" \
-             step's PARSED `run:` scalar is dishonest: {reason}.\n\
-             Parsed run: scalar text:\n{run_text}"
-        )
-    });
+    let path = extract_and_normalize_upload_outcomes_with_value(mutants_block, "path")
+        .unwrap_or_else(|reason| {
+            panic!(
+                "FAIL (D-HIGH): `mutants`'s \"Upload shard outcomes\" step \
+                 {reason}\n\
+                 Current mutants block:\n{mutants_block}"
+            )
+        });
+    assert_eq!(
+        path, PINNED_MUTANTS_SHARD_UPLOAD_OUTCOMES_WITH_PATH,
+        "FAIL (D-HIGH): the \"Upload shard outcomes\" step's `with.path` \
+         value does not match the pinned, human-reviewed literal — a \
+         repointed path (uploading a forged file in place of the real \
+         outcomes.json) fails this pin.\n\
+         Current mutants block:\n{mutants_block}"
+    );
+
+    let name = extract_and_normalize_upload_outcomes_with_value(mutants_block, "name")
+        .unwrap_or_else(|reason| {
+            panic!(
+                "FAIL (D-HIGH): `mutants`'s \"Upload shard outcomes\" step \
+                 {reason}\n\
+                 Current mutants block:\n{mutants_block}"
+            )
+        });
+    assert_eq!(
+        name, PINNED_MUTANTS_SHARD_UPLOAD_OUTCOMES_WITH_NAME,
+        "FAIL (D-HIGH): the \"Upload shard outcomes\" step's `with.name` \
+         value does not match the pinned, human-reviewed literal.\n\
+         Current mutants block:\n{mutants_block}"
+    );
 }
 
 /// (cycle-006 F4 review round 4, A-F1 — standing RED regression proof):
@@ -5273,18 +5513,350 @@ fn test_mutants_shard_run_step_rejects_trailing_outcomes_launder() {
         last_offset += offset + fragment.len();
     }
 
-    // Half 2: the NEW check (parsed `run-mutants` `run:` scalar, scanned
-    // for a post-invocation `outcomes.json` reference) must reject it.
+    // Half 2: the OLD substring-denylist check (parsed `run-mutants` `run:`
+    // scalar, scanned for a post-invocation `outcomes.json` reference)
+    // correctly rejects THIS particular forgery, because it spells the
+    // contiguous literal `outcomes.json` after the invocation.
     let run_text = mutants_shard_run_step_run_text(forged_block);
     let result = assert_run_mutants_step_content_is_honest(&run_text);
     assert!(
         result.is_err(),
-        "FAIL (A-F1 RED proof did not hold): the new content pin accepted \
-         a forged `mutants` shard job block whose run-mutants step \
-         launders its own outcomes.json via trailing shell appended after \
-         the real `cargo mutants` invocation — the fix is NOT \
-         default-deny against this exploit.\n\
+        "FAIL (A-F1 RED proof did not hold): the old substring-denylist \
+         check accepted a forged `mutants` shard job block whose \
+         run-mutants step launders its own outcomes.json via trailing \
+         shell appended after the real `cargo mutants` invocation — even \
+         the denylist should catch THIS particular (contiguous-literal) \
+         spelling.\n\
          Resolved run: scalar text was:\n{run_text}"
+    );
+
+    // Half 3 (cycle-006 F4 review round 6, D-HIGH): the NEW full-scalar
+    // byte pin also rejects it — trivially, since the forged text can
+    // never byte-match `PINNED_MUTANTS_SHARD_RUN_BODY` regardless of
+    // which laundering shape it uses.
+    let byte_pin_result = extract_and_normalize_mutants_shard_run_body(forged_block);
+    assert_ne!(
+        byte_pin_result.as_deref(),
+        Ok(PINNED_MUTANTS_SHARD_RUN_BODY),
+        "FAIL (D-HIGH RED proof did not hold): the new full-scalar byte \
+         pin accepted a forged `mutants` shard job block whose run-mutants \
+         step launders its own outcomes.json via trailing shell appended \
+         after the real `cargo mutants` invocation.\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
+}
+
+/// (cycle-006 F4 review round 6, D-HIGH, bypass variant (i) — standing RED
+/// regression proof): the OLD substring-denylist check
+/// (`assert_run_mutants_step_content_is_honest`) bans only the CONTIGUOUS
+/// LITERAL `outcomes.json` after the real invocation. Shell variable
+/// indirection (`n=outcomes; ... "mutants.out/${n}.json"`) never spells
+/// that literal — this is the exact bypass D-HIGH's finding text
+/// describes as variant (1). This test proves the OLD check accepts it
+/// and the NEW full-scalar byte pin rejects it.
+#[test]
+fn test_mutants_shard_run_step_rejects_variable_indirection_launder() {
+    let forged_block = r#"  mutants:
+    name: Mutation Testing (Shard)
+    runs-on: ubuntu-latest
+    needs: [mutants-plan]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    if: github.event_name == 'pull_request' && needs.mutants-plan.outputs.escalated != 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@x
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@x
+      - uses: taiki-e/install-action@x
+        with:
+          tool: cargo-mutants@27.1.0
+      - uses: Swatinem/rust-cache@x
+      - name: Download shared diff file
+        uses: actions/download-artifact@x
+        with:
+          name: mutants-diff-file
+          path: /tmp/diff
+      - name: Run mutation tests on this shard
+        id: run-mutants
+        continue-on-error: true
+        run: |
+          DIFF_FILE="/tmp/diff/pr.diff"
+          cargo mutants --in-diff "${DIFF_FILE}" \
+            --shard ${{ matrix.shard }}/8 --sharding slice \
+            --jobs 2 --baseline skip --timeout 240
+          n=outcomes
+          echo '{"caught": 999, "missed": 0, "timeout": 0, "unviable": 0}' > "mutants.out/${n}.json"
+      - name: Write shard status sentinel
+        if: always()
+        run: |
+          HAS_OUTCOMES=false
+          [ -f mutants.out/outcomes.json ] && HAS_OUTCOMES=true
+          echo done
+      - name: Upload shard status sentinel
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-status-0
+          path: /tmp/shard-status-0.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload shard outcomes
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-outcomes-0
+          path: mutants.out/outcomes.json
+          if-no-files-found: warn
+          retention-days: 1
+"#;
+
+    // Reproduces the D-HIGH exploit: not a single contiguous occurrence of
+    // the literal `outcomes.json` anywhere in the forged text.
+    assert!(
+        !forged_block.contains("outcomes.json")
+            || forged_block.matches("outcomes.json").count()
+                <= forged_block.matches("mutants.out/outcomes.json").count(),
+        "SETUP INVARIANT VIOLATED: this fixture must reproduce variable- \
+         indirection laundering — no NEW occurrence of the literal \
+         `outcomes.json` should appear in the run-mutants step body \
+         itself."
+    );
+
+    let run_text = mutants_shard_run_step_run_text(forged_block);
+    assert!(
+        !run_text.contains("n=outcomes")
+            || !run_text[run_text.find("n=outcomes").unwrap()..].contains("outcomes.json"),
+        "SETUP INVARIANT VIOLATED: the run-mutants step's OWN resolved \
+         `run:` text must not contain the contiguous literal \
+         `outcomes.json` anywhere after the indirection line, or this \
+         fixture no longer reproduces the D-HIGH bypass.\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
+
+    // The OLD substring-denylist check is bypassed: it never sees the
+    // literal `outcomes.json`, so it reports this forged step as honest.
+    let old_result = assert_run_mutants_step_content_is_honest(&run_text);
+    assert!(
+        old_result.is_ok(),
+        "FAIL (D-HIGH RED proof setup did not hold): the OLD \
+         substring-denylist check unexpectedly rejected the \
+         variable-indirection launder — it should have accepted it \
+         (proving the bypass was real): {old_result:?}\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
+
+    // The NEW full-scalar byte pin correctly rejects it — the forged text
+    // can never byte-match `PINNED_MUTANTS_SHARD_RUN_BODY`.
+    let byte_pin_result = extract_and_normalize_mutants_shard_run_body(forged_block);
+    assert_ne!(
+        byte_pin_result.as_deref(),
+        Ok(PINNED_MUTANTS_SHARD_RUN_BODY),
+        "FAIL (D-HIGH RED proof did not hold): the new full-scalar byte \
+         pin accepted a forged `mutants` shard job block whose \
+         run-mutants step launders its own outcomes.json via shell \
+         variable indirection.\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
+}
+
+/// (cycle-006 F4 review round 6, D-HIGH, bypass variant (ii) — standing RED
+/// regression proof): a glob/loop write to `mutants.out/*.json` never
+/// spells the literal `outcomes.json` either — D-HIGH's finding text
+/// variant (2). Same shape as the variable-indirection proof above, one
+/// laundering mechanism over.
+#[test]
+fn test_mutants_shard_run_step_rejects_glob_loop_launder() {
+    let forged_block = r#"  mutants:
+    name: Mutation Testing (Shard)
+    runs-on: ubuntu-latest
+    needs: [mutants-plan]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    if: github.event_name == 'pull_request' && needs.mutants-plan.outputs.escalated != 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@x
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@x
+      - uses: taiki-e/install-action@x
+        with:
+          tool: cargo-mutants@27.1.0
+      - uses: Swatinem/rust-cache@x
+      - name: Download shared diff file
+        uses: actions/download-artifact@x
+        with:
+          name: mutants-diff-file
+          path: /tmp/diff
+      - name: Run mutation tests on this shard
+        id: run-mutants
+        continue-on-error: true
+        run: |
+          DIFF_FILE="/tmp/diff/pr.diff"
+          cargo mutants --in-diff "${DIFF_FILE}" \
+            --shard ${{ matrix.shard }}/8 --sharding slice \
+            --jobs 2 --baseline skip --timeout 240
+          cd mutants.out && for f in *.json; do jq '.caught = (.caught + .missed + .timeout) | .missed = 0 | .timeout = 0' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
+      - name: Write shard status sentinel
+        if: always()
+        run: |
+          HAS_OUTCOMES=false
+          [ -f mutants.out/outcomes.json ] && HAS_OUTCOMES=true
+          echo done
+      - name: Upload shard status sentinel
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-status-0
+          path: /tmp/shard-status-0.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload shard outcomes
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-outcomes-0
+          path: mutants.out/outcomes.json
+          if-no-files-found: warn
+          retention-days: 1
+"#;
+
+    let run_text = mutants_shard_run_step_run_text(forged_block);
+    assert!(
+        !run_text[run_text.find("cd mutants.out").unwrap()..].contains("outcomes.json"),
+        "SETUP INVARIANT VIOLATED: the glob/loop launder line must not \
+         itself contain the contiguous literal `outcomes.json`, or this \
+         fixture no longer reproduces the D-HIGH bypass.\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
+
+    // The OLD substring-denylist check is bypassed the same way.
+    let old_result = assert_run_mutants_step_content_is_honest(&run_text);
+    assert!(
+        old_result.is_ok(),
+        "FAIL (D-HIGH RED proof setup did not hold): the OLD \
+         substring-denylist check unexpectedly rejected the glob/loop \
+         launder — it should have accepted it (proving the bypass was \
+         real): {old_result:?}\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
+
+    // The NEW full-scalar byte pin correctly rejects it.
+    let byte_pin_result = extract_and_normalize_mutants_shard_run_body(forged_block);
+    assert_ne!(
+        byte_pin_result.as_deref(),
+        Ok(PINNED_MUTANTS_SHARD_RUN_BODY),
+        "FAIL (D-HIGH RED proof did not hold): the new full-scalar byte \
+         pin accepted a forged `mutants` shard job block whose \
+         run-mutants step launders its own outcomes.json via a glob/loop \
+         write.\n\
+         Resolved run: scalar text was:\n{run_text}"
+    );
+}
+
+/// (cycle-006 F4 review round 6, D-HIGH, bypass variant (iii) — standing
+/// RED regression proof): D-HIGH's finding text variant (3) — the
+/// `run-mutants` step is left byte-identical to the real, honest
+/// invocation; instead, the sibling "Upload shard outcomes" step's
+/// `with.path` is repointed at a forged file. Before this pass, NOTHING
+/// checked `with.path`/`with.name` on this step at all — neither
+/// `assert_run_mutants_step_content_is_honest` (which only ever looks at
+/// the run-mutants step) nor `PINNED_MUTANTS_SHARD_STEP_KEY_SETS` (which
+/// pins the STEP's own key set — `if`/`name`/`uses`/`with` — but has no
+/// visibility into `with:`'s CHILDREN). This test proves both: the
+/// pre-existing step-key-set pin accepts the repointed block (its key set
+/// is unchanged), and the NEW `with.path`/`with.name` pin rejects it.
+#[test]
+fn test_mutants_shard_upload_outcomes_pin_rejects_repointed_path() {
+    let forged_block = r#"  mutants:
+    name: Mutation Testing (Shard)
+    runs-on: ubuntu-latest
+    needs: [mutants-plan]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    if: github.event_name == 'pull_request' && needs.mutants-plan.outputs.escalated != 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@x
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@x
+      - uses: taiki-e/install-action@x
+        with:
+          tool: cargo-mutants@27.1.0
+      - uses: Swatinem/rust-cache@x
+      - name: Download shared diff file
+        uses: actions/download-artifact@x
+        with:
+          name: mutants-diff-file
+          path: /tmp/diff
+      - name: Run mutation tests on this shard
+        id: run-mutants
+        continue-on-error: true
+        run: |
+          DIFF_FILE="/tmp/diff/pr.diff"
+          cargo mutants --in-diff "${DIFF_FILE}" \
+            --shard ${{ matrix.shard }}/8 --sharding slice \
+            --jobs 2 --baseline skip --timeout 240
+      - name: Write shard status sentinel
+        if: always()
+        run: |
+          HAS_OUTCOMES=false
+          [ -f mutants.out/outcomes.json ] && HAS_OUTCOMES=true
+          echo done
+      - name: Upload shard status sentinel
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-status-0
+          path: /tmp/shard-status-0.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload shard outcomes
+        if: always()
+        uses: actions/upload-artifact@x
+        with:
+          name: mutants-shard-outcomes-0
+          path: mutants.out/forged.json
+          if-no-files-found: warn
+          retention-days: 1
+"#;
+
+    // The pre-existing step-key-set pin accepts this forgery: the step's
+    // OWN key set (`if`/`name`/`uses`/`with`) is untouched — only a VALUE
+    // one level deeper (`with.path`) changed.
+    let key_set_result = check_job_and_step_key_sets(
+        forged_block,
+        PINNED_MUTANTS_SHARD_JOB_KEY_SET,
+        PINNED_MUTANTS_SHARD_STEP_KEY_SETS,
+    );
+    assert!(
+        key_set_result.is_ok(),
+        "SETUP INVARIANT VIOLATED: this fixture must satisfy the \
+         pre-existing job/step key-set pin (proving `with.path`/`with.name` \
+         values sit BELOW that pin's granularity) — {key_set_result:?}"
+    );
+
+    // The NEW `with.path` pin correctly rejects the repointed value.
+    let path_result = extract_and_normalize_upload_outcomes_with_value(forged_block, "path");
+    assert_ne!(
+        path_result.as_deref(),
+        Ok(PINNED_MUTANTS_SHARD_UPLOAD_OUTCOMES_WITH_PATH),
+        "FAIL (D-HIGH RED proof did not hold): the new `with.path` pin \
+         accepted a forged \"Upload shard outcomes\" step repointed at \
+         `mutants.out/forged.json` instead of the real \
+         `mutants.out/outcomes.json`."
     );
 }
 
@@ -9052,7 +9624,22 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// exact-equality reconciliation still passes) inside the SAME step. See
 /// `assert_run_mutants_step_content_is_honest`'s doc comment for the full
 /// account.
-const EXPECTED_GUARD_TEST_COUNT: usize = 65;
+/// **cycle-006 F4 review round 6 (finding D-HIGH): +3, 65 -> 68.**
+/// `test_mutants_shard_run_step_rejects_variable_indirection_launder` and
+/// `test_mutants_shard_run_step_rejects_glob_loop_launder` are standing RED
+/// regression proofs for the two run-body laundering bypasses of the OLD
+/// substring-denylist check (`assert_run_mutants_step_content_is_honest`,
+/// now superseded — see its own doc comment); `test_mutants_shard_upload_
+/// outcomes_pin_rejects_repointed_path` is the standing RED regression
+/// proof for the third bypass (repointing the sibling "Upload shard
+/// outcomes" step's `with.path` instead of touching `run-mutants` at all).
+/// `test_mutants_shard_run_step_content_is_pinned` (pre-existing, no count
+/// change) was rewritten in the same pass to compare the FULL, parsed
+/// `run:` scalar byte-for-byte against `PINNED_MUTANTS_SHARD_RUN_BODY`,
+/// and to also pin the upload step's `with.path`/`with.name` against
+/// `PINNED_MUTANTS_SHARD_UPLOAD_OUTCOMES_WITH_PATH`/`_WITH_NAME`.
+/// Re-verified mechanically (this file's own `#[test]`-line count == 68).
+const EXPECTED_GUARD_TEST_COUNT: usize = 68;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
