@@ -49,10 +49,13 @@ pub(super) fn filter_by_name_match(active_users: Vec<User>, query: &str) -> Vec<
         .collect();
     match crate::partial_match::partial_match(query, &display_names) {
         crate::partial_match::MatchResult::Exact(m)
-        | crate::partial_match::MatchResult::ExactMultiple(m) => active_users
-            .into_iter()
-            .filter(|u| u.display_name.eq_ignore_ascii_case(&m))
-            .collect(),
+        | crate::partial_match::MatchResult::ExactMultiple(m) => {
+            let m_lower = m.to_lowercase();
+            active_users
+                .into_iter()
+                .filter(|u| u.display_name.to_lowercase() == m_lower)
+                .collect()
+        }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             let lower: HashSet<String> = matches.iter().map(|s| s.to_lowercase()).collect();
             active_users
@@ -247,4 +250,47 @@ pub(super) async fn resolve_mentions(
     }
 
     Ok(resolutions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn active_user(account_id: &str, display_name: &str) -> User {
+        User {
+            account_id: account_id.to_string(),
+            display_name: display_name.to_string(),
+            email_address: None,
+            active: Some(true),
+        }
+    }
+
+    /// F1 regression (adversarial-review finding, MEDIUM,
+    /// correctness/notification-safety): `filter_by_name_match`'s
+    /// `Exact | ExactMultiple` arm must classify names using the SAME
+    /// Unicode `to_lowercase()` predicate as `partial_match` and the
+    /// `Ambiguous` arm — never a second, independently-maintained
+    /// ASCII-only fold. Two active accounts whose display names differ
+    /// only by the case of a non-ASCII letter ("José" vs "JOSÉ") both
+    /// case-insensitively (Unicode) match the query "josé" and must both
+    /// survive the reduction, so the caller's later disambiguation step
+    /// still sees 2 candidates rather than silently collapsing to 1.
+    ///
+    /// Before the fix, `eq_ignore_ascii_case` does not fold 'É' (U+00C9)
+    /// and 'é' (U+00E9) — non-ASCII bytes must match exactly — so this
+    /// incorrectly dropped "JOSÉ" and returned a single-element vec.
+    #[test]
+    fn test_filter_by_name_match_unicode_case_fold_keeps_both_ambiguous_users() {
+        let active_users = vec![active_user("acc-1", "José"), active_user("acc-2", "JOSÉ")];
+
+        let filtered = filter_by_name_match(active_users, "josé");
+
+        assert_eq!(
+            filtered.len(),
+            2,
+            "both accounts share the same Unicode-folded display name and must both \
+             survive filtering, so disambiguate_user's len()==1 short-circuit is never \
+             reached for a genuinely ambiguous pair; got {filtered:?}"
+        );
+    }
 }

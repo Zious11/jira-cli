@@ -730,6 +730,74 @@ async fn test_h_new_mention_003_exact_multiple_non_interactive_exit64_zero_post(
     );
 }
 
+/// F1 regression (adversarial-review finding, MEDIUM,
+/// correctness/notification-safety): `filter_by_name_match`'s
+/// `Exact | ExactMultiple` arm previously used `eq_ignore_ascii_case`, which
+/// does not Unicode-fold non-ASCII bytes, diverging from `partial_match`'s
+/// (and the `Ambiguous` arm's) `to_lowercase()`-based classification. Two
+/// ACTIVE accounts sharing a Unicode-case-folded display name must both
+/// survive the reduction and reach `disambiguate_user`'s `ExactMultiple`
+/// path (exit 64, "Multiple users named"), never collapse to a single
+/// candidate that silently short-circuits.
+///
+/// This test uses KELVIN SIGN (U+212A, glyph "K") rather than the
+/// illustrative "José"/"JOSÉ" pair from the finding: `find_mention_candidates`'s
+/// `@Name` grammar (`src/adf.rs`) only captures ASCII
+/// alphanumeric/`.`/`_`/`-` after the `@`, so a literal `@josé` in the
+/// comment body is truncated to the token `@jos` before any network call —
+/// the "é" never reaches `filter_by_name_match` as part of the query, and
+/// the truncated query "jos" only substring-matches (`Ambiguous`, which was
+/// never buggy), never exact-matches. KELVIN SIGN reproduces the identical
+/// ASCII-fold-vs-Unicode-fold divergence class end-to-end through the real
+/// `@Name` flow: the typed query ("kirk") is pure ASCII (satisfies the
+/// grammar), while one of the two ACTIVE accounts' display names uses U+212A
+/// in place of ASCII 'K' — `"\u{212A}irk".to_lowercase() == "kirk"` (Unicode
+/// case folding maps KELVIN SIGN to plain ASCII 'k'), so both accounts
+/// exact-match the query under `partial_match`, but
+/// `"\u{212A}irk".eq_ignore_ascii_case("Kirk")` is `false` (differing byte
+/// lengths — U+212A is a 3-byte UTF-8 sequence).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_f1_unicode_case_fold_exact_multiple_non_interactive_exit64_zero_post() {
+    let server = MockServer::start().await;
+    mount_search(
+        &server,
+        "kirk",
+        json!([
+            {"accountId": "acc-1", "displayName": "Kirk", "active": true, "emailAddress": "kirk@example.com"},
+            {"accountId": "acc-2", "displayName": "\u{212A}irk", "active": true, "emailAddress": "kirk2@example.com"}
+        ]),
+        None,
+    )
+    .await;
+    mount_post_comment(&server, "PROJ-1", 0).await;
+
+    let (mut cmd, _cache, _config) = jr_cmd_fresh(&server.uri());
+    let output = cmd
+        .args([
+            "issue",
+            "comment",
+            "add",
+            "PROJ-1",
+            "cc @kirk please review",
+            "--markdown",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "two Unicode-case-fold-equal ACTIVE accounts must be treated as ambiguous \
+         (ExactMultiple), never silently collapsed to a single candidate; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Multiple users named"),
+        "must reuse disambiguate_user's ExactMultiple wording verbatim; stderr={stderr}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_x_7_008_ambiguous_non_exact_non_interactive_exit64_zero_post() {
     let server = MockServer::start().await;
