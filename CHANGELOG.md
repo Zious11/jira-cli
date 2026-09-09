@@ -27,6 +27,30 @@ All notable changes to jr will be documented here.
   (`--no-mentions` flag, the four write-command call sites) are
   `S-cycle5-mention-resolution-wiring`'s scope.
 
+- **Effectful mention resolution + write-path wiring (S-cycle5-mention-resolution-wiring,
+  issue #674, ADR-0023, BC-X.7.007/008/009/010, BC-3.3.012/3.4.032/3.5.013/3.8.018):**
+  a new `src/cli/issue/mentions.rs::resolve_mentions` resolves every unique
+  `@Name`/bracket-form `[~accountid:<id>]` mention candidate in a
+  `--markdown` body against real Jira users before the write is sent — a
+  hard-error, notify-safe policy, not a silent pass-through. Bracket-form
+  ids are mandatory-preflight-validated via `GET /rest/api/3/user?accountId=`
+  (404/400 -> "not found", exit 64); `@Name` tokens resolve via
+  `GET /rest/api/3/user/search`, an active-only filter, a new
+  `filter_by_name_match` name-match tightening pre-filter, then the
+  existing `disambiguate_user` (`Exact`/`ExactMultiple`/`Ambiguous`/empty-list
+  contract, reused verbatim). Deduplicated per unique candidate before any
+  network call. Resolution is all-or-nothing: any failure among an
+  otherwise-resolvable body fails the WHOLE write with zero mutation HTTP
+  call. Wired into all four write-command call sites: `issue create`
+  (platform), `issue edit` (both the live PUT and the `--dry-run` preview,
+  which forces non-interactive resolution unconditionally), `issue comment
+  add`/`issue comment edit`, and JSM `issue create --request-type` (resolved
+  before the synchronous `JsmRequestBuilder::build()` runs). A new
+  `--no-mentions` flag (on `issue create`/`issue edit`/`issue comment
+  add`/`issue comment edit`) skips resolution entirely and falls back to
+  `adf::markdown_to_adf_no_mentions` — zero resolver HTTP calls, mention
+  syntax survives as literal text.
+
 ### Changed
 
 - **CI: sharded mutation-testing gate replaces the single 240-minute `mutants` job
