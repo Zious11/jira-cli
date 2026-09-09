@@ -9909,7 +9909,7 @@ fn test_matrix_os_lists_remain_static_literals() {
 /// `NAME=jq` variable-indirection assignment — none of which the round-6
 /// scan detected. Re-verified mechanically (this file's own `#[test]`-line
 /// count == 72).
-const EXPECTED_GUARD_TEST_COUNT: usize = 72;
+const EXPECTED_GUARD_TEST_COUNT: usize = 75;
 
 /// Collect the line indices (0-based, into `lines`) of every `#[cfg(...)]`
 /// attribute in the CONTIGUOUS attribute/doc block surrounding a `#[test]`
