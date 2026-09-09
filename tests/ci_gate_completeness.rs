@@ -5147,16 +5147,14 @@ fn assert_run_mutants_step_content_is_honest(run_text: &str) -> Result<(), Strin
         }
     }
     if run_text[last_offset..].contains("outcomes.json") {
-        return Err(
-            "a statement referencing `outcomes.json` appears AFTER the \
+        return Err("a statement referencing `outcomes.json` appears AFTER the \
              real `cargo mutants` invocation in this step — the \
              run-mutants step's sole legitimate job is to invoke `cargo \
              mutants`; any post-invocation reference to its own \
              outcomes.json (e.g. a `jq`/`mv`/`cp`/`tee`/redirect launder \
              moving missed/timeout counts into caught) is illegitimate \
              here"
-                .to_string(),
-        );
+            .to_string());
     }
     Ok(())
 }
@@ -5266,14 +5264,12 @@ fn test_mutants_shard_run_step_rejects_trailing_outcomes_launder() {
     // AFTER the last required fragment.
     let mut last_offset = 0usize;
     for fragment in &MUTANTS_SHARD_RUN_STEP_REQUIRED_FRAGMENTS {
-        let offset = forged_block[last_offset..]
-            .find(fragment)
-            .expect(
-                "SETUP INVARIANT VIOLATED: this forged fixture must satisfy \
+        let offset = forged_block[last_offset..].find(fragment).expect(
+            "SETUP INVARIANT VIOLATED: this forged fixture must satisfy \
                  the OLD presence-only ordered-substring search over the \
                  whole raw job block — if it does not, the fixture no \
                  longer reproduces the A-F1 exploit and must be revised.",
-            );
+        );
         last_offset += offset + fragment.len();
     }
 
