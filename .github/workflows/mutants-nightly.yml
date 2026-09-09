@@ -133,11 +133,34 @@ jobs:
           killable=$((caught_total + missed_total + timeout_total))
           if [ "${killable}" -eq 0 ]; then
             echo "NOTE: 0 killable mutants scored across all nightly shards."
+            kill_rate_display="N/A (0 killable mutants scored)"
           else
             kill_rate=$(( (caught_total * 100) / killable ))
             echo "Nightly pooled kill rate: ${kill_rate}% (target >= 90%, advisory only — never blocks a merge)"
             if [ "${kill_rate}" -lt 90 ]; then
               echo "::warning::Nightly full-scope pooled kill rate ${kill_rate}% is below the 90% target — advisory only, does not fail this workflow."
             fi
+            kill_rate_display="${kill_rate}% (target >= 90%)"
           fi
+
+          # (CI-visibility follow-up, CYCLE6-LOW-STALE-CHECK-KILL-RATE-COMMENTS
+          # adjacent work) Surface the same pooled result to the Actions job
+          # summary ($GITHUB_STEP_SUMMARY), in addition to the log echo/
+          # ::warning:: above — this is purely a visibility addition. It does
+          # NOT change advisory semantics: the step still always exits 0
+          # below, and writing to $GITHUB_STEP_SUMMARY deliberately does not
+          # create a GitHub status check, so this can never become a required
+          # check or gate a merge.
+          {
+            echo "## Nightly full-scope mutation testing"
+            echo ""
+            echo "**Pooled kill rate:** ${kill_rate_display}"
+            echo ""
+            echo "| Caught | Missed | Timeout | Unviable | Total scored |"
+            echo "|---|---|---|---|---|"
+            echo "| ${caught_total} | ${missed_total} | ${timeout_total} | ${unviable_total} | ${total_scored} |"
+            echo ""
+            echo "_Advisory only — this nightly full-scope run does not gate merges. The required per-PR check is the diff-scoped mutation gate in \`ci.yml\` (\`mutants\` / \`mutants-aggregate\`)._"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
           exit 0
