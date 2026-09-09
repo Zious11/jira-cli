@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
+use crate::adf::MentionResolutions;
 use crate::api::client::JiraClient;
 use crate::cli::issue::create::{FieldValueKind, FieldValueSpec};
 use crate::error::JrError;
@@ -73,6 +74,19 @@ pub struct JsmRequestBuilder<'a> {
     pub priority: Option<&'a str>,
     pub labels: &'a [String],
     pub on_behalf_of: Option<&'a str>,
+    /// S-cycle5-mention-resolution-wiring (AC-013, BC-3.8.018): when `true`,
+    /// `description` is converted via `adf::markdown_to_adf_no_mentions`
+    /// (skipping mention resolution entirely — the `--no-mentions` CLI
+    /// flag). When `false`, `description` is converted via
+    /// `adf::markdown_to_adf_with_mentions` using `mentions` (pre-resolved
+    /// by the async caller BEFORE this synchronous, effect-free `build()`
+    /// runs — `build()` gains no `async`/`Client` capability).
+    pub no_mentions: bool,
+    /// Pre-resolved mention data (`None` is treated as
+    /// `MentionResolutions::empty()`, preserving pre-#674 byte-identical
+    /// behavior for every caller — proptests included — that does not set
+    /// this field).
+    pub mentions: Option<&'a MentionResolutions>,
     /// S-578-3 (BC-3.8.008 amendment): `FieldValueSpec` map, not a plain
     /// `String` map — carries the shared `:option`/`:id`/`:name`/`:asset`
     /// hint-kind tag produced by `parse_field_kv` (S-578-1), so `build()`
@@ -100,7 +114,13 @@ impl<'a> JsmRequestBuilder<'a> {
         // Optional description → ADF (BC-3.8.006).
         let is_adf_request = if let Some(desc_text) = self.description {
             let adf_body = if self.markdown {
-                adf::markdown_to_adf(desc_text)?
+                if self.no_mentions {
+                    adf::markdown_to_adf_no_mentions(desc_text)?
+                } else {
+                    let empty = MentionResolutions::empty();
+                    let resolved = self.mentions.unwrap_or(&empty);
+                    adf::markdown_to_adf_with_mentions(desc_text, resolved)?
+                }
             } else {
                 adf::text_to_adf(desc_text)
             };
@@ -254,6 +274,8 @@ mod proptests {
                 priority: None,
                 labels: &[],
                 on_behalf_of: None,
+                no_mentions: false,
+                mentions: None,
                 extra_fields: &extra,
             }
             .build()
@@ -291,6 +313,8 @@ mod proptests {
                 priority: None,
                 labels: &[],
                 on_behalf_of: None,
+                no_mentions: false,
+                mentions: None,
                 extra_fields: &extra,
             }
             .build()
@@ -342,6 +366,8 @@ mod proptests {
                 priority: None,
                 labels: &[],
                 on_behalf_of: None,
+                no_mentions: false,
+                mentions: None,
                 extra_fields: &extra,
             }
             .build()
@@ -386,6 +412,8 @@ mod proptests {
                 priority: None,
                 labels: &[],
                 on_behalf_of,
+                no_mentions: false,
+                mentions: None,
                 extra_fields: &extra,
             }
             .build()

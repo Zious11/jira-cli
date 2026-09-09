@@ -12,6 +12,7 @@ use crate::partial_match::{self, MatchResult};
 
 use super::create::{FieldValueKind, FieldValueSpec, parse_field_kv};
 use super::helpers;
+use super::mentions;
 
 /// Argument bundle for `handle_jsm_create`.
 ///
@@ -62,6 +63,10 @@ pub(super) struct JsmCreateArgs {
     pub(super) parent: Option<String>,
     pub(super) to: Option<String>,
     pub(super) account_id: Option<String>,
+    // S-cycle5-mention-resolution-wiring (AC-013/AC-014/AC-015): `--no-mentions`
+    // opt-out, threaded through to skip mention resolution entirely and use
+    // `adf::markdown_to_adf_no_mentions` instead.
+    pub(super) no_mentions: bool,
 }
 
 /// Orchestrate a JSM customer-request creation.
@@ -114,6 +119,7 @@ pub(super) async fn handle_jsm_create(
         parent,
         to,
         account_id,
+        no_mentions,
     } = args;
 
     // Resolve the request_type arg — we know it's Some because this function is only
@@ -299,6 +305,21 @@ pub(super) async fn handle_jsm_create(
         }
     }
 
+    // S-cycle5-mention-resolution-wiring (AC-013): resolve mentions BEFORE
+    // constructing `JsmRequestBuilder` and calling its synchronous,
+    // effect-free `.build()` — the resolution result is threaded in as
+    // plain data (`build()` gains no `async`/`Client` capability).
+    // `--no-mentions` skips resolution entirely (AC-014/AC-015): zero
+    // resolver HTTP calls, `build()` uses `markdown_to_adf_no_mentions`.
+    let mention_resolutions = if markdown && desc_text.is_some() && !no_mentions {
+        Some(
+            mentions::resolve_mentions(client, desc_text.as_deref().unwrap_or(""), no_input)
+                .await?,
+        )
+    } else {
+        None
+    };
+
     // Build the POST body (BC-3.8.005..009).
     let body = JsmRequestBuilder {
         service_desk_id: &service_desk_id,
@@ -309,6 +330,8 @@ pub(super) async fn handle_jsm_create(
         priority: priority.as_deref(),
         labels: &labels,
         on_behalf_of: on_behalf_of.as_deref(),
+        no_mentions,
+        mentions: mention_resolutions.as_ref(),
         extra_fields: &extra_fields,
     }
     .build()?;
