@@ -11,53 +11,240 @@
 //! modified by this module — it only calls the pure API Story A already
 //! shipped (`find_mention_candidates`, `markdown_to_adf_with_mentions`,
 //! `markdown_to_adf_no_mentions`, `MentionResolutions`).
-//!
-//! STUB NOTICE (S-cycle5-mention-resolution-wiring, stub-architect pass):
-//! both functions below are `todo!()` per BC-5.38.001 — this file exists only
-//! to establish a compilable surface for the four write-command call sites
-//! (`create.rs`, `edit.rs`, `interactions.rs`, `jsm_create.rs`) to compile
-//! against in a later wiring pass. Neither function contains any real logic;
-//! implementing them (AC-001..AC-007) is TDD work for the test-writer /
-//! implementer stages, not this stub-architect pass.
 
-use crate::adf::MentionResolutions;
+use std::collections::HashSet;
+
+use crate::adf::{self, MentionCandidateKind, MentionResolution, MentionResolutions};
 use crate::api::client::JiraClient;
 use crate::error::JrError;
 use crate::types::jira::User;
 
+use super::helpers;
+
+/// Convert an `anyhow::Error` (the return type of `disambiguate_user`,
+/// `client.search_users`, and `client.get_user`) into a `JrError`, preserving
+/// the concrete variant when the error already wraps one (so exit-code
+/// mapping and downstream `match`es on `JrError` still work), falling back to
+/// `JrError::Internal` only for a genuinely foreign error (e.g. a
+/// `dialoguer`/io context wrapper).
+fn to_jr_error(e: anyhow::Error) -> JrError {
+    match e.downcast::<JrError>() {
+        Ok(jr) => jr,
+        Err(e) => JrError::Internal(e.to_string()),
+    }
+}
+
+/// Reduce `active_users` to those whose `display_name`
+/// case-insensitively-substring-contains `query`, reusing
+/// `partial_match::partial_match`'s existing classification (AC-002 step 2,
+/// ADR-0023 §7 — the F2-gate human-approved single-result tightening).
+///
+/// Pure, in-memory reduction — zero I/O, zero `async`. Not part of `adf.rs`'s
+/// formally-hardened pure core (this is a plain sync helper, like most of
+/// `helpers.rs`), but it never touches the network or a `JiraClient`.
+pub(super) fn filter_by_name_match(active_users: Vec<User>, query: &str) -> Vec<User> {
+    let display_names: Vec<String> = active_users
+        .iter()
+        .map(|u| u.display_name.clone())
+        .collect();
+    match crate::partial_match::partial_match(query, &display_names) {
+        crate::partial_match::MatchResult::Exact(m)
+        | crate::partial_match::MatchResult::ExactMultiple(m) => active_users
+            .into_iter()
+            .filter(|u| u.display_name.eq_ignore_ascii_case(&m))
+            .collect(),
+        crate::partial_match::MatchResult::Ambiguous(matches) => {
+            let lower: HashSet<String> = matches.iter().map(|s| s.to_lowercase()).collect();
+            active_users
+                .into_iter()
+                .filter(|u| lower.contains(&u.display_name.to_lowercase()))
+                .collect()
+        }
+        crate::partial_match::MatchResult::None(_) => Vec::new(),
+    }
+}
+
+/// Resolve a single bracket-form `[~accountid:<id>]` candidate via mandatory
+/// preflight validation (AC-006, BC-X.7.010). 404/400 → `JrError::UserError`
+/// ("not found", exit 64). Any other error (401/403/5xx/network) propagates
+/// via the standard `JrError` mapping, NOT re-wrapped.
+async fn resolve_bracket_candidate(
+    client: &JiraClient,
+    account_id: &str,
+    resolutions: &mut MentionResolutions,
+) -> Result<(), JrError> {
+    match client.get_user(account_id).await {
+        Ok(user) => {
+            resolutions.insert_bracket(
+                account_id.to_string(),
+                MentionResolution {
+                    account_id: user.account_id,
+                    display_name: user.display_name,
+                },
+            );
+            Ok(())
+        }
+        Err(e) => match to_jr_error(e) {
+            JrError::ApiError { status, .. } if status == 404 || status == 400 => {
+                Err(JrError::UserError(format!(
+                    "Mention target \"{account_id}\" not found. The accountId may be invalid, \
+                     stale, or the user may no longer exist."
+                )))
+            }
+            other => Err(other),
+        },
+    }
+}
+
+/// Resolve a single `@Name` candidate (AC-002..AC-005, BC-X.7.007/008/009).
+///
+/// `span` is the candidate token AS REPORTED by `find_mention_candidates`
+/// (leading `@` included) — used verbatim as the `MentionResolutions` key.
+/// The search query sent to Jira strips the leading `@`.
+async fn resolve_at_name_candidate(
+    client: &JiraClient,
+    span: &str,
+    no_input: bool,
+    resolutions: &mut MentionResolutions,
+) -> Result<(), JrError> {
+    let query = span.trim_start_matches('@');
+
+    let raw_users = client.search_users(query).await.map_err(to_jr_error)?;
+    let raw_empty = raw_users.is_empty();
+    let all_deactivated = !raw_empty && raw_users.iter().all(|u| u.active != Some(true));
+    let active_users: Vec<User> = raw_users
+        .into_iter()
+        .filter(|u| u.active == Some(true))
+        .collect();
+    let filtered = filter_by_name_match(active_users, query);
+
+    // BC-X.7.009 point 2 — three-way empty_msg selection, based on a single
+    // inspection of the RAW (pre-filter) search result: (i) genuinely no
+    // user found, (ii) all matches were deactivated, (iii) an active match
+    // exists but none name-matches the query. All three share the pinned
+    // substring "No user found matching"; only (ii) carries the
+    // "deactivated" hint.
+    let empty_msg = if all_deactivated {
+        format!(
+            "No user found matching \"@{query}\" (a matching account exists but is deactivated) \
+             — verify the spelling or use the [~accountid:<id>] form."
+        )
+    } else {
+        format!(
+            "No user found matching \"@{query}\" — verify the spelling or use the \
+             [~accountid:<id>] form."
+        )
+    };
+
+    // Determine the `name` value fed to `disambiguate_user`. BC-X.7.008
+    // frames its ExactMultiple trigger as "two or more users share the exact
+    // same display name" — a property of the CANDIDATES, not of exact
+    // equality against the (possibly abbreviated) typed query. When the
+    // name-matched, reduced set collapses to a single shared display name,
+    // pass that display name so `disambiguate_user`'s own (UNCHANGED)
+    // `partial_match` classification naturally lands on `ExactMultiple`;
+    // otherwise pass the original query, which lands on `Ambiguous` for a
+    // genuinely mixed set of matching names.
+    let disambiguate_name: String = if filtered.len() >= 2 {
+        let mut distinct: Vec<String> = filtered
+            .iter()
+            .map(|u| u.display_name.to_lowercase())
+            .collect();
+        distinct.sort();
+        distinct.dedup();
+        if distinct.len() == 1 {
+            filtered[0].display_name.clone()
+        } else {
+            query.to_string()
+        }
+    } else {
+        query.to_string()
+    };
+
+    let (account_id, display_name) = helpers::disambiguate_user(
+        &filtered,
+        &disambiguate_name,
+        no_input,
+        &empty_msg,
+        |_all_names: &[String]| empty_msg.clone(),
+    )
+    .map_err(to_jr_error)?;
+
+    resolutions.insert_at_name(
+        span.to_string(),
+        MentionResolution {
+            account_id,
+            display_name,
+        },
+    );
+    Ok(())
+}
+
 /// Resolve every unique mention candidate found in `text` against real Jira
 /// users (AC-001..AC-007; BC-X.7.007/008/009/010).
 ///
-/// Intended behavior (implemented by a later story task, NOT this stub):
 /// - Calls `adf::find_mention_candidates(text)` (pure, Story A) to discover
 ///   candidates, then deduplicates per unique bracket-form accountId and per
 ///   unique `@Name` token BEFORE any network call (AC-001).
+/// - For each unique bracket-form accountId: mandatory `client.get_user(id)`
+///   preflight validation (AC-006).
 /// - For each unique `@Name` candidate: filters `client.search_users(name)`
 ///   results to `active == Some(true)`, reduces via `filter_by_name_match`,
 ///   then disambiguates via `disambiguate_user` (AC-002/003/004/005).
-/// - For each unique bracket-form accountId: mandatory `client.get_user(id)`
-///   preflight validation (AC-006).
-/// - All-or-nothing: ANY resolution failure among otherwise-resolvable
-///   candidates fails the whole call — callers MUST NOT issue any
-///   mutation HTTP (POST/PUT) until this returns `Ok` (AC-007).
+/// - All-or-nothing: EVERY candidate is attempted (no short-circuit on the
+///   first failure — AC-007's zero-mutation guarantee is enforced by never
+///   calling the mutation HTTP endpoint until this returns `Ok`, not by
+///   skipping remaining candidates), and ANY resolution failure among
+///   otherwise-resolvable candidates fails the whole call.
 pub(super) async fn resolve_mentions(
     client: &JiraClient,
     text: &str,
     no_input: bool,
 ) -> Result<MentionResolutions, JrError> {
-    let _ = (client, text, no_input);
-    todo!("S-cycle5-mention-resolution-wiring: resolve_mentions (AC-001..AC-007)")
-}
+    let candidates = adf::find_mention_candidates(text)?;
 
-/// Reduce `active_users` to those whose `display_name`
-/// case-insensitively-substring-contains `query`, reusing
-/// `partial_match::partial_match`'s existing classification rather than a
-/// second, independently-maintained name-match predicate (AC-002 step 2,
-/// ADR-0023 §7 — the F2-gate human-approved single-result tightening).
-///
-/// Intended behavior (implemented by a later story task, NOT this stub): a
-/// pure, in-memory reduction over already-fetched data — zero I/O.
-pub(super) fn filter_by_name_match(active_users: Vec<User>, query: &str) -> Vec<User> {
-    let _ = (active_users, query);
-    todo!("S-cycle5-mention-resolution-wiring: filter_by_name_match (AC-002/003, ADR-0023 §7)")
+    let mut seen_brackets: HashSet<String> = HashSet::new();
+    let mut unique_brackets: Vec<String> = Vec::new();
+    let mut seen_at_names: HashSet<String> = HashSet::new();
+    let mut unique_at_names: Vec<String> = Vec::new();
+
+    for c in &candidates.candidates {
+        match c.kind {
+            MentionCandidateKind::Bracket => {
+                if seen_brackets.insert(c.span.clone()) {
+                    unique_brackets.push(c.span.clone());
+                }
+            }
+            MentionCandidateKind::AtName => {
+                if seen_at_names.insert(c.span.clone()) {
+                    unique_at_names.push(c.span.clone());
+                }
+            }
+        }
+    }
+
+    let mut resolutions = MentionResolutions::empty();
+    let mut first_err: Option<JrError> = None;
+
+    for id in &unique_brackets {
+        if let Err(e) = resolve_bracket_candidate(client, id, &mut resolutions).await {
+            if first_err.is_none() {
+                first_err = Some(e);
+            }
+        }
+    }
+
+    for span in &unique_at_names {
+        if let Err(e) = resolve_at_name_candidate(client, span, no_input, &mut resolutions).await {
+            if first_err.is_none() {
+                first_err = Some(e);
+            }
+        }
+    }
+
+    if let Some(e) = first_err {
+        return Err(e);
+    }
+
+    Ok(resolutions)
 }
