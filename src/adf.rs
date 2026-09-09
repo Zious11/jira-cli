@@ -540,10 +540,15 @@ fn compute_code_ranges(markdown: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 /// `true` when `pos` is at the start of `text` or immediately follows
-/// whitespace or one of `*_~(\[]` — the shared start-boundary rule for both
-/// mention forms (AC-002/AC-006 point 1), identical in shape to
+/// whitespace or one of `*_~(\[]` — the boundary rule for the BRACKET-FORM
+/// mention (`[~accountid:...]`) specifically, used only by
+/// `protect_bracket_mentions`'s pre-parse protect pass (AC-002 point 1).
+/// **This is NOT shared with the `@Name` form** — see
+/// `is_at_name_boundary`, used by `scan_mention_spans`'s `@Name` branch,
+/// which admits the identical set MINUS `]` (F-M1, cycle-005 F5 adversarial
+/// review; see that function's doc comment for why). Identical in shape to
 /// `find_bare_url_spans`'s own boundary check, extended with `[` (so a
-/// bracket-form or `@Name` span sitting as the very first character of an
+/// bracket-form span sitting as the very first character of an
 /// enclosing markdown link's TEXT — e.g. `[[~accountid:X]](url)`,
 /// EC-7.2.016-4 — is recognized as eligible; CommonMark's own `[` link
 /// delimiter is exactly the structural equivalent of "start of a text run"
@@ -558,18 +563,48 @@ fn compute_code_ranges(markdown: &str) -> Vec<std::ops::Range<usize>> {
 /// `[~accountid:b]` syntax as literal text. `]` closing a mention/link span
 /// is the structural mirror of `[` opening one, already admitted above —
 /// admitting it here converts both spans instead of just the first. This
-/// does widen eligibility slightly beyond the adjacent-mention case: a `]`
-/// left over from ordinary unmatched-bracket prose (e.g. `array[i]@ts`, a
-/// literal `]` CommonMark leaves untouched when no link/mention syntax
-/// closes over it) now also counts as a boundary — accepted as a narrow,
+/// does widen eligibility slightly beyond the adjacent-mention case for the
+/// BRACKET form: a `]` left over from ordinary unmatched-bracket prose
+/// (e.g. `[foo]bar`, a literal `]` CommonMark leaves untouched when no
+/// link/mention syntax closes over it) now also counts as a boundary for a
+/// bracket-form candidate starting right after it — accepted as a narrow,
 /// low-risk widening consistent with the file's existing bias toward
 /// converting a well-formed mention candidate rather than leaving it
-/// literal).
+/// literal. Cycle-005 F5 review (F-M1) found this widening is NOT safe to
+/// share with the `@Name` form — see `is_at_name_boundary`).
 fn is_mention_boundary(text: &str, pos: usize) -> bool {
     pos == 0
         || text[..pos].chars().next_back().is_some_and(|c| {
             c.is_whitespace() || matches!(c, '*' | '_' | '~' | '(' | '[' | ']' | '\\')
         })
+}
+
+/// `true` when `pos` is at the start of `text` or immediately follows
+/// whitespace or one of `*_~(\[` — the boundary rule for the `@Name`
+/// mention form specifically (BC-7.2.016 point 2 / BC-7.2.018 point 1),
+/// used only by `scan_mention_spans`'s `@Name` branch. This is
+/// `is_mention_boundary`'s admitted char set MINUS `]`
+/// (F-M1, cycle-005 F5 adversarial review): `is_mention_boundary`'s `]`
+/// admission (see its own doc comment) was added to fix two adjacent
+/// BRACKET-form mentions with no separator
+/// (`[~accountid:a][~accountid:b]`) and has EC backing only for that form.
+/// Sharing it with `@Name` detection has NO EC backing (BC-7.2.016 point 2
+/// and BC-7.2.018 point 1 restrict the `@Name` boundary set to
+/// whitespace/start or `*_~(`, with `[` and `\` separately EC-justified —
+/// EC-7.2.016-4/EC-7.2.018-6 and EC-7.2.018-8/VP-674-012 respectively — but
+/// `]` has no such justification) and is actively harmful: ordinary prose
+/// containing an unrelated `]` immediately followed by a live `@token`
+/// (e.g. `array[i]@ts`, `config[env]@home`) would be misdetected as an
+/// `@Name` mention candidate, triggering an unwanted `GET /user/search`
+/// and, under the BC-X.7.009 zero-match hard-error policy, failing the
+/// entire write (`issue create`/`issue edit --markdown`/`comment add`) with
+/// exit 64 for what is ordinary, mention-free text.
+fn is_at_name_boundary(text: &str, pos: usize) -> bool {
+    pos == 0
+        || text[..pos]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_whitespace() || matches!(c, '*' | '_' | '~' | '(' | '[' | '\\'))
 }
 
 /// `true` when `pos` is the first byte of a line (start of `text`, or
@@ -885,7 +920,7 @@ fn scan_mention_spans(text: &str) -> Vec<MentionSpan> {
                     continue;
                 }
             }
-        } else if is_mention_boundary(text, i) && text[i..].starts_with('@') {
+        } else if is_at_name_boundary(text, i) && text[i..].starts_with('@') {
             let token_start = i + 1;
             let mut raw_end = token_start;
             for ch in text[token_start..].chars() {
@@ -13625,6 +13660,66 @@ mod tests {
         assert_eq!(at_name_candidates("@a@b"), vec!["@a".to_string()]);
         // Mid-word negative.
         assert_eq!(at_name_candidates("foo@bar"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_f_m1_at_name_after_bracket_close_is_not_a_candidate() {
+        // F-M1 (cycle-005 F5 adversarial review): `]` is a legitimate
+        // boundary character for the BRACKET-form mention (adjacent bracket
+        // mentions, LOW-3), but it has no EC backing for the `@Name` form —
+        // BC-7.2.016 point 2 / BC-7.2.018 point 1 restrict the `@Name`
+        // boundary set to whitespace/start or `*_~(` (plus the separately
+        // EC-justified `[` and `\`). Ordinary prose containing an unrelated
+        // `]` immediately followed by a live `@token` — e.g.
+        // `config[env]@home`, `array[i]@ts` — must NOT be detected as an
+        // `@Name` mention candidate: doing so would trigger an unwanted
+        // `GET /user/search` and, under the zero-match hard-error policy,
+        // fail the entire write with exit 64 over ordinary text.
+        assert_eq!(
+            at_name_candidates("config[env]@home"),
+            Vec::<String>::new(),
+            "a `]` immediately preceding `@` in ordinary prose must not be \
+             treated as an `@Name` mention boundary"
+        );
+        assert_eq!(at_name_candidates("array[i]@ts"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_f_m1_adjacent_bracket_mentions_still_both_convert_regression() {
+        // Regression guard for the F-M1 fix above: the bracket-form's own
+        // `]`-boundary admission (LOW-3) must be unaffected — two adjacent
+        // bracket-form mentions with no separator must still both convert.
+        // This is the same case pinned by
+        // `test_bc_7_2_016_consecutive_bracket_mentions_no_separator_both_convert`;
+        // re-asserted here, colocated with the F-M1 fix, so a future change
+        // that tries to "simplify" by re-merging the two boundary predicates
+        // is caught by a test sitting right next to the code it would break.
+        let adf = conv("[~accountid:a][~accountid:b]");
+        assert_eq!(
+            count_mention_nodes(&adf),
+            2,
+            "F-M1's `@Name`-only narrowing must not regress adjacent \
+             bracket-form mention conversion: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_f_m1_at_name_after_sanctioned_boundaries_still_detected() {
+        // Confirms the F-M1 fix did not over-narrow: a genuine `@Name`
+        // immediately after a sanctioned boundary character (whitespace,
+        // `(`, `[` per EC-7.2.018-6) is still detected as a candidate.
+        assert_eq!(
+            at_name_candidates("(cc @jsmith)"),
+            vec!["@jsmith".to_string()]
+        );
+        assert_eq!(
+            at_name_candidates("[@jsmith](https://example.com)"),
+            vec!["@jsmith".to_string()]
+        );
+        assert_eq!(
+            at_name_candidates("see @jsmith please"),
+            vec!["@jsmith".to_string()]
+        );
     }
 
     #[test]
