@@ -301,7 +301,7 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532  # v2.86.3
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b  # v2.87.4
         with:
           tool: cargo-llvm-cov
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
@@ -403,7 +403,7 @@ jobs:
           # Need full history so `git diff origin/<base_ref>...HEAD` can resolve the
           # base ref (used by --in-diff to scope mutation testing to changed lines).
           fetch-depth: 0
-      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532  # v2.86.3
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b  # v2.87.4
         with:
           # cycle-006: tightened from major-only @27 to the exact release @27.1.0 —
           # the aggregator now depends on outcomes.json's schema being stable across
@@ -529,7 +529,7 @@ jobs:
         # fetch-depth: 0 is NOT needed here — the diff was already computed
         # once in mutants-plan and is downloaded below, not recomputed.
 
-      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532  # v2.86.3
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b  # v2.87.4
         with:
           tool: cargo-mutants@27.1.0  # same exact pin as mutants-plan
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
