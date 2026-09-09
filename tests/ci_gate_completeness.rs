@@ -5318,7 +5318,9 @@ fn extract_and_normalize_mutants_shard_run_body(job_block: &str) -> Result<Strin
 /// comment for the concrete exploit and
 /// `test_mutants_shard_sentinel_run_step_rejects_outcomes_launder` for the
 /// standing RED regression proof.
-fn extract_and_normalize_mutants_shard_sentinel_run_body(job_block: &str) -> Result<String, String> {
+fn extract_and_normalize_mutants_shard_sentinel_run_body(
+    job_block: &str,
+) -> Result<String, String> {
     extract_and_normalize_run_scalar_for_step(job_block, "Write shard status sentinel")
 }
 
@@ -5445,20 +5447,16 @@ EOF
 /// the byte-pin correctly rejects.
 fn assert_sentinel_run_step_uses_outcome_not_conclusion(text: &str) -> Result<(), String> {
     if !text.contains("steps.run-mutants.outcome") {
-        return Err(
-            "does not contain `steps.run-mutants.outcome` — the sole \
+        return Err("does not contain `steps.run-mutants.outcome` — the sole \
              per-shard completeness signal `mutants-aggregate.sh` trusts \
              must be sourced from `.outcome`, not `.conclusion`."
-                .to_string(),
-        );
+            .to_string());
     }
     if text.contains("steps.run-mutants.conclusion") {
-        return Err(
-            "reads `steps.run-mutants.conclusion` — this ALWAYS reads \
+        return Err("reads `steps.run-mutants.conclusion` — this ALWAYS reads \
              `success` under `run-mutants`'s `continue-on-error: true`, \
              silently reopening the all-shards-crash false-green class."
-                .to_string(),
-        );
+            .to_string());
     }
     Ok(())
 }
@@ -11709,6 +11707,23 @@ fn strip_trailing_shell_comment(line: &str) -> &str {
     }
 }
 
+/// Leading shell operator/opener characters trimmed from a token before
+/// comparing it against `"jq"`. Extended (cycle-006 F4 review round 8,
+/// G-MED) to include `<`/`>` so process-substitution openers `<(`/`>(`
+/// are recognized: `<(jq` trims to `jq` the same way `$(jq`/`` `jq ``
+/// already did, via the SAME mechanism (repeated leading-char trim), not
+/// a special case.
+const JQ_TOKEN_LEADING_TRIM: [char; 8] = ['|', '&', ';', '(', '`', '$', '<', '>'];
+
+/// Command-introducer words (cycle-006 F4 review round 8, G-MED): if the
+/// token immediately preceding a `jq` token (after the same leading/
+/// trailing operator trim) is one of these, the `jq` token is ALSO in
+/// command position — `eval jq ...`, `command jq ...`, `exec jq ...`,
+/// `xargs jq ...`, `env jq ...`, and `builtin jq ...` all invoke `jq` by
+/// its bare, PATH-resolved name just as directly as a standalone bare
+/// `jq` token would.
+const JQ_COMMAND_INTRODUCERS: [&str; 6] = ["eval", "command", "exec", "xargs", "env", "builtin"];
+
 /// True if `text` contains `jq` in shell COMMAND POSITION — i.e. a real
 /// invocation of the `jq` binary by its bare, PATH-resolved name — as
 /// opposed to `jq` appearing as: part of a longer identifier (`jq_bin`,
@@ -11723,23 +11738,40 @@ fn strip_trailing_shell_comment(line: &str) -> &str {
 /// `text` is split on whitespace into tokens (deliberately NOT further
 /// split on `-`/`.`/`_`, so a hyphenated or dotted token stays one unit
 /// and never collapses to bare `jq`). A token counts as a real invocation
-/// only if, after trimming a LEADING shell operator/opener (`|`, `&`,
-/// `;`, `(`, `` ` ``, `$`) and a TRAILING one (`)`, `;`, `&`, `|`, `` ` ``),
-/// it equals exactly `"jq"`, AND it is in COMMAND POSITION: either it is
-/// the first token on the line, the operator-trim actually removed a
-/// leading character (so the raw token was `` `jq ``/`$(jq`/`|jq`/etc.,
-/// with no whitespace before the operator), or the PRECEDING
-/// whitespace-separated token itself ends in one of `|`/`&`/`;`/`(`. This
-/// is what rejects the prose false positives above: in "ERROR: jq
-/// failed", the token immediately before "jq" is "ERROR:" — an ordinary
-/// word, not an operator — so it is correctly NOT in command position.
+/// only if, after trimming a LEADING shell operator/opener
+/// (`JQ_TOKEN_LEADING_TRIM`) and a TRAILING one (`)`, `;`, `&`, `|`,
+/// `` ` ``), it equals exactly `"jq"`, AND it is in COMMAND POSITION:
+/// either it is the first token on the line, the operator-trim actually
+/// removed a leading character (so the raw token was `` `jq ``/`$(jq`/
+/// `|jq`/`<(jq`/`>(jq`/etc., with no whitespace before the operator), the
+/// PRECEDING whitespace-separated token itself ends in one of
+/// `|`/`&`/`;`/`(`, or the PRECEDING token (after the same trim) is one of
+/// `JQ_COMMAND_INTRODUCERS` (round 8, G-MED). This is what rejects the
+/// prose false positives above: in "ERROR: jq failed", the token
+/// immediately before "jq" is "ERROR:" — an ordinary word, not an
+/// operator or introducer — so it is correctly NOT in command position.
+///
+/// **Round 8 (G-MED) also flags a `NAME=jq` shell-variable assignment as
+/// suspicious** (e.g. `JQ=jq; "${JQ}" ...`), via
+/// [`is_suspicious_jq_name_assignment`] — a bare `$NAME` invocation
+/// through such a variable would otherwise evade every check above
+/// (general variable-indirection tracing is out of scope for this
+/// hand-reviewed, two-script scan; this narrow heuristic catches the
+/// specific `NAME=jq` literal-assignment shape without attempting to
+/// trace arbitrary indirection).
+fn trim_jq_token_operators(t: &str) -> &str {
+    t.trim_start_matches(JQ_TOKEN_LEADING_TRIM)
+        .trim_end_matches([')', ';', '&', '|', '`'])
+}
+
 fn contains_bare_jq_invocation(text: &str) -> bool {
     let tokens: Vec<&str> = text.split_whitespace().collect();
     for (i, raw_token) in tokens.iter().enumerate() {
-        let trimmed = raw_token
-            .trim_start_matches(['|', '&', ';', '(', '`', '$'])
-            .trim_end_matches([')', ';', '&', '|', '`']);
+        let trimmed = trim_jq_token_operators(raw_token);
         if trimmed != "jq" {
+            if is_suspicious_jq_name_assignment(raw_token) {
+                return true;
+            }
             continue;
         }
         let operator_prefix_trimmed = *raw_token != "jq";
@@ -11748,11 +11780,37 @@ fn contains_bare_jq_invocation(text: &str) -> bool {
                 .chars()
                 .next_back()
                 .is_some_and(|c| matches!(c, '|' | '&' | ';' | '('));
-        if i == 0 || operator_prefix_trimmed || prev_ends_with_operator {
+        let prev_is_introducer =
+            i > 0 && JQ_COMMAND_INTRODUCERS.contains(&trim_jq_token_operators(tokens[i - 1]));
+        if i == 0 || operator_prefix_trimmed || prev_ends_with_operator || prev_is_introducer {
             return true;
         }
     }
     false
+}
+
+/// True if `raw_token` is a literal shell-variable assignment of the exact
+/// form `NAME=jq` (an ASCII shell-identifier `NAME`, `=`, then exactly the
+/// literal `jq`) — optionally followed by a trailing `;`/`&`/`|`/`)` (e.g.
+/// `JQ=jq;`). Deliberately narrow: `jq_bin=$(resolve_trusted_jq)` and
+/// similar resolver-routed assignments are NOT flagged (the assigned
+/// value is not the bare literal `jq`), and this makes no attempt to
+/// trace indirection beyond one literal assignment (e.g. it does not
+/// follow `A=B; B=jq`). See `contains_bare_jq_invocation`'s doc comment
+/// for the narrow scope this is meant to cover.
+fn is_suspicious_jq_name_assignment(raw_token: &str) -> bool {
+    let candidate = raw_token.trim_end_matches([';', '&', '|', ')']);
+    let Some((name, value)) = candidate.split_once('=') else {
+        return false;
+    };
+    if value != "jq" || name.is_empty() {
+        return false;
+    }
+    let mut chars = name.chars();
+    let first_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    first_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Count non-comment lines in `script` (after
@@ -11764,6 +11822,104 @@ fn count_bare_jq_invocation_lines(script: &str) -> usize {
         .map(strip_trailing_shell_comment)
         .filter(|l| contains_bare_jq_invocation(l))
         .count()
+}
+
+/// (cycle-006 F4 review round 8, finding G-MED — standing RED regression
+/// proof): before this pass, [`contains_bare_jq_invocation`] missed several
+/// real command-position bare-`jq` shapes: an `eval`/`command`/`exec`/
+/// `xargs`/`env`/`builtin` command-introducer word immediately before
+/// `jq`, and process-substitution openers `<(`/`>(`. Each is a real,
+/// PATH-resolved bare-name invocation of `jq` exactly as reachable by a
+/// `$GITHUB_PATH` shim as a plain `jq -r '...'` line — a false negative
+/// here would reopen the jq-shim false-green class VP-025 exists to close.
+/// This test proves each shape is now caught, and that the existing
+/// false-positive-avoidance assertions in
+/// `test_check_ci_gate_sh_and_mutants_aggregate_sh_have_no_bare_jq_
+/// invocations` (the `trusted-jq.sh` filename, hyphenated labels, quoted
+/// prose, `jq_bin`/`${jq_bin}`) remain unaffected by the widened
+/// tokenizer.
+#[test]
+fn test_contains_bare_jq_invocation_catches_command_introducers_and_process_substitution() {
+    for introducer in ["eval", "command", "exec", "xargs", "env", "builtin"] {
+        let line = format!("{introducer} jq -r '.caught' mutants.out/outcomes.json");
+        assert!(
+            contains_bare_jq_invocation(&line),
+            "FAIL (G-MED): contains_bare_jq_invocation must detect a bare \
+             `jq` invocation introduced by `{introducer}` — got false for \
+             {line:?}."
+        );
+    }
+
+    assert!(
+        contains_bare_jq_invocation("diff <(jq -r '.a' x.json) <(jq -r '.b' y.json)"),
+        "FAIL (G-MED): contains_bare_jq_invocation must detect a bare `jq` \
+         invocation opened by process substitution `<(`."
+    );
+    assert!(
+        contains_bare_jq_invocation("tee >(jq -r '.a' > /tmp/out) < in.json"),
+        "FAIL (G-MED): contains_bare_jq_invocation must detect a bare `jq` \
+         invocation opened by process substitution `>(`."
+    );
+
+    // Variable-indirection guard (documented, narrow heuristic — see
+    // contains_bare_jq_invocation's doc comment for exactly what this
+    // does and does not catch): a literal `NAME=jq` assignment is flagged
+    // as suspicious, since a later bare `$NAME` invocation would otherwise
+    // evade every check above.
+    assert!(
+        contains_bare_jq_invocation("JQ=jq; \"${JQ}\" -r '.caught' outcomes.json"),
+        "FAIL (G-MED): contains_bare_jq_invocation must flag a `NAME=jq` \
+         variable assignment as suspicious."
+    );
+
+    // False-positive guards (must NOT change with the widened tokenizer):
+    assert!(
+        !contains_bare_jq_invocation("jq_bin=$(resolve_trusted_jq)"),
+        "FAIL (G-MED): contains_bare_jq_invocation must NOT flag \
+         `jq_bin=$(resolve_trusted_jq)` as a suspicious assignment — the \
+         value is not the literal `jq`."
+    );
+    assert!(
+        !contains_bare_jq_invocation("caught=$(\"${jq_bin}\" '.caught // 0' \"${f}\")"),
+        "FAIL (G-MED): contains_bare_jq_invocation must NOT flag a \
+         `\"${{jq_bin}}\"`-routed call as a bare `jq` invocation after the \
+         widened tokenizer."
+    );
+    assert!(
+        !contains_bare_jq_invocation("source \"${_check_ci_gate_dir}/lib/trusted-jq.sh\""),
+        "FAIL (G-MED): contains_bare_jq_invocation must NOT flag the \
+         `trusted-jq.sh` FILENAME as a bare `jq` invocation after the \
+         widened tokenizer."
+    );
+    assert!(
+        !contains_bare_jq_invocation(
+            "    echo \"${jq_trust_total}/${EXPECTED_JQ_TRUST_CHECKS} jq-trust checks run,\" \\"
+        ),
+        "FAIL (G-MED): contains_bare_jq_invocation must NOT flag the \
+         hyphenated label \"jq-trust\" as a bare `jq` invocation after the \
+         widened tokenizer."
+    );
+
+    // The real scripts must still pass cleanly with the widened tokenizer
+    // (they route every jq call through `${jq_bin}` and never use eval/
+    // command/exec/xargs/env/builtin/process-substitution with jq, nor a
+    // NAME=jq assignment).
+    let gate = read_check_ci_gate_sh();
+    let agg = read_mutants_aggregate_sh();
+    assert_eq!(
+        count_bare_jq_invocation_lines(&gate),
+        0,
+        "FAIL (G-MED): the widened tokenizer now flags a line in \
+         `scripts/check-ci-gate.sh` that the real script did not \
+         previously trip — investigate before landing this change."
+    );
+    assert_eq!(
+        count_bare_jq_invocation_lines(&agg),
+        0,
+        "FAIL (G-MED): the widened tokenizer now flags a line in \
+         `scripts/mutants-aggregate.sh` that the real script did not \
+         previously trip — investigate before landing this change."
+    );
 }
 
 /// (cycle-006 F4 review round 6, F-HIGH, VP-MUTANTS-SHARD-024): asserts
