@@ -16,6 +16,7 @@ use super::field_resolve;
 use super::format;
 use super::helpers;
 use super::jsm_create::{JsmCreateArgs, handle_jsm_create};
+use super::mentions;
 
 pub(super) async fn handle_create(
     command: IssueCommand,
@@ -43,10 +44,7 @@ pub(super) async fn handle_create(
         request_type,
         field: field_pairs,
         on_behalf_of,
-        // S-cycle5-mention-resolution-wiring: `no_mentions` is a stub-stage
-        // field addition only (AC-014) — wiring it into this handler is the
-        // implementer's TDD work (Step 4/AC-008/AC-015), not this pass.
-        no_mentions: _,
+        no_mentions,
     } = command
     else {
         unreachable!()
@@ -98,6 +96,7 @@ pub(super) async fn handle_create(
                 parent,
                 to,
                 account_id,
+                no_mentions,
             },
         )
         .await;
@@ -260,7 +259,12 @@ pub(super) async fn handle_create(
 
     if let Some(ref text) = desc_text {
         let adf_body = if markdown {
-            adf::markdown_to_adf(text)?
+            if no_mentions {
+                adf::markdown_to_adf_no_mentions(text)?
+            } else {
+                let resolutions = mentions::resolve_mentions(client, text, no_input).await?;
+                adf::markdown_to_adf_with_mentions(text, &resolutions)?
+            }
         } else {
             adf::text_to_adf(text)
         };
