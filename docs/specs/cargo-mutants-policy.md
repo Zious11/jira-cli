@@ -129,14 +129,21 @@ simply forgotten:
 
 ## Kill-Rate Target
 
-**90% on the PR diff scope.** The CI `mutants` job fails if the kill rate is below 90%.
+**90% on the PR diff scope.** The required `ci-gate.needs` member `mutants-aggregate` fails
+the gate if the POOLED kill rate across all 8 shards is below 90%.
 
 Rationale: with the inline proptest from S-345 (BC-3.4.006) and the integration tests
 in `tests/issue_bulk_pr2.rs` and `tests/issue_bulk.rs`, the bulk + create paths have
 strong existing coverage. Mutation testing surfaces gaps where assertions are too loose.
 
-The 90% threshold lives in the CI YAML `Check kill rate` step (not in `.cargo/mutants.toml`)
-for CI-artifact visibility: reviewers can read the threshold without parsing TOML.
+**Location (cycle-006 correction):** there is no `Check kill rate` CI YAML step and no
+single deciding `mutants` job today — both were retired by cycle-006's sharded design
+(see **Sharded Mutation Gate (cycle-006)** below). The 90% threshold now lives in
+`scripts/mutants-aggregate.sh`'s Step 6 (`kill_rate=$(( (caught_total * 100) / killable ))`;
+`if [ "${kill_rate}" -lt 90 ]`), invoked from `ci.yml`'s `mutants-aggregate` job's
+"Evaluate sharded mutation gate" step — a shell script, not inline CI YAML, for the same
+CI-artifact-visibility rationale: reviewers can read the threshold without parsing YAML
+`env:`/`with:` blocks either way.
 
 ## Timeout Parameters (MUTATION-CI-TIMEOUT, 2026-06-28; corrected F5 adversarial pass)
 
@@ -450,6 +457,99 @@ The flakiness risk of a required `mutants` job is moderate:
 4. **Very large diffs (200+ mutants):** this causes a legitimate budget-exceeded
    cancellation, not flakiness. Treat as a split-PR signal (see Oversized-Diff Signal).
 
+## Sharded Mutation Gate (cycle-006)
+
+**This is the authoritative, current description of the mutation gate's CI topology and
+decision logic.** It supersedes the single-`mutants`-job design described in **CI
+Integration** below (retained there as history) and in the retired `Check kill rate` step
+referenced in the pre-cycle-006 text elsewhere in this document. Every claim below is
+verified directly against `scripts/mutants-aggregate.sh` and `.github/workflows/ci.yml` as
+shipped, not carried forward from planning documents.
+
+### Topology
+
+Three jobs, always in this order, all PR-only:
+
+1. **`mutants-plan`** (`if: github.event_name == 'pull_request'`) — computes
+   `git diff origin/<base_ref>...HEAD` ONCE, uploads it as the `mutants-diff-file`
+   artifact (shared, byte-identical, across every shard), and pre-counts in-diff mutants
+   via `cargo mutants --list --in-diff <diff>` (a listing-only invocation — it does not
+   execute the PR's code). Outputs: `escalated` (bool), `mutant_count` (the pre-count),
+   `overall_diff_lines`.
+2. **`mutants`** (matrix, `shard: [0..7]`, N=8; `if: github.event_name == 'pull_request'
+   && needs.mutants-plan.outputs.escalated != 'true'`) — each shard runs `cargo mutants
+   --in-diff <diff> --shard <k>/8 --sharding slice --jobs 2 --baseline skip --timeout 240`
+   with `continue-on-error: true` (a shard reporting missed/timeout mutants is routine
+   output, not a shard-job failure). Every shard unconditionally (`if: always()`) writes
+   and uploads a status sentinel (`{"shard_index", "run_outcome", "has_outcomes"}`, keyed
+   off `steps.run-mutants.outcome` — NOT `.conclusion`, which always reads `success` under
+   `continue-on-error: true`) and its `mutants.out/outcomes.json`.
+3. **`mutants-aggregate`** (`needs: [mutants-plan, mutants]`, `if: always()` — this job
+   NEVER reports `skipped` to GitHub Actions; a push-event no-op is resolved as an
+   ordinary `exit 0` INSIDE `scripts/mutants-aggregate.sh`'s Step 0, not via a job-level
+   `if:` short-circuit) — the sole pass/fail arbiter, invoked as `bash
+   scripts/mutants-aggregate.sh`. This is the required `ci-gate.needs` member that
+   replaces the pre-sharding single `mutants` job.
+
+### Pooled kill-rate computation (sum, not average)
+
+`mutants-aggregate.sh`'s Step 3 sums `caught`/`missed`/`timeout`/`unviable` from every
+shard's `outcomes.json` into pooled totals (`caught_total`, `missed_total`,
+`timeout_total`, `unviable_total`) — a POOLED sum across all 8 shards, never an average of
+8 per-shard percentages (which would let a small shard's extreme kill rate skew the
+result). Step 6 then computes:
+
+```
+killable   = caught_total + missed_total + timeout_total   # excludes unviable
+kill_rate  = (caught_total * 100) / killable                # integer division
+FAIL if kill_rate -lt 90                                    # integer comparison, not <=89
+```
+
+`unviable_total` is excluded from the `killable` denominator (an unviable mutant was never
+a real chance to catch a regression); if `killable` is 0 (every scored mutant was
+unviable), the gate passes unconditionally (`OK: N mutant(s) generated, all unviable.`).
+
+### Sentinel-based completeness (INV-COMPLETE) — every shard must report, or fail closed
+
+Step 2 checks, by exact shard index (0-7), that a status sentinel file exists at
+`${STATUS_DIR}/mutants-shard-status-<i>/shard-status-<i>.json` for every one of the 8
+expected shards — a crashed, cancelled, or never-scheduled shard job means its mutants
+were never verified, and the gate FAILS CLOSED rather than silently excluding that shard
+from the denominator. Step 3 then reads each present sentinel's `run_outcome`/
+`has_outcomes` fields to distinguish "this shard legitimately produced 0 mutants"
+(`run_outcome=success`, `has_outcomes=false` — contributes 0, not a failure) from "this
+shard's `run-mutants` step genuinely crashed before producing any `outcomes.json`"
+(anything else with `has_outcomes=false` — a hard FAIL). A sentinel claiming
+`has_outcomes=true` whose `outcomes.json` is missing from the download, or is malformed
+JSON, is also a hard FAIL (sentinel/data desync), never a silent skip.
+
+### Exact-equality `MUTANT_COUNT` reconciliation
+
+Step 4 requires the pooled `total_scored` (the shards' own summed
+`caught+missed+timeout+unviable`, folded in Step 3 from their OWN `outcomes.json` data)
+to equal `MUTANT_COUNT` (`mutants-plan`'s independent `cargo mutants --list --in-diff`
+pre-count) EXACTLY — both an under-count (a dropped, possibly-surviving mutant) and an
+over-count (the shard matrix examined more than was planned) are hard fails, not just the
+under-count direction. Step 6 (the kill-rate decision) is unreachable whenever Step 4
+finds a mismatch. See **Sharded Gate: Residual Trust Boundary** below for what this
+reconciliation does and does not protect against adversarially.
+
+### `>120`-mutant escape hatch (INV-ESCALATE) and escalation
+
+`mutants-plan`'s Step (`Compute diff and mutation plan`) compares its own
+`MUTANT_COUNT` pre-count against a human-reviewed literal, `ESCALATION_THRESHOLD=120`
+(update in the SAME commit as any deliberate change to shard count N or per-shard
+`--timeout`). When `MUTANT_COUNT > 120`, `escalated=true` is set as a job output; the
+`mutants` shard matrix's job-level `if:` then skips the entire matrix
+(`needs.mutants-plan.outputs.escalated != 'true'`), and `mutants-aggregate`'s Step 1
+short-circuits to an ordinary, actionable CI FAILURE — never a silent skip or a silent
+pass — naming two ways forward: split the PR into smaller changes, or (if genuinely large
+and reviewed) a repo admin merges via GitHub's branch-protection "Require approvals"
+bypass, explicitly acknowledging the unverified mutation coverage in the PR description.
+An advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=16,
+non-blocking) still exercises the full mutation surface regardless of how an escalated PR
+is merged.
+
 ## Whitelist Convention
 
 When a mutant cannot reasonably be killed — defensive guard, unreachable code, or a
@@ -553,7 +653,7 @@ file's own `--file`-scoped run uses. They do NOT reproduce the sharded CI topolo
 (`mutants-plan` → 8-shard matrix → `mutants-aggregate`) itself; the pooled kill-rate
 computation, the sentinel-based completeness accounting, and the escalation
 threshold are CI-only behaviors implemented in `scripts/mutants-aggregate.sh` (see
-**Sharded Mutation Gate** above) and are not exercised by a local single-process run.
+**Sharded Mutation Gate (cycle-006)** above) and are not exercised by a local single-process run.
 To reproduce one shard's slice locally, add `--shard <k>/8 --sharding slice
 --baseline skip` to the PR-diff-equivalent command below.
 
@@ -595,8 +695,8 @@ Results land in `mutants.out/` (excluded from git via `.gitignore`).
 
 ## CI Integration
 
-**Superseded by cycle-006's sharded pipeline — see Sharded Mutation Gate above for
-the current job names/shapes.** The description below (a single `mutants` job) is
+**Superseded by cycle-006's sharded pipeline — see Sharded Mutation Gate (cycle-006)
+above for the current job names/shapes.** The description below (a single `mutants` job) is
 retained as history; the required `ci-gate.needs` member today is
 `mutants-aggregate`, fed by `mutants-plan` and the 8-shard `mutants` matrix, all
 three PR-only (`mutants-plan`/`mutants`: `if: github.event_name == 'pull_request'`;
@@ -795,7 +895,7 @@ not a PRD BC.
 
 **cycle-006 (S-cycle6-mutants-ci-sharding) continues this precedent.** The sharded
 gate's governing invariants — INV-AGG, INV-COMPLETE, INV-ESCALATE (see **Sharded
-Mutation Gate** above) — are also policy-doc-only, per DEC-348 (F1 approval) and
+Mutation Gate (cycle-006)** above) — are also policy-doc-only, per DEC-348 (F1 approval) and
 DEC-349 (F2 gate approval). No PRD BC exists for the sharded gate either; this file,
 plus `.factory/phase-f2-spec-evolution/cycle-006/mutants-sharding-invariants.md` (the
 invariant statements and their adversarial-review history) and
@@ -888,11 +988,27 @@ of `mutant_count` / `overall_diff_lines` / `escalated` to a real `git diff` / `c
 step_key_sets_are_pinned` closes the job/step key-set gap that content pin sits inside (a
 smuggled job-level `defaults:`/`continue-on-error:`, or a smuggled step-level
 `if:`/`shell:`/`continue-on-error:`, on `mutants-plan` itself). The residual documented in
-this section is therefore narrower than at initial cycle-006 landing: it is specifically the
+this section is therefore narrower than at initial cycle-006 landing — but it was NOT, as
+an earlier revision of this paragraph claimed, narrowed all the way down to "specifically
+the code-execution-required path, not a plaintext `ci.yml` edit": that overclaimed
+closure. **Correction (cycle-006 F4 review round 4, A-F1):** a SECOND plaintext,
+no-code-execution `ci.yml` vector remained open on the sibling `mutants` shard job at the
+time that sentence was written — appending shell to the `run-mutants` step's `run:` body,
+AFTER the real `cargo mutants` invocation inside the SAME step, that launders the shard's
+own `mutants.out/outcomes.json` (moving `missed`/`timeout` counts into `caught`,
+sum-preserving so Step 4's exact-equality reconciliation still passes). AC-033's
+presence-only ordered-substring search over the whole raw `mutants` job block proved the
+real invocation was present, but never inspected what came after it. This is now CLOSED by
+`assert_run_mutants_step_content_is_honest` (scoped to the `run-mutants` step's PARSED
+`run:` scalar, mirroring this section's own `mutants-plan` fix) and its production pin
+`test_mutants_shard_run_step_content_is_pinned` in `tests/ci_gate_completeness.rs` — see
+"A second forgery path" below for a third, DIFFERENT no-code-execution variant
+(spoofed sibling-job artifacts) that remains open and tracked, separate from the one this
+paragraph now correctly states is closed. What remains open, accurately stated: the
 **code-execution-required** path (a malicious `build.rs`/proc-macro/test-time side effect
-reachable from a `cargo mutants`/`cargo build`/`cargo test` invocation), not a plaintext
-`ci.yml` edit — see "A second forgery path" below for a third variant that also requires no
-code execution.
+reachable from a `cargo mutants`/`cargo build`/`cargo test` invocation) and the
+spoofed-sibling-artifact / canceling-errors / set-identity residuals described below — not
+a trailing-shell-append inside the shard's own `run-mutants` step, which this fix closes.
 
 ### A second forgery path: spoofed sibling-job artifacts (cycle-006 F4 review round 2, F-PF-LOW-002)
 
