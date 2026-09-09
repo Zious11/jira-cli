@@ -12013,7 +12013,23 @@ fn strip_trailing_shell_comment(line: &str) -> &str {
 /// are recognized: `<(jq` trims to `jq` the same way `$(jq`/`` `jq ``
 /// already did, via the SAME mechanism (repeated leading-char trim), not
 /// a special case.
-const JQ_TOKEN_LEADING_TRIM: [char; 8] = ['|', '&', ';', '(', '`', '$', '<', '>'];
+///
+/// **Further extended (cycle-006 F4 review round 4, J-O1)** to include
+/// `\` (a `\jq` backslash-escape, the standard shell idiom for bypassing
+/// an alias/function of the same name while still invoking the bare,
+/// PATH-resolved binary), `"`/`'` (a quoted `"jq"`/`'jq'` invocation —
+/// quoting a command name does not change PATH resolution), and `.`/`/`
+/// (a relative-path spelling `./jq`, which explicitly names a binary in
+/// the CURRENT WORKING DIRECTORY rather than resolving through `$PATH` —
+/// a distinct but equally viable forgery: a PR that plants a malicious
+/// `jq` file at the repo root and invokes it as `./jq` never touches
+/// `$PATH`/`$GITHUB_PATH` at all, so it would evade a PATH-shim-focused
+/// scan even though it is exactly as dangerous as the bare-name case).
+/// See [`trim_jq_token_operators`]'s doc comment for the trailing-side
+/// counterpart these new leading characters pair with.
+const JQ_TOKEN_LEADING_TRIM: [char; 13] = [
+    '|', '&', ';', '(', '`', '$', '<', '>', '\\', '"', '\'', '.', '/',
+];
 
 /// Command-introducer words (cycle-006 F4 review round 8, G-MED): if the
 /// token immediately preceding a `jq` token (after the same leading/
@@ -12022,7 +12038,27 @@ const JQ_TOKEN_LEADING_TRIM: [char; 8] = ['|', '&', ';', '(', '`', '$', '<', '>'
 /// `xargs jq ...`, `env jq ...`, and `builtin jq ...` all invoke `jq` by
 /// its bare, PATH-resolved name just as directly as a standalone bare
 /// `jq` token would.
-const JQ_COMMAND_INTRODUCERS: [&str; 6] = ["eval", "command", "exec", "xargs", "env", "builtin"];
+///
+/// **Extended (cycle-006 F4 review round 4, J-O1)** with the process-
+/// wrapper class: `timeout`, `nice`, `nohup`, `stdbuf`, `sudo`, `setsid`,
+/// `ionice`, and `time` all exec (or fork-then-exec) the FOLLOWING word as
+/// a command by its bare, PATH-resolved name, exactly as directly as
+/// `eval`/`exec`/etc. already covered — `timeout 30 jq ...` is not
+/// meaningfully different from `exec jq ...` from this scan's point of
+/// view. (`time` is technically a bash reserved word rather than an
+/// external command, but it introduces its argument the same way for this
+/// scan's purposes.)
+///
+/// **Documented, out-of-scope residual:** a wrapper invoked WITH FLAGS
+/// between it and `jq` (e.g. `sudo -E jq ...`, `timeout --signal=KILL 30
+/// jq ...`) is NOT caught — this list only inspects the single token
+/// immediately preceding the `jq` token, the same one-token-lookback
+/// limitation `eval`/`exec`/etc. already carried before this pass. General
+/// flag-skipping is out of scope for this hand-reviewed, two-script scan.
+const JQ_COMMAND_INTRODUCERS: [&str; 14] = [
+    "eval", "command", "exec", "xargs", "env", "builtin", "timeout", "nice", "nohup", "stdbuf",
+    "sudo", "setsid", "ionice", "time",
+];
 
 /// True if `text` contains `jq` in shell COMMAND POSITION — i.e. a real
 /// invocation of the `jq` binary by its bare, PATH-resolved name — as
@@ -12059,9 +12095,20 @@ const JQ_COMMAND_INTRODUCERS: [&str; 6] = ["eval", "command", "exec", "xargs", "
 /// hand-reviewed, two-script scan; this narrow heuristic catches the
 /// specific `NAME=jq` literal-assignment shape without attempting to
 /// trace arbitrary indirection).
+///
+/// **Round 4 (J-O1) widens the TRAILING trim set to mirror the leading
+/// one**: `"`/`'` are added so a quoted `"jq"`/`'jq'` token trims cleanly
+/// on both ends to `jq` (see [`JQ_TOKEN_LEADING_TRIM`]'s doc comment for
+/// the full rationale, shared with the leading-side additions). Because a
+/// quote (or backslash, or relative-path `./`) being trimmed at all means
+/// `raw_token != "jq"`, such a token is treated as command position
+/// regardless of what precedes it — the same "any difference from the
+/// bare form is itself suspicious" precedent `is_suspicious_jq_name_
+/// assignment` already established for `NAME=jq`, applied here to a
+/// quoted/escaped/relative `jq` spelling instead of a variable name.
 fn trim_jq_token_operators(t: &str) -> &str {
     t.trim_start_matches(JQ_TOKEN_LEADING_TRIM)
-        .trim_end_matches([')', ';', '&', '|', '`'])
+        .trim_end_matches([')', ';', '&', '|', '`', '"', '\''])
 }
 
 fn contains_bare_jq_invocation(text: &str) -> bool {
@@ -12219,6 +12266,120 @@ fn test_contains_bare_jq_invocation_catches_command_introducers_and_process_subs
         "FAIL (G-MED): the widened tokenizer now flags a line in \
          `scripts/mutants-aggregate.sh` that the real script did not \
          previously trip — investigate before landing this change."
+    );
+}
+
+/// (cycle-006 F4 review round 4, J-O1 — standing RED regression proof):
+/// before this pass, [`contains_bare_jq_invocation`] missed several more
+/// real command-position bare-`jq` shapes beyond round 8's introducer/
+/// process-substitution set: additional wrapper introducers
+/// (`timeout`/`nice`/`nohup`/`stdbuf`/`sudo`/`setsid`/`ionice`/`time`) and
+/// quoted/escaped/relative spellings of the `jq` token itself
+/// (`\jq`/`"jq"`/`'jq'`/`./jq`). Each is a real invocation of the `jq`
+/// binary exactly as reachable by a `$GITHUB_PATH` shim (the wrapper
+/// class) or a planted-file-in-cwd forgery (the `./jq` case) as a plain
+/// `jq -r '...'` line — a false negative here would reopen the jq-shim/
+/// jq-forgery false-green class VP-025 exists to close. This test proves
+/// each new shape is now caught, and that every pre-existing false-
+/// positive-avoidance assertion (in this test and in
+/// `test_check_ci_gate_sh_and_mutants_aggregate_sh_have_no_bare_jq_
+/// invocations`) remains unaffected by the further-widened tokenizer.
+#[test]
+fn test_contains_bare_jq_invocation_catches_wrapper_introducers_and_quoted_relative_spellings() {
+    for introducer in [
+        "timeout", "nice", "nohup", "stdbuf", "sudo", "setsid", "ionice", "time",
+    ] {
+        let line = format!("{introducer} jq -r '.caught' mutants.out/outcomes.json");
+        assert!(
+            contains_bare_jq_invocation(&line),
+            "FAIL (J-O1): contains_bare_jq_invocation must detect a bare \
+             `jq` invocation introduced by wrapper `{introducer}` — got \
+             false for {line:?}."
+        );
+    }
+
+    // Quoted/escaped/relative spellings of the `jq` token itself.
+    assert!(
+        contains_bare_jq_invocation(r"\jq -r '.caught' mutants.out/outcomes.json"),
+        "FAIL (J-O1): contains_bare_jq_invocation must detect a backslash- \
+         escaped `\\jq` invocation (the standard shell idiom for bypassing \
+         an alias/function of the same name)."
+    );
+    assert!(
+        contains_bare_jq_invocation(r#""jq" -r '.caught' mutants.out/outcomes.json"#),
+        "FAIL (J-O1): contains_bare_jq_invocation must detect a double- \
+         quoted `\"jq\"` invocation — quoting a command name does not \
+         change PATH resolution."
+    );
+    assert!(
+        contains_bare_jq_invocation("'jq' -r '.caught' mutants.out/outcomes.json"),
+        "FAIL (J-O1): contains_bare_jq_invocation must detect a single- \
+         quoted 'jq' invocation."
+    );
+    assert!(
+        contains_bare_jq_invocation("./jq -r '.caught' mutants.out/outcomes.json"),
+        "FAIL (J-O1): contains_bare_jq_invocation must detect a relative- \
+         path `./jq` invocation — this names a binary in the current \
+         working directory rather than resolving through $PATH, a \
+         distinct but equally viable forgery a PATH-focused scan alone \
+         would miss."
+    );
+
+    // False-positive guards (must NOT change with the further-widened
+    // tokenizer) — re-run alongside the new assertions above so a
+    // regression here is caught in the SAME test as the widening that
+    // could cause it.
+    assert!(
+        !contains_bare_jq_invocation("jq_bin=$(resolve_trusted_jq)"),
+        "FAIL (J-O1): contains_bare_jq_invocation must NOT flag \
+         `jq_bin=$(resolve_trusted_jq)` as a suspicious assignment."
+    );
+    assert!(
+        !contains_bare_jq_invocation("caught=$(\"${jq_bin}\" '.caught // 0' \"${f}\")"),
+        "FAIL (J-O1): contains_bare_jq_invocation must NOT flag a \
+         `\"${{jq_bin}}\"`-routed call as a bare `jq` invocation after the \
+         further-widened tokenizer."
+    );
+    assert!(
+        !contains_bare_jq_invocation("source \"${_check_ci_gate_dir}/lib/trusted-jq.sh\""),
+        "FAIL (J-O1): contains_bare_jq_invocation must NOT flag the \
+         `trusted-jq.sh` FILENAME as a bare `jq` invocation after the \
+         further-widened tokenizer."
+    );
+    assert!(
+        !contains_bare_jq_invocation(
+            "        echo \"ERROR: jq failed while extracting job names from the needs\" >&2"
+        ),
+        "FAIL (J-O1): contains_bare_jq_invocation must NOT flag the \
+         ordinary English word \"jq\" inside a quoted error message as a \
+         bare `jq` invocation."
+    );
+    assert!(
+        !contains_bare_jq_invocation("        \"one of the trusted system jq directories\""),
+        "FAIL (J-O1): contains_bare_jq_invocation must NOT flag the word \
+         \"jq\" inside this quoted test-fixture label as a bare `jq` \
+         invocation."
+    );
+
+    // The real scripts must still pass cleanly with the further-widened
+    // tokenizer — same requirement round 8's sibling test already checks,
+    // re-asserted here so a regression from THIS pass's specific widening
+    // is caught in the same test that introduced it.
+    let gate = read_check_ci_gate_sh();
+    let agg = read_mutants_aggregate_sh();
+    assert_eq!(
+        count_bare_jq_invocation_lines(&gate),
+        0,
+        "FAIL (J-O1): the further-widened tokenizer now flags a line in \
+         `scripts/check-ci-gate.sh` that it did not previously trip — \
+         investigate before landing this change."
+    );
+    assert_eq!(
+        count_bare_jq_invocation_lines(&agg),
+        0,
+        "FAIL (J-O1): the further-widened tokenizer now flags a line in \
+         `scripts/mutants-aggregate.sh` that it did not previously trip — \
+         investigate before landing this change."
     );
 }
 
