@@ -68,6 +68,11 @@ pub(super) async fn handle_edit(
         description_stdin,
         markdown,
         field: field_raw,
+        // S-cycle5-mention-resolution-wiring: `no_mentions` is a stub-stage
+        // field addition only (AC-014) — wiring it into this handler (both
+        // the dry-run and live call sites, AC-009/AC-010/AC-015) is the
+        // implementer's TDD work (Step 4), not this pass.
+        no_mentions: _,
     } = command
     else {
         unreachable!()

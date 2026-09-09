@@ -85,6 +85,14 @@ examine_globs = [
     # (S-cycle4-cloud-id-correctness); same P22-001/DEC-149 drift class as every prior
     # "new security-relevant file → add to mutants.toml at creation" gap.
     "src/api/jira/tenant.rs",
+    # S-cycle5-mention-resolution-wiring (AC-016, verification-delta-674.md §9):
+    # new effectful mention-resolution module (`resolve_mentions`,
+    # `filter_by_name_match`) reachable from every write-command surface
+    # (create/edit/comment add/edit/JSM create). Added at file-creation time
+    # per the P22-001/DEC-149/S-MUTANTS-SCOPE-1 "new CLI handler file → add to
+    # mutants.toml at creation" convention, in the SAME commit that creates
+    # the file (satisfies `tests/mutants_glob_existence.rs`).
+    "src/cli/issue/mentions.rs",
 ]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI

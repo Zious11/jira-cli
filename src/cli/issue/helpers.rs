@@ -266,7 +266,14 @@ pub(super) fn is_me_keyword(input: &str) -> bool {
 /// user to choose when ambiguous.
 ///
 /// Returns `(account_id, display_name)` of the selected user.
-fn disambiguate_user(
+///
+/// Bumped from `fn` to `pub(super) fn` for S-cycle5-mention-resolution-wiring
+/// (AC-002) so `mentions::resolve_mentions` (a sibling module under
+/// `cli::issue`) can reuse it verbatim for `@Name` mention disambiguation —
+/// visibility change only, zero behavior change; the three existing callers
+/// below (`resolve_user`/`resolve_assignee`/`resolve_assignee_by_project`)
+/// are untouched.
+pub(super) fn disambiguate_user(
     users: &[User],
     name: &str,
     no_input: bool,

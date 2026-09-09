@@ -453,6 +453,12 @@ pub enum IssueCommand {
         /// Interpret description as Markdown
         #[arg(long)]
         markdown: bool,
+        /// Skip mention resolution entirely (no `GET /user/search` or
+        /// `GET /user?accountId=` calls); the ADF body carries the literal,
+        /// unconverted mention text. No relationship to --markdown — accepted
+        /// as a silent no-op without it (ADR-0023 §6, AC-014/AC-015).
+        #[arg(long = "no-mentions")]
+        no_mentions: bool,
         /// Parent issue key (e.g., for subtasks or stories under epics)
         #[arg(long)]
         parent: Option<String>,
@@ -581,6 +587,12 @@ pub enum IssueCommand {
         /// Interpret description as Markdown
         #[arg(long)]
         markdown: bool,
+        /// Skip mention resolution entirely (no `GET /user/search` or
+        /// `GET /user?accountId=` calls); the ADF body carries the literal,
+        /// unconverted mention text. No relationship to --markdown — accepted
+        /// as a silent no-op without it (ADR-0023 §6, AC-014/AC-015).
+        #[arg(long = "no-mentions")]
+        no_mentions: bool,
         /// Arbitrary custom field values as NAME=VALUE pairs (repeatable).
         /// The first '=' splits name from value; subsequent '=' are part of the value.
         /// Duplicate keys use the last value provided. Single-key path only (rejected
@@ -768,6 +780,12 @@ pub enum CommentSubcommand {
         /// Interpret input as Markdown
         #[arg(long)]
         markdown: bool,
+        /// Skip mention resolution entirely (no `GET /user/search` or
+        /// `GET /user?accountId=` calls); the ADF body carries the literal,
+        /// unconverted mention text. No relationship to --markdown — accepted
+        /// as a silent no-op without it (ADR-0023 §6, AC-014/AC-015).
+        #[arg(long = "no-mentions")]
+        no_mentions: bool,
         /// Read comment from file
         #[arg(long)]
         file: Option<String>,
@@ -810,6 +828,12 @@ pub enum CommentSubcommand {
         /// Interpret body as Markdown
         #[arg(long)]
         markdown: bool,
+        /// Skip mention resolution entirely (no `GET /user/search` or
+        /// `GET /user?accountId=` calls); the ADF body carries the literal,
+        /// unconverted mention text. No relationship to --markdown — accepted
+        /// as a silent no-op without it (ADR-0023 §6, AC-014/AC-015).
+        #[arg(long = "no-mentions")]
+        no_mentions: bool,
         /// Mark comment as internal (agent-only visibility)
         #[arg(long, conflicts_with = "public")]
         internal: bool,

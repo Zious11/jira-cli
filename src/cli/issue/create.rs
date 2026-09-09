@@ -43,6 +43,10 @@ pub(super) async fn handle_create(
         request_type,
         field: field_pairs,
         on_behalf_of,
+        // S-cycle5-mention-resolution-wiring: `no_mentions` is a stub-stage
+        // field addition only (AC-014) — wiring it into this handler is the
+        // implementer's TDD work (Step 4/AC-008/AC-015), not this pass.
+        no_mentions: _,
     } = command
     else {
         unreachable!()

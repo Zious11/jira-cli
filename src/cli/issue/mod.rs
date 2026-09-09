@@ -16,6 +16,11 @@ mod jsm_create;
 mod json_output;
 mod links;
 mod list;
+// S-cycle5-mention-resolution-wiring: `resolve_mentions`/`filter_by_name_match`
+// are called from create.rs/edit.rs/interactions.rs/jsm_create.rs (all
+// siblings within this module tree), so `mod` visibility (matching
+// `helpers`/`field_resolve`) is sufficient — no `pub`/`pub(crate)` needed.
+mod mentions;
 mod view;
 pub mod workflow;
 

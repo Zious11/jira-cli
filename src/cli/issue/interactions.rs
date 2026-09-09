@@ -41,6 +41,11 @@ pub(super) async fn handle_comment_add(
             file,
             stdin,
             internal,
+            // S-cycle5-mention-resolution-wiring: `no_mentions` is a
+            // stub-stage field addition only (AC-014) — wiring it (and
+            // `handle_comment_add`'s new `no_input` parameter, AC-011) is
+            // the implementer's TDD work (Step 4), not this pass.
+            no_mentions: _,
         } => (key, message, markdown, file, stdin, internal),
         _ => unreachable!("handle_comment_add called with non-Add variant"),
     };
@@ -357,6 +362,11 @@ pub(super) async fn handle_comment_edit(
         internal,
         public,
         yes,
+        // S-cycle5-mention-resolution-wiring: `no_mentions` is a stub-stage
+        // field addition only (AC-014) — wiring it into this handler
+        // (AC-011/AC-015) is the implementer's TDD work (Step 4), not this
+        // pass.
+        no_mentions: _,
     } = sub
     else {
         unreachable!("handle_comment_edit called with non-Edit variant")
