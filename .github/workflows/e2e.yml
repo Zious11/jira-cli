@@ -135,6 +135,11 @@ jobs:
           # test_e2e_jsm_resolution_enforcement (S-JSM-E2E-3). Auto-discovered from
           # `jr issue resolutions` when unset.
           JR_E2E_JSM_RESOLUTION: ${{ vars.JR_E2E_JSM_RESOLUTION }}
+          # Optional: override accountId for the mention round-trip tests'
+          # self-mention default (docs/specs/e2e-live-jira-testing.md §8). Tests
+          # default to the authenticated account's own accountId (self-discovered
+          # via `GET /rest/api/3/myself`) when unset.
+          JR_E2E_MENTION_ACCOUNT_ID: ${{ vars.JR_E2E_MENTION_ACCOUNT_ID }}
           # Wider JQL-index poll budget for ALL env-configurable polls (poll_jql,
           # poll_view, poll_component_filter — they all read these two knobs).
           # Rationale: live run 32388828850 failed test_e2e_pagination_dedup because
