@@ -58,7 +58,7 @@ All notable changes to jr will be documented here.
   no user-facing `jr` binary behavior changed. The required mutation-testing gate is
   now a three-job pipeline (`mutants-plan` → an 8-shard `mutants` matrix →
   `mutants-aggregate`) plus a new advisory nightly full-scope workflow
-  (`.github/workflows/mutants-nightly.yml`, N=16 shards, never blocks a merge).
+  (`.github/workflows/mutants-nightly.yml`, N=24 shards, never blocks a merge).
   `mutants-aggregate` (implemented in the new `scripts/mutants-aggregate.sh`)
   replaces `mutants` as the `ci-gate.needs` member and computes a POOLED,
   sum-not-average kill rate across all 8 shards, with an exact-equality
@@ -79,6 +79,26 @@ All notable changes to jr will be documented here.
   now share a common `scripts/lib/trusted-jq.sh` jq-trust resolver. Governed
   policy-doc-only (DEC-348/DEC-349), no new PRD BC — see
   `docs/specs/cargo-mutants-policy.md` §"Sharded Mutation Gate (cycle-006)".
+
+- **CI: nightly full-scope mutation workflow rebalanced to 24 shards + a completeness
+  guard (`ci/mutants-nightly-rebalance`).** Investigated run 34478602590 (the first
+  N=16 nightly run) `cancelled`: only 4/16 shards finished inside the old
+  `timeout-minutes: 240` job cap, the other 12 were killed mid-run by that cap, and
+  the report job pooled the partial outcomes into an ordinary "88% kill rate, below
+  90% target" `::warning::` with no signal that the run was incomplete — a partial
+  run was indistinguishable from a full one. Fix: (1) the matrix widened from N=16 to
+  N=24 shards (`--shard <k>/24`) so each shard's slice is smaller and more reliably
+  finishes in-budget; (2) the shard job's `timeout-minutes` raised 240 → 300 (still
+  safely under GitHub's 360-minute job max); (3) each shard now writes a completion
+  sentinel (`mutants-nightly-shard-status-<k>`) ONLY when its `cargo mutants`
+  invocation genuinely exits 0 — mirroring the shape (not the full
+  `run_outcome`/`has_outcomes` contract) of the per-PR sharded gate's own status
+  sentinel — so a cancelled or failed shard produces none; (4)
+  `mutants-nightly-report` counts sentinels, prints "N/24 shards completed" to both
+  the log and the job summary, and when N < 24 annotates the summary as PARTIAL and
+  suppresses the below-90% `::warning::` in favor of an explicit "advisory-incomplete,
+  not comparable to the 90% target" note. The report job remains advisory-only and
+  still never exits non-zero, regardless of completeness or kill rate.
 
 ## [0.7.0-dev.5] - 2026-09-06
 

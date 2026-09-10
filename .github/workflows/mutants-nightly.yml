@@ -22,15 +22,30 @@ jobs:
     # if: mirrors e2e.yml's own convention (never run this against a PR
     # even if `on:` is later edited).
     if: github.event_name != 'pull_request'
-    timeout-minutes: 240  # full, non-diff-scoped scope; advisory, not
+    timeout-minutes: 300  # full, non-diff-scoped scope; advisory, not
                            # required, so a long/occasionally-timing-out run
                            # here is acceptable (does not block any merge).
+                           # Raised from 240 (investigated run 34478602590:
+                           # 12/16 shards hit the old 240min cap mid-run,
+                           # producing a "cancelled" job with only PARTIAL
+                           # outcomes pooled into the report below — see the
+                           # completeness guard added to
+                           # mutants-nightly-report for how a run like that
+                           # is now surfaced honestly instead of silently).
+                           # 300 stays safely under GitHub's 360min job max.
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]  # N=16
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]  # N=24
         # heavier sharding than the per-PR N=8 — full examine_globs scope
-        # is materially larger than a typical --in-diff PR slice.
+        # is materially larger than a typical --in-diff PR slice. Raised
+        # from N=16 (investigated run 34478602590) so each shard's slice is
+        # smaller and more reliably finishes inside timeout-minutes above.
+        # This list's length, the `--shard <k>/24` denominator below, and
+        # `mutants-nightly-report`'s EXPECTED_SHARDS=24 must all move
+        # together in the SAME commit — same coupling discipline as the
+        # per-PR `mutants` job's N=8 / mutants-aggregate.sh's
+        # EXPECTED_SHARDS (mutants-sharding-invariants.md §INV-COMPLETE).
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -46,14 +61,56 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
 
       - name: Run full mutation scope on this shard
+        id: run-mutants
         continue-on-error: true
         run: |
           # NO --in-diff — full examine_globs scope, per docs/specs/
           # cargo-mutants-policy.md's own note that --in-diff is "not a
           # substitute for a full run" (weakened coverage of UNCHANGED
           # code is invisible to the per-PR diff-scoped gate).
-          cargo mutants --shard ${{ matrix.shard }}/16 --sharding slice \
+          cargo mutants --shard ${{ matrix.shard }}/24 --sharding slice \
             --jobs 2 --baseline skip --timeout 240
+
+      - name: Write shard completion sentinel
+        # Completeness guard (investigated run 34478602590: 12/16 shards
+        # were cancelled at the old 240min job cap, but their PARTIAL
+        # outcomes.json data was pooled into the report exactly like a
+        # genuinely-completed shard — a partial run was indistinguishable
+        # from a full one). This step is the fix: it is reached, and reads
+        # `steps.run-mutants.outcome` (NOT `.conclusion`, which
+        # `continue-on-error: true` forces to always read 'success' at the
+        # job-status level — see ci.yml's `mutants` job's own comment on the
+        # same distinction), ONLY when the run-mutants step above genuinely
+        # exited 0. A shard that fails, or whose job is killed outright by
+        # the 300-minute timeout-minutes cap (which skips every remaining
+        # step, this one included, per GitHub Actions' cancellation
+        # semantics), never writes this file — that absence IS the
+        # nightly-report job's completeness signal. Deliberately a lighter
+        # contract than the per-PR sharded gate's status sentinel
+        # (scripts/mutants-aggregate.sh's run_outcome/has_outcomes pair):
+        # this workflow only needs a binary "did this shard complete" bit,
+        # not per-shard pass/fail arbitration, since it is advisory-only
+        # and never gates a merge.
+        if: steps.run-mutants.outcome == 'success'
+        run: |
+          echo '{"shard_index": ${{ matrix.shard }}}' > "${{ runner.temp }}/shard-complete-${{ matrix.shard }}.json"
+
+      - name: Upload shard completion sentinel
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mutants-nightly-shard-status-${{ matrix.shard }}
+          path: ${{ runner.temp }}/shard-complete-${{ matrix.shard }}.json
+          if-no-files-found: warn  # absence is the EXPECTED, legitimate
+                                    # case for a shard that failed or was
+                                    # cancelled by the job timeout — the
+                                    # write step above never ran, so there
+                                    # is nothing to upload; the report job's
+                                    # completeness count relies on exactly
+                                    # this absence, not an error here.
+          retention-days: 7  # matches this workflow's existing outcomes
+                              # artifact retention (longer than the per-PR
+                              # shards' 1 day — useful for trend analysis).
 
       - name: Upload shard outcomes
         if: always()
@@ -84,6 +141,23 @@ jobs:
           pattern: mutants-nightly-shard-outcomes-*
           path: ${{ runner.temp }}/shards
 
+      - name: Download all shard completion sentinels
+        # Completeness signal for the guard below — see `mutants-full`'s
+        # "Write shard completion sentinel" step for what does and does not
+        # produce one of these. Downloaded even when some/all shards never
+        # wrote a sentinel (cancelled by the job timeout) — download-artifact
+        # on a partially/wholly-missing pattern simply finds nothing, and
+        # the summarize step below interprets "found nothing" as incomplete.
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: mutants-nightly-shard-status-*
+          path: ${{ runner.temp }}/shard-status
+          merge-multiple: false  # own named subdirectory per shard — keeps
+                                  # each shard's sentinel distinguishable,
+                                  # mirroring ci.yml's `mutants-aggregate`
+                                  # job's own download step.
+
       - name: Summarize pooled kill rate (advisory — never fails the workflow)
         run: |
           # Mirrors scripts/mutants-aggregate.sh's Step 3/Step 6 pooled
@@ -92,7 +166,17 @@ jobs:
           # this workflow is not wired into ci-gate.needs and must never
           # block a merge. See mutants-aggregate's per-shard-guard logic in
           # ci.yml for the summation algorithm this step mirrors.
+          #
+          # Completeness guard (investigated run 34478602590): before this
+          # guard existed, a run where 12/16 shards were cancelled by the
+          # job timeout still pooled the 4 completed shards' data and
+          # reported an ordinary "88% kill rate, below 90% target" warning
+          # — a partial run was silently indistinguishable from a full one.
+          # EXPECTED_SHARDS below must match `mutants-full`'s matrix.shard
+          # list length AND its `--shard <k>/N` denominator, in the SAME
+          # commit (see that job's own matrix comment).
           set +e
+          EXPECTED_SHARDS=24
           # (cycle-006 F4 review round 1, F-PC-LOW-003) source the same
           # PATH-shim-resistant jq resolver the decision-path scripts use,
           # for consistency — this workflow is advisory-only and never
@@ -106,8 +190,29 @@ jobs:
           else
             echo "NOTE: resolve_trusted_jq could not resolve a trusted jq binary — falling back to bare 'jq' (advisory summary only)."
           fi
-          caught_total=0; missed_total=0; timeout_total=0; unviable_total=0
+
+          # --- Completeness: count shard completion sentinels ---
+          # A sentinel exists iff that shard's cargo-mutants invocation
+          # exited 0 (see `mutants-full`'s "Write shard completion
+          # sentinel" step) — a timed-out/cancelled or failed shard leaves
+          # no sentinel, so completed_shards < EXPECTED_SHARDS is exactly
+          # the "partial run" signal.
+          completed_shards=0
           shopt -s nullglob
+          for f in "${{ runner.temp }}"/shard-status/mutants-nightly-shard-status-*/shard-complete-*.json; do
+            if "${jq_bin}" empty "${f}" 2>/dev/null; then
+              completed_shards=$((completed_shards + 1))
+            else
+              echo "NOTE: ${f} is missing or not valid JSON — not counted as a completed shard."
+            fi
+          done
+          echo "Shards completed: ${completed_shards}/${EXPECTED_SHARDS}"
+          is_partial=false
+          if [ "${completed_shards}" -lt "${EXPECTED_SHARDS}" ]; then
+            is_partial=true
+          fi
+
+          caught_total=0; missed_total=0; timeout_total=0; unviable_total=0
           for f in "${{ runner.temp }}"/shards/mutants-nightly-shard-outcomes-*/outcomes.json; do
             if ! "${jq_bin}" empty "${f}" 2>/dev/null; then
               echo "NOTE: ${f} is missing or not valid JSON — skipped (advisory summary only)."
@@ -136,11 +241,21 @@ jobs:
             kill_rate_display="N/A (0 killable mutants scored)"
           else
             kill_rate=$(( (caught_total * 100) / killable ))
-            echo "Nightly pooled kill rate: ${kill_rate}% (target >= 90%, advisory only — never blocks a merge)"
-            if [ "${kill_rate}" -lt 90 ]; then
-              echo "::warning::Nightly full-scope pooled kill rate ${kill_rate}% is below the 90% target — advisory only, does not fail this workflow."
-            fi
             kill_rate_display="${kill_rate}% (target >= 90%)"
+            if [ "${is_partial}" = true ]; then
+              # Suppress the below-90% ::warning:: entirely for a partial
+              # run — a kill rate pooled from an incomplete shard set is not
+              # a trustworthy figure to compare against the 90% target
+              # (it necessarily undercounts total_scored, and whichever
+              # shards didn't finish are excluded from both the numerator
+              # and denominator, not merely "missing data").
+              echo "Nightly pooled kill rate: ${kill_rate}% — PARTIAL RUN (${completed_shards}/${EXPECTED_SHARDS} shards completed). This figure is advisory-incomplete and is NOT compared against the 90% target."
+            else
+              echo "Nightly pooled kill rate: ${kill_rate}% (target >= 90%, advisory only — never blocks a merge)"
+              if [ "${kill_rate}" -lt 90 ]; then
+                echo "::warning::Nightly full-scope pooled kill rate ${kill_rate}% is below the 90% target — advisory only, does not fail this workflow."
+              fi
+            fi
           fi
 
           # (CI-visibility follow-up, CYCLE6-LOW-STALE-CHECK-KILL-RATE-COMMENTS
@@ -153,6 +268,17 @@ jobs:
           # check or gate a merge.
           {
             echo "## Nightly full-scope mutation testing"
+            echo ""
+            if [ "${is_partial}" = true ]; then
+              echo "**Status:** :warning: PARTIAL RUN — ${completed_shards}/${EXPECTED_SHARDS} shards completed"
+              echo ""
+              echo "One or more shards did not finish (killed by the 300-minute job timeout, or failed"
+              echo "before completing). The figures below are pooled from only the shards that DID"
+              echo "complete — **this kill rate is advisory-incomplete and is not comparable to the"
+              echo "90% target**; no below-target warning is raised for a partial run."
+            else
+              echo "**Status:** All ${EXPECTED_SHARDS}/${EXPECTED_SHARDS} shards completed"
+            fi
             echo ""
             echo "**Pooled kill rate:** ${kill_rate_display}"
             echo ""

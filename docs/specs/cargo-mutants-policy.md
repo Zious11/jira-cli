@@ -656,12 +656,20 @@ short-circuits to an ordinary, actionable CI FAILURE — never a silent skip or 
 pass — naming two ways forward: split the PR into smaller changes, or (if genuinely large
 and reviewed) a repo admin merges via GitHub's branch-protection "Require approvals"
 bypass, explicitly acknowledging the unverified mutation coverage in the PR description.
-An advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=16,
-non-blocking) still exercises the full mutation surface regardless of how an escalated PR
-is merged. Maintainers checking the current full-scope pooled kill rate should read the
-**Actions job summary** of the latest `Mutants Nightly (Full Scope)` workflow run (the
-`mutants-nightly-report` job's summary write) rather than scraping logs — this is advisory
-visibility only, not a status check.
+An advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=24,
+`timeout-minutes: 300` per shard, non-blocking) still exercises the full mutation surface
+regardless of how an escalated PR is merged. Maintainers checking the current full-scope
+pooled kill rate should read the **Actions job summary** of the latest
+`Mutants Nightly (Full Scope)` workflow run (the `mutants-nightly-report` job's summary
+write) rather than scraping logs — this is advisory visibility only, not a status check.
+That summary also carries a completeness guard (added `ci/mutants-nightly-rebalance`,
+investigated run 34478602590): each shard writes a completion sentinel only when its
+`cargo mutants` invocation exits 0, and `mutants-nightly-report` counts them and reports
+"N/24 shards completed." A run where N < 24 (a shard timed out against the 300-minute cap,
+or failed) is annotated PARTIAL in both the log and job summary, and the below-90%
+`::warning::` is suppressed for that run — a kill rate pooled from an incomplete shard set
+is not comparable to the 90% target. The report job's own exit code is unaffected either
+way; it remains advisory-only and never fails the workflow.
 
 ## Whitelist Convention
 
@@ -1422,6 +1430,7 @@ landed:
 
 | Date | Cycle | Change |
 |------|-------|--------|
+| 2026-09-10 | ci/mutants-nightly-rebalance | **Nightly full-scope workflow rebalanced for reliability + honest reporting.** Investigated run 34478602590 `cancelled`: only 4/16 shards finished inside the old `timeout-minutes: 240` cap before the other 12 were killed mid-run, and `mutants-nightly-report` pooled the partial outcomes into an ordinary below-90% warning indistinguishable from a full run. Fix: `.github/workflows/mutants-nightly.yml`'s matrix widened N=16 → N=24 (`--shard <k>/24`), shard `timeout-minutes` raised 240 → 300 (under GitHub's 360-minute job max), and a completeness guard added — each shard now writes a `mutants-nightly-shard-status-<k>` completion sentinel only on a genuine `cargo mutants` exit 0 (a cancelled or failed shard produces none), and `mutants-nightly-report` counts sentinels, reports "N/24 shards completed," and — when N < 24 — annotates the summary PARTIAL and suppresses the below-90% `::warning::` in favor of an explicit advisory-incomplete note. The report job remains advisory-only and still never exits non-zero. Internal CI/CD only — no `src/` change, no new PRD BC. |
 | 2026-09-07 | S-cycle6-mutants-ci-sharding | **Sharded mutation gate:** replaced the single `mutants` job with a three-job pipeline (`mutants-plan` → 8-shard `mutants` matrix → `mutants-aggregate`) plus an advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=16). `mutants-aggregate` (extracted to `scripts/mutants-aggregate.sh`) replaces `mutants` as the `ci-gate.needs` member and computes a POOLED sum-not-average kill rate across all 8 shards (INV-AGG), with exact-equality `MUTANT_COUNT` reconciliation as a hard fail (both over- and under-count directions). Fail-closed, sentinel-based shard-completeness accounting (INV-COMPLETE) replaces the old artifact-count proxy, closing an all-shards-crash false-green and an empty-shard false-red the single-job design was never exposed to. A `>120`-in-diff-mutant escape hatch (`ESCALATION_THRESHOLD=120`, INV-ESCALATE) routes oversized PRs to an ordinary, actionable CI failure — never a silent skip or pass — resolved by splitting the diff or an admin branch-protection bypass. `cargo-mutants` pin tightened from major-only `@27` to the exact release `@27.1.0`. Both `scripts/check-ci-gate.sh` and the new `scripts/mutants-aggregate.sh` now source a shared `scripts/lib/trusted-jq.sh`. See **Sharded Mutation Gate (cycle-006)** above for the full account; governed by this policy doc per DEC-348/DEC-349 (policy-doc-only, no new PRD BC), mirroring the MUTATION-CI-TIMEOUT precedent below. No `src/` (product-code) changes — CI/CD infrastructure only. |
 | 2026-08-31 | FIX-F6-MUTANTS-SCOPE | Scope-gap fix: added `src/cli/field.rs` (~91 mutants, S-580-1's `jr field options <field>` M1/M2/M3 resolution) and `src/cli/issue/field_resolve.rs` (~45 mutants, shared `--field` resolution/dispatch hub for `issue edit --field` and `issue create --field`) to `examine_globs` (18 → 20 entries). Both files had been omitted since creation across all field-dx PRs (S-580-1, #578 parts 1-5) — same P22-001/DEC-149/S-MUTANTS-SCOPE-1 drift class ("new CLI handler file → add to mutants.toml at creation"), meaning the required CI `mutants` gate generated zero mutants for either file across every field-dx PR to date. |
 | 2026-08-21 | S-575-1 | Added new "Exclusions" section (distinct from `#[mutants::skip]` Whitelist Convention) and a single `exclude_re` entry in `.cargo/mutants.toml` for `src/api/jira/issues.rs:374:16: delete ! in JiraClient::search_issues_with_fields` — an infinite-loop mutant uncatchable-as-anything-but-TIMEOUT under the whole-binary test-harness execution model. Termination correctness remains verified by existing multi-page pagination tests. |
