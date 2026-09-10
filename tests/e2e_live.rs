@@ -44,9 +44,13 @@
 //! | `JR_E2E_POLL_INITIAL_MS`    | no       | Initial backoff milliseconds for `poll_jql` (default 250)    |
 //! |                             |          | and `poll_component_filter` (default 500, run 32384091667);  |
 //! |                             |          | read by test code only — no `#[cfg(debug_assertions)]` needed |
-//! | `JR_E2E_PARENT_KEY`         | no       | Existing parent/epic key; enables `create --parent` test (E2E-HV-2) |
-//! | `JR_E2E_CHILD_TYPE`         | no       | Child issue type valid under the parent (e.g. `Sub-task`); paired with `JR_E2E_PARENT_KEY` |
-//! | `JR_E2E_EDIT_FIELD`         | no       | `NAME=VALUE` custom field on the Edit screen; enables `edit --field` test (E2E-HV-2) |
+//! | `JR_E2E_PARENT_KEY`         | no       | OPTIONAL OVERRIDE for `create --parent` test (E2E-HV-2); default: a fresh |
+//! |                             |          | parent is seeded dynamically and self-closed on teardown                 |
+//! | `JR_E2E_CHILD_TYPE`         | no       | OPTIONAL OVERRIDE for `create --parent` test's child type; default: the  |
+//! |                             |          | project's sub-task type is discovered dynamically via `jr api`           |
+//! | `JR_E2E_EDIT_FIELD`         | no       | OPTIONAL OVERRIDE (`NAME=VALUE`) for `edit --field` test (E2E-HV-2);     |
+//! |                             |          | default: a safe string field (e.g. `Environment`) is discovered          |
+//! |                             |          | dynamically via `jr api .../editmeta`                                    |
 //! |                             |          | The story-points field id is auto-discovered via `jr api`; no env var needed |
 
 use assert_cmd::Command;
@@ -5040,15 +5044,77 @@ fn test_e2e_issue_points_roundtrip() {
     best_effort_close(&h, &key);
 }
 
+/// Discover the E2E project's sub-task issue type via
+/// `GET /rest/api/3/project/<key>` (`jr api`, S-E2E-DYNAMIC).
+///
+/// Returns the `name` of the first issue type in the project's `issueTypes`
+/// array whose `subtask == true` (the stable Jira field marking a type as a
+/// child-only issue type, e.g. `"Sub-task"`). Returns `None` when the project
+/// has no sub-task type or the lookup fails — the clean-skip signal for
+/// `test_e2e_issue_parent_roundtrip` when no `JR_E2E_CHILD_TYPE` override is
+/// set.
+fn discover_subtask_type(h: &E2eHarness, proj: &str) -> Option<String> {
+    let v = fetch_raw(h, &format!("/rest/api/3/project/{proj}"))?;
+    v.get("issueTypes")?.as_array()?.iter().find_map(|it| {
+        if it.get("subtask").and_then(Value::as_bool) == Some(true) {
+            it.get("name").and_then(Value::as_str).map(str::to_string)
+        } else {
+            None
+        }
+    })
+}
+
+/// Best-effort `Drop`-guard for `test_e2e_issue_parent_roundtrip` — mirrors
+/// `MentionCommentDropGuard`'s convention (populate fields immediately after
+/// each creation call succeeds; `drop()` never panics; a fresh
+/// `E2eHarness::new()` is used since the outer harness borrow would not
+/// survive a panic-unwind).
+///
+/// `seeded_parent` is populated ONLY when this test seeded the parent itself
+/// (no `JR_E2E_PARENT_KEY` override) — a caller-supplied parent via the
+/// override is presumed permanent and caller-owned, and is deliberately left
+/// untouched by teardown.
+struct ParentChildDropGuard {
+    child: Option<String>,
+    seeded_parent: Option<String>,
+}
+
+impl ParentChildDropGuard {
+    fn new() -> Self {
+        Self {
+            child: None,
+            seeded_parent: None,
+        }
+    }
+}
+
+impl Drop for ParentChildDropGuard {
+    fn drop(&mut self) {
+        if let Some(ref key) = self.child {
+            let h = E2eHarness::new();
+            best_effort_close(&h, key);
+        }
+        if let Some(ref key) = self.seeded_parent {
+            let h = E2eHarness::new();
+            best_effort_close(&h, key);
+        }
+    }
+}
+
 /// E2E: `issue create --parent <KEY>` parents a new issue under an existing one.
 ///
-/// Instance-gated: requires `JR_E2E_PARENT_KEY` (an existing parent/epic issue)
-/// and `JR_E2E_CHILD_TYPE` (an issue type valid as that parent's child, e.g.
-/// `Sub-task` or `Story`). Clean-skips when either is unset, since the valid
-/// parent/child hierarchy is entirely project-config dependent.
+/// Self-configuring (S-E2E-DYNAMIC, no static vars required):
+/// - **Child issue type:** `JR_E2E_CHILD_TYPE` when set/non-empty (explicit
+///   override), else the project's sub-task type discovered dynamically via
+///   `discover_subtask_type`. Clean-skips if the project has no sub-task type.
+/// - **Parent issue:** `JR_E2E_PARENT_KEY` when set/non-empty (explicit
+///   override, presumed permanent/caller-owned — never closed by teardown),
+///   else a fresh parent issue seeded by this test via `seed_issue` (default
+///   issue type) and self-closed on teardown.
 ///
-/// On the happy path: creates a child with `--parent` and asserts the
-/// follow-up-GET JSON reports `fields.parent.key == <parent>`.
+/// On the happy path: creates a child with `--parent` and asserts a FRESH
+/// `GET` on the child (via `fetch_raw`, not the create response) reports
+/// `fields.parent.key == <parent>`.
 ///
 /// Traces to: E2E-HV-2, NFR-T-E2E-1.
 #[test]
@@ -5057,17 +5123,39 @@ fn test_e2e_issue_parent_roundtrip() {
     if !e2e_enabled() {
         return;
     }
-    let parent = match env::var("JR_E2E_PARENT_KEY") {
-        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
-        _ => return, // clean skip: no parent issue configured
-    };
-    let child_type = match env::var("JR_E2E_CHILD_TYPE") {
-        Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
-        _ => return, // clean skip: no child issue type configured
-    };
     let label = run_label();
     let proj = project();
     let h = e2e_harness();
+
+    let child_type = match env::var("JR_E2E_CHILD_TYPE") {
+        Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
+        _ => match discover_subtask_type(&h, &proj) {
+            Some(t) => t,
+            None => {
+                eprintln!(
+                    "[SKIP] no JR_E2E_CHILD_TYPE override and project {proj} has no sub-task \
+                     issue type — skipping dynamic parent/child round-trip \
+                     (test_e2e_issue_parent_roundtrip)"
+                );
+                return;
+            }
+        },
+    };
+
+    let mut guard = ParentChildDropGuard::new();
+
+    let parent = match env::var("JR_E2E_PARENT_KEY") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            let seeded = seed_issue(
+                &h,
+                &label,
+                &format!("[e2e {label}] dynamic parent for child round-trip"),
+            );
+            guard.seeded_parent = Some(seeded.clone());
+            seeded
+        }
+    };
 
     let create = h
         .cmd()
@@ -5079,7 +5167,7 @@ fn test_e2e_issue_parent_roundtrip() {
             "--type",
             &child_type,
             "--summary",
-            &format!("[e2e {label}] child of {parent}"),
+            &format!("[e2e {label}] dynamic child of {parent}"),
             "--parent",
             &parent,
             "--label",
@@ -5095,36 +5183,92 @@ fn test_e2e_issue_parent_roundtrip() {
         String::from_utf8_lossy(&create.stdout),
         String::from_utf8_lossy(&create.stderr)
     );
-    let json: Value =
+    let created: Value =
         serde_json::from_slice(&create.stdout).expect("create output must be valid JSON");
-    let key = json
+    let key = created
         .get("key")
         .and_then(Value::as_str)
         .expect("create JSON must contain a 'key'")
         .to_string();
+    guard.child = Some(key.clone());
+
+    let fetched = fetch_raw(&h, &format!("/rest/api/3/issue/{key}"))
+        .expect("fresh GET on the created child must succeed");
     assert_eq!(
-        json.get("fields")
+        fetched
+            .get("fields")
             .and_then(|f| f.get("parent"))
             .and_then(|p| p.get("key"))
             .and_then(Value::as_str),
         Some(parent.as_str()),
-        "create --parent must set fields.parent.key to {parent}; got: {json}"
+        "create --parent must set fields.parent.key to {parent}; got: {fetched}"
     );
-
-    best_effort_close(&h, &key);
 }
 
-/// E2E: `issue edit --field NAME=VALUE` sets an arbitrary custom field.
+/// Discover a safe, benign string field on `key`'s Edit screen via
+/// `GET /rest/api/3/issue/<key>/editmeta` (`jr api`, S-E2E-DYNAMIC), for use
+/// by `test_e2e_issue_edit_custom_field` when no `JR_E2E_EDIT_FIELD` override
+/// is set.
 ///
-/// Instance-gated: requires `JR_E2E_EDIT_FIELD` in `NAME=VALUE` form, where
-/// `NAME` is a custom field present on the issue's Edit screen (validated via
-/// `GET .../editmeta`). Clean-skips when unset, since no custom field is
-/// guaranteed to exist on an arbitrary site.
+/// Returns `(cli_field_ref, wire_key)`:
+/// - `cli_field_ref` is what to pass as the NAME half of `--field NAME=VALUE`
+///   — the standard `"Environment"` display name (resolves via `issue edit
+///   --field`'s cache-first name lookup) for the preferred field, or the bare
+///   `customfield_NNNNN` id (the documented literal-bypass form, BC-3.4.015
+///   Step 1) for a discovered custom field, avoiding any display-name
+///   ambiguity risk.
+/// - `wire_key` is the JSON key to read back from a fresh `GET
+///   .../issue/<key>` to verify the write (e.g. `"environment"` or
+///   `"customfield_10063"`).
+///
+/// Preference order: the standard `"Environment"` field (`editmeta` id
+/// `"environment"`) if present with `schema.type == "string"`, else the first
+/// other editable field (excluding `summary`/`description`) with
+/// `schema.type == "string"`. Returns `None` when no such field exists — the
+/// clean-skip signal.
+fn discover_safe_edit_field(h: &E2eHarness, key: &str) -> Option<(String, String)> {
+    let v = fetch_raw(h, &format!("/rest/api/3/issue/{key}/editmeta"))?;
+    let fields = v.get("fields")?.as_object()?;
+
+    let is_string_field = |meta: &Value| {
+        meta.get("schema")
+            .and_then(|s| s.get("type"))
+            .and_then(Value::as_str)
+            == Some("string")
+    };
+
+    if let Some(env_meta) = fields.get("environment") {
+        if is_string_field(env_meta) {
+            return Some(("Environment".to_string(), "environment".to_string()));
+        }
+    }
+
+    fields.iter().find_map(|(id, meta)| {
+        if id == "summary" || id == "description" || !is_string_field(meta) {
+            return None;
+        }
+        let cli_ref = if id.starts_with("customfield_") {
+            id.clone()
+        } else {
+            meta.get("name").and_then(Value::as_str)?.to_string()
+        };
+        Some((cli_ref, id.clone()))
+    })
+}
+
+/// E2E: `issue edit --field NAME=VALUE` sets an arbitrary field.
+///
+/// Self-configuring (S-E2E-DYNAMIC, no static vars required): `JR_E2E_EDIT_FIELD`
+/// (`NAME=VALUE` form) when set/non-empty is an explicit override; otherwise a
+/// safe string field is discovered dynamically via `discover_safe_edit_field`
+/// and a benign generated value is written. Clean-skips when neither an
+/// override nor a discoverable safe field is available.
 ///
 /// On the happy path: seeds an issue, applies `--field NAME=VALUE`, and asserts
 /// the edit succeeded (`updated == true`) and recorded a non-empty
-/// `changed_fields` map (the resolved field keys are instance-specific, so the
-/// assertion checks for presence rather than an exact key).
+/// `changed_fields` map. When the field was dynamically discovered (not an
+/// explicit override), additionally asserts a FRESH `GET` on the issue (via
+/// `fetch_raw`) shows the written value under the field's `wire_key`.
 ///
 /// Traces to: E2E-HV-2, NFR-T-E2E-1.
 #[test]
@@ -5133,22 +5277,43 @@ fn test_e2e_issue_edit_custom_field() {
     if !e2e_enabled() {
         return;
     }
-    let field = match env::var("JR_E2E_EDIT_FIELD") {
-        Ok(f) if f.contains('=') && !f.trim().is_empty() => f,
-        _ => return, // clean skip: no custom field configured
-    };
     let label = run_label();
     let h = e2e_harness();
     let key = seed_issue(&h, &label, &format!("[e2e {label}] custom field edit"));
 
+    // (--field NAME=VALUE argument, wire key to verify via a fresh GET). The
+    // wire key is only known for the dynamic-discovery path below — an
+    // explicit `JR_E2E_EDIT_FIELD` override supplies an arbitrary display
+    // name whose resolved wire key this test does not attempt to re-derive.
+    let (field_arg, wire_key): (String, Option<String>) = match env::var("JR_E2E_EDIT_FIELD") {
+        Ok(f) if f.contains('=') && !f.trim().is_empty() => (f, None),
+        _ => match discover_safe_edit_field(&h, &key) {
+            Some((cli_ref, wire_key)) => {
+                let value = format!("e2e dynamic edit {label}");
+                (format!("{cli_ref}={value}"), Some(wire_key))
+            }
+            None => {
+                eprintln!(
+                    "[SKIP] no JR_E2E_EDIT_FIELD override and no safe editable string field \
+                     found on {key}'s Edit screen — skipping dynamic edit --field round-trip \
+                     (test_e2e_issue_edit_custom_field)"
+                );
+                best_effort_close(&h, &key);
+                return;
+            }
+        },
+    };
+
     let edit = h
         .cmd()
-        .args(["issue", "edit", &key, "--field", &field, "--output", "json"])
+        .args([
+            "issue", "edit", &key, "--field", &field_arg, "--output", "json",
+        ])
         .output()
         .expect("failed to spawn jr for edit --field");
     assert!(
         edit.status.success(),
-        "edit --field {field:?} failed for {key}:\nstdout: {}\nstderr: {}",
+        "edit --field {field_arg:?} failed for {key}:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&edit.stdout),
         String::from_utf8_lossy(&edit.stderr)
     );
@@ -5164,6 +5329,19 @@ fn test_e2e_issue_edit_custom_field() {
             .is_some_and(|m| !m.is_empty()),
         "edit --field must record a non-empty changed_fields map; got: {json}"
     );
+
+    if let Some(wire_key) = wire_key {
+        let fetched = fetch_raw(&h, &format!("/rest/api/3/issue/{key}"))
+            .expect("fresh GET on the edited issue must succeed");
+        let got = fetched
+            .get("fields")
+            .and_then(|f| f.get(&wire_key))
+            .and_then(Value::as_str);
+        assert!(
+            got.is_some_and(|v| v.contains(&label)),
+            "edit --field must persist the written value under fields.{wire_key}; got: {fetched}"
+        );
+    }
 
     best_effort_close(&h, &key);
 }
