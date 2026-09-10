@@ -13378,26 +13378,41 @@ fn test_e2e_jsm_attachment_upload_no_flag() {
 // wiremock fixture (no wiremock fixture can prove Jira's real `mention` node
 // schema accepts the emitted shape).
 //
-// Gated additionally on `JR_E2E_MENTION_ACCOUNT_ID` — an optional env var
-// naming a CONTROLLED test account's accountId to mention (never a real
-// person). Clean-skips (early return) when unset, per the "reuse the
-// existing account, or add a dedicated seam" F4 implementation choice
-// (verification-delta-674.md §11 item 4) — this suite takes the dedicated
-// named-seam option for determinism (bracket-form mentions need an
-// accountId directly; `@Name` mentions would additionally need the
-// account's exact display name and risk ambiguous ExactMultiple/Ambiguous
-// ONLY-MATCH failures against a shared, live, multi-user Jira org, which
-// bracket-form sidesteps entirely). Documented in
+// The mention target DEFAULTS to the authenticated account's own accountId,
+// discovered at runtime via `GET /rest/api/3/myself` — a self-mention. This
+// sidesteps the @Name display-name ambiguity these tests would otherwise
+// face against a shared, live, multi-user Jira org entirely, since
+// bracket-form mentions (`[~accountid:<id>]`) take an accountId directly and
+// carry no ExactMultiple/Ambiguous resolution risk. Self-mentioning a
+// controlled test account (the CI service account itself) still fully
+// validates the round trip end-to-end: real Jira accepting and persisting
+// the `mention` node with that accountId is exactly what these tests exist
+// to prove — the round trip does not depend on the mention target being a
+// distinct account.
+//
+// `JR_E2E_MENTION_ACCOUNT_ID` remains available as an OPTIONAL OVERRIDE, for
+// mentioning a different controlled account when that's useful (never a
+// real third party). This lets the four `test_e2e_mention_*` round-trip
+// scenarios run in CI without any separately-configured seam. Documented in
 // `docs/specs/e2e-live-jira-testing.md` §8 in this same commit.
 
-/// Returns the controlled mention-target accountId from
-/// `JR_E2E_MENTION_ACCOUNT_ID`, or `None` when unset/empty (clean-skip
-/// signal for all four mention round-trip tests below).
-fn mention_account_id() -> Option<String> {
+/// Returns the mention-target accountId to use in the round-trip tests
+/// below: `JR_E2E_MENTION_ACCOUNT_ID` when set and non-empty (explicit
+/// override), otherwise the authenticated account's own accountId via
+/// `GET /rest/api/3/myself` (self-mention default). Returns `None` only when
+/// the env var is unset AND the `/myself` lookup fails or carries no
+/// `accountId` — a genuine "cannot determine a mention target" condition,
+/// the clean-skip signal for all four mention round-trip tests below.
+fn mention_account_id(h: &E2eHarness) -> Option<String> {
     match env::var("JR_E2E_MENTION_ACCOUNT_ID") {
-        Ok(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
-        _ => None,
+        Ok(v) if !v.trim().is_empty() => return Some(v.trim().to_string()),
+        _ => {}
     }
+    fetch_raw(h, "/rest/api/3/myself").and_then(|v| {
+        v.get("accountId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
 }
 
 /// Fetch a JSON value via `jr api <path>` — a raw REST passthrough used to
@@ -13499,14 +13514,15 @@ fn test_e2e_mention_comment_add_roundtrip() {
     if !e2e_enabled() {
         return;
     }
-    let Some(account_id) = mention_account_id() else {
+    let h = e2e_harness();
+    let Some(account_id) = mention_account_id(&h) else {
         eprintln!(
-            "[SKIP] JR_E2E_MENTION_ACCOUNT_ID not set — skipping mention comment-add round-trip \
-             (VP-674-016)"
+            "[SKIP] could not determine a mention target (no JR_E2E_MENTION_ACCOUNT_ID and \
+             GET /rest/api/3/myself returned no accountId) — skipping mention comment-add \
+             round-trip (VP-674-016)"
         );
         return;
     };
-    let h = e2e_harness();
     let run_id = run_label();
     let mut guard = MentionCommentDropGuard::new();
 
@@ -13569,14 +13585,15 @@ fn test_e2e_mention_issue_create_roundtrip() {
     if !e2e_enabled() {
         return;
     }
-    let Some(account_id) = mention_account_id() else {
+    let h = e2e_harness();
+    let Some(account_id) = mention_account_id(&h) else {
         eprintln!(
-            "[SKIP] JR_E2E_MENTION_ACCOUNT_ID not set — skipping mention issue-create \
+            "[SKIP] could not determine a mention target (no JR_E2E_MENTION_ACCOUNT_ID and \
+             GET /rest/api/3/myself returned no accountId) — skipping mention issue-create \
              round-trip (VP-674-014)"
         );
         return;
     };
-    let h = e2e_harness();
     let run_id = run_label();
     let itype = issue_type();
     let text = format!("cc [~accountid:{account_id}]");
@@ -13645,14 +13662,15 @@ fn test_e2e_mention_issue_edit_roundtrip() {
     if !e2e_enabled() {
         return;
     }
-    let Some(account_id) = mention_account_id() else {
+    let h = e2e_harness();
+    let Some(account_id) = mention_account_id(&h) else {
         eprintln!(
-            "[SKIP] JR_E2E_MENTION_ACCOUNT_ID not set — skipping mention issue-edit round-trip \
-             (VP-674-015)"
+            "[SKIP] could not determine a mention target (no JR_E2E_MENTION_ACCOUNT_ID and \
+             GET /rest/api/3/myself returned no accountId) — skipping mention issue-edit \
+             round-trip (VP-674-015)"
         );
         return;
     };
-    let h = e2e_harness();
     let run_id = run_label();
 
     let key = seed_issue(
@@ -13708,9 +13726,11 @@ fn test_e2e_mention_jsm_create_roundtrip() {
     if !e2e_enabled() {
         return;
     }
-    let Some(account_id) = mention_account_id() else {
+    let h = e2e_harness();
+    let Some(account_id) = mention_account_id(&h) else {
         eprintln!(
-            "[SKIP] JR_E2E_MENTION_ACCOUNT_ID not set — skipping mention JSM-create \
+            "[SKIP] could not determine a mention target (no JR_E2E_MENTION_ACCOUNT_ID and \
+             GET /rest/api/3/myself returned no accountId) — skipping mention JSM-create \
              round-trip (VP-674-017)"
         );
         return;
@@ -13722,7 +13742,6 @@ fn test_e2e_mention_jsm_create_roundtrip() {
             return;
         }
     };
-    let h = e2e_harness();
     let run_id = run_label();
 
     let list_out = h
