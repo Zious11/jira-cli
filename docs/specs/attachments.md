@@ -71,6 +71,8 @@ When `--public` or `--internal` is set, the upload routes through the JSM two-st
 
 **`--public` gates:** Non-interactive (`--no-input`/non-TTY, no `--yes`): exit 64 with "Use --yes to confirm uploading …" message. `--public + --replace-existing` → combined message. Interactive: `eprint!` + read_line single prompt (VP-576-005 — ONE prompt, not two). Cancel → exit 0; EOF → exit 130.
 
+**`--internal + --replace-existing` gate (BC-3.9.017):** when ≥1 filename match exists, consumer-2 (the replace-only confirmation prompt, `attachment_replace_confirmation_gate`) fires — no combined-visibility prompt, since `--internal` carries no visibility confirmation of its own. When zero matches exist, no gate fires at all (nothing to confirm). Non-interactive without `--yes` exits 64 "Use --yes to confirm deletion of existing same-filename attachments." VP-576-005.
+
 **`--public` on non-JSM (BC-3.9.005):** exit 64 "--public is only supported on Jira Service Management (JSM) issues."
 
 **`--internal` on non-JSM (OQ-9):** silent no-op — falls through to the platform POST path (no error, no warning, no servicedeskapi calls).
@@ -79,7 +81,7 @@ When `--public` or `--internal` is set, the upload routes through the JSM two-st
 
 **SEC-576-006 stale-ID self-heal:** on 404/403 from step-1, `invalidate_project_meta_cache` + re-fetch + retry ONCE only. Second failure: 404 → exit 64 "Service desk for {key} not found after refresh." (P1-001); 401 → exit 2; others propagate as-is.
 
-**BC-3.9.006 step-2 error taxonomy:** 401 → exit 2; 403 → exit 1; other 4xx → exit 64; 5xx → exit 1. All append retry hint "Temporary attachment IDs may have expired. Try the upload again."
+**BC-3.9.006 step-2 error taxonomy:** 401 → exit 2; 403 → exit 1; other 4xx → exit 64; 5xx → exit 1. All append retry hint "Temporary attachment IDs may have expired. Try the upload again." A step-2 transport/network error (e.g. unreachable host) maps instead to `JrError::NetworkError` ("Could not reach {host} — check your connection", exit 1) and does NOT carry the retry hint — parity with step-1's (`attach_temporary_file`) transport mapping (F5-R1-007/FIX-F5-006). Regression test: `src/api/jsm/attachments.rs::tests::test_f5_r1_007_step2_network_error_uses_canonical_network_error_variant`.
 
 **`--public --dry-run` (EC-3.9.020-7):** `wouldUpload` entries include `"visibility":"public"`; human mode prints `"Would upload N file(s) [public]."`. Non-JSM guard fires before dry-run (EC-3.9.020-8).
 
