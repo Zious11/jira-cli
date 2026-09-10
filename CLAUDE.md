@@ -28,6 +28,7 @@ src/
 │   │   ├── changelog.rs     # issue changelog handler (`jr issue changelog`)
 │   │   ├── field_resolve.rs # field resolution helpers for `issue edit --field`
 │   │   ├── attachments.rs   # attachment list handler + display_sanitize_filename (CWE-116, S-576-1)
+│   │   ├── mentions.rs      # effectful mention resolution (@Name / [~accountid:X] → real Jira users) for create/edit/comment write paths, ADR-0023 §1
 │   │   └── json_output.rs   # JSON output helpers for issue commands
 │   ├── assets/          # assets commands (module directory)
 │   │   ├── mod.rs           # dispatch + re-exports
@@ -56,12 +57,14 @@ src/
 │   ├── project.rs       # project fields (types, priorities, statuses, CMDB fields)
 │   ├── component.rs     # jr component list/create/edit/delete (~1066 LOC; see Known Size Deviations)
 │   ├── queue.rs         # queue list/view (JSM service desks)
-│   └── requesttype.rs   # requesttype list/fields (JSM request-type discovery + 7d cache)
+│   ├── requesttype.rs   # requesttype list/fields (JSM request-type discovery + 7d cache)
+│   └── field.rs         # `jr field options <NAME>` — enumerate a custom field's allowed options via createmeta/JSM requesttype-fields/editmeta (BC-X.14.001..004, ADR-0019 §1)
 ├── api/
 │   ├── mod.rs                 # module re-exports for api/
 │   ├── client.rs              # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
 │   ├── auth.rs                # OAuth 2.0 flow + per-profile keychain layout (namespaced <profile>:email / <profile>:api-token / <profile>:oauth-access-token / <profile>:oauth-refresh-token; shared flat oauth_client_id/oauth_client_secret only); lazy migration of legacy flat OAuth keys for the "default" profile
 │   ├── auth_embedded.rs       # thin sibling to auth.rs; XOR-obfuscated embedded OAuth app credentials
+│   ├── auth_windows_store.rs  # Windows DPAPI-encrypted-file fallback for OAuth tokens exceeding Credential Manager's blob-size ceiling (ADR-0021, issue #759)
 │   ├── pagination.rs          # Offset-based (most endpoints) + cursor-based (JQL search)
 │   ├── rate_limit.rs          # Retry-After parsing
 │   ├── refresh_coordinator.rs # per-profile single-flight OAuth refresh coordinator (prevents concurrent invalid_grant races)
@@ -87,6 +90,7 @@ src/
 │   │   ├── projects.rs  # project details
 │   │   ├── attachments.rs # list attachments on an issue (S-576-1; GET ?fields=attachment)
 │   │   ├── components.rs # list/get/create/edit/delete component API calls (ADR-0018)
+│   │   ├── tenant.rs     # fetch_cloud_id via the unauthenticated /_edge/tenant_info endpoint (ADR-0022, S-cycle4-cloud-id-correctness)
 │   │   └── users.rs     # current user, user search, assignable users, single-user lookup
 │   └── jsm/             # JSM-specific API call implementations
 │       ├── mod.rs           # module re-exports for api/jsm/
@@ -117,6 +121,7 @@ src/
 │   └── request_type.rs  # RequestType, request type fields types
 ├── cache.rs             # Per-profile XDG cache (~/.cache/jr/v1/<profile>/) — team list, project meta, workspace ID, CMDB fields, object-type attrs, resolutions (all 7-day TTL). Versioned root (`v1/`) lets a future schema bump orphan stale files cleanly. Also holds `{read,write,invalidate}_components_cache` — ADR-0018 §2 foundation for `jr component rename` (S-608-1), not yet wired into any read/resolve path this cycle (see the rustdoc on those functions).
 ├── config.rs            # Global (~/.config/jr/config.toml) [profiles.<name>] + default_profile + per-project (.jr.toml), figment layering. Auto-migrates legacy [instance]/[fields] shape on first load. Active profile resolved at load via Config::load_with(cli_profile) (cli flag threaded through as a parameter, NOT an env-var seam) > JR_PROFILE env > default_profile field > "default".
+├── profile.rs           # Profile(String) newtype — type-level hard fence over profile-scoped cache/credential functions (ADR-0011, DEC-317); infallible From<String>/From<&str>, no existence validation
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
 ├── duration.rs          # Worklog duration parser (2h, 1h30m, 1d, 1w)
@@ -200,7 +205,13 @@ The distinction matters for scripting: pipe stdout for data, redirect stderr for
 
 ## Key Decisions
 
-See `docs/adr/` for detailed rationale:
+See `docs/adr/` for detailed rationale. **Two ADR tracks:** ADR-0001 through ADR-0016 live in
+`docs/adr/`. ADR-0017 and higher (cited by bare number in this file's Gotchas section, e.g.
+ADR-0017 attachments multipart, ADR-0018 component list/create/edit/delete, ADR-0021 Windows
+DPAPI fallback) are managed by the VSDD-factory pipeline and live at
+`.factory/specs/architecture/decisions/ADR-00NN-*.md` instead — a continuation of the same
+numbering sequence, not a separate one, but a different directory. Chasing an ADR-0017+
+citation into `docs/adr/` will not find it; look under `.factory/specs/architecture/decisions/`.
 - ADR-0001: Thin client vs generated API client
 - ADR-0002: OAuth 2.0 with embedded secret (superseded — see ADR-0006)
 - ADR-0003: reqwest with rustls-tls
@@ -211,7 +222,7 @@ See `docs/adr/` for detailed rationale:
 - ADR-0008: Asset enrichment key correctness — HashMap key must be (workspace_id, object_id), not object_id alone
 - ADR-0009: handle_open uses instance_url(), not base_url() — base_url() is API-only; browser URLs must use instance_url()
 - ADR-0010: list_worklogs pagination loop — single-page fetch silently truncates; must use offset pagination
-- ADR-0011: Type-level Profile fence deferred — convention-based soft fence is sufficient for current team size (v0.5.x)
+- ADR-0011: Type-level Profile fence — Accepted (amended 2026-09-01, DEC-317; originally Deferred); the `Profile(String)` newtype and its call-site sweep have landed (`src/profile.rs`, PR #758)
 - ADR-0012: Module shard rule — src/cli/ files at ≥1,000 LOC are shard candidates; exceptions: adf.rs, api/auth.rs
 - ADR-0013: PKCE deferral — Atlassian 3LO does not support public-client PKCE as of 2026-05; reactivation trigger defined
 - ADR-0014: JSM request-type dispatch fork in `jr issue create` (`--request-type` routes to `/rest/servicedeskapi/request`)

@@ -312,6 +312,7 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | `jr project fields --project FOO` | Show valid issue types, priorities, statuses, and asset custom fields |
 | `jr requesttype list` | List JSM request types for the project's service desk (7d cache) |
 | `jr requesttype fields <NAME\|ID>` | Show fields for a request type (partial name match or numeric ID) |
+| `jr field options <NAME>` | Enumerate a custom field's allowed options via one of `--type` (project+issue-type createmeta), `--request-type` (JSM request-type fields), or `--issue KEY` (issue editmeta) — exactly one required. `--project` is a companion flag (required-or-defaulted for `--type`, optional for `--request-type`, ignored for `--issue`). `--value` filters results by a case-insensitive substring |
 | `jr completion bash\|zsh\|fish` | Generate shell completions |
 
 ## Global Flags
