@@ -124,6 +124,17 @@ jobs:
           # round-trip test (#331). Test clean-skips if unset. Must name a real issue
           # type in the E2E project's scheme, distinct from JR_E2E_ISSUE_TYPE (seed type).
           JR_E2E_ISSUE_TYPE_ALT: ${{ vars.JR_E2E_ISSUE_TYPE_ALT }}
+          # Optional, paired: enables the `create --parent` test (E2E-HV-2). Both must
+          # be set together — the test clean-skips unless both are non-empty.
+          JR_E2E_PARENT_KEY: ${{ vars.JR_E2E_PARENT_KEY }}
+          JR_E2E_CHILD_TYPE: ${{ vars.JR_E2E_CHILD_TYPE }}
+          # Optional: NAME=VALUE pair enabling the `edit --field` test (E2E-HV-2).
+          # Test clean-skips if unset.
+          JR_E2E_EDIT_FIELD: ${{ vars.JR_E2E_EDIT_FIELD }}
+          # Optional: resolution name override for jsm_self_close teardown and
+          # test_e2e_jsm_resolution_enforcement (S-JSM-E2E-3). Auto-discovered from
+          # `jr issue resolutions` when unset.
+          JR_E2E_JSM_RESOLUTION: ${{ vars.JR_E2E_JSM_RESOLUTION }}
           # Wider JQL-index poll budget for ALL env-configurable polls (poll_jql,
           # poll_view, poll_component_filter — they all read these two knobs).
           # Rationale: live run 32388828850 failed test_e2e_pagination_dedup because
