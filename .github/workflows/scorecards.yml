@@ -20,6 +20,10 @@ permissions: read-all
 jobs:
   analysis:
     name: Scorecard analysis
+    # Default off — enable by setting repo variable SCORECARD_ENABLED=true
+    # (same opt-in pattern as SIGNING_ENABLED). Keeps forks from running
+    # scorecard unintentionally.
+    if: vars.SCORECARD_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       # Needed to upload the results to code-scanning dashboard.
