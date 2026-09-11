@@ -2203,6 +2203,54 @@ fn extract_query_param(request: &str, param: &str) -> Option<String> {
     None
 }
 
+// ── BC-1.6.048 — AuthState vocabulary + derive_auth_state pure helper ──────
+
+/// Three-state vocabulary for a profile's credential readiness (BC-1.6.048).
+///
+/// Serializes to kebab-case strings: `"unset"` / `"no-credentials"` /
+/// `"configured"`. Used by `derive_auth_state`, `auth list`, and (Wave 2)
+/// `auth status --output json`.
+///
+/// `Serialize` only — this enum is never deserialized from external data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthState {
+    /// No URL is configured for this profile — nothing to authenticate against.
+    Unset,
+    /// A URL is configured but no matching-kind credential is stored.
+    NoCredentials,
+    /// A URL is configured and a matching-kind credential is present.
+    Configured,
+}
+
+/// Derive the credential-readiness state for a profile (BC-1.6.048).
+///
+/// **PURE** — no IO, no keychain access, deterministic on its two inputs.
+/// The CALLER selects and invokes the kind-specific keychain probe
+/// (`load_oauth_tokens` for oauth, `load_api_token` for api_token) and passes
+/// `.is_ok()` as `matching_kind_present`.
+///
+/// # Truth table
+///
+/// | url     | matching_kind_present | Result        |
+/// |---------|----------------------|---------------|
+/// | None    | false                | Unset         |
+/// | None    | true                 | Unset         |
+/// | Some(_) | false                | NoCredentials |
+/// | Some(_) | true                 | Configured    |
+pub fn derive_auth_state(url: Option<&str>, matching_kind_present: bool) -> AuthState {
+    match url {
+        None => AuthState::Unset,
+        Some(_) => {
+            if matching_kind_present {
+                AuthState::Configured
+            } else {
+                AuthState::NoCredentials
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2551,8 +2599,16 @@ mod tests {
         let cases: &[(Option<&str>, bool, AuthState)] = &[
             (None, false, AuthState::Unset),
             (None, true, AuthState::Unset),
-            (Some("https://acme.atlassian.net"), false, AuthState::NoCredentials),
-            (Some("https://acme.atlassian.net"), true, AuthState::Configured),
+            (
+                Some("https://acme.atlassian.net"),
+                false,
+                AuthState::NoCredentials,
+            ),
+            (
+                Some("https://acme.atlassian.net"),
+                true,
+                AuthState::Configured,
+            ),
         ];
         for (url, matching, expected) in cases {
             let first = derive_auth_state(*url, *matching);

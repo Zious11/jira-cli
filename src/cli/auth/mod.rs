@@ -12,7 +12,9 @@ pub(crate) use keychain::{OAUTH_APP_HINT, resolve_oauth_app_credentials_for_test
 pub(crate) use keychain::{resolve_credential, resolve_oauth_app_credentials};
 pub use list::handle_list;
 #[cfg(test)]
-pub(crate) use list::{render_env_column, render_list_json, render_list_table};
+pub(crate) use list::{
+    collect_probe_results, render_env_column, render_list_json, render_list_table,
+};
 pub use login::{
     LoginArgs, clear_outgoing_mechanism_on_switch, handle_login, login_oauth, login_token,
     prompt_auth_method_picker,

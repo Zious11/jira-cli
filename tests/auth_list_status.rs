@@ -39,10 +39,7 @@ fn test_bc_1_6_049_renderers_are_probe_free() {
     // We extract approximate function bodies by finding the fn declaration and
     // scanning forward to the next top-level declaration.
 
-    let keychain_symbols = [
-        "load_oauth_tokens",
-        "load_api_token",
-    ];
+    let keychain_symbols = ["load_oauth_tokens", "load_api_token"];
 
     for &sym in &keychain_symbols {
         let table_body = extract_fn_body(list_src, "fn render_list_table");

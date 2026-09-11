@@ -93,6 +93,11 @@ examine_globs = [
     # mutants.toml at creation" convention, in the SAME commit that creates
     # the file (satisfies `tests/mutants_glob_existence.rs`).
     "src/cli/issue/mentions.rs",
+    # S-cycle7-auth-state-derivation (B1): pure `derive_auth_state` +
+    # injection-seam `collect_probe_results` + renderer purity wiring.
+    # `probe_matching_kind_credential` is in the same file but excluded below
+    # (keychain-gated, no injection seam, exclude_re pair below).
+    "src/cli/auth/list.rs",
 ]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI
@@ -131,4 +136,9 @@ additional_cargo_test_args = ["--all-features"]
 # any of the sibling `>`/`>=`/`||`/`&&`/`==` mutants at nearby lines in the same function.
 exclude_re = [
     '^src/api/jira/issues\.rs:374:16: delete ! in JiraClient::search_issues_with_fields$',
+    # S-cycle7-auth-state-derivation B1: `probe_matching_kind_credential` reads
+    # the OS keychain and has no injection seam — its mutations cannot be caught
+    # by DEFAULT-CI tests. Excluded as a named-function pair so a future rename
+    # is loud (mirrors Story A's `load_api_token` exclusion design, finding MED-1).
+    'in probe_matching_kind_credential$',
 ]

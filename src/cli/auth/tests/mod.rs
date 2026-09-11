@@ -518,14 +518,21 @@ fn three_profile_fixture() -> GlobalConfig {
 #[test]
 fn list_table_snapshot() {
     let global = three_profile_fixture();
-    let rendered = render_list_table(&global, "default");
+    // Pass an empty probe_results — all URL-having profiles will show
+    // "no-credentials" (the honest result when the keychain is empty in
+    // test). Snapshot is regenerated as part of AC-012.
+    let probe_results = std::collections::HashMap::new();
+    let rendered = render_list_table(&global, "default", &probe_results);
     insta::assert_snapshot!(rendered);
 }
 
 #[test]
 fn list_json_shape() {
     let global = three_profile_fixture();
-    let json = render_list_json(&global, "default").unwrap();
+    // Pass an empty probe_results — signature fallout fix (Task 13a).
+    // This test asserts only active-profile presence, not STATUS values.
+    let probe_results = std::collections::HashMap::new();
+    let json = render_list_json(&global, "default", &probe_results).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let arr = parsed.as_array().expect("array");
     assert_eq!(arr.len(), 3);
@@ -606,7 +613,11 @@ fn test_render_env_column_hostile_value_delegates_to_shared_sanitizer() {
 #[test]
 fn test_render_list_table_headers_include_env_between_url_and_auth() {
     let empty = GlobalConfig::default();
-    let rendered = render_list_table(&empty, "default");
+    // Pass an empty probe_results — signature fallout fix (Task 13a).
+    // This test uses GlobalConfig::default() (no profiles) and asserts
+    // header order only, never a STATUS cell value.
+    let probe_results = std::collections::HashMap::new();
+    let rendered = render_list_table(&empty, "default", &probe_results);
     let name_pos = rendered.find("NAME").expect("NAME header present");
     let url_pos = rendered.find("URL").expect("URL header present");
     let env_pos = rendered.find("ENV").expect("ENV header present");
@@ -657,7 +668,15 @@ fn test_render_list_json_env_key_is_verbatim_and_never_omitted() {
         profiles,
         ..GlobalConfig::default()
     };
-    let json = render_list_json(&global, "tagged").unwrap();
+    // Pass probe_results covering the 3 fixture profiles — signature fallout
+    // fix (Task 13a, F3 adversary pass-8, MEDIUM-1). This test asserts only
+    // the "env" key's verbatim/never-omitted property (BC-1.6.047), never
+    // "status" values — any valid booleans are fine here.
+    let mut probe_results = std::collections::HashMap::new();
+    probe_results.insert("tagged".to_string(), true);
+    probe_results.insert("untagged".to_string(), true);
+    probe_results.insert("empty-env".to_string(), true);
+    let json = render_list_json(&global, "tagged", &probe_results).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let arr = parsed.as_array().expect("array");
     assert_eq!(arr.len(), 3);
@@ -1566,7 +1585,7 @@ fn test_bc_1_6_048_derive_auth_state_is_pure_no_io() {
     // the RED Gate for this guard is the AC-005/006 compile error.)
     let has_derive_call_with_probe_kind = list_src
         .split("derive_auth_state(")
-        .skip(1)  // skip everything before the first call
+        .skip(1) // skip everything before the first call
         .any(|after| after.starts_with("probe_stored_credential_kind"));
     assert!(
         !has_derive_call_with_probe_kind,
@@ -1760,8 +1779,8 @@ fn test_bc_1_6_049_list_status_derives_from_probe_not_url() {
 /// COMPILE ERROR until Task 11 adds the function.
 #[test]
 fn test_bc_1_6_049_list_probes_at_most_once_per_url_profile() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Build a 3-profile fixture: 2 with URL, 1 without.
     let mut profiles = std::collections::BTreeMap::new();
