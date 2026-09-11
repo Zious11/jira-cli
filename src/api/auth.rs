@@ -628,7 +628,7 @@ pub fn load_oauth_tokens(profile: &Profile) -> Result<(String, String)> {
             }
             Err(anyhow::anyhow!(
                 "No stored OAuth token for profile {profile:?} — \
-                 run \"jr auth login --profile {profile}\""
+                 run \"jr auth login --profile={profile}\""
             ))
         }
         // Partial state: one half of the namespaced pair is missing. For
@@ -678,8 +678,8 @@ pub fn load_oauth_tokens(profile: &Profile) -> Result<(String, String)> {
             Err(anyhow::anyhow!(
                 "OAuth keychain entries for profile {profile:?} are partial \
                  (one of access/refresh present, the other missing). \
-                 Run \"jr auth logout --profile {profile}\" then \
-                 \"jr auth login --profile {profile}\" to restore a clean state."
+                 Run \"jr auth logout --profile={profile}\" then \
+                 \"jr auth login --profile={profile}\" to restore a clean state."
             ))
         }
     }
@@ -865,7 +865,7 @@ pub fn load_api_token(profile: &Profile) -> Result<(String, String)> {
 ///
 /// Deliberately NOT probed: the legacy flat api-token pair (`email` /
 /// `api-token`). BC-1.4.032 already made that pair permanently unusable by
-/// [`load_api_token`] (it forces `jr auth login --profile <profile>` regardless of
+/// [`load_api_token`] (it forces `jr auth login --profile=<profile>` regardless of
 /// `auth_method`), so its mere presence must NOT block a pre-mark — doing
 /// so would resurrect exactly the "trust a credential that can't actually
 /// be loaded" bug BC-1.4.032 was designed to close. Also not probed: the
@@ -3669,8 +3669,8 @@ mod tests {
         let simulated_err = format!(
             "OAuth keychain entries for profile {:?} are partial \
              (one of access/refresh present, the other missing). \
-             Run \"jr auth logout --profile {0}\" then \
-             \"jr auth login --profile {0}\" to restore a clean state.",
+             Run \"jr auth logout --profile={0}\" then \
+             \"jr auth login --profile={0}\" to restore a clean state.",
             "sandbox"
         );
         assert!(
@@ -3710,7 +3710,7 @@ mod tests {
     fn expected_bc_1_4_032_absent_message(profile: &str) -> String {
         format!(
             "No credentials stored for profile '{profile}'. This version of jr \
-             requires per-profile credentials — run `jr auth login --profile {profile}` to set them up."
+             requires per-profile credentials — run `jr auth login --profile={profile}` to set them up."
         )
     }
 
@@ -3722,7 +3722,7 @@ mod tests {
     fn expected_bc_1_4_033_partial_message(profile: &str) -> String {
         format!(
             "Incomplete credentials stored for profile '{profile}' — run \
-             `jr auth login --profile {profile}` to fix this."
+             `jr auth login --profile={profile}` to fix this."
         )
     }
 
@@ -4222,7 +4222,7 @@ mod tests {
     }
 
     /// BC-1.4.034 postconditions 2/4 / EC-1.4.032-4: after the actionable
-    /// error fires once, running the remediation (`jr auth login --profile <profile>`,
+    /// error fires once, running the remediation (`jr auth login --profile=<profile>`,
     /// simulated here via `store_api_token`) exactly once
     /// permanently resolves the failure for that profile — no second
     /// re-login is ever required — and the legacy pair (if any) remains
@@ -4238,7 +4238,7 @@ mod tests {
                 load_api_token(&Profile::from("default")).expect_err("first call must error");
             assert_not_authenticated_exit_2(&err1);
 
-            // Remediation: `jr auth login --profile default` writes the namespaced pair
+            // Remediation: `jr auth login --profile=default` writes the namespaced pair
             // (BC-1.4.034 postcondition 2 — no flags beyond a normal login).
             store_api_token(&Profile::from("default"), "new@example.com", "new-token").unwrap();
 

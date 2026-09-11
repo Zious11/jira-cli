@@ -120,7 +120,9 @@ All notable changes to jr will be documented here.
      read `` `jr auth login <profile>` `` (positional), which does not parse against
      the real clap surface (the subcommand-local `profile` flag is `#[arg(long)]`-only,
      never a positional). The remediation now correctly reads
-     `` `jr auth login --profile <profile>` ``.
+     `` `jr auth login --profile=<profile>` `` (equals form — required so that
+     profile names beginning with a hyphen, e.g. `-prod`, are not misread by
+     clap as unknown short flags; EC-1.4.032-6).
 
   **Scope:** only `load_api_token`'s two credential-absence branches are changed.
   `src/cli/auth/status.rs`'s unrelated unknown-profile branch (`profile does not exist
@@ -434,7 +436,7 @@ All notable changes to jr will be documented here.
   `auth_method`; `--oauth`/`--api-token` remain syntactically accepted (no
   clap error) but have zero effect on which mechanism is used. Migration:
   the only way to change a profile's mechanism is `auth login`
-  re-declaration (`jr auth login --profile <name> --oauth` or
+  re-declaration (`jr auth login --profile=<name> --oauth` or
   `--api-token`), mirroring the BC-1.2.047/S-663-1 precedent
   (`jr auth switch --profile` removal). See also the accompanying I-6
   "relogin-then-replace" ordering fix, which ensures a failed `refresh`

@@ -473,8 +473,8 @@ A user who wants to revert can `cp config.toml config.toml.backup` first (releas
 | `jr auth switch <unknown>` | `UserError` | 64 | `unknown profile: foo; known: …` |
 | `jr auth remove <name>` where `name == default_profile` | `UserError` | 64 | `cannot remove active profile "default"; switch first with "jr auth switch …"` |
 | `jr auth remove <unknown>` | `UserError` | 64 | `unknown profile: foo; known: …` |
-| `jr auth login --profile X --no-input` and target has no URL | `UserError` | 64 | `--url required when the target profile has no URL configured` |
-| `jr auth refresh --profile X` where X uses api_token auth and has no URL | `UserError` | 64 | `profile "X" has no URL configured. Use "jr auth login --profile X --url <https://…>" instead of refresh — refresh assumes the profile is already set up and only rotates credentials.` |
+| `jr auth login --profile=X --no-input` and target has no URL | `UserError` | 64 | `--url required when the target profile has no URL configured` |
+| `jr auth refresh --profile X` where X uses api_token auth and has no URL | `UserError` | 64 | `profile "X" has no URL configured. Use "jr auth login --profile=X --url <https://…>" instead of refresh — refresh assumes the profile is already set up and only rotates credentials.` |
 | Profile name fails character/length validation | `UserError` | 64 | `invalid profile name "foo:bar"; allowed: A-Z a-z 0-9 _ - up to 64 chars; reserved Windows names (CON, NUL, AUX, PRN, COM1-9, LPT1-9) excluded` |
 | Profile name matches a Windows reserved name | `UserError` | 64 | (same message — reserved name list embedded) |
 | TOML migration write fails | `Internal` | 1 | `Internal error: config migration failed: <io>` |
@@ -511,7 +511,7 @@ TDD; existing test stack (`proptest`, `insta`, `tempfile`, `assert_cmd`, `wiremo
 ### Integration tests (`tests/`)
 
 `tests/auth_profiles.rs` (new):
-- `jr auth login --profile sandbox --url https://… --no-input` (with `JR_API_TOKEN` env preset to skip prompt) — assert config.toml gains the profile, keyring gains shared API token, exit 0
+- `jr auth login --profile=sandbox --url https://… --no-input` (with `JR_API_TOKEN` env preset to skip prompt) — assert config.toml gains the profile, keyring gains shared API token, exit 0
 - `jr auth list --output json` — assert JSON shape, active marker
 - `jr auth switch sandbox` — assert default_profile mutated, exit 0
 - `jr auth switch nonexistent` — assert exit 64, error message names known profiles
@@ -574,12 +574,12 @@ Current gated tests (non-exhaustive; search `#[ignore]` + `JR_RUN_KEYRING_TESTS`
 
 **Concurrent OAuth refresh against the same profile**: two simultaneous `jr auth refresh --profile X` (or any commands that trigger refresh) can both POST to `/oauth/token`, with the second response invalidating the first. Last writer wins on the keyring side. Pre-existing single-instance limitation, not a regression. The retry path on a 401 already handles the case where a stale refresh token rejects — users see one extra retry, not a hard failure.
 
-**Cross-machine portability**: `config.toml` is plain TOML and copies cleanly between machines. **Credentials in the OS keyring do NOT migrate** (by design — never write secrets to disk). Users moving to a new machine re-run `jr auth login --profile <each>` to re-establish credentials. Matches every CLI surveyed.
+**Cross-machine portability**: `config.toml` is plain TOML and copies cleanly between machines. **Credentials in the OS keyring do NOT migrate** (by design — never write secrets to disk). Users moving to a new machine re-run `jr auth login --profile=<each>` to re-establish credentials. Matches every CLI surveyed.
 
 ## Out of Scope / Follow-ups
 
 - **`jr profile` subcommand tree** — separate from `jr auth`. May be revisited if non-auth per-profile config grows beyond the current set.
-- **Profile renaming** — multistep workaround works for now (`jr auth login --profile new --url ...; jr auth logout --profile old; jr auth remove old`).
+- **Profile renaming** — multistep workaround works for now (`jr auth login --profile=new --url ...; jr auth logout --profile=old; jr auth remove old`).
 - **Per-repo `.jr.toml` profile pinning** — direnv with `JR_PROFILE` covers it. Adding it natively conflicts with the universal `flag > env > global > default` convention surveyed across kubectl/aws/gh/gcloud.
 - **`KeyringProvider` trait abstraction** — file as a follow-up issue for testability and CI portability. Outside the scope of multi-profile semantics.
 - **Atomic `Config::save_global` (tempfile + rename)** — file as a follow-up issue. Existing limitation, not a regression of this feature.
