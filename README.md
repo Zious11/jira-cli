@@ -430,6 +430,15 @@ namespaced keys (`default:oauth-access-token`) on first authenticated
 read. Old cache files at `~/.cache/jr/*.json` orphan harmlessly when the
 new layout starts using `~/.cache/jr/v1/<profile>/`.
 
+**API-token profiles created before per-profile credential storage shipped
+require a one-time re-login.** `email` and `api-token` credentials are
+not lazy-migrated to the new per-profile keychain layout the way OAuth
+tokens are. On any affected profile, the first command after upgrading
+exits 2 (not authenticated) with a remediation hint; run
+`jr auth login --profile=<name>` once to store credentials under the new
+namespaced keys. Use the `=` form (`--profile=<name>`) so profile names
+that begin with `-` are not misinterpreted as flags.
+
 ## Scripting & AI Agents
 
 `jr` is designed to be used by scripts and AI coding agents:
