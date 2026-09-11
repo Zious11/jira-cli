@@ -123,7 +123,8 @@ fn test_bc_1_4_032_remediation_command_parses_against_clap() {
             ok_parse.command,
             JrCommand::Auth {
                 command: AuthCommand::Login {
-                    profile: Some(_), ..
+                    profile: Some(_),
+                    ..
                 },
             }
         ),
