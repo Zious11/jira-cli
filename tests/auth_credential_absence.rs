@@ -119,15 +119,14 @@ fn test_bc_1_4_032_remediation_command_parses_against_clap() {
     let result = Cli::try_parse_from(["jr", "auth", "login", "default"]);
     let positional_bound_to_profile = match result {
         Err(_) => false, // clap parse error → the positional was rejected
-        Ok(ok_parse) => match ok_parse.command {
+        Ok(ok_parse) => matches!(
+            ok_parse.command,
             JrCommand::Auth {
-                command:
-                    AuthCommand::Login {
-                        profile: Some(_), ..
-                    },
-            } => true,
-            _ => false,
-        },
+                command: AuthCommand::Login {
+                    profile: Some(_), ..
+                },
+            }
+        ),
     };
     assert!(
         !positional_bound_to_profile,
@@ -356,16 +355,14 @@ fn test_clap_login_profile_equals_form_required_for_leading_hyphen() {
     let space_form_result = Cli::try_parse_from(["jr", "auth", "login", "--profile", "-prod"]);
     let space_form_bound_hyphen_value = match space_form_result {
         Err(_) => false, // clap parse error: -prod treated as flags — correct
-        Ok(ok_parse) => match ok_parse.command {
+        Ok(ok_parse) => matches!(
+            ok_parse.command,
             JrCommand::Auth {
-                command:
-                    AuthCommand::Login {
-                        profile: Some(ref p),
-                        ..
-                    },
-            } if p == "-prod" => true,
-            _ => false,
-        },
+                command: AuthCommand::Login {
+                    profile: Some(ref p), ..
+                },
+            } if p == "-prod"
+        ),
     };
     assert!(
         !space_form_bound_hyphen_value,
