@@ -102,13 +102,26 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
-- **`jr auth login --help` `--oauth` flag now accurately describes jr's built-in
-  OAuth app** (S-cycle7-oauth-help-text-fix, issue #790, BC-1.2.049 EC-1.2.049-3).
-  The help text previously stated "(requires your own OAuth app)" — factually wrong
-  since jr ships an embedded OAuth app by default (ADR-0006). The text also overclaimed
-  the deprecation notice prints unconditionally in human-output mode; it is now
-  qualified to reflect that the non-interactive guard may fire first and suppress the
-  notice. No functional change — doc-comment accuracy fix only.
+- **`jr auth login --help` and `jr auth refresh --help` `--oauth` flag help text
+  accuracy fixes** (S-cycle7-oauth-help-text-fix, issue #790, BC-1.2.049
+  EC-1.2.049-3; adversary pass-1 OBS-1, adversary pass-2 F1).
+  *Login:* the text previously stated "(requires your own OAuth app)" — factually
+  wrong since jr ships an embedded OAuth app by default (ADR-0006); corrected. The
+  login text also overclaimed the deprecation notice prints unconditionally in
+  human-output mode; it is now qualified to note that the non-interactive guard may
+  fire first and suppress the notice on non-interactive runs (the guard keys on
+  `--oauth` + non-TTY/`--no-input`, so interactive runs are unaffected).
+  *Refresh (adversary pass-1 OBS-1 + pass-2 F1):* the refresh `--oauth` doc
+  previously claimed the notice prints unconditionally "to stderr in human-output
+  mode"; corrected to note the guard may fire. A subsequent adversary pass found the
+  interim reword ("may be emitted on interactive runs") was also inaccurate for
+  Refresh: unlike Login, Refresh's guard keys on the profile's stored `auth_method`,
+  not the `--oauth` flag — a non-interactive `jr auth refresh --oauth` on an
+  api-token-method profile does NOT trip the guard and the notice IS emitted in
+  human-output mode. The final wording is now output-format-gated rather than
+  interactivity-gated: "A deprecation notice is printed in human-output (Table) mode
+  unless the non-interactive OAuth guard rejects the refresh first."
+  No functional change — doc-comment accuracy fixes only.
 
 - **Breaking: `load_api_token` credential-absence branches now exit 2 (not 64) and
   suggest the correct `--profile` flag form** (S-cycle7-credential-absence-fix,

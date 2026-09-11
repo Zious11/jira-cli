@@ -279,9 +279,9 @@ pub enum AuthCommand {
         ///
         /// DEPRECATED (BC-1.2.049): retained as an accepted alias, but has no
         /// effect on `auth refresh`'s mechanism selection (BC-1.2.051) — the
-        /// profile's own stored `auth_method` is always used. When the
-        /// non-interactive guard does not reject first, a deprecation notice
-        /// may be emitted on interactive runs.
+        /// profile's own stored `auth_method` is always used. A deprecation
+        /// notice is printed in human-output (Table) mode unless the
+        /// non-interactive OAuth guard rejects the refresh first.
         #[arg(long, conflicts_with = "api_token")]
         oauth: bool,
         /// Syntactically accepted for symmetry with `auth login`

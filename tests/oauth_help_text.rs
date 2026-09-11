@@ -211,29 +211,49 @@ fn refresh_oauth_option_block(stdout: &str) -> &str {
     &rest[..end]
 }
 
-/// OBS-1 (adversary pass-1 finding, sibling to AC-002).
+/// OBS-1 + pass-2 F1/OBS-A (adversary findings).
 ///
-/// `AuthCommand::Refresh`'s `--oauth` doc comment in `src/cli/mod.rs` (~L280)
-/// ends with "A deprecation notice is printed to stderr in human-output mode."
-/// — the same unconditional overclaim fixed for `Login`. `auth refresh` calls
-/// `check_noninteractive_oauth_guard` first (EC-1.2.049-3), so the notice is
-/// NOT unconditional. After the doc-comment fix the Refresh `--oauth` help
-/// block must not contain the overclaiming phrase.
+/// `AuthCommand::Refresh`'s `--oauth` doc comment in `src/cli/mod.rs` (~L280).
 ///
-/// RED today: the current doc string contains the overclaim.
-/// GREEN after: the doc string is corrected to match the guard-aware qualifier
-/// already applied to `Login --oauth`.
+/// Negative assertion (OBS-1): must NOT contain the old unconditional overclaim
+/// "printed to stderr in human-output mode".
+///
+/// Positive assertion (OBS-A): MUST contain "human-output" — pins the corrected
+/// framing so a future reword that simply removes both claims cannot silently
+/// pass. The accurate wording is: "A deprecation notice is printed in
+/// human-output (Table) mode unless the non-interactive OAuth guard rejects the
+/// refresh first." This correctly captures that the notice IS emitted in
+/// human-output mode for non-OAuth profiles (where the guard does not fire),
+/// unlike Login where main.rs auto-sets --no-input on non-TTY stdin and the
+/// guard always fires before the notice.
+///
+/// RED today: current text "may be emitted on interactive runs" passes the
+/// negative assertion but FAILS the positive assertion (no "human-output").
+/// GREEN after: doc corrected to the accurate output-format-gated wording.
 #[test]
 fn test_help_text_refresh_oauth_flag_does_not_overclaim_unconditional_notice() {
     let stdout = auth_refresh_help_stdout();
     let block = refresh_oauth_option_block(&stdout);
 
+    // Negative: must not contain the old "printed to stderr" unconditional form.
     assert!(
         !block.contains("printed to stderr in human-output mode"),
         "--oauth help block in `jr auth refresh --help` must not claim the \
          deprecation notice is unconditionally 'printed to stderr in \
-         human-output mode' — the guard-rejection path suppresses it \
-         (EC-1.2.049-3, OBS-1). The phrasing must be corrected.\n\
+         human-output mode' (OBS-1).\n\
+         Current --oauth block:\n{block}"
+    );
+
+    // Positive (OBS-A): must contain "human-output" — pins the accurate
+    // output-format-gated framing (notice is output-mode-gated, not
+    // interactive-session-gated; see pass-2 F1 for the distinction).
+    assert!(
+        block.contains("human-output"),
+        "--oauth help block in `jr auth refresh --help` must contain \
+         'human-output' to accurately pin the output-format-gated framing \
+         (OBS-A). The corrected wording is: 'A deprecation notice is printed \
+         in human-output (Table) mode unless the non-interactive OAuth guard \
+         rejects the refresh first.'\n\
          Current --oauth block:\n{block}"
     );
 }
