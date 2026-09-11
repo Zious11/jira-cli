@@ -1594,52 +1594,59 @@ fn test_bc_1_6_048_derive_auth_state_is_pure_no_io() {
     );
 
     // Guard 2: render_list_table and render_list_json must NOT reference
-    // keychain-reading symbols in their bodies. The probe lives in handle_list
-    // (F-1 fix). Scan the entire file; a more precise renderer-body-only
-    // scan would require a parser, so we scan the whole file and rely on the
-    // fact that load_oauth_tokens/load_api_token should not appear anywhere
-    // in list.rs at all (probe_matching_kind_credential calls them, but that
-    // function should live in the effectful handler layer, not the renderer).
+    // probing symbols in their bodies. The probe lives in handle_list (F-1 fix).
     //
-    // Post-implementation: `probe_matching_kind_credential` will call these,
-    // so this guard is intentionally RELAXED to only check they're not called
-    // INSIDE the renderer function bodies. We do a simplified check:
-    // the render_ functions themselves must not contain these calls.
-    // We use a simple heuristic: extract the text between "fn render_list_table"
-    // and the matching closing brace block.
+    // Denylist: direct keychain reads (load_oauth_tokens, load_api_token) AND
+    // indirect probe dispatch (probe_matching_kind_credential,
+    // collect_probe_results). A renderer calling collect_probe_results or
+    // probe_matching_kind_credential would still violate BC-1.6.048 purity
+    // even if it skipped load_* directly (adversary pass-1, FIX 2).
     //
+    // Extraction uses brace-balanced counting (counts `{`/`}`) to find the
+    // exact closing brace of each renderer, avoiding the previous `\npub `
+    // heuristic that could over-run into sibling functions.
+    let extract_body = |src: &str, fn_sig: &str| -> Option<String> {
+        let start = src.find(fn_sig)?;
+        let after = &src[start..];
+        let open_brace_offset = after.find('{')?;
+        let from_open = &after[open_brace_offset..];
+        let mut depth = 0usize;
+        let mut body_end = from_open.len();
+        for (i, ch) in from_open.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Some(after[..open_brace_offset + body_end].to_string())
+    };
+
     // For Red Gate, the POSITIVE assertion (Guard 3) is what fails currently.
-    for keychain_sym in &["load_oauth_tokens", "load_api_token"] {
-        // Extract the render_list_table function body
-        if let Some(table_fn_start) = list_src.find("fn render_list_table") {
-            // Find the function body up to a reasonable boundary
-            let after_table_fn = &list_src[table_fn_start..];
-            // Take up to the next top-level "pub" or "fn" declaration as an
-            // approximation of the function boundary.
-            let table_body_end = after_table_fn[1..]
-                .find("\npub ")
-                .or_else(|| after_table_fn[1..].find("\n/// "))
-                .map(|pos| pos + 1)
-                .unwrap_or(after_table_fn.len());
-            let table_body = &after_table_fn[..table_body_end];
+    for probe_sym in &[
+        "load_oauth_tokens",
+        "load_api_token",
+        "probe_matching_kind_credential",
+        "collect_probe_results",
+    ] {
+        if let Some(table_body) = extract_body(list_src, "fn render_list_table") {
             assert!(
-                !table_body.contains(keychain_sym),
-                "BC-1.6.048 purity violation: render_list_table references `{keychain_sym}` — \
+                !table_body.contains(probe_sym),
+                "BC-1.6.048 purity violation: render_list_table references `{probe_sym}` — \
                  keychain probing must be in handle_list, not the renderer (F-1 fix)"
             );
         }
 
-        if let Some(json_fn_start) = list_src.find("fn render_list_json") {
-            let after_json_fn = &list_src[json_fn_start..];
-            let json_body_end = after_json_fn[1..]
-                .find("\npub ")
-                .or_else(|| after_json_fn[1..].find("\n/// "))
-                .map(|pos| pos + 1)
-                .unwrap_or(after_json_fn.len());
-            let json_body = &after_json_fn[..json_body_end];
+        if let Some(json_body) = extract_body(list_src, "fn render_list_json") {
             assert!(
-                !json_body.contains(keychain_sym),
-                "BC-1.6.048 purity violation: render_list_json references `{keychain_sym}` — \
+                !json_body.contains(probe_sym),
+                "BC-1.6.048 purity violation: render_list_json references `{probe_sym}` — \
                  keychain probing must be in handle_list, not the renderer (F-1 fix)"
             );
         }
@@ -1731,10 +1738,23 @@ fn test_bc_1_6_049_list_status_derives_from_probe_not_url() {
          Table output:\n{table}"
     );
     // AC-006: api_token-method profile with matching credential → "configured"
+    // Positive row-level assertion: find the api-token-with-orphan-oauth row and
+    // confirm it contains "configured". This mirrors the JSON arm below (adversary
+    // pass-1 FIX 3: replace weak !contains || count==1 guard with a direct check).
+    let api_token_row = table
+        .lines()
+        .find(|line| line.contains("api-token-with-orphan-oauth"))
+        .unwrap_or_else(|| {
+            panic!(
+                "AC-006 FAIL (table): 'api-token-with-orphan-oauth' row not found in table.\n\
+                 Table output:\n{table}"
+            )
+        });
     assert!(
-        !table.contains("no-credentials") || table.matches("no-credentials").count() == 1,
+        api_token_row.contains("configured"),
         "AC-006 FAIL (table): api_token profile with matching credential must show \
-         'configured', not 'no-credentials'. Only 1 'no-credentials' cell expected."
+         'configured' in its row, not 'no-credentials'. Got row: {api_token_row:?}\n\
+         Full table:\n{table}"
     );
 
     // ── JSON renderer (AC-007) ──
