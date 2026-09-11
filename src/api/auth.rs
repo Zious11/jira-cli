@@ -3937,7 +3937,7 @@ mod tests {
     /// namespaced keys absent, no legacy pair → actionable error.
     #[test]
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
-    fn test_bc_1_4_032_absent_namespaced_keys_no_legacy_pair_returns_actionable_exit64() {
+    fn test_bc_1_4_032_absent_namespaced_keys_no_legacy_pair_returns_actionable_exit2() {
         with_test_keyring(|| {
             let err =
                 load_api_token(&Profile::from("default")).expect_err("absent state must error");
@@ -3948,11 +3948,11 @@ mod tests {
 
     /// AC-001 / EC-1.4.032-1 (BC-1.4.032 postcondition 2): both namespaced
     /// keys absent, legacy flat pair PRESENT → the IDENTICAL actionable
-    /// exit-64 error as the no-legacy-pair case above (byte-for-byte equal
+    /// exit-2 error as the no-legacy-pair case above (byte-for-byte equal
     /// message — legacy-pair presence changes nothing observable).
     #[test]
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
-    fn test_bc_1_4_032_absent_namespaced_keys_legacy_pair_present_returns_identical_actionable_exit64()
+    fn test_bc_1_4_032_absent_namespaced_keys_legacy_pair_present_returns_identical_actionable_exit2()
      {
         with_test_keyring(|| {
             store_legacy_flat_api_token("legacy@example.com", "legacy-token-xyz").unwrap();
@@ -3968,7 +3968,7 @@ mod tests {
 
     /// **CRITICAL — DEC-326 no-copy invariant (AC-003, VP-AUTHDX-005(a)/(b)).**
     /// Seeds ONLY the legacy flat `email`/`api-token` pair (no per-profile
-    /// pair at all). After the resulting exit-64 `Err`:
+    /// pair at all). After the resulting exit-2 `Err`:
     /// (a) the legacy flat pair STILL EXISTS, byte-for-byte unchanged — it
     ///     was never deleted;
     /// (b) NO `default:email`/`default:api-token` entry was ever created —
@@ -4061,7 +4061,7 @@ mod tests {
     }
 
     /// AC-007 (BC-1.4.033 postconditions 1-2), variant 1: `<profile>:email`
-    /// present, `<profile>:api-token` absent → actionable exit-64
+    /// present, `<profile>:api-token` absent → actionable exit-2
     /// "Incomplete credentials" error, never a silently-incomplete `Ok`.
     #[test]
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
@@ -4176,7 +4176,7 @@ mod tests {
     /// detect-and-instruct SCENARIO against the REAL OS keychain backend.
     /// Pre-seeds legacy flat keys (simulating a pre-cycle-003 install), runs
     /// the "first post-upgrade `jr` invocation" against `"default"`,
-    /// confirms the exit-64 actionable error, confirms the legacy pair is
+    /// confirms the exit-2 actionable error, confirms the legacy pair is
     /// byte-for-byte unchanged afterward, confirms no namespaced pair was
     /// ever written — then repeats identically for a `"sandbox"` profile,
     /// proving the failure-and-untouched behavior is not differentiated by
@@ -4215,8 +4215,8 @@ mod tests {
     }
 
     /// BC-1.4.034 postconditions 2/4 / EC-1.4.032-4: after the actionable
-    /// error fires once, running the remediation (`jr auth login
-    /// <profile>`, simulated here via `store_api_token`) exactly once
+    /// error fires once, running the remediation (`jr auth login --profile <profile>`,
+    /// simulated here via `store_api_token`) exactly once
     /// permanently resolves the failure for that profile — no second
     /// re-login is ever required — and the legacy pair (if any) remains
     /// untouched, inert, throughout and after remediation.
@@ -4231,7 +4231,7 @@ mod tests {
                 load_api_token(&Profile::from("default")).expect_err("first call must error");
             assert_not_authenticated_exit_2(&err1);
 
-            // Remediation: `jr auth login default` writes the namespaced pair
+            // Remediation: `jr auth login --profile default` writes the namespaced pair
             // (BC-1.4.034 postcondition 2 — no flags beyond a normal login).
             store_api_token(&Profile::from("default"), "new@example.com", "new-token").unwrap();
 
