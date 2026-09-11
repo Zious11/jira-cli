@@ -1517,3 +1517,430 @@ fn b1_brand_new_oauth_profile_login_failure_logout_routes_to_oauth_branch() {
          message must not recommend `jr auth remove` unconditionally for this exact scenario"
     );
 }
+
+// ── BC-1.6.048 / BC-1.6.049 — auth list STATUS truthful-probe tests ──
+//
+// S-cycle7-auth-state-derivation, Wave 1.
+//
+// These tests cover the render_list_table/render_list_json injected-probe_results
+// path (AC-005/006/007/009/010/013/014) plus the AC-004 source-scan.
+//
+// RED GATE strategy:
+//
+// * AC-005/006/007/013 call render_list_table/render_list_json with a NEW
+//   `probe_results` parameter that does not exist yet → COMPILE ERROR.
+// * AC-009 calls collect_probe_results which does not exist yet → COMPILE ERROR.
+// * AC-010 asserts via source-scan that both renderers call derive_auth_state;
+//   currently they do not → ASSERTION FAILURE.
+// * AC-004 asserts via source-scan that render_list_table/render_list_json do NOT
+//   contain "p.url.is_some()" (the current defective implementation); currently
+//   they DO → ASSERTION FAILURE.
+// * AC-013 depends on the probe_results parameter (same compile error as AC-005).
+
+/// BC-1.6.048 postcondition 2 / AC-004 (DEFAULT CI — source-scan).
+///
+/// Asserts two structural properties of the CURRENT source of
+/// `src/cli/auth/list.rs`:
+///
+/// 1. `probe_stored_credential_kind` does NOT appear as an input to
+///    `derive_auth_state` in any form (the rejected design from F2 round 2).
+/// 2. `render_list_table` and `render_list_json` do NOT call any of the
+///    keychain-reading symbols `load_oauth_tokens`, `load_api_token` — the
+///    purity invariant (F-1 fix: all probing moves to `handle_list`).
+///
+/// ALSO asserts that `render_list_table`/`render_list_json` DO call
+/// `derive_auth_state` — ensuring the refactor has actually wired them
+/// through the shared helper, not just removed the old path.
+///
+/// The current (pre-implementation) source fails the third assertion because
+/// neither renderer calls `derive_auth_state` yet → assertion failure IS the
+/// Red Gate for this AC.
+#[test]
+fn test_bc_1_6_048_derive_auth_state_is_pure_no_io() {
+    let list_src = include_str!("../list.rs");
+
+    // Guard 1: probe_stored_credential_kind must never appear as a parameter
+    // to derive_auth_state (the comparison-kind design rejected at F2 round 2).
+    // We assert it is not present inside a `derive_auth_state(` call.
+    // (If neither function exists yet, this assertion trivially passes —
+    // the RED Gate for this guard is the AC-005/006 compile error.)
+    let has_derive_call_with_probe_kind = list_src
+        .split("derive_auth_state(")
+        .skip(1)  // skip everything before the first call
+        .any(|after| after.starts_with("probe_stored_credential_kind"));
+    assert!(
+        !has_derive_call_with_probe_kind,
+        "BC-1.6.048 violation: probe_stored_credential_kind must never be passed \
+         as an argument to derive_auth_state — use the kind-specific probe caller selects"
+    );
+
+    // Guard 2: render_list_table and render_list_json must NOT reference
+    // keychain-reading symbols in their bodies. The probe lives in handle_list
+    // (F-1 fix). Scan the entire file; a more precise renderer-body-only
+    // scan would require a parser, so we scan the whole file and rely on the
+    // fact that load_oauth_tokens/load_api_token should not appear anywhere
+    // in list.rs at all (probe_matching_kind_credential calls them, but that
+    // function should live in the effectful handler layer, not the renderer).
+    //
+    // Post-implementation: `probe_matching_kind_credential` will call these,
+    // so this guard is intentionally RELAXED to only check they're not called
+    // INSIDE the renderer function bodies. We do a simplified check:
+    // the render_ functions themselves must not contain these calls.
+    // We use a simple heuristic: extract the text between "fn render_list_table"
+    // and the matching closing brace block.
+    //
+    // For Red Gate, the POSITIVE assertion (Guard 3) is what fails currently.
+    for keychain_sym in &["load_oauth_tokens", "load_api_token"] {
+        // Extract the render_list_table function body
+        if let Some(table_fn_start) = list_src.find("fn render_list_table") {
+            // Find the function body up to a reasonable boundary
+            let after_table_fn = &list_src[table_fn_start..];
+            // Take up to the next top-level "pub" or "fn" declaration as an
+            // approximation of the function boundary.
+            let table_body_end = after_table_fn[1..]
+                .find("\npub ")
+                .or_else(|| after_table_fn[1..].find("\n/// "))
+                .map(|pos| pos + 1)
+                .unwrap_or(after_table_fn.len());
+            let table_body = &after_table_fn[..table_body_end];
+            assert!(
+                !table_body.contains(keychain_sym),
+                "BC-1.6.048 purity violation: render_list_table references `{keychain_sym}` — \
+                 keychain probing must be in handle_list, not the renderer (F-1 fix)"
+            );
+        }
+
+        if let Some(json_fn_start) = list_src.find("fn render_list_json") {
+            let after_json_fn = &list_src[json_fn_start..];
+            let json_body_end = after_json_fn[1..]
+                .find("\npub ")
+                .or_else(|| after_json_fn[1..].find("\n/// "))
+                .map(|pos| pos + 1)
+                .unwrap_or(after_json_fn.len());
+            let json_body = &after_json_fn[..json_body_end];
+            assert!(
+                !json_body.contains(keychain_sym),
+                "BC-1.6.048 purity violation: render_list_json references `{keychain_sym}` — \
+                 keychain probing must be in handle_list, not the renderer (F-1 fix)"
+            );
+        }
+    }
+
+    // Guard 3 (RED GATE assertion — fails on current code): both renderers
+    // must call derive_auth_state. Currently they do NOT (they use
+    // `p.url.is_some()` instead), so this assertion FAILS until implementation.
+    assert!(
+        list_src.contains("derive_auth_state("),
+        "BC-1.6.049 wiring violation: neither render_list_table nor render_list_json \
+         calls derive_auth_state yet — the STATUS derivation is still url.is_some()-only. \
+         This assertion IS the Red Gate for AC-004 / AC-010."
+    );
+}
+
+/// BC-1.6.049 postconditions 1-4 / AC-005 + AC-006 + AC-007 (DEFAULT CI —
+/// injected probe_results, no keychain).
+///
+/// Tests the two fixtures that directly exercise the #788 defect:
+///
+/// Fixture A (AC-005, mismatched-kind): an `oauth`-method profile with ONLY
+/// a stored api-token pair (matching_kind_present=false for oauth) must yield
+/// STATUS = `no-credentials`, NOT `configured`.
+///
+/// Fixture B (AC-006, both-kinds): an `api_token`-method profile with BOTH
+/// an api-token pair AND an orphaned OAuth pair (matching_kind_present=true
+/// for api_token, since load_api_token would succeed) must yield
+/// STATUS = `configured`.
+///
+/// Both cases are verified via INJECTED probe_results (no real keychain call
+/// in this test — the injection seam is the F-1 fix). A mutant that reverts
+/// either renderer to `url.is_some()`-only, OR ignores the injected
+/// `probe_results` parameter, fails this test.
+///
+/// RED GATE: calls render_list_table/render_list_json with a `probe_results`
+/// parameter that does not exist in the current 2-argument signature →
+/// COMPILE ERROR until Task 12 adds the parameter.
+#[test]
+fn test_bc_1_6_049_list_status_derives_from_probe_not_url() {
+    use std::collections::HashMap;
+
+    // Build a 2-profile GlobalConfig for the two fixture cases.
+    let mut profiles = std::collections::BTreeMap::new();
+    // Fixture A (AC-005): oauth-method profile, ONLY an api-token credential
+    // stored — derive_auth_state should return NoCredentials.
+    profiles.insert(
+        "oauth-no-creds".to_string(),
+        ProfileConfig {
+            url: Some("https://acme.atlassian.net".into()),
+            auth_method: Some("oauth".into()),
+            ..ProfileConfig::default()
+        },
+    );
+    // Fixture B (AC-006): api_token-method profile with both api-token AND
+    // orphaned oauth pair stored — derive_auth_state should return Configured.
+    profiles.insert(
+        "api-token-with-orphan-oauth".to_string(),
+        ProfileConfig {
+            url: Some("https://acme.atlassian.net".into()),
+            auth_method: Some("api_token".into()),
+            ..ProfileConfig::default()
+        },
+    );
+    let global = GlobalConfig {
+        default_profile: Some("oauth-no-creds".into()),
+        profiles,
+        ..GlobalConfig::default()
+    };
+
+    // Inject probe_results directly — bypassing the real keychain:
+    // - "oauth-no-creds" → oauth probe failed → matching_kind_present=false
+    // - "api-token-with-orphan-oauth" → api_token probe succeeded → true
+    let mut probe_results: HashMap<String, bool> = HashMap::new();
+    probe_results.insert("oauth-no-creds".to_string(), false);
+    probe_results.insert("api-token-with-orphan-oauth".to_string(), true);
+
+    // ── Table renderer (AC-005, AC-007) ──
+    // render_list_table currently has signature (global, active) — the new
+    // `probe_results` parameter does not exist yet → COMPILE ERROR (Red Gate).
+    let table = render_list_table(&global, "oauth-no-creds", &probe_results);
+
+    // AC-005: oauth-method profile with no matching credential → "no-credentials"
+    assert!(
+        table.contains("no-credentials"),
+        "AC-005 FAIL (table): oauth-method profile with no matching credential must show \
+         'no-credentials', not 'configured'. Current url.is_some()-only impl reports \
+         'configured' falsely — this assertion IS the Red Gate for the #788 fix.\n\
+         Table output:\n{table}"
+    );
+    // AC-006: api_token-method profile with matching credential → "configured"
+    assert!(
+        !table.contains("no-credentials") || table.matches("no-credentials").count() == 1,
+        "AC-006 FAIL (table): api_token profile with matching credential must show \
+         'configured', not 'no-credentials'. Only 1 'no-credentials' cell expected."
+    );
+
+    // ── JSON renderer (AC-007) ──
+    // Same expected failure mode — compile error until probe_results param lands.
+    let json = render_list_json(&global, "oauth-no-creds", &probe_results).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let arr = parsed.as_array().expect("json must be array");
+
+    let find = |name: &str| -> &serde_json::Value {
+        arr.iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("profile {name} missing from JSON array"))
+    };
+
+    let oauth_profile = find("oauth-no-creds");
+    assert_eq!(
+        oauth_profile["status"],
+        serde_json::Value::String("no-credentials".to_string()),
+        "AC-005/007 FAIL (json): oauth-method profile with no matching credential must have \
+         status='no-credentials'. Got: {}",
+        oauth_profile["status"]
+    );
+
+    let api_token_profile = find("api-token-with-orphan-oauth");
+    assert_eq!(
+        api_token_profile["status"],
+        serde_json::Value::String("configured".to_string()),
+        "AC-006/007 FAIL (json): api_token profile with matching credential must have \
+         status='configured'. Got: {}",
+        api_token_profile["status"]
+    );
+}
+
+/// BC-1.6.049 postcondition 4 / invariant 1 / AC-009 (DEFAULT CI —
+/// injected counting closure, no keychain).
+///
+/// `auth list` probes AT MOST N profiles with a URL, and ZERO profiles
+/// with `url: None`. This is verified via `collect_probe_results` with an
+/// injected call-counting closure.
+///
+/// RED GATE: calls `collect_probe_results` which does not exist yet →
+/// COMPILE ERROR until Task 11 adds the function.
+#[test]
+fn test_bc_1_6_049_list_probes_at_most_once_per_url_profile() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    // Build a 3-profile fixture: 2 with URL, 1 without.
+    let mut profiles = std::collections::BTreeMap::new();
+    profiles.insert(
+        "with-url-1".to_string(),
+        ProfileConfig {
+            url: Some("https://acme1.atlassian.net".into()),
+            auth_method: Some("api_token".into()),
+            ..ProfileConfig::default()
+        },
+    );
+    profiles.insert(
+        "with-url-2".to_string(),
+        ProfileConfig {
+            url: Some("https://acme2.atlassian.net".into()),
+            auth_method: Some("oauth".into()),
+            ..ProfileConfig::default()
+        },
+    );
+    profiles.insert(
+        "no-url".to_string(),
+        ProfileConfig {
+            url: None,
+            auth_method: None,
+            ..ProfileConfig::default()
+        },
+    );
+    let global = GlobalConfig {
+        default_profile: Some("with-url-1".into()),
+        profiles,
+        ..GlobalConfig::default()
+    };
+
+    // Counting closure — will be called once per probed profile.
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = Arc::clone(&call_count);
+
+    // collect_probe_results does not exist yet → COMPILE ERROR (Red Gate).
+    let _results = collect_probe_results(&global, |_profile, _auth_method| {
+        call_count_clone.fetch_add(1, Ordering::SeqCst);
+        true
+    });
+
+    // BC-1.6.049 invariant 1: exactly 2 probes — one per url-having profile,
+    // zero for the url=None profile.
+    assert_eq!(
+        call_count.load(Ordering::SeqCst),
+        2,
+        "BC-1.6.049 invariant 1 FAIL: expected exactly 2 probes (one per url-having \
+         profile), got {}. A url=None profile must never be probed.",
+        call_count.load(Ordering::SeqCst)
+    );
+}
+
+/// BC-1.6.049 invariant 2 / VP-AUTHDX-024 call-site regression / AC-010
+/// (DEFAULT CI — structural source-scan, no keychain).
+///
+/// Both `render_list_table` and `render_list_json` must call the IDENTICAL
+/// `derive_auth_state` function. A source-scan confirms both renderers
+/// reference `derive_auth_state` — preventing a future refactor from
+/// introducing a second, separately-implemented equivalent in one renderer.
+///
+/// RED GATE: currently neither renderer calls `derive_auth_state` (they use
+/// `p.url.is_some()` instead) → assertion failure until implementation.
+#[test]
+fn test_bc_1_6_049_both_renderers_share_derive_auth_state_call_site() {
+    let list_src = include_str!("../list.rs");
+
+    // Extract the render_list_table function body (approximate).
+    let table_calls_derive = if let Some(start) = list_src.find("fn render_list_table") {
+        let after = &list_src[start..];
+        let end = after[1..]
+            .find("\npub ")
+            .or_else(|| after[1..].find("\n/// "))
+            .map(|p| p + 1)
+            .unwrap_or(after.len());
+        after[..end].contains("derive_auth_state(")
+    } else {
+        false
+    };
+
+    let json_calls_derive = if let Some(start) = list_src.find("fn render_list_json") {
+        let after = &list_src[start..];
+        let end = after[1..]
+            .find("\npub ")
+            .or_else(|| after[1..].find("\n/// "))
+            .map(|p| p + 1)
+            .unwrap_or(after.len());
+        after[..end].contains("derive_auth_state(")
+    } else {
+        false
+    };
+
+    assert!(
+        table_calls_derive,
+        "BC-1.6.049 invariant 2 FAIL: render_list_table does not call derive_auth_state. \
+         Currently uses p.url.is_some() — this IS the Red Gate for AC-010."
+    );
+    assert!(
+        json_calls_derive,
+        "BC-1.6.049 invariant 2 FAIL: render_list_json does not call derive_auth_state. \
+         Currently uses p.url.is_some() — this IS the Red Gate for AC-010."
+    );
+}
+
+/// BC-1.6.049 postcondition 3 / AC-013 (DEFAULT CI — no ANSI in STATUS
+/// column; F3 adversary pass-1, finding LOW-1).
+///
+/// The table's STATUS column renders all three vocabulary values as PLAIN
+/// TEXT — no color, icon, or other ANSI treatment. This is an explicit,
+/// standalone assertion so a mutant that adds styling to the STATUS column
+/// is caught directly rather than only incidentally via a snapshot diff.
+///
+/// RED GATE: calls render_list_table with the NEW probe_results parameter
+/// that does not exist yet → COMPILE ERROR (same as AC-005/006/007).
+#[test]
+fn test_bc_1_6_049_list_status_column_is_plain_text_no_ansi() {
+    use std::collections::HashMap;
+
+    // Build a 3-profile fixture to exercise all three status values.
+    let mut profiles = std::collections::BTreeMap::new();
+    profiles.insert(
+        "url-with-creds".to_string(),
+        ProfileConfig {
+            url: Some("https://acme.atlassian.net".into()),
+            auth_method: Some("api_token".into()),
+            ..ProfileConfig::default()
+        },
+    );
+    profiles.insert(
+        "url-no-creds".to_string(),
+        ProfileConfig {
+            url: Some("https://acme2.atlassian.net".into()),
+            auth_method: Some("oauth".into()),
+            ..ProfileConfig::default()
+        },
+    );
+    profiles.insert(
+        "no-url".to_string(),
+        ProfileConfig {
+            url: None,
+            auth_method: None,
+            ..ProfileConfig::default()
+        },
+    );
+    let global = GlobalConfig {
+        default_profile: Some("url-with-creds".into()),
+        profiles,
+        ..GlobalConfig::default()
+    };
+
+    // Inject probe_results: configured / no-creds / unset (url=None skipped)
+    let mut probe_results: HashMap<String, bool> = HashMap::new();
+    probe_results.insert("url-with-creds".to_string(), true);
+    probe_results.insert("url-no-creds".to_string(), false);
+    // "no-url" is not in probe_results (url=None profiles are never probed)
+
+    // render_list_table currently takes 2 args → COMPILE ERROR (Red Gate)
+    let table = render_list_table(&global, "url-with-creds", &probe_results);
+
+    // The rendered output must not contain any ANSI escape sequence.
+    assert!(
+        !table.contains('\x1b'),
+        "BC-1.6.049 postcondition 3 FAIL: STATUS column contains an ANSI escape \
+         sequence (\\x1b). Plain text is required, no color/icon treatment.\n\
+         Table output:\n{table}"
+    );
+
+    // The three vocabulary values must appear as exact plain-text substrings.
+    assert!(
+        table.contains("configured"),
+        "STATUS 'configured' must appear as plain text in the rendered table"
+    );
+    assert!(
+        table.contains("no-credentials"),
+        "STATUS 'no-credentials' must appear as plain text in the rendered table"
+    );
+    assert!(
+        table.contains("unset"),
+        "STATUS 'unset' must appear as plain text in the rendered table (url=None profile)"
+    );
+}

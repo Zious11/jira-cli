@@ -2472,6 +2472,149 @@ mod tests {
         );
     }
 
+    // ── BC-1.6.048 / BC-1.6.049 — derive_auth_state pure-function tests ──
+    //
+    // Tests for the new `derive_auth_state(url: Option<&str>,
+    // matching_kind_present: bool) -> AuthState` helper (BC-1.6.048).
+    //
+    // RED GATE: all tests in this block reference `derive_auth_state` and
+    // `AuthState`, which do NOT yet exist in production code. They will fail
+    // with a compile error until the implementation is added — that compile
+    // error IS the Red Gate for these ACs (AC-001/002/003/008/011).
+    //
+    // S-cycle7-auth-state-derivation, Wave 1.
+
+    /// BC-1.6.048 postcondition 1 / AC-001 (DEFAULT CI — pure function, no
+    /// keychain). `derive_auth_state` returns `AuthState::Unset` whenever
+    /// `url` is `None`, REGARDLESS of `matching_kind_present`. Both
+    /// `false` and `true` must produce `Unset`.
+    #[test]
+    fn test_bc_1_6_048_derive_auth_state_url_none_always_unset() {
+        assert_eq!(
+            derive_auth_state(None, false),
+            AuthState::Unset,
+            "url=None + matching_kind=false must yield Unset"
+        );
+        assert_eq!(
+            derive_auth_state(None, true),
+            AuthState::Unset,
+            "url=None + matching_kind=true must still yield Unset (url is gating)"
+        );
+    }
+
+    /// BC-1.6.048 postcondition 1 / AC-002 (DEFAULT CI — pure function, no
+    /// keychain). `derive_auth_state` returns `AuthState::NoCredentials`
+    /// when `url` is `Some` AND `matching_kind_present == false`.
+    #[test]
+    fn test_bc_1_6_048_derive_auth_state_url_some_no_match_yields_no_credentials() {
+        assert_eq!(
+            derive_auth_state(Some("https://acme.atlassian.net"), false),
+            AuthState::NoCredentials,
+            "url=Some + matching_kind=false must yield NoCredentials"
+        );
+    }
+
+    /// BC-1.6.048 postcondition 1 / AC-003 (DEFAULT CI — pure function, no
+    /// keychain). `derive_auth_state` returns `AuthState::Configured` when
+    /// `url` is `Some` AND `matching_kind_present == true`.
+    #[test]
+    fn test_bc_1_6_048_derive_auth_state_url_some_match_yields_configured() {
+        assert_eq!(
+            derive_auth_state(Some("https://acme.atlassian.net"), true),
+            AuthState::Configured,
+            "url=Some + matching_kind=true must yield Configured"
+        );
+    }
+
+    /// BC-1.6.048 postcondition 1 / AC-011 — VP-AUTHDX-024 pure-function
+    /// half (DEFAULT CI — exhaustive truth-table over the 4-class domain).
+    /// `derive_auth_state` is a TOTAL, DETERMINISTIC function of its two
+    /// inputs with no hidden state. Covers all four (url × matching_kind)
+    /// input classes collapsing onto the 3-value `AuthState` enum:
+    ///
+    /// | url     | matching_kind | Expected        |
+    /// |---------|---------------|-----------------|
+    /// | None    | false         | Unset           |
+    /// | None    | true          | Unset           |
+    /// | Some(_) | false         | NoCredentials   |
+    /// | Some(_) | true          | Configured      |
+    ///
+    /// Uses proptest to also verify the function is stable across arbitrary
+    /// `&str` URL values (the function never parses/validates the URL —
+    /// only `.is_none()` is checked).
+    #[test]
+    fn test_bc_1_6_048_derive_auth_state_exhaustive_truth_table() {
+        use proptest::prelude::*;
+
+        // Exhaustive enumeration of the 4 classes — determinism is
+        // verified by calling each case twice and asserting equality.
+        let cases: &[(Option<&str>, bool, AuthState)] = &[
+            (None, false, AuthState::Unset),
+            (None, true, AuthState::Unset),
+            (Some("https://acme.atlassian.net"), false, AuthState::NoCredentials),
+            (Some("https://acme.atlassian.net"), true, AuthState::Configured),
+        ];
+        for (url, matching, expected) in cases {
+            let first = derive_auth_state(*url, *matching);
+            let second = derive_auth_state(*url, *matching);
+            assert_eq!(
+                first, *expected,
+                "truth table mismatch: url={url:?} matching={matching}"
+            );
+            assert_eq!(
+                first, second,
+                "non-deterministic: derive_auth_state({url:?}, {matching}) produced \
+                 different results on two consecutive calls"
+            );
+        }
+
+        // Property-based: arbitrary URL strings must not alter the
+        // url-None/url-Some gating. Only `.is_none()` matters — the
+        // actual URL content is irrelevant.
+        let mut runner = proptest::test_runner::TestRunner::default();
+        runner
+            .run(&("[a-z]{1,20}"), |url_str| {
+                // url=Some with any string + matching=false → NoCredentials
+                prop_assert_eq!(
+                    derive_auth_state(Some(url_str.as_str()), false),
+                    AuthState::NoCredentials,
+                    "arbitrary url + matching=false must yield NoCredentials"
+                );
+                // url=Some with any string + matching=true → Configured
+                prop_assert_eq!(
+                    derive_auth_state(Some(url_str.as_str()), true),
+                    AuthState::Configured,
+                    "arbitrary url + matching=true must yield Configured"
+                );
+                Ok(())
+            })
+            .expect("proptest: derive_auth_state truth table holds for arbitrary url strings");
+    }
+
+    /// BC-1.6.049 postcondition 2 / AC-008 (DEFAULT CI — AuthState
+    /// serialization check). The JSON `"status"` field's string values are
+    /// exactly `"unset"` / `"no-credentials"` / `"configured"`. Verified
+    /// by checking `AuthState`'s serde serialization output directly —
+    /// the vocabulary is defined here, not in the renderer.
+    #[test]
+    fn test_bc_1_6_049_list_json_schema_status_vocabulary_values() {
+        // All three AuthState variants must serialize to their canonical
+        // vocabulary strings. Any misspelling (e.g. "no_credentials") is a
+        // breaking API change.
+        assert_eq!(
+            serde_json::to_string(&AuthState::Unset).unwrap(),
+            "\"unset\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AuthState::NoCredentials).unwrap(),
+            "\"no-credentials\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AuthState::Configured).unwrap(),
+            "\"configured\""
+        );
+    }
+
     fn unique_test_service() -> String {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
