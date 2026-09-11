@@ -68,7 +68,7 @@ auth_method = "api_token"
 // ===========================================================================
 
 /// AC-003 (BC-1.4.032 postcondition 2 / VP-AUTHDX-027 property a):
-/// The remediation string `jr auth login --profile=<profile>` parses
+/// The remediation command `jr auth login --profile <profile>` parses
 /// through the real clap surface and resolves to `AuthCommand::Login`
 /// with the Login-LOCAL `profile` field set to the supplied value.
 ///
@@ -88,11 +88,12 @@ fn test_bc_1_4_032_remediation_command_parses_against_clap() {
     use jr::cli::Cli;
     use jr::cli::Command as JrCommand;
 
-    // AC-003: positive anchor — `--profile=default` (equals form, as the
-    // production hint now emits) binds to the Login-LOCAL `profile` field
-    // (not the global Cli.profile). clap also accepts the space form
-    // `--profile default` for non-leading-hyphen names; the equals form
-    // is required for names starting with a hyphen (see Codex pass-3 test).
+    // AC-003: positive anchor — parses the SPACE form `--profile default`
+    // for the normal (non-leading-hyphen) profile name "default".  For
+    // non-hyphen names this is equivalent to production's emitted equals
+    // form (`--profile=default`).  The equals-form literal AND the
+    // leading-hyphen case are proven by the sibling test
+    // `test_clap_login_profile_equals_form_required_for_leading_hyphen`.
     let parsed = Cli::try_parse_from(["jr", "auth", "login", "--profile", "default"])
         .expect("AC-003: `jr auth login --profile default` must parse without a clap error");
 
