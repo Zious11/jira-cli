@@ -628,7 +628,7 @@ pub fn load_oauth_tokens(profile: &Profile) -> Result<(String, String)> {
             }
             Err(anyhow::anyhow!(
                 "No stored OAuth token for profile {profile:?} — \
-                 run \"jr auth login --profile={profile}\""
+                 run \"jr auth login --profile {profile}\""
             ))
         }
         // Partial state: one half of the namespaced pair is missing. For
@@ -678,8 +678,8 @@ pub fn load_oauth_tokens(profile: &Profile) -> Result<(String, String)> {
             Err(anyhow::anyhow!(
                 "OAuth keychain entries for profile {profile:?} are partial \
                  (one of access/refresh present, the other missing). \
-                 Run \"jr auth logout --profile={profile}\" then \
-                 \"jr auth login --profile={profile}\" to restore a clean state."
+                 Run \"jr auth logout --profile {profile}\" then \
+                 \"jr auth login --profile {profile}\" to restore a clean state."
             ))
         }
     }
@@ -3669,8 +3669,8 @@ mod tests {
         let simulated_err = format!(
             "OAuth keychain entries for profile {:?} are partial \
              (one of access/refresh present, the other missing). \
-             Run \"jr auth logout --profile={0}\" then \
-             \"jr auth login --profile={0}\" to restore a clean state.",
+             Run \"jr auth logout --profile {0}\" then \
+             \"jr auth login --profile {0}\" to restore a clean state.",
             "sandbox"
         );
         assert!(

@@ -436,7 +436,7 @@ All notable changes to jr will be documented here.
   `auth_method`; `--oauth`/`--api-token` remain syntactically accepted (no
   clap error) but have zero effect on which mechanism is used. Migration:
   the only way to change a profile's mechanism is `auth login`
-  re-declaration (`jr auth login --profile=<name> --oauth` or
+  re-declaration (`jr auth login --profile <name> --oauth` or
   `--api-token`), mirroring the BC-1.2.047/S-663-1 precedent
   (`jr auth switch --profile` removal). See also the accompanying I-6
   "relogin-then-replace" ordering fix, which ensures a failed `refresh`
