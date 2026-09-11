@@ -3678,47 +3678,72 @@ mod tests {
     // `legacy_flat_pair_exists` existence-only helper itself.
     // -------------------------------------------------------------------------
 
-    /// BC-1.4.032 Postcondition 2's exact actionable error text for a given
-    /// profile name — single source of truth for every test below that
-    /// asserts byte-identical error text across differing legacy-pair
-    /// states (Postcondition 2's "identical regardless of legacy pair"
-    /// guarantee) or across differing profile names (Postcondition 4's
-    /// "no profile is special-cased" guarantee).
+    /// BC-1.4.032 Postcondition 2's exact actionable `hint` field text for a
+    /// given profile name — single source of truth for every test below that
+    /// asserts byte-identical hint text across differing legacy-pair states
+    /// (Postcondition 2's "identical regardless of legacy pair" guarantee) or
+    /// across differing profile names (Postcondition 4's "no profile is
+    /// special-cased" guarantee).
+    ///
+    /// **AC-010 / S-cycle7-credential-absence-fix:** returns the raw `hint`
+    /// FIELD only — never includes the `"Not authenticated. "` prefix that
+    /// `JrError::NotAuthenticated`'s own Display impl prepends at render time.
+    /// Tests compare against this prefix-free text via `.contains(...)`, not
+    /// a full-string equality against the rendered Display output.
     fn expected_bc_1_4_032_absent_message(profile: &str) -> String {
         format!(
             "No credentials stored for profile '{profile}'. This version of jr \
-             requires per-profile credentials — run `jr auth login {profile}` to set them up."
+             requires per-profile credentials — run `jr auth login --profile {profile}` to set them up."
         )
     }
 
-    /// BC-1.4.033 Postcondition 2's exact actionable error text for a given
-    /// profile name.
+    /// BC-1.4.033 Postcondition 2's exact actionable `hint` field text for a
+    /// given profile name.
+    ///
+    /// **AC-010 / S-cycle7-credential-absence-fix:** same prefix-free contract
+    /// as `expected_bc_1_4_032_absent_message` above — raw `hint` field only.
     fn expected_bc_1_4_033_partial_message(profile: &str) -> String {
         format!(
             "Incomplete credentials stored for profile '{profile}' — run \
-             `jr auth login {profile}` to fix this."
+             `jr auth login --profile {profile}` to fix this."
         )
     }
 
     /// Downcasts an `anyhow::Error` produced by `load_api_token`'s
-    /// absent/partial branches to `JrError`, asserts it is a `UserError`
-    /// with exit code 64 (the shared exit-64 contract BC-1.4.032
-    /// Postcondition 2 and BC-1.4.033 Postcondition 2 both mandate), and
-    /// returns the formatted display message for further assertion.
-    fn assert_user_error_exit_64(err: &anyhow::Error) -> String {
+    /// absent/partial branches to `JrError`, asserts it is a
+    /// `NotAuthenticated` variant with exit code 2 (the reclassified
+    /// exit-code contract BC-1.4.032 Postcondition 2 and BC-1.4.033
+    /// Postcondition 2 mandate as of S-cycle7-credential-absence-fix,
+    /// issues #784 + #786), and returns the raw `hint` field for further
+    /// assertion.
+    ///
+    /// **S-cycle7-credential-absence-fix (Task 7a, F3 adversary pass-7 +
+    /// pass-10):** renamed from `assert_not_authenticated_exit_2` (which asserted
+    /// `JrError::UserError` / exit 64 — the OLD, now-corrected contract).
+    /// Returns `hint.clone()` (the raw `hint` FIELD of
+    /// `JrError::NotAuthenticated { hint }`), NOT `format!("{err:#}")` — the
+    /// Display-rendered string would include the `"Not authenticated. "`
+    /// prefix, breaking every downstream `assert_eq!(msg,
+    /// expected_bc_1_4_03{2,3}_..._message(...))` site. This is the SINGLE
+    /// root-cause fix; all 12 downstream comparison sites converge
+    /// automatically with zero per-site edits.
+    fn assert_not_authenticated_exit_2(err: &anyhow::Error) -> String {
         let je = err
             .downcast_ref::<JrError>()
             .unwrap_or_else(|| panic!("expected a JrError, got: {err:#}"));
         assert!(
-            matches!(je, JrError::UserError(_)),
-            "expected JrError::UserError, got {je:?}"
+            matches!(je, JrError::NotAuthenticated { .. }),
+            "expected JrError::NotAuthenticated, got {je:?}"
         );
         assert_eq!(
             je.exit_code(),
-            64,
-            "BC-1.4.032/BC-1.4.033 both mandate exit code 64"
+            2,
+            "BC-1.4.032/BC-1.4.033 both mandate exit code 2 (S-cycle7-credential-absence-fix)"
         );
-        format!("{err:#}")
+        match je {
+            JrError::NotAuthenticated { hint } => hint.clone(),
+            _ => unreachable!(),
+        }
     }
 
     /// Asserts `entry(key).get_password()` is exactly `Err(NoEntry)` — i.e.
@@ -3744,15 +3769,168 @@ mod tests {
         }
     }
 
-    /// AC-002 (BC-1.4.032 postcondition 2): both namespaced keys absent, no
-    /// legacy pair either → actionable exit-64 error.
+    // -----------------------------------------------------------------------
+    // S-cycle7-credential-absence-fix — NEW RED-GATE TESTS (AC-001/002/005)
+    // Must fail against the current (pre-fix) code that returns
+    // JrError::UserError / exit 64.  The implementer makes them green by
+    // changing load_api_token's two Err(…) constructions to
+    // JrError::NotAuthenticated { hint: … } with the `--profile` form.
+    // -----------------------------------------------------------------------
+
+    /// AC-001 (BC-1.4.032 postcondition 2, S-cycle7-credential-absence-fix):
+    /// `load_api_token`'s both-namespaced-keys-absent branch returns
+    /// `JrError::NotAuthenticated { hint }` with `exit_code() == 2`, and the
+    /// `hint` field contains the exact remediation string
+    /// `jr auth login --profile {profile}` (the `--profile` flag form, NOT
+    /// the old positional form `jr auth login {profile}`).
+    ///
+    /// Architecture Compliance Rule: asserts at least one non-`"default"`
+    /// profile name to prove no profile is special-cased (BC-1.4.032
+    /// Postcondition 4).
+    ///
+    /// **Test method: keyring-gated** — `load_api_token` has no in-memory
+    /// injection seam (VP-AUTHDX-005's own documented coverage-boundary note).
+    /// The "absent credential" fixture is a freshly-chosen, never-used profile
+    /// name exercised against the REAL keyring backend.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_032_credential_absence_exits_2_not_64() {
+        with_test_keyring(|| {
+            // Test with "default" profile.
+            let err_default = load_api_token(&Profile::from("default"))
+                .expect_err("absent-credentials state must error");
+            let je_default = err_default
+                .downcast_ref::<JrError>()
+                .unwrap_or_else(|| panic!("expected a JrError, got: {err_default:#}"));
+            assert!(
+                matches!(je_default, JrError::NotAuthenticated { .. }),
+                "AC-001: expected JrError::NotAuthenticated for 'default', got {je_default:?}"
+            );
+            assert_eq!(
+                je_default.exit_code(),
+                2,
+                "AC-001: exit code must be 2 (not 64) for credential-absence (issue #786)"
+            );
+            let JrError::NotAuthenticated { hint: hint_default } = je_default else {
+                unreachable!()
+            };
+            assert!(
+                hint_default.contains("jr auth login --profile default"),
+                "AC-001: hint must contain `jr auth login --profile default` (not \
+                 the old positional form `jr auth login default`), got: {hint_default}"
+            );
+
+            // Architecture Compliance Rule — non-"default" profile must behave
+            // identically (BC-1.4.032 Postcondition 4, no profile is special-cased).
+            let err_sandbox = load_api_token(&Profile::from("sandbox"))
+                .expect_err("absent-credentials state must error for non-default profile");
+            let je_sandbox = err_sandbox
+                .downcast_ref::<JrError>()
+                .unwrap_or_else(|| panic!("expected a JrError, got: {err_sandbox:#}"));
+            assert!(
+                matches!(je_sandbox, JrError::NotAuthenticated { .. }),
+                "AC-001: expected JrError::NotAuthenticated for 'sandbox', got {je_sandbox:?}"
+            );
+            assert_eq!(
+                je_sandbox.exit_code(),
+                2,
+                "AC-001: exit code must be 2 for non-default profile too"
+            );
+            let JrError::NotAuthenticated { hint: hint_sandbox } = je_sandbox else {
+                unreachable!()
+            };
+            assert!(
+                hint_sandbox.contains("jr auth login --profile sandbox"),
+                "AC-001: hint must contain `jr auth login --profile sandbox`, got: {hint_sandbox}"
+            );
+        });
+    }
+
+    /// AC-002 (BC-1.4.033 postcondition 2, S-cycle7-credential-absence-fix) +
+    /// AC-005 (BC-1.4.033 invariant 2, SR-009):
+    /// `load_api_token`'s exactly-one-namespaced-key-present branch returns
+    /// `JrError::NotAuthenticated { hint }` with `exit_code() == 2`, and the
+    /// `hint` field:
+    /// - contains `jr auth login --profile {profile}` (the `--profile` form)
+    /// - does NOT contain `"logout"` (SR-009: `jr auth logout` is a no-op for
+    ///   api-token profiles and must never be recommended as a fix)
+    ///
+    /// **AC-005 note (LOW-1):** The PRE-EXISTING test
+    /// `test_bc_1_4_033_remediation_message_never_mentions_auth_logout`
+    /// also asserts this property via substring checks against the formatted
+    /// Display output (not via `hint` field directly), and SURVIVES this
+    /// story's change unmodified. This test and that one are NOT duplicates —
+    /// this test asserts the `hint` FIELD content and exit code (AC-002 + the
+    /// `NotAuthenticated` variant), while the pre-existing test asserts only
+    /// substrings of the full Display string with no exit-code/variant check.
+    ///
+    /// **Test method: keyring-gated** — same reasoning as
+    /// `test_bc_1_4_032_credential_absence_exits_2_not_64`.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_bc_1_4_033_partial_write_exits_2_and_recommends_login_not_logout() {
+        with_test_keyring(|| {
+            // Seed only the email key (partial write — token absent).
+            entry(&api_token_email_key("sandbox"))
+                .unwrap()
+                .set_password("partial@example.com")
+                .unwrap();
+
+            let err = load_api_token(&Profile::from("sandbox"))
+                .expect_err("partial-credentials state must error");
+            let je = err
+                .downcast_ref::<JrError>()
+                .unwrap_or_else(|| panic!("expected a JrError, got: {err:#}"));
+
+            // AC-002: must be NotAuthenticated with exit code 2.
+            assert!(
+                matches!(je, JrError::NotAuthenticated { .. }),
+                "AC-002: expected JrError::NotAuthenticated for partial-write state, got {je:?}"
+            );
+            assert_eq!(
+                je.exit_code(),
+                2,
+                "AC-002: exit code must be 2 (not 64) for partial-write state (issue #786)"
+            );
+
+            let JrError::NotAuthenticated { hint } = je else {
+                unreachable!()
+            };
+
+            // AC-002: remediation command must use --profile form.
+            assert!(
+                hint.contains("jr auth login --profile sandbox"),
+                "AC-002: hint must contain `jr auth login --profile sandbox` (not the \
+                 old positional form), got: {hint}"
+            );
+
+            // AC-005 (SR-009): logout must never be recommended.
+            assert!(
+                !hint.contains("logout"),
+                "AC-005 / SR-009: hint must NEVER contain 'logout' — \
+                 `jr auth logout` is a no-op for api-token profiles, got: {hint}"
+            );
+
+            cleanup_api_token_profile("sandbox");
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // End of S-cycle7-credential-absence-fix NEW tests.
+    // Existing tests (pre-Task 7a) follow; they are updated by Task 7a to
+    // use the renamed assert_not_authenticated_exit_2 helper and the
+    // `--profile` form message helpers above.
+    // -----------------------------------------------------------------------
+
+    /// (pre-existing, updated by Task 7a) BC-1.4.032 postcondition 2: both
+    /// namespaced keys absent, no legacy pair → actionable error.
     #[test]
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn test_bc_1_4_032_absent_namespaced_keys_no_legacy_pair_returns_actionable_exit64() {
         with_test_keyring(|| {
             let err =
                 load_api_token(&Profile::from("default")).expect_err("absent state must error");
-            let msg = assert_user_error_exit_64(&err);
+            let msg = assert_not_authenticated_exit_2(&err);
             assert_eq!(msg, expected_bc_1_4_032_absent_message("default"));
         });
     }
@@ -3770,7 +3948,7 @@ mod tests {
 
             let err = load_api_token(&Profile::from("default"))
                 .expect_err("absent state with legacy pair must still error");
-            let msg = assert_user_error_exit_64(&err);
+            let msg = assert_not_authenticated_exit_2(&err);
             assert_eq!(msg, expected_bc_1_4_032_absent_message("default"));
 
             cleanup_legacy_flat_pair();
@@ -3797,7 +3975,7 @@ mod tests {
 
             let err = load_api_token(&Profile::from("default"))
                 .expect_err("absent namespaced state must error");
-            assert_user_error_exit_64(&err);
+            assert_not_authenticated_exit_2(&err);
 
             // (a) legacy pair STILL EXISTS, byte-for-byte unchanged — never deleted.
             let (legacy_email, legacy_token) = load_legacy_flat_api_token()
@@ -3827,11 +4005,11 @@ mod tests {
 
             let default_err =
                 load_api_token(&Profile::from("default")).expect_err("default must error");
-            let default_msg = assert_user_error_exit_64(&default_err);
+            let default_msg = assert_not_authenticated_exit_2(&default_err);
 
             let sandbox_err = load_api_token(&Profile::from("sandbox"))
                 .expect_err("sandbox must error identically");
-            let sandbox_msg = assert_user_error_exit_64(&sandbox_err);
+            let sandbox_msg = assert_not_authenticated_exit_2(&sandbox_err);
 
             assert_eq!(default_msg, expected_bc_1_4_032_absent_message("default"));
             assert_eq!(sandbox_msg, expected_bc_1_4_032_absent_message("sandbox"));
@@ -3857,11 +4035,11 @@ mod tests {
         with_test_keyring(|| {
             let err1 =
                 load_api_token(&Profile::from("sandbox")).expect_err("first call must error");
-            let msg1 = assert_user_error_exit_64(&err1);
+            let msg1 = assert_not_authenticated_exit_2(&err1);
 
             let err2 = load_api_token(&Profile::from("sandbox"))
                 .expect_err("second call must error identically");
-            let msg2 = assert_user_error_exit_64(&err2);
+            let msg2 = assert_not_authenticated_exit_2(&err2);
 
             assert_eq!(
                 msg1, msg2,
@@ -3886,7 +4064,7 @@ mod tests {
 
             let err = load_api_token(&Profile::from("sandbox"))
                 .expect_err("partial namespaced state must error");
-            let msg = assert_user_error_exit_64(&err);
+            let msg = assert_not_authenticated_exit_2(&err);
             assert_eq!(msg, expected_bc_1_4_033_partial_message("sandbox"));
 
             cleanup_api_token_profile("sandbox");
@@ -3908,7 +4086,7 @@ mod tests {
 
             let err = load_api_token(&Profile::from("sandbox"))
                 .expect_err("partial namespaced state must error");
-            let msg = assert_user_error_exit_64(&err);
+            let msg = assert_not_authenticated_exit_2(&err);
             assert_eq!(msg, expected_bc_1_4_033_partial_message("sandbox"));
 
             cleanup_api_token_profile("sandbox");
@@ -3933,7 +4111,7 @@ mod tests {
 
             let err = load_api_token(&Profile::from("default"))
                 .expect_err("namespaced-partial must take precedence");
-            let msg = assert_user_error_exit_64(&err);
+            let msg = assert_not_authenticated_exit_2(&err);
             assert_eq!(
                 msg,
                 expected_bc_1_4_033_partial_message("default"),
@@ -4007,7 +4185,7 @@ mod tests {
             for profile in ["default", "sandbox"] {
                 let err = load_api_token(&Profile::from(profile))
                     .expect_err("first post-upgrade invocation must fail with an actionable error");
-                let msg = assert_user_error_exit_64(&err);
+                let msg = assert_not_authenticated_exit_2(&err);
                 assert_eq!(msg, expected_bc_1_4_032_absent_message(profile));
 
                 assert_keychain_entry_absent(&api_token_email_key(profile));
@@ -4040,7 +4218,7 @@ mod tests {
             // First post-upgrade call fails.
             let err1 =
                 load_api_token(&Profile::from("default")).expect_err("first call must error");
-            assert_user_error_exit_64(&err1);
+            assert_not_authenticated_exit_2(&err1);
 
             // Remediation: `jr auth login default` writes the namespaced pair
             // (BC-1.4.034 postcondition 2 — no flags beyond a normal login).
@@ -4102,18 +4280,32 @@ mod tests {
             }
         }
 
-        /// Calls `load_api_token(profile)`, asserts it is an exit-64
-        /// `JrError::UserError`, asserts the no-copy invariant (neither
-        /// namespaced key was written by the call), and returns the
-        /// formatted message.
+        /// Calls `load_api_token(profile)`, asserts it is exit-2
+        /// `JrError::NotAuthenticated` (S-cycle7-credential-absence-fix,
+        /// Task 7a, F3 adversary pass-7 + pass-10), asserts the no-copy
+        /// invariant (neither namespaced key was written by the call), and
+        /// returns the raw `hint` FIELD (prefix-free) for further assertion.
+        ///
+        /// Returns `hint.clone()` (not `format!("{err:#}")`) so downstream
+        /// `assert_eq!(msg, expected_bc_1_4_032_absent_message(...))` sites
+        /// at ~4153 and ~4189 converge without their own edits — the
+        /// Display-rendered string would include `"Not authenticated. "`,
+        /// which the prefix-free expected helpers don't contain.
         fn assert_absent_err_and_no_write(profile: &str) -> String {
             let err = load_api_token(&Profile::from(profile))
                 .expect_err("absent-namespaced state must error");
             let je = err
                 .downcast_ref::<JrError>()
                 .unwrap_or_else(|| panic!("expected a JrError, got: {err:#}"));
-            assert!(matches!(je, JrError::UserError(_)));
-            assert_eq!(je.exit_code(), 64);
+            assert!(
+                matches!(je, JrError::NotAuthenticated { .. }),
+                "expected JrError::NotAuthenticated, got {je:?}"
+            );
+            assert_eq!(
+                je.exit_code(),
+                2,
+                "S-cycle7-credential-absence-fix: exit code must be 2"
+            );
             assert!(matches!(
                 entry(&api_token_email_key(profile)).unwrap().get_password(),
                 Err(keyring::Error::NoEntry)
@@ -4122,7 +4314,10 @@ mod tests {
                 entry(&api_token_key(profile)).unwrap().get_password(),
                 Err(keyring::Error::NoEntry)
             ));
-            format!("{err:#}")
+            match je {
+                JrError::NotAuthenticated { hint } => hint.clone(),
+                _ => unreachable!(),
+            }
         }
 
         proptest! {
@@ -4221,9 +4416,25 @@ mod tests {
                     let je = err
                         .downcast_ref::<JrError>()
                         .unwrap_or_else(|| panic!("expected a JrError, got: {err:#}"));
-                    assert!(matches!(je, JrError::UserError(_)));
-                    assert_eq!(je.exit_code(), 64);
-                    let msg = format!("{err:#}");
+                    // S-cycle7-credential-absence-fix (Task 7a, F3 adversary
+                    // pass-7 + pass-10): assert NotAuthenticated/exit-2 (not
+                    // UserError/exit-64), and build `msg` from the raw `hint`
+                    // FIELD (not `format!("{err:#}")`) so the downstream
+                    // full-equality assert_eq at the end of this block converges
+                    // without a per-site edit.
+                    assert!(
+                        matches!(je, JrError::NotAuthenticated { .. }),
+                        "expected JrError::NotAuthenticated, got {je:?}"
+                    );
+                    assert_eq!(
+                        je.exit_code(),
+                        2,
+                        "S-cycle7-credential-absence-fix: exit code must be 2"
+                    );
+                    let msg = match je {
+                        JrError::NotAuthenticated { hint } => hint.clone(),
+                        _ => unreachable!(),
+                    };
                     assert_eq!(msg, expected_bc_1_4_033_partial_message(&profile));
 
                     cleanup_api_token_profile(&profile);
