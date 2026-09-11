@@ -798,10 +798,17 @@ pub fn load_api_token(profile: &Profile) -> Result<(String, String)> {
             // BC-1.4.032 Postcondition 2: byte-identical regardless of
             // `_legacy_pair_present` — the legacy pair is never read as a
             // credential, only checked for existence above (Postcondition 1).
-            Err(crate::error::JrError::UserError(format!(
-                "No credentials stored for profile '{profile}'. This version of jr \
-                 requires per-profile credentials — run `jr auth login {profile}` to set them up."
-            ))
+            // S-cycle7-credential-absence-fix (issues #784 + #786): reclassified
+            // from JrError::UserError (exit 64) to JrError::NotAuthenticated
+            // (exit 2), and remediation command updated from positional
+            // `jr auth login {profile}` to `jr auth login --profile {profile}`
+            // (the only form that actually parses against the real clap surface).
+            Err(crate::error::JrError::NotAuthenticated {
+                hint: format!(
+                    "No credentials stored for profile '{profile}'. This version of jr \
+                     requires per-profile credentials — run `jr auth login --profile {profile}` to set them up."
+                ),
+            }
             .into())
         }
         _ => {
@@ -809,10 +816,14 @@ pub fn load_api_token(profile: &Profile) -> Result<(String, String)> {
             // partial-write branch — runs before any legacy-pair check
             // (EC-1.4.033-1). Remediation message must NOT name
             // `jr auth logout` (SR-009).
-            Err(crate::error::JrError::UserError(format!(
-                "Incomplete credentials stored for profile '{profile}' — run \
-                 `jr auth login {profile}` to fix this."
-            ))
+            // S-cycle7-credential-absence-fix (issues #784 + #786): same
+            // reclassification as the both-absent branch above.
+            Err(crate::error::JrError::NotAuthenticated {
+                hint: format!(
+                    "Incomplete credentials stored for profile '{profile}' — run \
+                     `jr auth login --profile {profile}` to fix this."
+                ),
+            }
             .into())
         }
     }

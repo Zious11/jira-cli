@@ -100,6 +100,34 @@ All notable changes to jr will be documented here.
   not comparable to the 90% target" note. The report job remains advisory-only and
   still never exits non-zero, regardless of completeness or kill rate.
 
+### Fixed
+
+- **Breaking: `load_api_token` credential-absence branches now exit 2 (not 64) and
+  suggest the correct `--profile` flag form** (S-cycle7-credential-absence-fix,
+  BC-1.4.032/BC-1.4.033, issues #784 + #786). Two fixes in one story, same two lines
+  of `src/api/auth.rs::load_api_token`:
+
+  1. **Exit-code reclassification (exit 64 → exit 2, breaking change):** both the
+     both-namespaced-keys-absent branch (`(None, None)`) and the
+     exactly-one-namespaced-key-present branch (`_` catch-all) previously returned
+     `JrError::UserError` (exit 64), indistinguishable from an ordinary usage error.
+     They now return `JrError::NotAuthenticated` (exit 2), the existing variant
+     `error-taxonomy.md` already defines for "no token in keychain" — scripts and
+     agents that grep exit codes to distinguish "unauthenticated" from "bad flags" must
+     be updated.
+
+  2. **Remediation command fix (issue #784):** both branches' suggested fix previously
+     read `` `jr auth login <profile>` `` (positional), which does not parse against
+     the real clap surface (the subcommand-local `profile` flag is `#[arg(long)]`-only,
+     never a positional). The remediation now correctly reads
+     `` `jr auth login --profile <profile>` ``.
+
+  **Scope:** only `load_api_token`'s two credential-absence branches are changed.
+  `src/cli/auth/status.rs`'s unrelated unknown-profile branch (`profile does not exist
+  in config`) is NOT affected — that site remains `JrError::UserError` (exit 64, BC-1.1.004,
+  unchanged). "Profile exists but has no stored credentials" (exit 2) is categorically
+  distinct from "profile does not exist" (exit 64).
+
 ## [0.7.0-dev.5] - 2026-09-06
 
 ### Changed

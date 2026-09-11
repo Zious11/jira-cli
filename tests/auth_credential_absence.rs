@@ -83,10 +83,10 @@ auth_method = "api_token"
 /// no keychain access.
 #[test]
 fn test_bc_1_4_032_remediation_command_parses_against_clap() {
-    use jr::cli::Cli;
-    use jr::cli::AuthCommand;
-    use jr::cli::Command as JrCommand;
     use clap::Parser;
+    use jr::cli::AuthCommand;
+    use jr::cli::Cli;
+    use jr::cli::Command as JrCommand;
 
     // AC-003: positive anchor — `--profile default` binds to the
     // Login-LOCAL `profile` field (not the global Cli.profile).
@@ -94,7 +94,9 @@ fn test_bc_1_4_032_remediation_command_parses_against_clap() {
         .expect("AC-003: `jr auth login --profile default` must parse without a clap error");
 
     let login_profile = match parsed.command {
-        JrCommand::Auth { command: AuthCommand::Login { profile, .. } } => profile,
+        JrCommand::Auth {
+            command: AuthCommand::Login { profile, .. },
+        } => profile,
         _ => panic!("AC-003: expected Auth Login command"),
     };
     assert_eq!(
@@ -114,7 +116,12 @@ fn test_bc_1_4_032_remediation_command_parses_against_clap() {
     let positional_bound_to_profile = match result {
         Err(_) => false, // clap parse error → the positional was rejected
         Ok(ok_parse) => match ok_parse.command {
-            JrCommand::Auth { command: AuthCommand::Login { profile: Some(_), .. } } => true,
+            JrCommand::Auth {
+                command:
+                    AuthCommand::Login {
+                        profile: Some(_), ..
+                    },
+            } => true,
             _ => false,
         },
     };

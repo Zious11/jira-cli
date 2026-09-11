@@ -410,15 +410,21 @@ pub fn load_api_token(profile: &str) -> Result<(String, String)> {
             // copied, never deleted) — kept purely to mirror (2)'s
             // migration-detection step; does not change the error below.
             let _legacy_pair_present = legacy_flat_pair_exists()?;
-            Err(JrError::UserError(format!(
-                "No credentials stored for profile '{profile}'. This version of jr \
-                 requires per-profile credentials — run `jr auth login {profile}` to set them up."
-            )).into())
+            // S-cycle7-credential-absence-fix: reclassified to NotAuthenticated (exit 2);
+            // remediation uses --profile flag form (not positional).
+            Err(JrError::NotAuthenticated {
+                hint: format!(
+                    "No credentials stored for profile '{profile}'. This version of jr \
+                     requires per-profile credentials — run `jr auth login --profile {profile}` to set them up."
+                ),
+            }.into())
         }
-        _ => Err(JrError::UserError(format!(
-            "Incomplete credentials stored for profile '{profile}' — run \
-             `jr auth login {profile}` to fix this."
-        )).into()),
+        _ => Err(JrError::NotAuthenticated {
+            hint: format!(
+                "Incomplete credentials stored for profile '{profile}' — run \
+                 `jr auth login --profile {profile}` to fix this."
+            ),
+        }.into()),
     }
 }
 ```
