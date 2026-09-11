@@ -751,7 +751,7 @@ fn legacy_flat_pair_exists() -> Result<bool> {
 /// present or absent, the error text is byte-identical (BC-1.4.032
 /// Postcondition 2). This is a one-time, permanent breaking-change contract
 /// for every pre-cycle-003 api-token profile (BC-1.4.034): the remediation
-/// is `jr auth login <profile>`, run once.
+/// is `jr auth login --profile <profile>`, run once.
 ///
 /// **Namespaced-pair partial-write (BC-1.4.033, REDESIGNED — namespaced-pair
 /// case only; the legacy-partial branch is dissolved, since BC-1.4.032's
@@ -763,7 +763,7 @@ fn legacy_flat_pair_exists() -> Result<bool> {
 /// (EC-1.4.033-1 ordering — this match's arm order encodes that). The
 /// remediation message intentionally never names `jr auth logout` (SR-009)
 /// — that command is a no-op for api-token profiles (BC-1.2.013, amended);
-/// only `jr auth login <profile>` (repair) or `jr auth remove <profile>`
+/// only `jr auth login --profile <profile>` (repair) or `jr auth remove <profile>`
 /// (abandon) are valid remediations.
 ///
 /// Unlike [`load_oauth_tokens`], this function has NO `"default"`-only
@@ -859,7 +859,7 @@ pub fn load_api_token(profile: &Profile) -> Result<(String, String)> {
 ///
 /// Deliberately NOT probed: the legacy flat api-token pair (`email` /
 /// `api-token`). BC-1.4.032 already made that pair permanently unusable by
-/// [`load_api_token`] (it forces `jr auth login <profile>` regardless of
+/// [`load_api_token`] (it forces `jr auth login --profile <profile>` regardless of
 /// `auth_method`), so its mere presence must NOT block a pre-mark — doing
 /// so would resurrect exactly the "trust a credential that can't actually
 /// be loaded" bug BC-1.4.032 was designed to close. Also not probed: the
@@ -3729,7 +3729,7 @@ mod tests {
     /// assertion.
     ///
     /// **S-cycle7-credential-absence-fix (Task 7a, F3 adversary pass-7 +
-    /// pass-10):** renamed from `assert_not_authenticated_exit_2` (which asserted
+    /// pass-10):** renamed from `assert_user_error_exit_64` (which asserted
     /// `JrError::UserError` / exit 64 — the OLD, now-corrected contract).
     /// Returns `hint.clone()` (the raw `hint` FIELD of
     /// `JrError::NotAuthenticated { hint }`), NOT `format!("{err:#}")` — the
@@ -4145,7 +4145,7 @@ mod tests {
     /// AC-010 / SR-009 (BC-1.4.033 invariant 2): the partial-write
     /// remediation message must never name `jr auth logout` (a no-op for
     /// api-token profiles, BC-1.2.013 amended) — only `jr auth login
-    /// <profile>` is a valid remediation for this branch.
+    /// --profile <profile>` is a valid remediation for this branch.
     #[test]
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn test_bc_1_4_033_remediation_message_never_mentions_auth_logout() {

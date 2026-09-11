@@ -448,9 +448,9 @@ Properties (BC-1.4.032/BC-1.4.033/BC-1.4.034):
   also happens to exist.
 - **Never suggests `jr auth logout`:** that command is a no-op for
   API-token profiles; the only valid remediations surfaced are
-  `jr auth login <profile>` (repair) or `jr auth remove <profile>`
+  `jr auth login --profile <profile>` (repair) or `jr auth remove <profile>`
   (abandon).
-- **One-time cost:** running the remediation (`jr auth login <profile>`)
+- **One-time cost:** running the remediation (`jr auth login --profile <profile>`)
   once permanently resolves the failure for that profile — there is no
   first-call-migrates/subsequent-call-differs shape, since this whole path
   is read-only with no mutating side effect of its own.
