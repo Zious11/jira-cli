@@ -80,6 +80,15 @@ All notable changes to jr will be documented here.
   policy-doc-only (DEC-348/DEC-349), no new PRD BC — see
   `docs/specs/cargo-mutants-policy.md` §"Sharded Mutation Gate (cycle-006)".
 
+- **README: add per-profile-credential migration note** (S-cycle7-readme-migration-note,
+  issue #783). API-token profiles created before per-profile credential storage shipped
+  (pre-cycle-003) do not have their `email`/`api-token` credentials lazy-migrated to the
+  new per-profile keychain layout the way OAuth tokens are. After upgrading, the first
+  command that contacts Jira on any such profile exits 2 (not authenticated) with a
+  remediation hint. The migration section of README.md now documents this asymmetry and
+  directs users to run `jr auth login --profile=<name>` once (equals form, so
+  leading-hyphen profile names are not misread as flags). Doc-only; no `src/` changes.
+
 - **CI: nightly full-scope mutation workflow rebalanced to 24 shards + a completeness
   guard (`ci/mutants-nightly-rebalance`).** Investigated run 34478602590 (the first
   N=16 nightly run) `cancelled`: only 4/16 shards finished inside the old

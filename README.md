@@ -433,7 +433,7 @@ new layout starts using `~/.cache/jr/v1/<profile>/`.
 **API-token profiles created before per-profile credential storage shipped
 require a one-time re-login.** `email` and `api-token` credentials are
 not lazy-migrated to the new per-profile keychain layout the way OAuth
-tokens are. On any affected profile, the first command after upgrading
+tokens are. On any affected profile, the first command that contacts Jira
 exits 2 (not authenticated) with a remediation hint; run
 `jr auth login --profile=<name>` once to store credentials under the new
 namespaced keys. Use the `=` form (`--profile=<name>`) so profile names
