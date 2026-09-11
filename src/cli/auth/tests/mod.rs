@@ -1869,30 +1869,42 @@ fn test_bc_1_6_049_list_probes_at_most_once_per_url_profile() {
 fn test_bc_1_6_049_both_renderers_share_derive_auth_state_call_site() {
     let list_src = include_str!("../list.rs");
 
-    // Extract the render_list_table function body (approximate).
-    let table_calls_derive = if let Some(start) = list_src.find("fn render_list_table") {
+    // Extract precise function bodies using brace-balanced extraction —
+    // counts `{`/`}` to find each renderer's exact closing brace. This
+    // replaces the old `\npub ` / `\n/// ` boundary heuristic which would
+    // over-run from render_list_table into render_list_json and beyond
+    // (adversary pass-3, FIX F-1: the third source-scan site).
+    let extract_body_ac010 = |fn_sig: &str| -> bool {
+        let start = match list_src.find(fn_sig) {
+            Some(s) => s,
+            None => return false,
+        };
         let after = &list_src[start..];
-        let end = after[1..]
-            .find("\npub ")
-            .or_else(|| after[1..].find("\n/// "))
-            .map(|p| p + 1)
-            .unwrap_or(after.len());
-        after[..end].contains("derive_auth_state(")
-    } else {
-        false
+        let open_brace_offset = match after.find('{') {
+            Some(o) => o,
+            None => return false,
+        };
+        let from_open = &after[open_brace_offset..];
+        let mut depth = 0usize;
+        let mut body_end = from_open.len();
+        for (i, ch) in from_open.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        after[..open_brace_offset + body_end].contains("derive_auth_state(")
     };
 
-    let json_calls_derive = if let Some(start) = list_src.find("fn render_list_json") {
-        let after = &list_src[start..];
-        let end = after[1..]
-            .find("\npub ")
-            .or_else(|| after[1..].find("\n/// "))
-            .map(|p| p + 1)
-            .unwrap_or(after.len());
-        after[..end].contains("derive_auth_state(")
-    } else {
-        false
-    };
+    let table_calls_derive = extract_body_ac010("fn render_list_table");
+    let json_calls_derive = extract_body_ac010("fn render_list_json");
 
     assert!(
         table_calls_derive,
