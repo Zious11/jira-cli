@@ -218,15 +218,18 @@ pub enum AuthCommand {
         /// Jira instance URL (required when creating a new profile under --no-input).
         #[arg(long)]
         url: Option<String>,
-        /// Use OAuth 2.0 instead of API token (requires your own OAuth app).
-        /// Scope list is Atlassian's recommended classic set by default;
-        /// override via `[profiles.<name>].oauth_scopes` in config.toml — see
-        /// Configuration below.
+        /// Use OAuth 2.0 instead of API token. jr ships a built-in OAuth app
+        /// by default (ADR-0006); `--client-id`/`--client-secret` or
+        /// `$JR_OAUTH_CLIENT_ID`/`$JR_OAUTH_CLIENT_SECRET` are an optional
+        /// BYO override. Scope list is Atlassian's recommended classic set by
+        /// default; override via `[profiles.<name>].oauth_scopes` in
+        /// config.toml — see Configuration below.
         ///
-        /// DEPRECATED (BC-1.2.049): retained as an accepted alias — a
-        /// deprecation notice is printed to stderr in human-output mode.
-        /// Prefer letting the interactive picker default to OAuth, or pass
-        /// `--api-token` explicitly for the other mechanism.
+        /// DEPRECATED (BC-1.2.049): retained as an accepted alias — when the
+        /// non-interactive guard does not reject first, a deprecation notice
+        /// may be emitted on interactive runs. Prefer letting the interactive
+        /// picker default to OAuth, or pass `--api-token` explicitly for the
+        /// other mechanism.
         #[arg(long, conflicts_with = "api_token")]
         oauth: bool,
         /// Select the API-token mechanism directly, skipping the

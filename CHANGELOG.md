@@ -102,6 +102,14 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **`jr auth login --help` `--oauth` flag now accurately describes jr's built-in
+  OAuth app** (S-cycle7-oauth-help-text-fix, issue #790, BC-1.2.049 EC-1.2.049-3).
+  The help text previously stated "(requires your own OAuth app)" — factually wrong
+  since jr ships an embedded OAuth app by default (ADR-0006). The text also overclaimed
+  the deprecation notice prints unconditionally in human-output mode; it is now
+  qualified to reflect that the non-interactive guard may fire first and suppress the
+  notice. No functional change — doc-comment accuracy fix only.
+
 - **Breaking: `load_api_token` credential-absence branches now exit 2 (not 64) and
   suggest the correct `--profile` flag form** (S-cycle7-credential-absence-fix,
   BC-1.4.032/BC-1.4.033, issues #784 + #786). Two fixes in one story, same two lines
