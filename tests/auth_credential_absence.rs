@@ -94,7 +94,7 @@ fn test_bc_1_4_032_remediation_command_parses_against_clap() {
     // `--profile default` for non-leading-hyphen names; the equals form
     // is required for names starting with a hyphen (see Codex pass-3 test).
     let parsed = Cli::try_parse_from(["jr", "auth", "login", "--profile", "default"])
-        .expect("AC-003: `jr auth login --profile=default` must parse without a clap error");
+        .expect("AC-003: `jr auth login --profile default` must parse without a clap error");
 
     let login_profile = match parsed.command {
         JrCommand::Auth {

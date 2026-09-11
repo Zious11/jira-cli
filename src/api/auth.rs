@@ -4152,7 +4152,7 @@ mod tests {
     /// AC-010 / SR-009 (BC-1.4.033 invariant 2): the partial-write
     /// remediation message must never name `jr auth logout` (a no-op for
     /// api-token profiles, BC-1.2.013 amended) — only `jr auth login
-    /// --profile <profile>` is a valid remediation for this branch.
+    /// --profile=<profile>` is a valid remediation for this branch.
     #[test]
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn test_bc_1_4_033_remediation_message_never_mentions_auth_logout() {
