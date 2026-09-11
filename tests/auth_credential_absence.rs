@@ -292,3 +292,81 @@ auth_method = "api_token"
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// ===========================================================================
+// Codex pass-3 — leading-hyphen profile name clap round-trip (DEFAULT CI)
+// ===========================================================================
+
+/// Codex adversarial pass-3 finding: `src/api/auth.rs::load_api_token`'s
+/// remediation hint previously emitted the SPACE form
+/// `jr auth login --profile {profile}`, which fails to parse when the profile
+/// name begins with a hyphen (e.g. `-prod`) — clap interprets `-prod` as an
+/// unknown flag instead of a value.
+///
+/// This test pins two properties:
+///
+/// **Positive anchor:** `jr auth login --profile=-prod` (equals form) binds
+/// `AuthCommand::Login`'s LOCAL `profile` field to `"-prod"` without a parse
+/// error.
+///
+/// **Negative anchor:** `jr auth login --profile -prod` (space form) does
+/// NOT bind `"-prod"` to the login-local `profile` field — either clap emits
+/// a parse error (interpreting `-prod` as an unknown short flag), or the parse
+/// succeeds but the field is not `Some("-prod")`. This proves the equals form
+/// is necessary (not just stylistically different) for valid leading-hyphen
+/// profile names.
+///
+/// **Test method: DEFAULT CI** — pure `Cli::try_parse_from` round-trip; no
+/// keychain access.
+#[test]
+fn test_clap_login_profile_equals_form_required_for_leading_hyphen() {
+    use clap::Parser;
+    use jr::cli::AuthCommand;
+    use jr::cli::Cli;
+    use jr::cli::Command as JrCommand;
+
+    // Positive anchor: equals form binds the leading-hyphen value.
+    let parsed = Cli::try_parse_from(["jr", "auth", "login", "--profile=-prod"]).expect(
+        "equals form `--profile=-prod` must parse without a clap error — \
+         this form is required for leading-hyphen profile names",
+    );
+
+    let login_profile = match parsed.command {
+        JrCommand::Auth {
+            command: AuthCommand::Login { profile, .. },
+        } => profile,
+        _ => panic!("expected Auth Login command for equals-form test"),
+    };
+    assert_eq!(
+        login_profile,
+        Some("-prod".to_string()),
+        "equals form `--profile=-prod` must bind `-prod` to \
+         AuthCommand::Login's LOCAL profile field"
+    );
+
+    // Negative anchor: space form does NOT bind the leading-hyphen value.
+    // clap parses `-prod` as an unknown flag `-p`/`-r`/`-o`/`-d` cluster,
+    // so try_parse_from returns Err, OR the parse succeeds but profile is not
+    // Some("-prod").  Either outcome proves the space form is broken for
+    // leading-hyphen names.
+    let space_form_result = Cli::try_parse_from(["jr", "auth", "login", "--profile", "-prod"]);
+    let space_form_bound_hyphen_value = match space_form_result {
+        Err(_) => false, // clap parse error: -prod treated as flags — correct
+        Ok(ok_parse) => match ok_parse.command {
+            JrCommand::Auth {
+                command:
+                    AuthCommand::Login {
+                        profile: Some(ref p),
+                        ..
+                    },
+            } if p == "-prod" => true,
+            _ => false,
+        },
+    };
+    assert!(
+        !space_form_bound_hyphen_value,
+        "space form `--profile -prod` must NOT successfully bind `-prod` to \
+         AuthCommand::Login's profile field — `-prod` is parsed as unknown \
+         flags; use the equals form `--profile=-prod` instead"
+    );
+}

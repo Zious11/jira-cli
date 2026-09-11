@@ -411,18 +411,18 @@ pub fn load_api_token(profile: &str) -> Result<(String, String)> {
             // migration-detection step; does not change the error below.
             let _legacy_pair_present = legacy_flat_pair_exists()?;
             // S-cycle7-credential-absence-fix: reclassified to NotAuthenticated (exit 2);
-            // remediation uses --profile flag form (not positional).
+            // remediation uses --profile= equals form (required for leading-hyphen names).
             Err(JrError::NotAuthenticated {
                 hint: format!(
                     "No credentials stored for profile '{profile}'. This version of jr \
-                     requires per-profile credentials — run `jr auth login --profile {profile}` to set them up."
+                     requires per-profile credentials — run `jr auth login --profile={profile}` to set them up."
                 ),
             }.into())
         }
         _ => Err(JrError::NotAuthenticated {
             hint: format!(
                 "Incomplete credentials stored for profile '{profile}' — run \
-                 `jr auth login --profile {profile}` to fix this."
+                 `jr auth login --profile={profile}` to fix this."
             ),
         }.into()),
     }
@@ -448,9 +448,9 @@ Properties (BC-1.4.032/BC-1.4.033/BC-1.4.034):
   also happens to exist.
 - **Never suggests `jr auth logout`:** that command is a no-op for
   API-token profiles; the only valid remediations surfaced are
-  `jr auth login --profile <profile>` (repair) or `jr auth remove <profile>`
+  `jr auth login --profile=<profile>` (repair) or `jr auth remove <profile>`
   (abandon).
-- **One-time cost:** running the remediation (`jr auth login --profile <profile>`)
+- **One-time cost:** running the remediation (`jr auth login --profile=<profile>`)
   once permanently resolves the failure for that profile — there is no
   first-call-migrates/subsequent-call-differs shape, since this whole path
   is read-only with no mutating side effect of its own.

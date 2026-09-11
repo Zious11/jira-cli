@@ -751,7 +751,9 @@ fn legacy_flat_pair_exists() -> Result<bool> {
 /// present or absent, the error text is byte-identical (BC-1.4.032
 /// Postcondition 2). This is a one-time, permanent breaking-change contract
 /// for every pre-cycle-003 api-token profile (BC-1.4.034): the remediation
-/// is `jr auth login --profile <profile>`, run once.
+/// is `jr auth login --profile=<profile>`, run once. The equals form is
+/// required for leading-hyphen profile names (e.g. `-prod`) — the space form
+/// `--profile -prod` is misread by clap as an unknown flag.
 ///
 /// **Namespaced-pair partial-write (BC-1.4.033, REDESIGNED — namespaced-pair
 /// case only; the legacy-partial branch is dissolved, since BC-1.4.032's
@@ -763,7 +765,7 @@ fn legacy_flat_pair_exists() -> Result<bool> {
 /// (EC-1.4.033-1 ordering — this match's arm order encodes that). The
 /// remediation message intentionally never names `jr auth logout` (SR-009)
 /// — that command is a no-op for api-token profiles (BC-1.2.013, amended);
-/// only `jr auth login --profile <profile>` (repair) or `jr auth remove <profile>`
+/// only `jr auth login --profile=<profile>` (repair) or `jr auth remove <profile>`
 /// (abandon) are valid remediations.
 ///
 /// Unlike [`load_oauth_tokens`], this function has NO `"default"`-only
@@ -801,12 +803,14 @@ pub fn load_api_token(profile: &Profile) -> Result<(String, String)> {
             // S-cycle7-credential-absence-fix (issues #784 + #786): reclassified
             // from JrError::UserError (exit 64) to JrError::NotAuthenticated
             // (exit 2), and remediation command updated from positional
-            // `jr auth login {profile}` to `jr auth login --profile {profile}`
-            // (the only form that actually parses against the real clap surface).
+            // `jr auth login {profile}` to `jr auth login --profile={profile}`
+            // (equals form — required for leading-hyphen profile names such as
+            // `-prod`; the space form `--profile -prod` is parsed as an unknown
+            // flag by clap; Codex pass-3 finding).
             Err(crate::error::JrError::NotAuthenticated {
                 hint: format!(
                     "No credentials stored for profile '{profile}'. This version of jr \
-                     requires per-profile credentials — run `jr auth login --profile {profile}` to set them up."
+                     requires per-profile credentials — run `jr auth login --profile={profile}` to set them up."
                 ),
             }
             .into())
@@ -818,10 +822,12 @@ pub fn load_api_token(profile: &Profile) -> Result<(String, String)> {
             // `jr auth logout` (SR-009).
             // S-cycle7-credential-absence-fix (issues #784 + #786): same
             // reclassification as the both-absent branch above.
+            // Equals form (`--profile={profile}`) is required for leading-hyphen
+            // profile names; see the both-absent branch comment for details.
             Err(crate::error::JrError::NotAuthenticated {
                 hint: format!(
                     "Incomplete credentials stored for profile '{profile}' — run \
-                     `jr auth login --profile {profile}` to fix this."
+                     `jr auth login --profile={profile}` to fix this."
                 ),
             }
             .into())
@@ -3785,15 +3791,16 @@ mod tests {
     // Must fail against the current (pre-fix) code that returns
     // JrError::UserError / exit 64.  The implementer makes them green by
     // changing load_api_token's two Err(…) constructions to
-    // JrError::NotAuthenticated { hint: … } with the `--profile` form.
+    // JrError::NotAuthenticated { hint: … } with the `--profile=` equals form.
     // -----------------------------------------------------------------------
 
     /// AC-001 (BC-1.4.032 postcondition 2, S-cycle7-credential-absence-fix):
     /// `load_api_token`'s both-namespaced-keys-absent branch returns
     /// `JrError::NotAuthenticated { hint }` with `exit_code() == 2`, and the
     /// `hint` field contains the exact remediation string
-    /// `jr auth login --profile {profile}` (the `--profile` flag form, NOT
-    /// the old positional form `jr auth login {profile}`).
+    /// `jr auth login --profile={profile}` (the equals form, NOT the space
+    /// form `--profile {profile}` or the old positional form `jr auth login
+    /// {profile}`).
     ///
     /// Architecture Compliance Rule: asserts at least one non-`"default"`
     /// profile name to prove no profile is special-cased (BC-1.4.032
@@ -3826,9 +3833,9 @@ mod tests {
                 unreachable!()
             };
             assert!(
-                hint_default.contains("jr auth login --profile default"),
-                "AC-001: hint must contain `jr auth login --profile default` (not \
-                 the old positional form `jr auth login default`), got: {hint_default}"
+                hint_default.contains("jr auth login --profile=default"),
+                "AC-001: hint must contain `jr auth login --profile=default` (equals form, \
+                 not the space form `--profile default` or old positional form), got: {hint_default}"
             );
 
             // Architecture Compliance Rule — non-"default" profile must behave
@@ -3851,8 +3858,8 @@ mod tests {
                 unreachable!()
             };
             assert!(
-                hint_sandbox.contains("jr auth login --profile sandbox"),
-                "AC-001: hint must contain `jr auth login --profile sandbox`, got: {hint_sandbox}"
+                hint_sandbox.contains("jr auth login --profile=sandbox"),
+                "AC-001: hint must contain `jr auth login --profile=sandbox` (equals form), got: {hint_sandbox}"
             );
         });
     }
@@ -3862,7 +3869,7 @@ mod tests {
     /// `load_api_token`'s exactly-one-namespaced-key-present branch returns
     /// `JrError::NotAuthenticated { hint }` with `exit_code() == 2`, and the
     /// `hint` field:
-    /// - contains `jr auth login --profile {profile}` (the `--profile` form)
+    /// - contains `jr auth login --profile={profile}` (the equals form)
     /// - does NOT contain `"logout"` (SR-009: `jr auth logout` is a no-op for
     ///   api-token profiles and must never be recommended as a fix)
     ///
@@ -3908,11 +3915,11 @@ mod tests {
                 unreachable!()
             };
 
-            // AC-002: remediation command must use --profile form.
+            // AC-002: remediation command must use --profile= equals form.
             assert!(
-                hint.contains("jr auth login --profile sandbox"),
-                "AC-002: hint must contain `jr auth login --profile sandbox` (not the \
-                 old positional form), got: {hint}"
+                hint.contains("jr auth login --profile=sandbox"),
+                "AC-002: hint must contain `jr auth login --profile=sandbox` (equals form, \
+                 not the space form or old positional form), got: {hint}"
             );
 
             // AC-005 (SR-009): logout must never be recommended.
