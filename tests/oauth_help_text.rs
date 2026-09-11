@@ -175,6 +175,70 @@ fn test_ec_1_2_049_3_guard_rejection_precedes_deprecation_notice() {
 }
 
 // ---------------------------------------------------------------------------
+// OBS-1 — RED today: auth refresh --oauth help must not overclaim notice
+// ---------------------------------------------------------------------------
+
+/// Runs `jr auth refresh --help` and returns captured stdout as a String.
+fn auth_refresh_help_stdout() -> String {
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .args(["auth", "refresh", "--help"])
+        .output()
+        .expect("failed to run `jr auth refresh --help`");
+    assert!(
+        output.status.success(),
+        "`jr auth refresh --help` did not exit successfully"
+    );
+    String::from_utf8(output.stdout).expect("stdout is not valid UTF-8")
+}
+
+/// Extracts the `--oauth` flag's help-text block from `jr auth refresh --help`
+/// stdout — from `      --oauth` up to (but not including) `      --api-token`.
+/// Scoped to the Refresh subcommand only; prevents false-greens from the Login
+/// block sharing the same process output.
+fn refresh_oauth_option_block(stdout: &str) -> &str {
+    let header = "      --oauth";
+    let next_header = "      --api-token";
+    let start = stdout.find(header).unwrap_or_else(|| {
+        panic!("no '{header}' marker found in `jr auth refresh --help` output:\n{stdout}")
+    });
+    let rest = &stdout[start..];
+    let end = rest.find(next_header).unwrap_or_else(|| {
+        panic!(
+            "no '{next_header}' marker found after '--oauth' in `jr auth refresh --help` output:\n{stdout}"
+        )
+    });
+    &rest[..end]
+}
+
+/// OBS-1 (adversary pass-1 finding, sibling to AC-002).
+///
+/// `AuthCommand::Refresh`'s `--oauth` doc comment in `src/cli/mod.rs` (~L280)
+/// ends with "A deprecation notice is printed to stderr in human-output mode."
+/// — the same unconditional overclaim fixed for `Login`. `auth refresh` calls
+/// `check_noninteractive_oauth_guard` first (EC-1.2.049-3), so the notice is
+/// NOT unconditional. After the doc-comment fix the Refresh `--oauth` help
+/// block must not contain the overclaiming phrase.
+///
+/// RED today: the current doc string contains the overclaim.
+/// GREEN after: the doc string is corrected to match the guard-aware qualifier
+/// already applied to `Login --oauth`.
+#[test]
+fn test_help_text_refresh_oauth_flag_does_not_overclaim_unconditional_notice() {
+    let stdout = auth_refresh_help_stdout();
+    let block = refresh_oauth_option_block(&stdout);
+
+    assert!(
+        !block.contains("printed to stderr in human-output mode"),
+        "--oauth help block in `jr auth refresh --help` must not claim the \
+         deprecation notice is unconditionally 'printed to stderr in \
+         human-output mode' — the guard-rejection path suppresses it \
+         (EC-1.2.049-3, OBS-1). The phrasing must be corrected.\n\
+         Current --oauth block:\n{block}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-004 — GREEN baseline: conflicts_with usage rendering is unaffected
 // ---------------------------------------------------------------------------
 
