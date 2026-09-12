@@ -80,7 +80,7 @@ GET succeeding immediately.
 ### Read coverage (assert exit 0 + JSON shape)
 | Command family | E2E assertion |
 |---|---|
-| `issue list --jql "project=<E2E>" --output json` | valid JSON array — **also the auth-seam validator** (first real network call; a 401 means the `JR_AUTH_HEADER` seam/credential is broken). `auth status` is intentionally NOT tested: it emits no JSON and makes no API call (see story AC-004-v2). |
+| `issue list --jql "project=<E2E>" --output json` | valid JSON array — **also the auth-seam validator** (first real network call; a 401 means the `JR_AUTH_HEADER` seam/credential is broken). `auth status` is intentionally NOT tested: it now supports `--output json` (BC-1.6.050) but makes no Jira API call, so the E2E exclusion still stands (see story AC-004-v2). |
 | `issue search` / list with JQL | filters apply |
 | `issue view <seed-or-created-key> --output json` | issue fields present |
 | `board list --output json` | the Scrum board appears |

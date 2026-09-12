@@ -776,6 +776,36 @@ sibling function).
   `examine_globs` scope; no sub-file targeting — same tradeoff as `src/main.rs`) and are
   deliberately NOT `exclude_re`'d to avoid silencing rather than documenting them.
 
+- **`src/cli/auth/status.rs` — `probe_matching_kind_credential` and `peek_oauth_app_source`
+  (four regexes total, two per function)**
+  (S-cycle7-auth-status-json, F3 adversary pass-3 finding MED-1).
+  Same exclusion class as the `list.rs` `probe_matching_kind_credential` entry above —
+  effectful wrappers with no in-memory injection seam, exercisable only by
+  `#[ignore]`+`JR_RUN_KEYRING_TESTS=1` tests that default CI does not run.
+
+  - **`probe_matching_kind_credential`** (`src/cli/auth/status.rs`): reads the OS keychain
+    via `load_oauth_tokens` / `load_api_token` dispatch by `auth_method`. Correctness
+    positively verified by `tests/auth_profiles.rs` keychain round-trip tests (gated,
+    `#[ignore]`), existing `load_oauth_tokens`/`load_api_token` unit/integration coverage,
+    and the AC-004 source-scan + call-count wiring tests which verify the function is called
+    without exercising the keychain itself. Same justification as the `list.rs` sibling;
+    two regexes required (Regex A: operator/expression mutants ending with
+    `in probe_matching_kind_credential`; Regex B: whole-body replacement mutants beginning
+    with `replace probe_matching_kind_credential`), both file+function-name anchored to
+    `status.rs`.
+
+  - **`peek_oauth_app_source`** (`src/cli/auth/status.rs`): pre-existing effectful wrapper
+    calling `try_load_oauth_app_credentials`; no in-memory injection seam exists for the
+    real credential-load path. Its pure sibling `peek_oauth_app_source_for_test` (used
+    exclusively in `#[cfg(test)]` blocks) remains in scope and is fully default-CI-tested.
+    Correctness positively verified by the `peek_oauth_app_source_for_test`-backed unit
+    tests that exercise all reachable `OAuthAppSource` variants, and the AC-012/AC-013
+    wiring tests that assert `peek_oauth_app_source` is called in the right code path.
+    Two regexes required (same A/B operator+whole-body pattern), both anchored to
+    `status.rs`.
+
+  See `.cargo/mutants.toml`'s `exclude_re` array for the exact patterns and their comments.
+
 ## Deferral Policy
 
 The initial baseline PR (S-346) MUST NOT block on achieving 90% kill-rate on first run.

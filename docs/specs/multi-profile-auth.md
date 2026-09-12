@@ -271,8 +271,9 @@ jr auth list
     JSON: [{"name", "url", "env", "auth_method", "status", "active"}]
 
 jr auth status [--profile NAME]
-    Show one profile's auth state (default: active). Human text only —
-        no --output json support for this subcommand.
+    Show one profile's auth state (default: active). Supports --output json
+        (BC-1.6.050, S-cycle7-auth-status-json): emits a 6-key object
+        {profile, url, env, auth_method, status, oauth_app}.
 
 jr auth logout [--profile NAME]
     Session-clear only, non-destructive (DEC-322, BC-1.2.013/BC-1.2.014):
