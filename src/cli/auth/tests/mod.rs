@@ -2153,3 +2153,324 @@ fn test_bc_1_6_049_list_status_column_is_plain_text_no_ansi() {
          column-targeted). Got STATUS cell: {status_cell:?}\nFull row: {no_url_row:?}"
     );
 }
+
+// ── BC-1.6.050 — auth status --output json (S-cycle7-auth-status-json, B2) ──
+//
+// Tests for the new `build_status_json(profile, url, env, auth_method,
+// matching_kind_present, oauth_app) -> anyhow::Result<String>` pure builder
+// and its field-parity invariant with `render_list_json`.
+//
+// These tests live INLINE (not in tests/) because they call `build_status_json`
+// and `render_list_json` as `pub(crate)` symbols, which are NOT visible from
+// the integration test crate (F3 adversary pass-4, LOW-1).
+//
+// RED GATE: all tests below fail because `build_status_json` stubs out with
+// `todo!()` — every call panics until the implementer fills in the body
+// (S-cycle7-auth-status-json Task 10).
+
+/// AC-001 (BC-1.6.050 postcondition 1, VP-AUTHDX-026) — DEFAULT CI.
+///
+/// `build_status_json` emits a JSON object (not array) with EXACTLY the
+/// six keys `profile`, `url`, `env`, `auth_method`, `status`, `oauth_app`
+/// (set-equality: none missing, no extras).
+///
+/// Called with an api_token profile: url present, no env, matching_kind=true,
+/// oauth_app=None (→ should be `null` in JSON, still present as a key).
+///
+/// RED GATE failure: `todo!()` panic in `build_status_json` stub.
+#[test]
+fn test_bc_1_6_050_status_json_full_schema_api_token() {
+    let json = build_status_json(
+        "myprofile",
+        Some("https://acme.atlassian.net"),
+        None,
+        Some("api_token"),
+        true,
+        None,
+    )
+    .expect("build_status_json should not error");
+
+    let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON string");
+    let obj = v.as_object().expect("AC-001 FAIL: top-level value must be a JSON object (not array)");
+
+    const EXPECTED_KEYS: &[&str] =
+        &["profile", "url", "env", "auth_method", "status", "oauth_app"];
+
+    for key in EXPECTED_KEYS {
+        assert!(
+            obj.contains_key(*key),
+            "AC-001 FAIL: key {key:?} is missing from auth status JSON object. \
+             Got keys: {:?}. Object: {json}",
+            obj.keys().collect::<Vec<_>>()
+        );
+    }
+    for key in obj.keys() {
+        assert!(
+            EXPECTED_KEYS.contains(&key.as_str()),
+            "AC-001 FAIL: unexpected extra key {key:?} in auth status JSON object. \
+             Expected only {:?}. Object: {json}",
+            EXPECTED_KEYS
+        );
+    }
+}
+
+/// AC-003 (BC-1.6.050 postcondition 3 / BC-1.6.047 postcondition 2a,
+/// VP-AUTHDX-026) — DEFAULT CI.
+///
+/// `"env"` in the JSON is VERBATIM/LOSSLESS: the raw profile `env` string,
+/// byte-for-byte, with no sanitization, no truncation, no control-char
+/// stripping. This is distinct from the human-text `Env:` line (which
+/// applies `sanitize_env_display`).
+///
+/// Three sub-cases: Some(normal), Some(with-control-char), None.
+///
+/// RED GATE failure: `todo!()` panic.
+#[test]
+fn test_bc_1_6_050_status_json_env_verbatim_lossless() {
+    // Case 1: normal env string
+    {
+        let json = build_status_json(
+            "p",
+            Some("https://acme.atlassian.net"),
+            Some("production"),
+            Some("api_token"),
+            true,
+            None,
+        )
+        .expect("build_status_json ok");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            v["env"],
+            serde_json::json!("production"),
+            "AC-003 FAIL: env 'production' must be preserved verbatim. Object: {json}"
+        );
+    }
+    // Case 2: env with a control character — sanitize_env_display would strip/replace it,
+    // but build_status_json must emit it VERBATIM.
+    {
+        let raw_env = "staging\x01ctrl";
+        let json = build_status_json(
+            "p",
+            Some("https://acme.atlassian.net"),
+            Some(raw_env),
+            Some("api_token"),
+            true,
+            None,
+        )
+        .expect("build_status_json ok");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let env_in_json = v["env"].as_str().expect("env must be a string");
+        assert_eq!(
+            env_in_json, raw_env,
+            "AC-003 FAIL: env with control char must be preserved VERBATIM \
+             (not sanitized like the human-text Env: line). \
+             Expected {raw_env:?}, got {env_in_json:?}. Object: {json}"
+        );
+    }
+    // Case 3: None env → JSON `null`
+    {
+        let json = build_status_json(
+            "p",
+            Some("https://acme.atlassian.net"),
+            None,
+            Some("api_token"),
+            false,
+            None,
+        )
+        .expect("build_status_json ok");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            v["env"].is_null(),
+            "AC-003 FAIL: env None must render as JSON null. Object: {json}"
+        );
+    }
+}
+
+/// AC-004 (BC-1.6.050 postcondition 4, VP-AUTHDX-026) — DEFAULT CI, first sub-test.
+///
+/// When `auth_method == "oauth"` and an `oauth_app` label is provided,
+/// `"oauth_app"` must be a non-null string matching that label.
+///
+/// RED GATE failure: `todo!()` panic.
+#[test]
+fn test_bc_1_6_050_status_json_oauth_app_present_when_oauth() {
+    let json = build_status_json(
+        "p",
+        Some("https://acme.atlassian.net"),
+        None,
+        Some("oauth"),
+        true,
+        Some("embedded"),
+    )
+    .expect("build_status_json ok");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert!(
+        v.as_object()
+            .map(|m| m.contains_key("oauth_app"))
+            .unwrap_or(false),
+        "AC-004 FAIL: 'oauth_app' key must ALWAYS be present (even for oauth profiles). \
+         Object: {json}"
+    );
+    assert_eq!(
+        v["oauth_app"],
+        serde_json::json!("embedded"),
+        "AC-004 FAIL: 'oauth_app' must equal 'embedded' for an oauth profile with \
+         embedded credentials. Object: {json}"
+    );
+}
+
+/// AC-004 (BC-1.6.050 postcondition 4, VP-AUTHDX-026) — DEFAULT CI, second sub-test.
+///
+/// When `auth_method != "oauth"` (api_token profile), `oauth_app` input is
+/// `None`. The `"oauth_app"` KEY must still be present in the JSON object
+/// (never omitted) — its VALUE is `null`. This guards the "omit-when-null"
+/// mutant that BC-1.6.050 explicitly prohibits.
+///
+/// RED GATE failure: `todo!()` panic.
+#[test]
+fn test_bc_1_6_050_status_json_oauth_app_null_when_api_token() {
+    let json = build_status_json(
+        "p",
+        Some("https://acme.atlassian.net"),
+        None,
+        Some("api_token"),
+        true,
+        None, // no oauth_app for api_token profiles
+    )
+    .expect("build_status_json ok");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let obj = v.as_object().expect("JSON object");
+
+    assert!(
+        obj.contains_key("oauth_app"),
+        "AC-004 FAIL: 'oauth_app' key must be PRESENT even for api_token profiles \
+         (value should be null). Object: {json}"
+    );
+    assert!(
+        v["oauth_app"].is_null(),
+        "AC-004 FAIL: 'oauth_app' must be JSON null for api_token profiles. \
+         Object: {json}"
+    );
+}
+
+/// AC-005 (BC-1.6.050 postcondition 5 / #526 invariant, VP-AUTHDX-026) — DEFAULT CI.
+///
+/// `build_status_json` output is PRETTY-PRINTED (multi-line JSON with
+/// indentation), not compact single-line. This verifies it routes through
+/// `output::render_json` rather than a compact `json!` Display or compact
+/// serialization.
+///
+/// RED GATE failure: `todo!()` panic.
+#[test]
+fn test_bc_1_6_050_status_json_routes_through_render_json_pretty() {
+    let json = build_status_json(
+        "myprofile",
+        Some("https://acme.atlassian.net"),
+        None,
+        Some("api_token"),
+        true,
+        None,
+    )
+    .expect("build_status_json ok");
+
+    // Pretty-printed JSON must contain newlines.
+    assert!(
+        json.contains('\n'),
+        "AC-005 FAIL: auth status JSON must be pretty-printed (contains newlines). \
+         Got: {json:?}"
+    );
+    // Pretty-printed JSON must have the opening brace on the first line
+    // (single object, not an array).
+    assert!(
+        json.trim_start().starts_with('{'),
+        "AC-005 FAIL: auth status JSON must be an object (starts with '{{'). Got: {json:?}"
+    );
+    // Verify at least one key is indented — i.e., is NOT compact.
+    // serde_json::to_string_pretty uses 2-space indentation.
+    assert!(
+        json.contains("  \"profile\"") || json.contains("\n  \""),
+        "AC-005 FAIL: auth status JSON must be indented (pretty-printed). Got: {json:?}"
+    );
+}
+
+/// AC-011 (BC-1.6.050 invariant 1, DEFAULT CI).
+///
+/// `status --output json`'s object and `list --output json`'s per-profile
+/// object share field names for the four overlapping fields: `url`, `env`,
+/// `auth_method`, `status` — a script that already parses one already knows
+/// how to parse the shared fields of the other.
+///
+/// Strategy: extract keys from `build_status_json`'s output and from a
+/// `render_list_json`'s per-profile object, then check the four shared keys
+/// appear in both. Called with injected/dummy inputs — no keychain access.
+///
+/// Must be INLINE (not in tests/) because it calls two `pub(crate)` functions
+/// directly (F3 adversary pass-4, LOW-1).
+///
+/// RED GATE failure: `todo!()` panic in `build_status_json`.
+#[test]
+fn test_bc_1_6_050_json_field_names_match_list_json() {
+    // ── status JSON keys ────────────────────────────────────────────────────
+    let status_json = build_status_json(
+        "default",
+        Some("https://acme.atlassian.net"),
+        Some("prod"),
+        Some("api_token"),
+        true,
+        None,
+    )
+    .expect("build_status_json ok");
+    let status_val: serde_json::Value = serde_json::from_str(&status_json).unwrap();
+    let status_keys: std::collections::HashSet<&str> = status_val
+        .as_object()
+        .expect("status JSON is an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+
+    // ── list JSON keys (one per-profile object) ─────────────────────────────
+    let mut profiles = std::collections::BTreeMap::new();
+    profiles.insert(
+        "default".to_string(),
+        crate::config::ProfileConfig {
+            url: Some("https://acme.atlassian.net".into()),
+            env: Some("prod".into()),
+            auth_method: Some("api_token".into()),
+            ..crate::config::ProfileConfig::default()
+        },
+    );
+    let global = crate::config::GlobalConfig {
+        default_profile: Some("default".into()),
+        profiles,
+        ..crate::config::GlobalConfig::default()
+    };
+    let probe_results = std::collections::HashMap::new();
+    let list_json_str = render_list_json(&global, "default", &probe_results).unwrap();
+    let list_val: serde_json::Value = serde_json::from_str(&list_json_str).unwrap();
+    let list_keys: std::collections::HashSet<&str> = list_val
+        .as_array()
+        .expect("list JSON is an array")
+        .first()
+        .expect("at least one profile")
+        .as_object()
+        .expect("per-profile element is an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+
+    // ── Invariant check: the four shared fields must have the SAME name ─────
+    const SHARED: &[&str] = &["url", "env", "auth_method", "status"];
+    for key in SHARED {
+        assert!(
+            status_keys.contains(key),
+            "AC-011 FAIL: shared key {key:?} missing from auth status JSON. \
+             status keys: {status_keys:?}"
+        );
+        assert!(
+            list_keys.contains(key),
+            "AC-011 FAIL: shared key {key:?} missing from auth list JSON. \
+             list keys: {list_keys:?}"
+        );
+    }
+}

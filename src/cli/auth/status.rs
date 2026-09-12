@@ -65,6 +65,40 @@ pub(crate) fn peek_oauth_app_source_for_test(
     OAuthAppSource::None
 }
 
+/// Build the 6-key JSON object for `auth status --output json` (BC-1.6.050).
+///
+/// **PURE** — performs NO keychain access and NO config load. All inputs are
+/// pre-resolved by the effectful `status()` caller: it computes
+/// `matching_kind_present` ONCE via `probe_matching_kind_credential` (the
+/// same single kind-specific probe that drives the human-text `Credentials:`
+/// line), then feeds it here alongside the other pre-resolved fields.
+///
+/// Fields emitted (set-equality, BC-1.6.050 postcondition 1):
+/// - `profile`:     the active profile name
+/// - `url`:         `null` when URL is unset, else the verbatim URL string
+/// - `env`:         `null` when env is unset, else verbatim (no sanitization)
+/// - `auth_method`: `null` when not configured, else the stored method string
+/// - `status`:      3-state vocabulary from `derive_auth_state`
+/// - `oauth_app`:   `null` when `auth_method != "oauth"`, else the source label
+///
+/// Output is pretty-printed via `output::render_json` (the #526 invariant).
+///
+/// # STUB — Red Gate scaffold (S-cycle7-auth-status-json)
+///
+/// This stub exists so the B2 test suite can compile during the Red Gate phase.
+/// The implementer replaces `todo!()` with the real construction logic.
+#[allow(unused_variables)]
+pub(crate) fn build_status_json(
+    profile: &str,
+    url: Option<&str>,
+    env: Option<&str>,
+    auth_method: Option<&str>,
+    matching_kind_present: bool,
+    oauth_app: Option<&str>,
+) -> anyhow::Result<String> {
+    todo!("S-cycle7-auth-status-json: build_status_json not yet implemented")
+}
+
 /// Show authentication status: instance URL, auth method, credential availability.
 ///
 /// When `profile_arg` is `Some`, reports for that profile. Otherwise reports

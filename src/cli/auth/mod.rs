@@ -34,6 +34,8 @@ pub use remove::handle_remove;
 #[cfg(test)]
 pub(crate) use remove::handle_remove_in_memory;
 #[cfg(test)]
+pub(crate) use status::build_status_json;
+#[cfg(test)]
 pub(crate) use status::peek_oauth_app_source_for_test;
 #[cfg(test)]
 pub(crate) use status::render_env_line;
