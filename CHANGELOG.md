@@ -138,6 +138,12 @@ All notable changes to jr will be documented here.
   keychain access themselves (BC-1.6.048 F-1 fix). JSON `"status"` serializes with
   kebab-case: `"unset"`, `"no-credentials"`, `"configured"`.
 
+  **macOS note:** because `jr auth list` now probes the keychain for each URL-configured
+  profile, macOS users may see a Keychain Access consent dialog ("jr wants to use your
+  confidential information stored in jr in your keychain") after upgrading if the rebuilt
+  binary is not yet on the keychain item's ACL. Grant access once; subsequent invocations
+  are silent. This prompt does not appear on Linux or Windows.
+
 - **Breaking: `load_api_token` credential-absence branches now exit 2 (not 64) and
   suggest the correct `--profile` flag form** (S-cycle7-credential-absence-fix,
   BC-1.4.032/BC-1.4.033, issues #784 + #786). Two fixes in one story, same two lines
