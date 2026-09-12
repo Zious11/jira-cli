@@ -186,7 +186,11 @@ auth_method = "api_token"
 
     // Standard project convention: JSON error on stderr, stdout empty,
     // exit code matches.
-    assert_json_error_envelope(&output, 64, "AC-009: auth status --output json --profile unknown");
+    assert_json_error_envelope(
+        &output,
+        64,
+        "AC-009: auth status --output json --profile unknown",
+    );
 }
 
 // ── AC-010 — EC-1.6.050-2: fresh install → no stdout JSON ────────────────────
@@ -219,7 +223,8 @@ fn test_bc_1_6_050_ec2_fresh_install_no_json_output() {
     // Must exit 0 (existing behavior).
     let exit_code = output.status.code().unwrap_or(-1);
     assert_eq!(
-        exit_code, 0,
+        exit_code,
+        0,
         "AC-010 FAIL: fresh install with zero profiles must exit 0 even with \
          --output json. Got {exit_code}. \
          stdout: {:?}\nstderr: {:?}",

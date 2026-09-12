@@ -2191,10 +2191,18 @@ fn test_bc_1_6_050_status_json_full_schema_api_token() {
     .expect("build_status_json should not error");
 
     let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON string");
-    let obj = v.as_object().expect("AC-001 FAIL: top-level value must be a JSON object (not array)");
+    let obj = v
+        .as_object()
+        .expect("AC-001 FAIL: top-level value must be a JSON object (not array)");
 
-    const EXPECTED_KEYS: &[&str] =
-        &["profile", "url", "env", "auth_method", "status", "oauth_app"];
+    const EXPECTED_KEYS: &[&str] = &[
+        "profile",
+        "url",
+        "env",
+        "auth_method",
+        "status",
+        "oauth_app",
+    ];
 
     for key in EXPECTED_KEYS {
         assert!(

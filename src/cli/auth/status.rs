@@ -220,10 +220,7 @@ pub async fn status(profile_arg: Option<&str>, output: &crate::cli::OutputFormat
             let url = url_str.unwrap_or("(not configured)");
             println!("Profile:     {target}");
             println!("Instance:    {url}");
-            println!(
-                "Env:         {}",
-                render_env_line(env_str)
-            );
+            println!("Env:         {}", render_env_line(env_str));
             println!("Auth method: {method}");
             if matching_kind_present {
                 println!("Credentials: stored in keychain");
