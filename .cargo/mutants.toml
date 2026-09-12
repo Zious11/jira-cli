@@ -98,6 +98,11 @@ examine_globs = [
     # `probe_matching_kind_credential` is in the same file but excluded below
     # (keychain-gated, no injection seam, exclude_re pair below).
     "src/cli/auth/list.rs",
+    # S-cycle7-auth-status-json (B2): `build_status_json` pure JSON builder
+    # + `status()` OutputFormat dispatch. `probe_matching_kind_credential`
+    # and `peek_oauth_app_source` are in the same file but excluded below
+    # (both keychain-gated, no injection seam, exclude_re pairs below).
+    "src/cli/auth/status.rs",
 ]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI
@@ -158,4 +163,22 @@ exclude_re = [
     # Anchored to file + function name; does NOT match derive_auth_state,
     # collect_probe_results, render_list_table, render_list_json, or handle_list.
     '^src/cli/auth/list\.rs:\d+:\d+: replace probe_matching_kind_credential .*$',
+    # S-cycle7-auth-status-json B2: `probe_matching_kind_credential` in
+    # status.rs reads the OS keychain and has no injection seam — its
+    # mutations cannot be caught by DEFAULT-CI tests. TWO regexes required:
+    #
+    # Regex A — operator/expression mutants:
+    '^src/cli/auth/status\.rs:\d+:\d+: .+ in probe_matching_kind_credential$',
+    # Regex B — whole-function-body replacement mutants:
+    '^src/cli/auth/status\.rs:\d+:\d+: replace probe_matching_kind_credential .*$',
+    # S-cycle7-auth-status-json B2: `peek_oauth_app_source` in status.rs
+    # reads the OS keychain (try_load_oauth_app_credentials + embedded flag)
+    # and has no injection seam — mutations cannot be caught by DEFAULT-CI
+    # tests. `peek_oauth_app_source_for_test` (pure, no keychain) is NOT
+    # excluded. TWO regexes required:
+    #
+    # Regex A — operator/expression mutants:
+    '^src/cli/auth/status\.rs:\d+:\d+: .+ in peek_oauth_app_source$',
+    # Regex B — whole-function-body replacement mutants:
+    '^src/cli/auth/status\.rs:\d+:\d+: replace peek_oauth_app_source .*$',
 ]
