@@ -2113,8 +2113,7 @@ fn test_bc_1_6_049_list_status_column_is_plain_text_no_ansi() {
     let status_cell = no_url_row
         .split(['┆', '│'])
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .last()
+        .rfind(|s: &&str| !s.is_empty())
         .unwrap_or("");
     assert_eq!(
         status_cell, "unset",
