@@ -6,6 +6,20 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- **`jr auth status --output json` (S-cycle7-auth-status-json, BC-1.6.050, retires
+  NFR-O-N):** `auth status` now supports `--output json`, emitting a 6-key object
+  `{profile, url, env, auth_method, status, oauth_app}` to stdout (pretty-printed,
+  #526 invariant). `status` is a 3-value vocabulary (`"unset"` / `"no-credentials"` /
+  `"configured"`) derived via the shared `derive_auth_state` helper introduced in
+  cycle-007 Wave-1 (BC-1.6.048) — the same helper used by `auth list --output json`
+  for parity. `oauth_app` is the OAuth app source label (`"embedded"` / `"keychain"` /
+  `"(none)"`) when `auth_method` is `"oauth"`, `null` otherwise (key always present).
+  Human-text output (`Profile:`, `Instance:`, `Env:`, `Auth method:`, `Credentials:`,
+  `OAuth app:` lines) is byte-for-byte unchanged. Error paths (unknown profile → exit
+  64 `{"error":…,"code":64}`) follow the standard project JSON-error envelope. The
+  fresh-install early-return (no profiles configured) emits no JSON — human-text only,
+  exit 0 (BC-1.6.050 EC-1.6.050-2, explicitly out of scope for a JSON shape).
+
 - **Pure markdown-mention conversion in `adf.rs` (S-cycle5-mention-pure-conversion,
   issue #674, ADR-0023, BC-7.2.016/017/018/019):** `src/adf.rs` gains three new
   pure, synchronous, zero-HTTP entrypoints — `find_mention_candidates`
