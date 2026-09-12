@@ -173,6 +173,10 @@ url = "https://from-flag.example"
         .env("XDG_CONFIG_HOME", dir.path())
         .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .env("JR_PROFILE", "from-env")
+        // JR_SERVICE_NAME: isolate from the real jr keychain service so
+        // collect_probe_results doesn't trigger a macOS ACL consent dialog
+        // on developer machines (BC-1.6.049 keychain-probe side-effect).
+        .env("JR_SERVICE_NAME", "jr-test-auth-precedence-flag-env-config")
         .args(["--profile", "from-flag", "auth", "list", "--output", "json"])
         .output()
         .unwrap();
@@ -893,6 +897,10 @@ url = "https://other.example"
     let out = jr()
         .env("XDG_CONFIG_HOME", dir.path())
         .env("JR_CONFIG_DIR", dir.path().join("jr"))
+        // JR_SERVICE_NAME: isolate from the real jr keychain service so
+        // collect_probe_results doesn't trigger a macOS ACL consent dialog
+        // on developer machines (BC-1.6.049 keychain-probe side-effect).
+        .env("JR_SERVICE_NAME", "jr-test-auth-bc-1-2-018-auth-list")
         .args(["auth", "list", "--profile", "sandbox", "--output", "json"])
         .output()
         .unwrap();
