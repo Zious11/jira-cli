@@ -540,12 +540,14 @@ fn list_table_snapshot() {
 fn list_json_shape() {
     let global = three_profile_fixture();
     // Pass an empty probe_results — signature fallout fix (Task 13a).
+    // three_profile_fixture has 4 profiles (default, sandbox, staging, unset-url);
+    // render_list_json emits one object per profile (no URL filter).
     // This test asserts only active-profile presence, not STATUS values.
     let probe_results = std::collections::HashMap::new();
     let json = render_list_json(&global, "default", &probe_results).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let arr = parsed.as_array().expect("array");
-    assert_eq!(arr.len(), 3);
+    assert_eq!(arr.len(), 4);
     let active: Vec<&serde_json::Value> = arr
         .iter()
         .filter(|p| p["active"].as_bool() == Some(true))
