@@ -44,7 +44,7 @@ src/
 │   │   ├── logout.rs        # auth logout
 │   │   ├── refresh.rs       # auth refresh
 │   │   ├── remove.rs        # auth remove
-│   │   ├── status.rs        # auth status (human text only; no JSON path)
+│   │   ├── status.rs        # auth status: human text + --output json (BC-1.6.050)
 │   │   ├── switch.rs        # auth switch
 │   │   └── tests/           # inline integration tests + insta snapshots
 │   ├── api.rs           # API passthrough command (`jr api`)
