@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::api::auth::{AuthState, derive_auth_state, load_api_token, load_oauth_tokens};
+use crate::api::auth::{derive_auth_state, load_api_token, load_oauth_tokens};
 use crate::output;
 use crate::profile::Profile;
 
@@ -101,11 +101,10 @@ pub(crate) fn render_list_table(
         let auth = p.auth_method.as_deref().unwrap_or("?");
         let url = p.url.as_deref().unwrap_or("(unset)");
         let matching_kind_present = probe_results.get(name.as_str()).copied().unwrap_or(false);
-        let status = match derive_auth_state(p.url.as_deref(), matching_kind_present) {
-            AuthState::Unset => "unset",
-            AuthState::NoCredentials => "no-credentials",
-            AuthState::Configured => "configured",
-        };
+        // Use AuthState::as_str() — the single source of truth for STATUS
+        // column strings, ensuring table and JSON channels cannot drift
+        // (adversary pass-6, F-1 root-cause dedup).
+        let status = derive_auth_state(p.url.as_deref(), matching_kind_present).as_str();
         rows.push(vec![
             format!("{marker} {name}"),
             url.to_string(),

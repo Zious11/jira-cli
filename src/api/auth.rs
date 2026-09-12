@@ -2223,6 +2223,24 @@ pub enum AuthState {
     Configured,
 }
 
+impl AuthState {
+    /// Return the canonical kebab-case string representation of this variant —
+    /// the single source of truth for the human-readable STATUS column in
+    /// `render_list_table` (adversary pass-6, F-1 root-cause dedup).
+    ///
+    /// These strings match the serde `#[serde(rename_all = "kebab-case")]`
+    /// serialization, keeping table and JSON channels in sync. The agreement
+    /// is enforced by `test_bc_1_6_048_auth_state_as_str_agrees_with_serde`
+    /// in this module.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            AuthState::Unset => "unset",
+            AuthState::NoCredentials => "no-credentials",
+            AuthState::Configured => "configured",
+        }
+    }
+}
+
 /// Derive the credential-readiness state for a profile (BC-1.6.048).
 ///
 /// **PURE** — no IO, no keychain access, deterministic on its two inputs.
@@ -2669,6 +2687,33 @@ mod tests {
             serde_json::to_string(&AuthState::Configured).unwrap(),
             "\"configured\""
         );
+    }
+
+    /// BC-1.6.048 / AC-014 root-cause dedup — `AuthState::as_str()` must agree
+    /// with serde's `#[serde(rename_all = "kebab-case")]` serialization for ALL
+    /// THREE variants (adversary pass-6, F-1). This is the cross-channel
+    /// consistency lock: if someone renames a variant without updating `as_str()`,
+    /// this test catches the drift immediately. Likewise, if serde's output drifts
+    /// (e.g. derive macro changes), this test would surface the inconsistency.
+    #[test]
+    fn test_bc_1_6_048_auth_state_as_str_agrees_with_serde() {
+        for variant in [
+            AuthState::Unset,
+            AuthState::NoCredentials,
+            AuthState::Configured,
+        ] {
+            let serde_str = serde_json::to_string(&variant)
+                .unwrap_or_else(|e| panic!("serde failed on {variant:?}: {e}"));
+            // serde_json::to_string wraps in quotes: `"unset"` → strip them.
+            let serde_inner = serde_str.trim_matches('"');
+            assert_eq!(
+                variant.as_str(),
+                serde_inner,
+                "AuthState::{variant:?}: as_str()={:?} but serde produces {serde_inner:?} — \
+                 table and JSON STATUS columns have drifted (adversary pass-6, F-1)",
+                variant.as_str()
+            );
+        }
     }
 
     fn unique_test_service() -> String {

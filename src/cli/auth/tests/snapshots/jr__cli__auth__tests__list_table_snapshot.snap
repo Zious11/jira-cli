@@ -2,10 +2,11 @@
 source: src/cli/auth/tests/mod.rs
 expression: rendered
 ---
-┌───────────┬────────────────────────────────────┬──────┬───────────┬────────────────┐
-│ NAME      ┆ URL                                ┆ ENV  ┆ AUTH      ┆ STATUS         │
-╞═══════════╪════════════════════════════════════╪══════╪═══════════╪════════════════╡
-│ * default ┆ https://acme.atlassian.net         ┆ -    ┆ api_token ┆ no-credentials │
-│   sandbox ┆ https://acme-sandbox.atlassian.net ┆ prod ┆ oauth     ┆ no-credentials │
-│   staging ┆ https://acme-staging.atlassian.net ┆      ┆ api_token ┆ no-credentials │
-└───────────┴────────────────────────────────────┴──────┴───────────┴────────────────┘
+┌─────────────┬────────────────────────────────────┬──────┬───────────┬────────────────┐
+│ NAME        ┆ URL                                ┆ ENV  ┆ AUTH      ┆ STATUS         │
+╞═════════════╪════════════════════════════════════╪══════╪═══════════╪════════════════╡
+│ * default   ┆ https://acme.atlassian.net         ┆ -    ┆ api_token ┆ no-credentials │
+│   sandbox   ┆ https://acme-sandbox.atlassian.net ┆ prod ┆ oauth     ┆ no-credentials │
+│   staging   ┆ https://acme-staging.atlassian.net ┆      ┆ api_token ┆ no-credentials │
+│   unset-url ┆ (unset)                            ┆ -    ┆ ?         ┆ unset          │
+└─────────────┴────────────────────────────────────┴──────┴───────────┴────────────────┘

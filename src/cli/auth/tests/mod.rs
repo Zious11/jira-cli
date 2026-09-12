@@ -508,6 +508,16 @@ fn three_profile_fixture() -> GlobalConfig {
             ..ProfileConfig::default()
         },
     );
+    // url=None profile: STATUS must show "unset" in the table snapshot
+    // (adversary pass-6, F-1 snapshot pin for AuthState::Unset arm).
+    profiles.insert(
+        "unset-url".to_string(),
+        ProfileConfig {
+            url: None,
+            auth_method: None,
+            ..ProfileConfig::default()
+        },
+    );
     GlobalConfig {
         default_profile: Some("default".into()),
         profiles,
@@ -1981,17 +1991,58 @@ fn test_bc_1_6_049_list_status_column_is_plain_text_no_ansi() {
          Table output:\n{table}"
     );
 
-    // The three vocabulary values must appear as exact plain-text substrings.
+    // The three vocabulary values must appear in the STATUS COLUMN of their
+    // respective rows — NOT as a whole-table contains() which would also match
+    // the URL column's "(unset)" placeholder for url=None profiles (adversary
+    // pass-6, F-1 column-targeted AC-013 assertion).
+    //
+    // Strategy: split the table into lines, find the row for each profile by
+    // its name, then assert the STATUS vocabulary word appears in THAT line.
+    // This is tight even if the URL cell also contains the word.
+    let find_row = |profile_name: &str| -> String {
+        table
+            .lines()
+            .find(|line| line.contains(profile_name))
+            .unwrap_or_else(|| panic!("AC-013: profile row '{profile_name}' not found in table"))
+            .to_string()
+    };
+
+    let configured_row = find_row("url-with-creds");
     assert!(
-        table.contains("configured"),
-        "STATUS 'configured' must appear as plain text in the rendered table"
+        configured_row.contains("configured"),
+        "AC-013 FAIL: STATUS cell of 'url-with-creds' row must be 'configured' (plain text). \
+         Row: {configured_row:?}"
     );
     assert!(
-        table.contains("no-credentials"),
-        "STATUS 'no-credentials' must appear as plain text in the rendered table"
+        !configured_row.contains('\x1b'),
+        "AC-013 FAIL: 'configured' STATUS cell contains ANSI escape. Row: {configured_row:?}"
     );
+
+    let no_creds_row = find_row("url-no-creds");
     assert!(
-        table.contains("unset"),
-        "STATUS 'unset' must appear as plain text in the rendered table (url=None profile)"
+        no_creds_row.contains("no-credentials"),
+        "AC-013 FAIL: STATUS cell of 'url-no-creds' row must be 'no-credentials' (plain text). \
+         Row: {no_creds_row:?}"
+    );
+
+    // Column-targeted 'unset' check: the 'no-url' row's STATUS cell must show
+    // "unset". We assert the STATUS column value specifically — the same row's
+    // URL cell shows "(unset)" so a whole-table contains("unset") would pass
+    // even if the STATUS arm were mutated to "" or "configured".
+    let no_url_row = find_row("no-url");
+    // The STATUS column is the 5th (rightmost) column. Extract the STATUS cell
+    // by splitting on the ┆ / │ separators used by comfy-table and taking the
+    // last non-empty cell. `.last()` alone returns the empty fragment after
+    // the trailing │, so filter to non-empty cells first.
+    let status_cell = no_url_row
+        .split(['┆', '│'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .last()
+        .unwrap_or("");
+    assert_eq!(
+        status_cell, "unset",
+        "AC-013 FAIL: STATUS cell of 'no-url' row must be exactly 'unset' (plain text, \
+         column-targeted). Got STATUS cell: {status_cell:?}\nFull row: {no_url_row:?}"
     );
 }
