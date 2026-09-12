@@ -276,7 +276,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 }
                 cli::AuthCommand::Status { profile } => {
                     let effective_profile = profile.or_else(|| cli.profile.clone());
-                    cli::auth::status(effective_profile.as_deref()).await
+                    cli::auth::status(effective_profile.as_deref(), &cli.output).await
                 }
                 cli::AuthCommand::Refresh {
                     profile,
