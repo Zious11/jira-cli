@@ -556,6 +556,80 @@ fn list_json_shape() {
     assert_eq!(active[0]["name"], "default");
 }
 
+/// BC-1.6.049 AC-008: `auth list --output json` schema is UNCHANGED except for
+/// the `status` vocabulary. Every per-profile JSON object must contain EXACTLY
+/// the six keys `{name, url, env, auth_method, status, active}` — no field
+/// added, none removed. `status` must be one of the new vocabulary values
+/// (`"unset"` / `"no-credentials"` / `"configured"`). This test closes the
+/// mutation-killer gap on `render_list_json`'s field lines (adversary pass-8
+/// F-1, MEDIUM).
+#[test]
+fn test_bc_1_6_049_list_json_schema_unchanged_except_status_values() {
+    let global = three_profile_fixture();
+    // Inject probe_results by profile name (same key scheme as collect_probe_results).
+    // default  → true  → "configured"   (url present, matching_kind_present=true)
+    // sandbox  → false → "no-credentials" (url present, matching_kind_present=false)
+    // staging  → true  → "configured"   (url present, matching_kind_present=true)
+    // unset-url → absent → "unset"        (url=None; derive_auth_state returns Unset)
+    let mut probe_results = std::collections::HashMap::new();
+    probe_results.insert("default".to_string(), true);
+    probe_results.insert("sandbox".to_string(), false);
+    probe_results.insert("staging".to_string(), true);
+    let json = render_list_json(&global, "default", &probe_results).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let arr = parsed.as_array().expect("top-level array");
+    assert_eq!(arr.len(), 4, "one object per profile");
+
+    const EXPECTED_KEYS: &[&str] = &["name", "url", "env", "auth_method", "status", "active"];
+    const VALID_STATUS: &[&str] = &["unset", "no-credentials", "configured"];
+
+    for obj in arr {
+        let map = obj.as_object().expect("profile object is a JSON map");
+
+        // Set-equality: every expected key is present.
+        for &key in EXPECTED_KEYS {
+            assert!(
+                map.contains_key(key),
+                "AC-008 FAIL: key {:?} missing from profile object {:?}",
+                key,
+                obj
+            );
+        }
+        // Set-equality: no unexpected key present.
+        for actual_key in map.keys() {
+            assert!(
+                EXPECTED_KEYS.contains(&actual_key.as_str()),
+                "AC-008 FAIL: unexpected key {:?} in profile object {:?}",
+                actual_key,
+                obj
+            );
+        }
+
+        // status must come from the new vocabulary.
+        let status = obj["status"]
+            .as_str()
+            .expect("\"status\" must be a JSON string");
+        assert!(
+            VALID_STATUS.contains(&status),
+            "AC-008 FAIL: status {:?} not in vocabulary {:?} for profile object {:?}",
+            status,
+            VALID_STATUS,
+            obj
+        );
+    }
+
+    // Spot-check the injected values to ensure probe_results actually drive status.
+    let find_profile = |name: &str| -> &serde_json::Value {
+        arr.iter()
+            .find(|p| p["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("profile {:?} not found", name))
+    };
+    assert_eq!(find_profile("default")["status"], "configured");
+    assert_eq!(find_profile("sandbox")["status"], "no-credentials");
+    assert_eq!(find_profile("staging")["status"], "configured");
+    assert_eq!(find_profile("unset-url")["status"], "unset");
+}
+
 // ── S-cycle3-env-tag: BC-6.1.015 / BC-1.6.046 / BC-1.6.047 — ENV tag ──
 //
 // Post-Green note: `render_env_column`/`sanitize_env_display` are now
