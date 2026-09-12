@@ -188,7 +188,7 @@ DIFF_FILE=$(mktemp -t pr.diff.XXXXXX) && trap 'rm -f "$DIFF_FILE"' EXIT && git d
 - `--dry-run` is implemented on `issue edit` (multi-key positional + `--jql`-resolved sets) with `--output json` support. Pre-PR2 NFR-O-C originally documented this as DOCUMENT-AS-IS-OUT-OF-SCOPE; superseded by issue #110 part 2.
 - `jr version --output json` is not implemented (NFR-O-X: deferred to v2; consider for `release-notes` automation).
 - `sprint list` table omits start/end dates (NFR-O-U: deferred UX pass v2; available in API response).
-- `auth status` has no `--output json` support (NFR-O-N: deferred; neither single-profile nor multi-profile JSON is implemented — `src/cli/auth/status.rs::status()` writes human text only via `println!`). JSON path planned alongside future `auth list --output json` extension.
+- `auth status --output json` is now implemented (BC-1.6.050, S-cycle7-auth-status-json): `src/cli/auth/status.rs::build_status_json` emits a 6-key object `{profile, url, env, auth_method, status, oauth_app}` via `output::render_json` (#526 invariant). NFR-O-N is RETIRED. `status` is derived via the shared `derive_auth_state` helper (VP-AUTHDX-024). Human-text output is byte-for-byte unchanged (BC-1.6.050 Postcondition 6). `auth list --output json` is a separate story and remains unimplemented.
 - JSON output has no `_meta: {version: N}` envelope (NFR-O-P: deliberate for v0.5; consider for v2 to enable downstream-parser schema-drift detection).
 
 ### Output channels
