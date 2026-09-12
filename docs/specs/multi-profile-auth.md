@@ -263,7 +263,11 @@ jr auth list
     Table columns: NAME | URL | ENV | AUTH | STATUS    (DEC-324 — ENV
         inserted between URL and AUTH; ENV is a free-form label such as
         prod/sandbox/uat, or `-` when unset)
-    STATUS ∈ {configured, unset}
+    STATUS ∈ {configured, no-credentials, unset}
+        (S-cycle7-auth-state-derivation, BC-1.6.048/049 — derived from a real
+         per-profile keychain probe, not url.is_some() alone; "configured" means
+         URL set AND matching-kind credential present; "no-credentials" means URL
+         set but no matching-kind credential; "unset" means no URL configured)
     JSON: [{"name", "url", "env", "auth_method", "status", "active"}]
 
 jr auth status [--profile NAME]

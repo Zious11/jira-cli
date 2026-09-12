@@ -1920,14 +1920,17 @@ fn test_bc_1_6_049_list_probes_at_most_once_per_url_profile() {
         ..GlobalConfig::default()
     };
 
-    // Counting closure — will be called once per probed profile.
+    // Counting closure — returns profile-specific bool so map-value mutations
+    // are detectable: "with-url-1" returns true, "with-url-2" returns false.
+    // A `results.insert(name.clone(), true)` mutation would make "with-url-2"
+    // map to true instead of false, failing the invariant-2 assertions below.
     let call_count = Arc::new(AtomicUsize::new(0));
     let call_count_clone = Arc::clone(&call_count);
 
-    // collect_probe_results does not exist yet → COMPILE ERROR (Red Gate).
-    let _results = collect_probe_results(&global, |_profile, _auth_method| {
+    let results = collect_probe_results(&global, |profile, _auth_method| {
         call_count_clone.fetch_add(1, Ordering::SeqCst);
-        true
+        // Deterministic per-profile return: true only for the api_token profile.
+        profile == "with-url-1"
     });
 
     // BC-1.6.049 invariant 1: exactly 2 probes — one per url-having profile,
@@ -1938,6 +1941,35 @@ fn test_bc_1_6_049_list_probes_at_most_once_per_url_profile() {
         "BC-1.6.049 invariant 1 FAIL: expected exactly 2 probes (one per url-having \
          profile), got {}. A url=None profile must never be probed.",
         call_count.load(Ordering::SeqCst)
+    );
+
+    // BC-1.6.049 invariant 2: probe return values are faithfully stored in the
+    // map (not clamped to a constant). "with-url-1" probe returned true;
+    // "with-url-2" probe returned false; "no-url" must be absent entirely.
+    assert_eq!(
+        results.get("with-url-1"),
+        Some(&true),
+        "BC-1.6.049 invariant 2 FAIL: with-url-1 should map to the probe's \
+         true return value"
+    );
+    assert_eq!(
+        results.get("with-url-2"),
+        Some(&false),
+        "BC-1.6.049 invariant 2 FAIL: with-url-2 should map to the probe's \
+         false return value — a results.insert(name, true) mutation would make \
+         this assert fire, catching the #788 defect class"
+    );
+    assert!(
+        !results.contains_key("no-url"),
+        "BC-1.6.049 invariant 2 FAIL: no-url profile (url=None) must never \
+         appear in the results map"
+    );
+    assert_eq!(
+        results.len(),
+        2,
+        "BC-1.6.049 invariant 2 FAIL: map must contain exactly 2 entries \
+         (one per url-having profile), got {}",
+        results.len()
     );
 }
 

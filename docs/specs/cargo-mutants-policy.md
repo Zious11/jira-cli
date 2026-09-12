@@ -748,6 +748,34 @@ sibling function).
   (`issues.rs:273`) has the identical `if !page_has_more { break; }` construct and is
   deliberately **not** excluded — only this one, precisely-anchored mutant is.
 
+- **`src/cli/auth/list.rs` — `probe_matching_kind_credential` (two regexes)**
+  (S-cycle7-auth-state-derivation, BC-1.6.048, F3 adversary pass-3 finding MED-1).
+  This is a **different exclusion class** from the timeout class above: the mutant is not
+  uncatchable-as-anything-but-TIMEOUT, but is genuinely untestable in DEFAULT CI because
+  `probe_matching_kind_credential` reads the OS keychain and has no in-memory injection
+  seam. Its caller (`collect_probe_results`) accepts the probe function as an INJECTABLE
+  parameter; the tests wire a counting closure rather than the real keychain probe — that
+  injection is precisely what makes `collect_probe_results`'s own loop/gating logic
+  default-CI-testable. But the body of `probe_matching_kind_credential` itself (the real
+  `load_oauth_tokens` / `load_api_token` dispatch by `auth_method`) has no in-memory seam
+  and can only be exercised by a real keychain-backed test (`JR_RUN_KEYRING_TESTS=1`),
+  which default CI does not run. The function's correctness is positively verified by
+  `tests/auth_profiles.rs`'s keychain round-trip tests (gated, `#[ignore]`), the existing
+  `load_oauth_tokens`/`load_api_token` unit/integration coverage, and the AC-004/AC-009
+  source-scan + call-count tests which verify the WIRING (that `handle_list` calls
+  `collect_probe_results` with this function) without exercising the keychain itself.
+  The exclusion covers ONLY `probe_matching_kind_credential` — `collect_probe_results`'s
+  loop logic (AC-009 injection seam), `handle_list`'s dispatch, `render_list_table`/
+  `render_list_json`'s probe-free rendering, and `derive_auth_state` itself are all fully
+  default-CI-testable and MUST NOT be swept into this exclusion. Two regexes required:
+  Regex A covers operator/expression mutants (ending with `in probe_matching_kind_credential`);
+  Regex B covers whole-function-body replacement mutants (beginning with
+  `replace probe_matching_kind_credential`). Both are file+function-name anchored. See
+  `.cargo/mutants.toml`'s `exclude_re` array for the exact patterns and their comments.
+  Note: `handle_list` mutants are an ACCEPTED-SURVIVOR residual (whole-file
+  `examine_globs` scope; no sub-file targeting — same tradeoff as `src/main.rs`) and are
+  deliberately NOT `exclude_re`'d to avoid silencing rather than documenting them.
+
 ## Deferral Policy
 
 The initial baseline PR (S-346) MUST NOT block on achieving 90% kill-rate on first run.
