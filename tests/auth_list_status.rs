@@ -16,7 +16,8 @@
 ///
 /// `render_list_table` and `render_list_json` must be PURE with respect to
 /// credential probing — neither references `load_oauth_tokens`,
-/// `load_api_token`, or any other keychain-reading symbol in its body.
+/// `load_api_token`, `probe_matching_kind_credential`, `collect_probe_results`,
+/// or any other keychain-reading or probe-dispatching symbol in its body.
 /// ALL kind-specific probing must happen in `handle_list` (or the extracted
 /// `collect_probe_results` helper it calls), not inside a renderer.
 ///
@@ -33,15 +34,27 @@
 fn test_bc_1_6_049_renderers_are_probe_free() {
     let list_src = include_str!("../src/cli/auth/list.rs");
 
-    // ── Negative guards: keychain-reading symbols must NOT appear in renderer
-    //    function bodies ──────────────────────────────────────────────────────
+    // ── Negative guards: probing symbols must NOT appear in renderer bodies ──
     //
-    // We extract approximate function bodies by finding the fn declaration and
-    // scanning forward to the next top-level declaration.
+    // We extract precise function bodies using brace-balanced extraction
+    // (counts `{`/`}` to find the matching closing brace). This is more
+    // robust than the previous `\npub ` boundary heuristic, which could
+    // inadvertently include the next function's body.
+    //
+    // Denylist covers:
+    //   - Direct keychain-read calls: load_oauth_tokens, load_api_token
+    //   - Indirect probe dispatch:    probe_matching_kind_credential,
+    //                                 collect_probe_results
+    // A renderer calling collect_probe_results or probe_matching_kind_credential
+    // would still violate BC-1.6.048 purity even if it skipped load_* directly.
+    let probe_symbols = [
+        "load_oauth_tokens",
+        "load_api_token",
+        "probe_matching_kind_credential",
+        "collect_probe_results",
+    ];
 
-    let keychain_symbols = ["load_oauth_tokens", "load_api_token"];
-
-    for &sym in &keychain_symbols {
+    for &sym in &probe_symbols {
         let table_body = extract_fn_body(list_src, "fn render_list_table");
         if let Some(body) = table_body {
             assert!(
@@ -121,18 +134,36 @@ fn test_bc_1_6_049_renderers_are_probe_free() {
     );
 }
 
-/// Extract the approximate body of a named function from source text.
+/// Extract the precise body of a named function from source text using
+/// brace-balanced extraction.
 ///
-/// Finds `fn_sig` in `src`, then returns the text from that point up to
-/// the next `\npub ` or `\n/// ` marker (a coarse function-boundary heuristic
-/// sufficient for source-scan assertions).
+/// Finds `fn_sig` in `src`, locates the function's opening `{`, then counts
+/// nested `{`/`}` until the depth returns to zero — giving the exact extent
+/// of the function body without over-running into the next function.
+///
+/// This is more robust than the previous `\npub ` or `\n/// ` boundary
+/// heuristic, which could extend the extracted body through sibling functions
+/// whose bodies share the same `\npub ` boundary (adversary pass-1, FIX 2).
 fn extract_fn_body(src: &str, fn_sig: &str) -> Option<String> {
     let start = src.find(fn_sig)?;
     let after = &src[start..];
-    let end = after[1..]
-        .find("\npub ")
-        .or_else(|| after[1..].find("\n/// "))
-        .map(|pos| pos + 1)
-        .unwrap_or(after.len());
-    Some(after[..end].to_string())
+    // Locate the opening brace of the function body.
+    let open_brace_offset = after.find('{')?;
+    let from_open = &after[open_brace_offset..];
+    let mut depth = 0usize;
+    let mut body_end = from_open.len();
+    for (i, ch) in from_open.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    body_end = i + 1; // include the closing '}'
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(after[..open_brace_offset + body_end].to_string())
 }
