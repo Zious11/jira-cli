@@ -105,10 +105,16 @@ pub(super) async fn handle_edit(
     // incompatible with --markdown; both would write to the description field,
     // but via different rendering paths (ADF raw text vs. markdown→ADF).
     // Checked BEFORE the --markdown guard so users get the most specific error.
+    //
+    // Match the RAW token (substring before the first '='), CASE-SENSITIVE,
+    // equal to exactly "description" — mirrors the JSM guard in jsm_create.rs
+    // for uniform behavior across all three write paths (ADR-0024 §uniform-exit-64,
+    // DEC-359). "Description" (capital D) does NOT fire this guard.
     if markdown
-        && field_pairs
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case("description"))
+        && field_raw.iter().any(|pair| {
+            pair.find('=')
+                .is_some_and(|pos| &pair[..pos] == "description")
+        })
     {
         return Err(JrError::UserError(
             "--field description cannot be combined with `--markdown`. \

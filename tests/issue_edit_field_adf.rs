@@ -214,6 +214,48 @@ async fn test_bc_3_4_035_3_markdown_field_description_conflict_exits_64_edit() {
 }
 
 // ---------------------------------------------------------------------------
+// F-1 negative anchor (ADR-0024 §uniform-exit-64): guard is case-SENSITIVE
+// ---------------------------------------------------------------------------
+
+/// F-1 negative anchor (edit path): `--field Description=VALUE` (capital D)
+/// with `--markdown` must NOT fire the guard — only the exact raw token
+/// `"description"` (lowercase, no `:kind` suffix) matches.
+///
+/// RED: the current guard uses `eq_ignore_ascii_case("description")` on the
+/// PARSED map key, so capital-D fires the guard spuriously.
+/// GREEN after fix: guard iterates raw CLI tokens, matching only
+/// substring-before-first-`=` == `"description"` (case-sensitive).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_3_014_5_markdown_field_description_guard_is_case_sensitive_edit() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    let out = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Description=Some description",
+            "--markdown",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // The guard MUST NOT fire for capital-D. The command may fail for other
+    // reasons (e.g. "--markdown requires --description"), but not with the
+    // "cannot be combined" message.
+    assert!(
+        !stderr.contains("cannot be combined with `--markdown`"),
+        "F-1 edit: capital-D 'Description' must NOT trigger the guard; stderr: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-008 / VP-FIELD-ADF-002 dry-run JSON axis + VP-FIELD-ADF-003 Axis E
 // ---------------------------------------------------------------------------
 

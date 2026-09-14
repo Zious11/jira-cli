@@ -233,10 +233,16 @@ pub(super) async fn handle_create(
     // missing --project or --type errors fire first (test AC-17 discriminating
     // invariant: without --project, "Project key is required" fires, not this guard).
     // Checked BEFORE the blocking --description-stdin read (Step 4a).
+    //
+    // Match the RAW token (substring before the first '='), CASE-SENSITIVE,
+    // equal to exactly "description" — mirrors the JSM guard in jsm_create.rs
+    // for uniform behavior across all three write paths (ADR-0024 §uniform-exit-64,
+    // DEC-359). "Description" (capital D) does NOT fire this guard.
     if markdown
-        && field_spec_map
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case("description"))
+        && field_pairs.iter().any(|pair| {
+            pair.find('=')
+                .is_some_and(|pos| &pair[..pos] == "description")
+        })
     {
         return Err(crate::error::JrError::UserError(
             "--field description cannot be combined with `--markdown`. \
