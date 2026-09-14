@@ -743,3 +743,515 @@ async fn resolve_jsm_request_type_id(
         }
     }
 }
+
+/// S-cycle12-jsm-adf-autoconvert Red Gate: AC-002 (pure `is_adf_field_value`
+/// call-site contract), AC-009 (pure `jsm_adf_empty_omit_guard_applies`
+/// gate), and AC-004/007/008/013 (resolution-layer `resolve_jsm_adf_extra_fields`
+/// behavior, driven against a wiremock `MockServer`).
+///
+/// The resolution-layer tests isolate `JR_CACHE_DIR`/`XDG_CACHE_HOME` per
+/// test (via `with_isolated_cache`) so `resolve_jsm_adf_extra_fields`'s
+/// on-disk request-type-fields cache never touches a developer's real
+/// `~/.cache/jr`, and so parallel `cargo test` execution cannot race on the
+/// process-global env vars `crate::cache`'s read path consults.
+#[cfg(test)]
+mod adf_resolution_tests {
+    use super::*;
+    use crate::api::client::JiraClient;
+    use crate::api::jsm::requests::JsmRequestBuilder;
+    use crate::profile::Profile;
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Serializes `JR_CACHE_DIR`/`XDG_CACHE_HOME` mutation across this
+    /// module's tests and points them at a fresh temp dir for the duration
+    /// of `f`, restoring afterward even on panic. Mirrors `cache.rs`'s own
+    /// `mod tests::with_env_var` helper, which is `pub(super)`-scoped to
+    /// `crate::cache` and therefore not reusable here.
+    ///
+    /// `f` returns a `Future` (an async block), which is driven to
+    /// completion via a fresh current-thread Tokio runtime — this function
+    /// itself stays synchronous so the `ENV_MUTEX` guard is never held
+    /// across a syntactic `.await` point (clippy::await_holding_lock).
+    fn with_isolated_cache<F, Fut, R>(f: F) -> R
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = R>,
+    {
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: ENV_MUTEX held; no concurrent env reads occur while we
+        // hold the lock (mirrors cache.rs's own test-isolation pattern).
+        unsafe {
+            std::env::set_var("JR_CACHE_DIR", dir.path().join("jr"));
+            std::env::set_var("XDG_CACHE_HOME", dir.path());
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.block_on(f())));
+        unsafe {
+            std::env::remove_var("JR_CACHE_DIR");
+            std::env::remove_var("XDG_CACHE_HOME");
+        }
+        drop(guard);
+        match result {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
+
+    fn rt_fields_response(fields: Vec<Value>) -> Value {
+        json!({
+            "canRaiseOnBehalfOf": false,
+            "canAddRequestParticipants": false,
+            "requestTypeFields": fields
+        })
+    }
+
+    fn description_field() -> Value {
+        json!({
+            "fieldId": "description",
+            "name": "Description",
+            "description": Value::Null,
+            "required": false,
+            "visible": true,
+            "defaultValues": Value::Null,
+            "validValues": Value::Null,
+            "jiraSchema": {"type": "string", "system": "description"}
+        })
+    }
+
+    fn textarea_field(field_id: &str) -> Value {
+        json!({
+            "fieldId": field_id,
+            "name": "Steps to Reproduce",
+            "description": Value::Null,
+            "required": false,
+            "visible": true,
+            "defaultValues": Value::Null,
+            "validValues": Value::Null,
+            "jiraSchema": {
+                "type": "string",
+                "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textarea"
+            }
+        })
+    }
+
+    fn plain_field(field_id: &str) -> Value {
+        json!({
+            "fieldId": field_id,
+            "name": "Labels",
+            "description": Value::Null,
+            "required": false,
+            "visible": true,
+            "defaultValues": Value::Null,
+            "validValues": Value::Null,
+            "jiraSchema": {"type": "string"}
+        })
+    }
+
+    /// Recursively asserts no ADF `text` node's `text` attribute contains a
+    /// raw `\n` or `\r` (INV-1, VP-FIELD-ADF-004 AC-004(b)).
+    fn assert_no_raw_newline_in_text_nodes(value: &Value) {
+        match value {
+            Value::Object(map) => {
+                if map.get("type").and_then(Value::as_str) == Some("text") {
+                    if let Some(t) = map.get("text").and_then(Value::as_str) {
+                        assert!(
+                            !t.contains('\n') && !t.contains('\r'),
+                            "INV-1: ADF text node must not contain a raw newline; got: {t:?}"
+                        );
+                    }
+                }
+                for v in map.values() {
+                    assert_no_raw_newline_in_text_nodes(v);
+                }
+            }
+            Value::Array(arr) => {
+                for v in arr {
+                    assert_no_raw_newline_in_text_nodes(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn bare(value: &str) -> FieldValueSpec {
+        FieldValueSpec {
+            kind: None,
+            value: value.to_string(),
+        }
+    }
+
+    /// Assemble the final POST body from a [`JsmAdfFieldResolution`],
+    /// mirroring `handle_jsm_create`'s own `JsmRequestBuilder` construction
+    /// (AC-004(d), AC-013).
+    fn build_body(resolution: &JsmAdfFieldResolution) -> Value {
+        JsmRequestBuilder {
+            service_desk_id: "10",
+            request_type_id: "11002",
+            summary: "test",
+            description: None,
+            markdown: false,
+            priority: None,
+            labels: &[],
+            on_behalf_of: None,
+            no_mentions: false,
+            mentions: None,
+            extra_fields: &resolution.extra_fields,
+            resolved_adf_values: &resolution.resolved_adf_values,
+            is_adf_request: resolution.is_adf_request,
+        }
+        .build()
+        .unwrap()
+    }
+
+    /// AC-002 (BC-3.8.019 precondition, VP-FIELD-ADF-004 Axis a): the JSM
+    /// call site passes `rt_field.jira_schema` DIRECTLY to
+    /// `is_adf_field_value` — never double-nested inside another
+    /// `{"jiraSchema": ...}` wrapper (the anti-pattern that produced
+    /// `is_adf_field_value` returning `false` for every input before this
+    /// fix, ADR-0024 canonical `jiraSchema` contract).
+    ///
+    /// Test method: DEFAULT CI (pure function, no network).
+    #[test]
+    fn test_bc_3_8_019_is_adf_field_value_receives_inner_schema_not_double_nested() {
+        let rt_field: crate::types::jsm::RequestTypeField = serde_json::from_value(json!({
+            "fieldId": "description",
+            "name": "Description",
+            "description": Value::Null,
+            "required": false,
+            "visible": true,
+            "defaultValues": Value::Null,
+            "validValues": Value::Null,
+            "jiraSchema": {"type": "string", "system": "description"}
+        }))
+        .unwrap();
+
+        assert!(
+            crate::cli::issue::field_resolve::is_adf_field_value(&rt_field.jira_schema),
+            "AC-002: is_adf_field_value(&rt_field.jira_schema) — the inner schema \
+             passed directly — must return true for an allowlist match"
+        );
+
+        let double_nested = json!({"jiraSchema": rt_field.jira_schema});
+        assert!(
+            !crate::cli::issue::field_resolve::is_adf_field_value(&double_nested),
+            "AC-002: double-nesting — is_adf_field_value(&json!({{\"jiraSchema\": ...}})) \
+             — must return false; this demonstrates the anti-pattern this AC exists to \
+             prevent"
+        );
+    }
+
+    /// AC-009 / VP-FIELD-ADF-003 Axis D (JSM sub-case): the empty-omit
+    /// guard's `kind.is_none()` half applies ONLY to the bare form — every
+    /// hinted kind (`:option`/`:id`/`:name`/`:asset`) bypasses it, routing
+    /// to the hint composer regardless of emptiness.
+    ///
+    /// Test method: DEFAULT CI (pure, no network — GREEN-BY-DESIGN per the
+    /// stub's rustdoc; authored per the story's explicit instruction to
+    /// author this test anyway).
+    #[test]
+    fn test_adf_empty_guard_fires_only_on_bare_form_not_hinted_jsm() {
+        assert!(
+            jsm_adf_empty_omit_guard_applies(None),
+            "AC-009: the bare form (kind: None) must satisfy the empty-omit guard's gate"
+        );
+        assert!(
+            !jsm_adf_empty_omit_guard_applies(Some(FieldValueKind::Option)),
+            "AC-009: a ':option'-hinted value must bypass the empty-omit guard"
+        );
+        assert!(
+            !jsm_adf_empty_omit_guard_applies(Some(FieldValueKind::Id)),
+            "AC-009: a ':id'-hinted value must bypass the empty-omit guard"
+        );
+        assert!(
+            !jsm_adf_empty_omit_guard_applies(Some(FieldValueKind::Name)),
+            "AC-009: a ':name'-hinted value must bypass the empty-omit guard"
+        );
+        assert!(
+            !jsm_adf_empty_omit_guard_applies(Some(FieldValueKind::Asset)),
+            "AC-009: an ':asset'-hinted value must bypass the empty-omit guard"
+        );
+    }
+
+    /// AC-004 Axis (b) (BC-3.8.019 postcondition): a non-empty bare
+    /// `--field description=VALUE` extra field — `system == "description"` —
+    /// is ADF-converted via `text_to_adf` and accumulates `is_adf_request`.
+    ///
+    /// Test method: DEFAULT CI (resolution-layer unit test, DQ-6-gated
+    /// shape; wiremock-backed for the RT-fields fetch only).
+    #[test]
+    fn test_bc_3_8_019_jsm_description_extra_field_adf_converted() {
+        with_isolated_cache(|| async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(rt_fields_response(vec![description_field()])),
+                )
+                .mount(&server)
+                .await;
+
+            let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+            let profile = Profile::from("s-cycle12-desc");
+
+            let mut extra_fields = std::collections::HashMap::new();
+            extra_fields.insert("description".to_string(), bare("Hello world"));
+
+            let resolution =
+                resolve_jsm_adf_extra_fields(&client, &profile, "10", "11002", extra_fields).await;
+
+            let adf = resolution
+                .resolved_adf_values
+                .get("description")
+                .expect("AC-004(a): description must be ADF-converted into resolved_adf_values");
+            assert_eq!(
+                adf.get("type").and_then(Value::as_str),
+                Some("doc"),
+                "AC-004(a): must be an ADF doc; got {adf}"
+            );
+            assert_eq!(adf.get("version").and_then(Value::as_i64), Some(1));
+            assert!(
+                adf.get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|c| !c.is_empty()),
+                "AC-004(a): content must be a non-empty array for non-empty input; got {adf}"
+            );
+            assert_no_raw_newline_in_text_nodes(adf);
+            assert!(
+                resolution.is_adf_request,
+                "AC-004(c): is_adf_request must be true"
+            );
+
+            let body = build_body(&resolution);
+            assert_eq!(
+                body.get("requestFieldValues")
+                    .and_then(|rfv| rfv.get("description")),
+                Some(adf),
+                "AC-004(a): requestFieldValues['description'] in the assembled POST body \
+                 must be the ADF doc, not a plain string"
+            );
+            assert_eq!(
+                body.get("isAdfRequest").and_then(Value::as_bool),
+                Some(true),
+                "AC-004(d): isAdfRequest must be true in the assembled POST body"
+            );
+        });
+    }
+
+    /// AC-004 Axis (b) (BC-3.8.020 postcondition): a non-empty bare
+    /// `--field NAME=VALUE` extra field whose `custom` ends `:textarea` is
+    /// ADF-converted and accumulates `is_adf_request`. Uses a multi-line
+    /// value to also exercise INV-1 (hardBreak, not raw `\n`, AC-004(b)).
+    ///
+    /// Test method: DEFAULT CI (resolution-layer unit test, DQ-6-gated
+    /// shape; wiremock-backed for the RT-fields fetch only).
+    #[test]
+    fn test_bc_3_8_020_jsm_textarea_extra_field_adf_converted() {
+        with_isolated_cache(|| async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(rt_fields_response(vec![
+                        textarea_field("customfield_10050"),
+                    ])),
+                )
+                .mount(&server)
+                .await;
+
+            let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+            let profile = Profile::from("s-cycle12-textarea");
+
+            let mut extra_fields = std::collections::HashMap::new();
+            extra_fields.insert("customfield_10050".to_string(), bare("Line one\nLine two"));
+
+            let resolution =
+                resolve_jsm_adf_extra_fields(&client, &profile, "10", "11002", extra_fields).await;
+
+            let adf = resolution
+                .resolved_adf_values
+                .get("customfield_10050")
+                .expect("BC-3.8.020: :textarea extra field must be ADF-converted");
+            assert_eq!(adf.get("type").and_then(Value::as_str), Some("doc"));
+            assert_no_raw_newline_in_text_nodes(adf);
+            assert!(resolution.is_adf_request);
+
+            let body = build_body(&resolution);
+            assert_eq!(
+                body.get("isAdfRequest").and_then(Value::as_bool),
+                Some(true),
+                "BC-3.8.020: isAdfRequest must be true in the assembled POST body"
+            );
+        });
+    }
+
+    /// AC-004 Axis (c) (BC-3.8.022 Behavior item 2, EC-3.8.022-2): the
+    /// `is_adf_request` flag accumulates OR-only across multiple extra
+    /// fields — a plain-string field alongside an ADF-converted field must
+    /// still yield `true`, and the plain field must NOT itself contribute an
+    /// entry to `resolved_adf_values`.
+    ///
+    /// Test method: DEFAULT CI (resolution-layer unit test, DQ-6-gated
+    /// shape; wiremock-backed for the RT-fields fetch only).
+    #[test]
+    fn test_bc_3_8_022_is_adf_request_accumulated_for_adf_field() {
+        with_isolated_cache(|| async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(rt_fields_response(vec![
+                        textarea_field("customfield_10060"),
+                        plain_field("labels_field"),
+                    ])),
+                )
+                .mount(&server)
+                .await;
+
+            let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+            let profile = Profile::from("s-cycle12-accum");
+
+            let mut extra_fields = std::collections::HashMap::new();
+            extra_fields.insert("labels_field".to_string(), bare("not-adf"));
+            extra_fields.insert("customfield_10060".to_string(), bare("adf text"));
+
+            let resolution =
+                resolve_jsm_adf_extra_fields(&client, &profile, "10", "11002", extra_fields).await;
+
+            assert!(
+                resolution
+                    .resolved_adf_values
+                    .contains_key("customfield_10060")
+            );
+            assert!(
+                !resolution.resolved_adf_values.contains_key("labels_field"),
+                "EC-3.8.022-2: only the ADF-backed field contributes to resolved_adf_values; \
+                 the plain field must not be ADF-converted"
+            );
+            assert!(
+                resolution.is_adf_request,
+                "BC-3.8.022 item 2: one ADF-converted extra field is enough to accumulate true"
+            );
+
+            let body = build_body(&resolution);
+            assert_eq!(
+                body.get("isAdfRequest").and_then(Value::as_bool),
+                Some(true)
+            );
+        });
+    }
+
+    /// AC-004 Axis (c) ABSENT-check (VP-FIELD-ADF-004 pass-14 M-1 finding):
+    /// when NO extra field is ADF-converted, `is_adf_request` stays `false`
+    /// and the assembled POST body's `isAdfRequest` key is ABSENT — asserted
+    /// via `.is_none()`, never `.unwrap_or(false)` (AC-010 strictness).
+    ///
+    /// Test method: DEFAULT CI (resolution-layer unit test, DQ-6-gated
+    /// shape; wiremock-backed for the RT-fields fetch only).
+    #[test]
+    fn test_bc_3_8_020_is_adf_request_absent_when_no_adf_field_present() {
+        with_isolated_cache(|| async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(rt_fields_response(vec![plain_field("labels_field")])),
+                )
+                .mount(&server)
+                .await;
+
+            let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+            let profile = Profile::from("s-cycle12-absent");
+
+            let mut extra_fields = std::collections::HashMap::new();
+            extra_fields.insert("labels_field".to_string(), bare("plain-value"));
+
+            let resolution =
+                resolve_jsm_adf_extra_fields(&client, &profile, "10", "11002", extra_fields).await;
+
+            assert!(resolution.resolved_adf_values.is_empty());
+            assert!(!resolution.is_adf_request);
+
+            let body = build_body(&resolution);
+            assert!(
+                body.get("isAdfRequest").is_none(),
+                "VP-FIELD-ADF-004 Axis c: isAdfRequest key must be ABSENT (NOT explicit \
+                 false) when no extra field is ADF-converted; got body: {body}"
+            );
+        });
+    }
+
+    /// AC-007 / VP-FIELD-ADF-003 Axis C (BC-3.8.021 postcondition): an empty
+    /// or whitespace-only ADF-backed bare extra field is OMITTED from
+    /// `requestFieldValues` entirely — not sent as an empty string, not a
+    /// clear-doc (JSM create-omit semantics, distinct from platform edit's
+    /// clear-doc) — and does NOT contribute to `is_adf_request`.
+    ///
+    /// Test method: DEFAULT CI (resolution-layer unit test, DQ-6-gated
+    /// shape; wiremock-backed for the RT-fields fetch only).
+    #[test]
+    fn test_bc_3_8_021_jsm_empty_adf_field_omitted_isadfrequest_not_accumulated() {
+        with_isolated_cache(|| async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(rt_fields_response(vec![description_field()])),
+                )
+                .mount(&server)
+                .await;
+
+            let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+            let profile = Profile::from("s-cycle12-empty");
+
+            let mut extra_fields = std::collections::HashMap::new();
+            extra_fields.insert("description".to_string(), bare("   "));
+
+            let resolution =
+                resolve_jsm_adf_extra_fields(&client, &profile, "10", "11002", extra_fields).await;
+
+            assert!(
+                !resolution.extra_fields.contains_key("description"),
+                "AC-007: an empty ADF-backed bare field must be OMITTED from extra_fields \
+                 entirely"
+            );
+            assert!(!resolution.resolved_adf_values.contains_key("description"));
+            assert!(
+                !resolution.is_adf_request,
+                "AC-007: is_adf_request must NOT be set for the omitted field"
+            );
+
+            let body = build_body(&resolution);
+            let rfv = body
+                .get("requestFieldValues")
+                .expect("requestFieldValues must exist");
+            assert!(
+                rfv.get("description").is_none(),
+                "BC-3.8.021: requestFieldValues must have NO entry for the omitted field; \
+                 got rfv: {rfv}"
+            );
+            assert!(body.get("isAdfRequest").is_none());
+        });
+    }
+}

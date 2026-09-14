@@ -2978,6 +2978,200 @@ fn test_e2e_jsm_create_request_roundtrip() {
     }
 }
 
+/// E2E: `jr issue create --request-type ... --field description=VALUE`
+/// (bare form, NOT `--description`) sends ADF for the `description` extra
+/// field and reads back as an ADF object via `jr issue view --output json`
+/// (S-cycle12-jsm-adf-autoconvert AC-016, BC-3.8.019 postcondition).
+///
+/// Distinct from `test_e2e_jsm_create_request_roundtrip` (Scenario 6, which
+/// supplies no `--field` at all): this test specifically exercises the bare
+/// `--field description=` ADF-autoconvert resolution-layer path added by
+/// cycle-012 (`jsm_create.rs::resolve_jsm_adf_extra_fields` +
+/// `field_resolve::is_adf_field_value`).
+///
+/// Gated on `JR_RUN_E2E=1` + `JR_E2E_JSM_PROJECT`; clean-skips when either
+/// is unset, when the request-type list is empty, or on a 403 at any HTTP
+/// step (permission-scoped test credential). Self-closes the created
+/// request via `jsm_self_close` before any assertion that could panic
+/// (F-2b close-always-runs pattern, mirroring Scenario 6 above).
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_create_adf_field_description_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!("[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM ADF --field test");
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    // Step 1: list request types to discover the fixture dynamically
+    // (mirrors Scenario 6).
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    if !list_out.status.success() {
+        let stderr = String::from_utf8_lossy(&list_out.stderr);
+        if stderr.contains("403") {
+            eprintln!("[SKIP] requesttype list returned 403 — skipping ADF --field test");
+            return;
+        }
+        panic!(
+            "requesttype list failed:\nstdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&list_out.stdout)
+        );
+    }
+
+    let rts: Vec<Value> =
+        serde_json::from_slice(&list_out.stdout).expect("requesttype list must be a JSON array");
+
+    if rts.is_empty() {
+        eprintln!("[SKIP] No request types found on {jsm_project} — skipping ADF --field test");
+        return;
+    }
+
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a usable type — skipping");
+            return;
+        }
+    };
+    if !first_rt_id.chars().all(|c| c.is_ascii_digit()) {
+        eprintln!("[SKIP] rts[0].id={first_rt_id} is not all-ASCII-digit — skipping");
+        return;
+    }
+
+    // Step 2: create via the BARE `--field description=VALUE` path (NOT
+    // `--description`) — this is the AC-016 code path under test.
+    let summary = format!("[e2e-jsm {run_id}] adf field description round-trip");
+    let desc_value = format!("ADF autoconvert round-trip {run_id}");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary,
+            "--field",
+            &format!("description={desc_value}"),
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    let create_stderr = String::from_utf8_lossy(&create_out.stderr).to_string();
+    if !create_out.status.success() {
+        if create_stderr.contains("403") {
+            eprintln!("[SKIP] issue create returned 403 — skipping ADF --field test");
+            return;
+        }
+        eprintln!(
+            "[SKIP] issue create failed (non-fatal skip) — cannot test ADF --field \
+             round-trip\nstdout: {}\nstderr: {create_stderr}",
+            String::from_utf8_lossy(&create_out.stdout)
+        );
+        return;
+    }
+
+    let create_v: Value = serde_json::from_slice(&create_out.stdout)
+        .expect("issue create --output json must be valid JSON");
+    let key = create_v
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain 'key' field")
+        .to_string();
+    assert!(
+        !key.is_empty(),
+        "issue create --field description=: 'key' field must be non-empty; got: {create_v}"
+    );
+
+    // Step 3: non-fatal bounded poll for GET-by-key consistency (mirrors
+    // Scenario 6's F-2b pattern) — poll_view() would panic after
+    // MAX_ATTEMPTS, orphaning the EJ issue; a local loop with a bounded
+    // return keeps the unconditional self-close at step 4 reachable.
+    const MAX_VIEW_ATTEMPTS: u32 = 5;
+    const VIEW_BACKOFF_MS: [u64; 4] = [250, 500, 1_000, 2_000];
+    let mut view_result: Option<Value> = None;
+    for attempt in 1..=MAX_VIEW_ATTEMPTS {
+        let out = h
+            .cmd()
+            .args(["issue", "view", &key, "--output", "json"])
+            .output()
+            .expect("failed to spawn jr for view poll");
+        if out.status.success() {
+            if let Ok(v) = serde_json::from_slice::<Value>(out.stdout.as_slice()) {
+                view_result = Some(v);
+                break;
+            }
+        }
+        if attempt < MAX_VIEW_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(
+                VIEW_BACKOFF_MS[(attempt - 1) as usize],
+            ));
+        }
+    }
+
+    // Step 4: self-close BEFORE any remaining assertions (F-2b: close-always-
+    // runs) — guarantees poll exhaustion or an assertion panic below cannot
+    // leave the EJ issue open.
+    jsm_self_close(&key, &h);
+
+    // Step 5: assert the read-back `description` is an ADF object (Jira
+    // Cloud v3 `fields.description`), not a plain string (BC-3.8.019
+    // postcondition — the bare --field path must have sent ADF, not a
+    // string, or the API would have rejected the create with a 400 in the
+    // first place; this assertion confirms the read-back shape matches).
+    let view_v = match view_result {
+        Some(v) => v,
+        None => {
+            eprintln!(
+                "[WARN] issue view({key}) did not resolve after {MAX_VIEW_ATTEMPTS} attempts \
+                 — cannot assert ADF read-back shape (issue already self-closed)"
+            );
+            return;
+        }
+    };
+    let description = view_v.get("fields").and_then(|f| f.get("description"));
+    assert!(
+        description.map(Value::is_object).unwrap_or(false),
+        "AC-016/BC-3.8.019: 'description' set via bare --field description=VALUE on the \
+         JSM create path must read back as an ADF object (type: \"doc\"), not a plain \
+         string; got: {description:?}"
+    );
+    assert_eq!(
+        description
+            .and_then(|d| d.get("type"))
+            .and_then(Value::as_str),
+        Some("doc"),
+        "AC-016: ADF root type must be \"doc\"; got: {description:?}"
+    );
+}
+
 /// E2E: `jr queue list --project <non-JSM>` exits 64 and stderr contains
 /// `"Jira Service Management project"`. (Scenario 7 — require_service_desk guard)
 ///

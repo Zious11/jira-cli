@@ -366,10 +366,14 @@ mod proptests {
                     desc_val
                 );
             } else {
-                let is_adf = body.get("isAdfRequest").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                // AC-010 (VP-FIELD-ADF-004 pass-14 M-1 finding): the negative-case
+                // ABSENT-check MUST use `.is_none()`, NOT
+                // `.and_then(as_bool).unwrap_or(false)` — the lax form passes on
+                // BOTH an absent key AND an explicit `false` value, so it cannot
+                // kill a mutant that inserts `"isAdfRequest": false`.
                 prop_assert!(
-                    !is_adf,
-                    "C.2: BC-3.8.006 isAdfRequest must be absent/false when description is None"
+                    body.get("isAdfRequest").is_none(),
+                    "C.2: BC-3.8.006 isAdfRequest must be ABSENT (NOT explicit false) when description is None"
                 );
                 let rfv_desc = body.get("requestFieldValues").and_then(|rfv| rfv.get("description"));
                 prop_assert!(
@@ -479,5 +483,128 @@ mod proptests {
                 );
             }
         }
+    }
+}
+
+/// S-cycle12-jsm-adf-autoconvert Red Gate: AC-006 (assembly-order fix, VP-FIELD-ADF-004
+/// Axis g) and AC-013 (`build()` never derives `isAdfRequest` from value shapes,
+/// VP-FIELD-ADF-004 Axis c I-2 discriminator-precision regression).
+///
+/// Both target `JsmRequestBuilder::build` directly — pure, no network, no
+/// `RequestTypeField` metadata.
+#[cfg(test)]
+mod adf_build_tests {
+    use super::JsmRequestBuilder;
+    use crate::cli::issue::create::{FieldValueKind, FieldValueSpec};
+    use std::collections::{BTreeMap, HashMap};
+
+    /// AC-006 (EC-3.8.019-4 assembly-order rule, pass-13 MEDIUM-3,
+    /// VP-FIELD-ADF-004 Axis g sub-case 1): `self.description`'s ADF value
+    /// (the BC-3.8.006 channel) MUST supersede any `extra_fields`-loop write
+    /// to `requestFieldValues["description"]` — `build()` must write the
+    /// `self.description` insert AFTER the `extra_fields` loop, not before.
+    ///
+    /// Currently RED: `build()` writes `self.description`'s ADF BEFORE the
+    /// `extra_fields` loop, so the loop's string-wrap for a `description`
+    /// key overwrites it with `Value::String("Y")`.
+    #[test]
+    fn test_bc_3_8_019_build_description_supersedes_extra_field_description_entry() {
+        let mut extra_fields = HashMap::new();
+        extra_fields.insert(
+            "description".to_string(),
+            FieldValueSpec {
+                kind: None,
+                value: "Y".to_string(),
+            },
+        );
+        let resolved_adf_values: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+
+        let body = JsmRequestBuilder {
+            service_desk_id: "10",
+            request_type_id: "11002",
+            summary: "test",
+            description: Some("text X"),
+            markdown: false,
+            priority: None,
+            labels: &[],
+            on_behalf_of: None,
+            no_mentions: false,
+            mentions: None,
+            extra_fields: &extra_fields,
+            resolved_adf_values: &resolved_adf_values,
+            is_adf_request: false,
+        }
+        .build()
+        .unwrap();
+
+        let desc = body
+            .get("requestFieldValues")
+            .and_then(|rfv| rfv.get("description"))
+            .expect("requestFieldValues.description must be present");
+        assert_eq!(
+            desc.get("type").and_then(serde_json::Value::as_str),
+            Some("doc"),
+            "EC-3.8.019-4 assembly-order rule: self.description's ADF value (from \
+             \"text X\") must supersede the extra_fields['description'] string-wrap \
+             entry (\"Y\"); got requestFieldValues.description: {desc}"
+        );
+    }
+
+    /// AC-013 (VP-FIELD-ADF-004 Axis c I-2 discriminator-precision
+    /// regression): `build()` must NEVER derive `isAdfRequest` by inspecting
+    /// value shapes in `requestFieldValues`/`extra_fields` — it must reflect
+    /// ONLY the explicit `is_adf_request` bool it receives. A hinted `:id`
+    /// extra field serializes to a JSON OBJECT (`{"id": "123"}`), which a
+    /// naive `self.extra_fields.values().any(|v| v.is_object())`-style
+    /// derivation in `build()` would mistake for an ADF value. With
+    /// `is_adf_request: false` passed explicitly and no ADF value present,
+    /// `isAdfRequest` must be ABSENT even though `requestFieldValues`
+    /// contains an object.
+    #[test]
+    fn test_bc_3_8_022_is_adf_request_absent_with_hinted_object_field_no_adf() {
+        let mut extra_fields = HashMap::new();
+        extra_fields.insert(
+            "cf".to_string(),
+            FieldValueSpec {
+                kind: Some(FieldValueKind::Id),
+                value: "123".to_string(),
+            },
+        );
+        let resolved_adf_values: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+
+        let body = JsmRequestBuilder {
+            service_desk_id: "10",
+            request_type_id: "11002",
+            summary: "test",
+            description: None,
+            markdown: false,
+            priority: None,
+            labels: &[],
+            on_behalf_of: None,
+            no_mentions: false,
+            mentions: None,
+            extra_fields: &extra_fields,
+            resolved_adf_values: &resolved_adf_values,
+            is_adf_request: false,
+        }
+        .build()
+        .unwrap();
+
+        let rfv = body
+            .get("requestFieldValues")
+            .and_then(serde_json::Value::as_object)
+            .expect("requestFieldValues must exist");
+        assert!(
+            rfv.get("cf")
+                .map(serde_json::Value::is_object)
+                .unwrap_or(false),
+            "sanity: the hinted ':id' field must serialize to a JSON object; got: {rfv:?}"
+        );
+        assert!(
+            body.get("isAdfRequest").is_none(),
+            "AC-013 I-2: isAdfRequest must be ABSENT — build() must not derive it by \
+             inspecting requestFieldValues/extra_fields value shapes (a hinted-object \
+             field is NOT ADF); got body: {body}"
+        );
     }
 }

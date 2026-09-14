@@ -820,14 +820,14 @@ async fn test_jsm_create_plain_description_absent_when_no_description_flag() {
     let body: Value =
         serde_json::from_slice(&jsm_post.body).expect("BC-3.8.006: POST body must be valid JSON");
 
-    // BC-3.8.006: isAdfRequest must be absent or false when description is absent.
-    let is_adf = body
-        .get("isAdfRequest")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    // AC-010 (VP-FIELD-ADF-004 pass-14 M-1 finding): the negative-case
+    // ABSENT-check MUST use `.is_none()`, NOT
+    // `.and_then(as_bool).unwrap_or(false)` — the lax form passes on BOTH an
+    // absent key AND an explicit `false` value, so it cannot kill a mutant
+    // that inserts `"isAdfRequest": false`.
     assert!(
-        !is_adf,
-        "BC-3.8.006: isAdfRequest must be absent or false when --description not set; got body: {body}"
+        body.get("isAdfRequest").is_none(),
+        "BC-3.8.006: isAdfRequest must be ABSENT (NOT explicit false) when --description not set; got body: {body}"
     );
 
     // BC-3.8.006: description key must be absent from requestFieldValues.
@@ -7172,5 +7172,647 @@ async fn test_vp_578_016_id_name_asset_jsm_wire_shapes_by_analogy_flagged_unveri
         rfv.get("f_asset"),
         Some(&json!([{"workspaceId": "WSX", "id": "WSX:5001", "objectId": "5001"}])),
         "AC-009/VP-578-016 (by analogy, parity-PENDING): ':asset' shape; got rfv: {rfv}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// S-cycle12-jsm-adf-autoconvert: JSM ADF auto-conversion for `--field` on
+// rich-text fields (BC-3.8.019..022, VP-FIELD-ADF-004, ADR-0024).
+//
+// These wiremock/CLI-level tests exercise the full `handle_jsm_create`
+// dispatch, including the new `GET .../requesttype/{id}/field` fetch (cache-
+// first, fail-open) added by this story. All bare-form JSM `--field` fixtures
+// pre-dating this story were audited (AC-011) and found to need no wiremock
+// stub or assertion change — see the story-delivery report for the full
+// triage (every pre-existing bare-form fixture targets a non-ADF-backed
+// field_id and asserts neither exact request counts nor "stderr clean", so
+// they remain correct under this section's default fail-open degradation).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Mount `GET .../requesttype/11002/field` for service desk 10 / RT 11002
+/// (the `mount_request_types_password_reset` fixture's resolved id),
+/// returning the given `RequestTypeField` JSON objects.
+async fn mount_request_type_fields(server: &MockServer, fields: Vec<Value>) {
+    Mock::given(method("GET"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "canRaiseOnBehalfOf": false,
+            "canAddRequestParticipants": false,
+            "requestTypeFields": fields
+        })))
+        .mount(server)
+        .await;
+}
+
+/// An ADF-backed `RequestTypeField` fixture for the system `description`
+/// field (BC-3.8.019 allowlist arm).
+fn adf_description_field_json() -> Value {
+    json!({
+        "fieldId": "description",
+        "name": "Description",
+        "description": Value::Null,
+        "required": false,
+        "visible": true,
+        "defaultValues": Value::Null,
+        "validValues": Value::Null,
+        "jiraSchema": {"type": "string", "system": "description"}
+    })
+}
+
+/// AC-008 / VP-FIELD-ADF-004 Axis (e) (BC-3.8.019 EC-3.8.019-2): when the
+/// `GET .../requesttype/{id}/field` fetch itself FAILS (here: simply
+/// unmocked, so wiremock's default unmatched-request 404 applies), the
+/// resolution layer fails OPEN: exactly one global `warning:` line, ALL bare
+/// `--field` values (including empty ones) degrade to `Value::String`, and
+/// the command NEVER exits 64. Includes the pass-21 M-1 sub-assertion:
+/// a bare EMPTY `--field NAME=` on an allowlist-looking field_id is present
+/// as `Value::String("")` (NOT omitted) and `isAdfRequest` is ABSENT.
+#[tokio::test]
+async fn test_jsm_adf_field_metadata_unavailable_emits_warning() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+    // Deliberately NOT mounting GET .../requesttype/11002/field — the fetch
+    // must fail (wiremock's default unmatched-request 404), triggering the
+    // AC-008 fail-open path.
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "description=",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-008(d): fail-open must NEVER exit 64; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+
+    // AC-008(a): exactly ONE global warning line.
+    let warning_lines: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("warning:"))
+        .collect();
+    assert_eq!(
+        warning_lines.len(),
+        1,
+        "AC-008(a): exactly ONE global warning line must be emitted; got stderr: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains("could not fetch request type fields"),
+        "AC-008: warning must identify the fields-fetch failure; got: {}",
+        warning_lines[0]
+    );
+
+    let requests = server.received_requests().await.expect("requests recorded");
+    let jsm_post = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/servicedeskapi/request" && r.method.as_str() == "POST")
+        .expect("AC-008: JSM POST must have been made");
+    let body: Value =
+        serde_json::from_slice(&jsm_post.body).expect("AC-008: POST body must be valid JSON");
+
+    // AC-008(e) / pass-21 M-1: bare empty --field on an allowlist-looking
+    // field_id, under fail-open, is present as an empty string (NOT omitted).
+    assert_eq!(
+        body.get("requestFieldValues")
+            .and_then(|rfv| rfv.get("description")),
+        Some(&json!("")),
+        "AC-008(e): under fail-open, requestFieldValues['description'] must be \
+         Value::String(\"\") — present, NOT omitted; got body: {body}"
+    );
+    // AC-008(c): isAdfRequest key ABSENT — NOT explicit false.
+    assert!(
+        body.get("isAdfRequest").is_none(),
+        "AC-008(c): isAdfRequest must be ABSENT under fail-open; got body: {body}"
+    );
+}
+
+/// VP-FIELD-ADF-004 Axis (f) (BC-3.8.019 "Accepted residual" / EC-3.8.019-2
+/// I-1 rule): the fields-fetch SUCCEEDS but the bare `--field` NAME simply
+/// does not match any `RequestTypeField.field_id` in the returned list —
+/// this is the ordinary unknown-field case (BC-3.8.008 verbatim), NOT the
+/// fetch-failed case: `Value::String(VALUE)` verbatim, ZERO warning lines,
+/// `isAdfRequest` unchanged. Discriminates from the Axis (e) fail-open test
+/// above — conflating "fetch failed" with "field absent from a successful
+/// fetch" is the mutant this test pins.
+#[tokio::test]
+async fn test_jsm_adf_field_name_absent_from_fetched_list_falls_through_verbatim() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+    // Fetch SUCCEEDS but returns a field list that does not contain
+    // "mystery_field".
+    mount_request_type_fields(&server, vec![adf_description_field_json()]).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "mystery_field=SomeValue",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Axis f: expected exit 0; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("warning:"),
+        "Axis f: ZERO warnings must be emitted when the fetch succeeds and the field \
+         is simply absent from the list (I-1 rule, distinct from the fetch-failed \
+         case); got stderr: {stderr}"
+    );
+
+    let requests = server.received_requests().await.expect("requests recorded");
+    let jsm_post = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/servicedeskapi/request" && r.method.as_str() == "POST")
+        .expect("Axis f: JSM POST must have been made");
+    let body: Value =
+        serde_json::from_slice(&jsm_post.body).expect("Axis f: POST body must be valid JSON");
+
+    assert_eq!(
+        body.get("requestFieldValues")
+            .and_then(|rfv| rfv.get("mystery_field")),
+        Some(&json!("SomeValue")),
+        "Axis f: NAME absent from a successfully-fetched RT field list must fall \
+         through to Value::String(VALUE) verbatim; got body: {body}"
+    );
+    assert!(
+        body.get("isAdfRequest").is_none(),
+        "Axis f: isAdfRequest must be unchanged (ABSENT) — no ADF conversion occurred; \
+         got body: {body}"
+    );
+}
+
+/// AC-012 (BC-3.8.001 context/regression): on a successful
+/// `jr issue create --request-type RT --field <ADF-BACKED>=VALUE`, the
+/// success output is `Created request <KEY>` — no per-field echo, no
+/// `(adf)` marker (the JSM create path has no per-field table output
+/// surface; `field_markers` from Story 1 is a platform-paths-only
+/// side-channel, never populated by `jsm_create.rs`).
+#[tokio::test]
+async fn test_bc_3_8_019_jsm_create_output_is_key_only_no_adf_marker() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+    mount_request_type_fields(&server, vec![adf_description_field_json()]).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Table mode (default, no --output json): success output must be
+    // exactly "Created request <KEY>" with no per-field ADF marker.
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "description=Some rich text",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-012: expected exit 0; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(
+        stdout.trim(),
+        "Created request HELP-42",
+        "AC-012: JSM create success output must be key-only with no per-field ADF \
+         marker; got stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("(adf)"),
+        "AC-012: JSM create has no per-field echo surface — '(adf)' must never appear; \
+         got stdout: {stdout}"
+    );
+}
+
+/// AC-015(a) (delta §5 item 7 FIRM-MUST): the `GET .../requesttype/{id}/field`
+/// fetch fires IFF at least one BARE (`kind.is_none()`) `--field` pair is
+/// present — asserted across all three sub-cases in one test (per delta
+/// pass-19 M-2 gate correction).
+#[tokio::test]
+async fn test_jsm_adf_rt_fields_get_fires_iff_bare_field_present() {
+    fn empty_rt_fields_body() -> Value {
+        json!({
+            "canRaiseOnBehalfOf": false,
+            "canAddRequestParticipants": false,
+            "requestTypeFields": []
+        })
+    }
+
+    // ── Sub-case 1: a bare --field pair → GET fires exactly once ──────────
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        mount_project_meta_help(&server).await;
+        mount_service_desk_list(&server).await;
+        mount_request_types_password_reset(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_rt_fields_body()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+            .mount(&server)
+            .await;
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "Password Reset",
+                "--summary",
+                "test",
+                "--field",
+                "labels_field=plain",
+                "--no-input",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "AC-015(a) sub-case 1 (bare field present): expected exit 0; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // The `.expect(1)` on the GET mock enforces "fires exactly once" on server drop.
+    }
+
+    // ── Sub-case 2: no --field at all → GET must NOT fire ──────────────────
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        mount_project_meta_help(&server).await;
+        mount_service_desk_list(&server).await;
+        mount_request_types_password_reset(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_rt_fields_body()))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+            .mount(&server)
+            .await;
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "Password Reset",
+                "--summary",
+                "test",
+                "--no-input",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "AC-015(a) sub-case 2 (no --field): expected exit 0; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // The `.expect(0)` on the GET mock enforces "never fires" on server drop.
+    }
+
+    // ── Sub-case 3: only hinted --field pairs → GET must NOT fire ──────────
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        mount_project_meta_help(&server).await;
+        mount_service_desk_list(&server).await;
+        mount_request_types_password_reset(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_rt_fields_body()))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+            .mount(&server)
+            .await;
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "Password Reset",
+                "--summary",
+                "test",
+                "--field",
+                "cf:id=5",
+                "--no-input",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "AC-015(a) sub-case 3 (hinted-only): expected exit 0; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // The `.expect(0)` on the GET mock enforces "never fires" on server drop.
+    }
+}
+
+/// AC-015(b): a warm request-type-fields cache entry (from a prior create in
+/// the same profile/service-desk/request-type) skips the HTTP GET entirely
+/// on a second create.
+#[tokio::test]
+async fn test_jsm_adf_rt_fields_cache_warm_skips_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    // Registered ONCE; `.expect(1)` verifies it is called AT MOST once across
+    // BOTH creates below — the second create must be served entirely from
+    // `read_request_type_fields_cache`.
+    Mock::given(method("GET"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "canRaiseOnBehalfOf": false,
+            "canAddRequestParticipants": false,
+            "requestTypeFields": []
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .mount(&server)
+        .await;
+
+    let run = || {
+        Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "Password Reset",
+                "--summary",
+                "test",
+                "--field",
+                "labels_field=plain",
+                "--no-input",
+            ])
+            .output()
+            .unwrap()
+    };
+
+    let first = run();
+    assert!(
+        first.status.success(),
+        "AC-015(b): first (cold-cache) create must succeed; stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let second = run();
+    assert!(
+        second.status.success(),
+        "AC-015(b): second (warm-cache) create must succeed; stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    // The `.expect(1)` on the GET mock enforces "at most once across both
+    // creates" on server drop.
+}
+
+/// AC-015(c): a 401 on the fields-fetch GET emits the mandatory global
+/// warning prefix, does NOT include the `write:servicedesk-request` hint
+/// (that hint is reserved for the create POST itself, not this read-only
+/// endpoint), and does NOT exit 64 (fail-open; the create POST still fires).
+#[tokio::test]
+async fn test_jsm_adf_rt_fields_fetch_401_emits_global_warning_not_write_scope_hint() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+        ))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Unauthorized"]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "labels_field=plain",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "AC-015(c): 401 on the fields-fetch must fail-open, NOT exit 64; got {:?}. \
+         stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("warning: could not fetch request type fields"),
+        "AC-015(c): the mandatory global warning prefix must be present; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("write:servicedesk-request"),
+        "AC-015(c): the write-scope hint is reserved for the create POST itself, NOT \
+         the read-only fields-fetch endpoint; got: {stderr}"
     );
 }
