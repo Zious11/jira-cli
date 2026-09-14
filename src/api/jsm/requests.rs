@@ -7,7 +7,7 @@
 //! constructing the POST body. It lives here so proptest properties (C.1–C.3)
 //! can exercise it without a mock HTTP client.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 
@@ -93,6 +93,35 @@ pub struct JsmRequestBuilder<'a> {
     /// can dispatch kind-aware `requestFieldValues` serialization instead of
     /// the old unconditional string-wrap.
     pub(crate) extra_fields: &'a HashMap<String, FieldValueSpec>,
+    /// ADF-converted values for non-empty bare (`kind.is_none()`) ADF-backed
+    /// extra fields, keyed by field name (S-cycle12-jsm-adf-autoconvert
+    /// AC-001/004/013, ADR-0024 DQ-6 Option (b) — see the DQ-6 decision
+    /// rustdoc on [`crate::cli::issue::jsm_create::JsmAdfFieldResolution`]).
+    /// Populated exclusively by the resolution layer (`jsm_create.rs`);
+    /// `build()` must insert these into `requestFieldValues`, superseding
+    /// any string-wrap for the same key from `extra_fields` above — it must
+    /// NEVER derive ADF-ness by inspecting value shapes itself (AC-013).
+    ///
+    /// STUB NOTE (Red Gate, S-cycle12-jsm-adf-autoconvert): this field is
+    /// declared but NOT YET consumed by `build()`'s body — the merge logic
+    /// (AC-004/007/013) is implementation work for the TDD implementer step,
+    /// gated on RED tests authored against this shape first. Every existing
+    /// caller passes an empty map, preserving pre-cycle-012 `build()` output
+    /// byte-for-byte.
+    pub(crate) resolved_adf_values: &'a BTreeMap<String, serde_json::Value>,
+    /// Accumulated `isAdfRequest` contribution from the resolution layer's
+    /// `--field` extra-field ADF conversions (S-cycle12-jsm-adf-autoconvert
+    /// AC-001/013, BC-3.8.022). `build()` must OR this with its own
+    /// `self.description`-derived flag — it must NEVER derive this flag by
+    /// inspecting `requestFieldValues`/`extra_fields` value shapes
+    /// (`.is_object()` derivation is the specific mutant class AC-013 exists
+    /// to kill; see VP-FIELD-ADF-004 Axis (c) I-2).
+    ///
+    /// STUB NOTE: NOT YET consumed by `build()`'s body — see
+    /// `resolved_adf_values` STUB NOTE above. Every existing caller passes
+    /// `false`, preserving pre-cycle-012 `isAdfRequest` output byte-for-byte
+    /// (the description-only channel, BC-3.8.006, is unaffected).
+    pub(crate) is_adf_request: bool,
 }
 
 impl<'a> JsmRequestBuilder<'a> {
@@ -254,6 +283,7 @@ fn compose_asset_wire(value: &str) -> serde_json::Value {
 mod proptests {
     use super::JsmRequestBuilder;
     use proptest::prelude::*;
+    use std::collections::BTreeMap;
 
     proptest! {
         /// C.1 (BC-3.8.005): `summary` is always present in `requestFieldValues`
@@ -277,6 +307,8 @@ mod proptests {
                 no_mentions: false,
                 mentions: None,
                 extra_fields: &extra,
+                resolved_adf_values: &BTreeMap::new(),
+                is_adf_request: false,
             }
             .build()
             .unwrap();
@@ -316,6 +348,8 @@ mod proptests {
                 no_mentions: false,
                 mentions: None,
                 extra_fields: &extra,
+                resolved_adf_values: &BTreeMap::new(),
+                is_adf_request: false,
             }
             .build()
             .unwrap();
@@ -369,6 +403,8 @@ mod proptests {
                 no_mentions: false,
                 mentions: None,
                 extra_fields: &extra,
+                resolved_adf_values: &BTreeMap::new(),
+                is_adf_request: false,
             }
             .build()
             .unwrap();
@@ -415,6 +451,8 @@ mod proptests {
                 no_mentions: false,
                 mentions: None,
                 extra_fields: &extra,
+                resolved_adf_values: &BTreeMap::new(),
+                is_adf_request: false,
             }
             .build()
             .unwrap();

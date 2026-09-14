@@ -305,6 +305,33 @@ pub(super) async fn handle_jsm_create(
         }
     }
 
+    // S-cycle12-jsm-adf-autoconvert AC-003/004/007/008/013/015(a) (ADR-0024
+    // DQ-6 Option (b)): ADF detection/conversion resolution pass over bare
+    // --field extra fields. Gated on >=1 bare (kind.is_none()) pair per
+    // AC-015(a) — a no-`--field` create or a hinted-only create issues ZERO
+    // GET .../requesttype/{id}/field calls.
+    let has_bare_field_pair = extra_fields.values().any(|spec| spec.kind.is_none());
+    let JsmAdfFieldResolution {
+        extra_fields,
+        resolved_adf_values,
+        is_adf_request: extra_fields_is_adf_request,
+    } = if has_bare_field_pair {
+        resolve_jsm_adf_extra_fields(
+            client,
+            profile,
+            &service_desk_id,
+            &request_type_id,
+            extra_fields,
+        )
+        .await
+    } else {
+        JsmAdfFieldResolution {
+            extra_fields,
+            resolved_adf_values: std::collections::BTreeMap::new(),
+            is_adf_request: false,
+        }
+    };
+
     // S-cycle5-mention-resolution-wiring (AC-013): resolve mentions BEFORE
     // constructing `JsmRequestBuilder` and calling its synchronous,
     // effect-free `.build()` — the resolution result is threaded in as
@@ -333,6 +360,8 @@ pub(super) async fn handle_jsm_create(
         no_mentions,
         mentions: mention_resolutions.as_ref(),
         extra_fields: &extra_fields,
+        resolved_adf_values: &resolved_adf_values,
+        is_adf_request: extra_fields_is_adf_request,
     }
     .build()?;
 
@@ -512,6 +541,135 @@ async fn resolve_asset_field_l2(client: &JiraClient, value: &str) -> Result<Fiel
         kind: Some(FieldValueKind::Asset),
         value: resolved_value,
     })
+}
+
+/// Result of the ADF detection/conversion resolution pass over bare
+/// `--field` extra fields on the JSM create path
+/// (S-cycle12-jsm-adf-autoconvert AC-001/004/007/008/013;
+/// BC-3.8.019/020/021/022).
+///
+/// # DQ-6 type/signature decision (ADR-0024 §Decision "DQ-6", AC-001) — Option (b) chosen
+///
+/// ADR-0024 leaves the DQ-6 plumbing shape open between (a) widening
+/// [`FieldValueSpec::value`] from `String` to `serde_json::Value`, or (b) a
+/// parallel `resolved_adf_values` map alongside `extra_fields`. This story
+/// picks **Option (b)**, for two reasons:
+///
+/// 1. `FieldValueSpec` is a SHARED type with three call sites: the platform
+///    create path (`create.rs`), the platform edit path (`edit.rs`), and
+///    this JSM create path (`jsm_create.rs`). Widening `value` to
+///    `serde_json::Value` would ripple into `field_resolve.rs`'s
+///    `dispatch_field_value` and every hint-kind composer on the platform
+///    paths — `field_resolve.rs` is VERIFY ONLY for this story (no new
+///    logic), so a widening change there is out of scope.
+/// 2. Option (b) confines the new plumbing entirely to `jsm_create.rs` +
+///    `JsmRequestBuilder` (`api/jsm/requests.rs`) — zero blast radius on the
+///    platform paths, zero risk of an accidental behavior change to
+///    `dispatch_field_value`'s type dispatch or any hinted-kind composer.
+///
+/// `extra_fields` below stays a `HashMap<String, FieldValueSpec>` —
+/// `FieldValueSpec.value` stays `String`, unchanged from pre-cycle-012.
+/// ADF-converted values live exclusively in `resolved_adf_values`.
+pub(super) struct JsmAdfFieldResolution {
+    /// The extra-fields map with empty, bare (`kind.is_none()`), ADF-backed
+    /// entries REMOVED (AC-007 empty-omit guard). Every other entry
+    /// (non-ADF-backed, hinted, or non-empty-and-already-ADF-converted-into-
+    /// `resolved_adf_values`) is passed through unchanged from the caller's
+    /// input map. `JsmRequestBuilder::build()`'s pre-existing string-wrap
+    /// loop over this map is still correct for every entry NOT also present
+    /// as a key in `resolved_adf_values`.
+    pub(super) extra_fields: std::collections::HashMap<String, FieldValueSpec>,
+    /// ADF document objects (`{"type":"doc","version":1,"content":[...]}`)
+    /// for non-empty bare ADF-backed extra fields, keyed by field name.
+    /// `JsmRequestBuilder::build()` (AC-001/013) must insert these into
+    /// `requestFieldValues`, superseding any string-wrap for the same key —
+    /// `build()` NEVER derives ADF-ness by inspecting value shapes.
+    pub(super) resolved_adf_values: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Accumulated `isAdfRequest` contribution from THIS resolution pass —
+    /// `true` iff at least one extra field was ADF-converted (BC-3.8.022).
+    /// `JsmRequestBuilder::build()` must OR this with its own
+    /// `self.description`-derived flag; it is never recomputed by inspecting
+    /// `requestFieldValues` entries (AC-013 mutant-kill invariant — see
+    /// VP-FIELD-ADF-004 Axis (c) I-2, the hinted-`:id`/`:name`-object
+    /// discriminator-precision regression).
+    pub(super) is_adf_request: bool,
+}
+
+/// Pure gate: does the ADF empty-omit guard (AC-007) apply to this `--field`
+/// token's kind? (VP-FIELD-ADF-003 Axis D — JSM sub-case, AC-009.)
+///
+/// Fires ONLY for the bare form (`kind.is_none()`) — a hinted `:option`/
+/// `:id`/`:name`/`:asset` value bypasses ADF auto-detection entirely and
+/// routes to its hint composer regardless of emptiness (ADR-0024 "Hint kinds
+/// opt out of ADF on both platform and JSM paths" invariant). Callers must
+/// additionally check `is_adf_field_value(...)` and `value.trim().is_empty()`
+/// — this function is ONLY the `kind.is_none()` half of the three-part gate,
+/// extracted so it can be unit-tested independent of RT-field metadata
+/// (F4 extraction obligation, AC-009).
+///
+/// # GREEN-BY-DESIGN
+///
+/// Correct-by-construction: a single method call with no branching syntax
+/// (`if`/`match`/`?`/`unwrap`), no I/O, no calls to non-trivial helpers, one
+/// line. See the stub commit report's GREEN-BY-DESIGN table.
+pub(super) fn jsm_adf_empty_omit_guard_applies(kind: Option<FieldValueKind>) -> bool {
+    kind.is_none()
+}
+
+/// Fetch RT-field metadata (cache-first, fail-open) and resolve ADF
+/// detection/conversion for bare `--field` extra fields
+/// (S-cycle12-jsm-adf-autoconvert AC-003, AC-004, AC-007, AC-008;
+/// BC-3.8.019/020/021/022).
+///
+/// Effectful (L2/L3): calls [`JiraClient::get_request_type_fields`]
+/// (`api/jsm/request_types.rs`) via [`crate::cache::read_request_type_fields_cache`]
+/// / [`crate::cache::write_request_type_fields_cache`] (cache-first, 7-day
+/// TTL, keyed on `(profile, service_desk_id, request_type_id)`); emits a
+/// single global stderr `warning:` line on fail-open (AC-008(a)).
+///
+/// Only invoked by [`handle_jsm_create`] when `>=1` extra-field pair is bare
+/// (`kind.is_none()`) — the "GET fires IFF >=1 bare pair" contract
+/// (AC-015(a)) is enforced at the call site, not inside this function.
+///
+/// # Fail-open contract (BC-3.8.019 EC-3.8.019-2, AC-008)
+///
+/// On ANY fetch failure (network error, non-200 status including
+/// 401/403/404/500, deserialization error, or a cache-miss-with-no-network):
+/// emit exactly ONE global `"warning: …"` stderr line (never per-field,
+/// never mentioning `write:servicedesk-request` — AC-015(c), that hint is
+/// reserved for the create POST itself), degrade ALL bare `--field` values
+/// (including empty ones) to `Value::String(value)` verbatim, and NEVER exit
+/// 64 — this function is infallible by design (no `Result` return type).
+///
+/// # ADF detection contract (AC-002, ADR-0024 canonical `jiraSchema` contract)
+///
+/// For each bare extra field whose NAME matches a fetched
+/// `RequestTypeField.field_id`, call
+/// `field_resolve::is_adf_field_value(&rt_field.jira_schema)` — passing the
+/// INNER schema block DIRECTLY. `rt_field.jira_schema` IS the inner schema;
+/// do NOT wrap it in another `json!({"jiraSchema": ...})` (the
+/// double-nesting anti-pattern AC-002 exists to prevent).
+async fn resolve_jsm_adf_extra_fields(
+    client: &JiraClient,
+    profile: &crate::profile::Profile,
+    service_desk_id: &str,
+    request_type_id: &str,
+    extra_fields: std::collections::HashMap<String, FieldValueSpec>,
+) -> JsmAdfFieldResolution {
+    todo!(
+        "AC-003/004/007/008: cache-first get_request_type_fields fetch (fail-open on any \
+         error — single global stderr warning, ALL bare fields degrade to Value::String, \
+         never exit 64; client/profile/service_desk_id/request_type_id/extra_fields params \
+         reserved for this); for each bare (kind.is_none(), see \
+         jsm_adf_empty_omit_guard_applies) extra field whose resolved \
+         RequestTypeField.jira_schema passes field_resolve::is_adf_field_value (receive the \
+         inner schema DIRECTLY — no double-nesting, ADR-0024/AC-002): non-empty value -> \
+         text_to_adf conversion into resolved_adf_values + is_adf_request=true; \
+         empty/whitespace value -> OMIT from extra_fields (AC-007), do NOT set \
+         is_adf_request. A NAME absent from a successfully-fetched RT field list falls \
+         through verbatim (I-1 rule, AC-005 OBS-1 item 3) — no warning, unchanged \
+         string-wrap."
+    )
 }
 
 /// Resolve a request type name to its ID for the JSM create path.
