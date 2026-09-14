@@ -808,12 +808,37 @@ fn is_adf_schema(system: Option<&str>, custom: Option<&str>) -> bool {
         || custom.map(|c| c.ends_with(":textarea")).unwrap_or(false)
 }
 
-/// ADF field detection predicate for `EditMetaFieldSchema` (AC-001, BC-3.4.033
-/// precondition).
+/// ADF field detection predicate for a raw `serde_json::Value` schema object
+/// (ACR-3, Architecture Compliance Rule 3, S-cycle12-platform-adf-autoconvert).
 ///
-/// Delegates to [`is_adf_schema`]; contains NO allowlist logic itself.
+/// This is the single `pub(crate)` entry point for ADF detection used by both
+/// typed-struct callers (via [`is_adf_field`]) and Wave-2 JSON-Value callers
+/// (e.g. `jsm_create.rs`). Delegates to [`is_adf_schema`]; contains NO
+/// allowlist logic itself (ACR-1).
+///
+/// `value` is expected to be the schema sub-object (e.g.
+/// `{"type":"string","system":"description"}`). Returns `false` for non-object
+/// values or if neither `system` nor `custom` is present.
+pub(crate) fn is_adf_field_value(value: &serde_json::Value) -> bool {
+    let system = value.get("system").and_then(|v| v.as_str());
+    let custom = value.get("custom").and_then(|v| v.as_str());
+    is_adf_schema(system, custom)
+}
+
+/// ADF field detection predicate for a typed `EditMetaFieldSchema` (AC-001,
+/// BC-3.4.033 precondition).
+///
+/// Bridges the typed-struct path to [`is_adf_field_value`], which is the
+/// single `pub(crate)` entry point. Contains NO allowlist logic itself (ACR-1).
 fn is_adf_field(schema: &crate::types::jira::EditMetaFieldSchema) -> bool {
-    is_adf_schema(schema.system.as_deref(), schema.custom.as_deref())
+    // Bridge to the pub(crate) entry point so all ADF detection goes through
+    // a single production-reachable function (suppresses dead_code for
+    // is_adf_field_value; ACR-1 — no allowlist duplication).
+    let v = serde_json::json!({
+        "system": schema.system,
+        "custom": schema.custom,
+    });
+    is_adf_field_value(&v)
 }
 
 /// Output/accumulator bundle for [`dispatch_field_value`].
@@ -1853,6 +1878,61 @@ mod tests {
         assert!(
             !is_adf_field(&mk(None, None)),
             "empty schema must NOT be ADF-backed"
+        );
+    }
+
+    /// AC-001 delegator contract: `is_adf_field_value` is the Wave-2 entry
+    /// point for callers holding a `serde_json::Value` schema (e.g. jsm_create).
+    /// It must return exactly the same decisions as `is_adf_field` for the same
+    /// schema data, by delegating to `is_adf_schema` (ACR-1 — no allowlist
+    /// duplication).
+    #[test]
+    fn test_bc_3_4_033_is_adf_field_value_delegates_to_allowlist() {
+        use serde_json::json;
+
+        // Positive anchors (must return true):
+        // system = "description"
+        assert!(
+            is_adf_field_value(&json!({"type": "string", "system": "description"})),
+            "system=description must be ADF-backed via is_adf_field_value"
+        );
+        // system = "environment"
+        assert!(
+            is_adf_field_value(&json!({"type": "string", "system": "environment"})),
+            "system=environment must be ADF-backed via is_adf_field_value"
+        );
+        // custom ends with ":textarea"
+        assert!(
+            is_adf_field_value(&json!({
+                "type": "string",
+                "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textarea"
+            })),
+            ":textarea custom must be ADF-backed via is_adf_field_value"
+        );
+
+        // Negative anchors (must return false):
+        // custom ends with ":textfield", NOT ":textarea"
+        assert!(
+            !is_adf_field_value(&json!({
+                "type": "string",
+                "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textfield"
+            })),
+            ":textfield must NOT be ADF-backed via is_adf_field_value"
+        );
+        // system = "summary"
+        assert!(
+            !is_adf_field_value(&json!({"type": "string", "system": "summary"})),
+            "system=summary must NOT be ADF-backed via is_adf_field_value"
+        );
+        // empty schema (no system, no custom keys)
+        assert!(
+            !is_adf_field_value(&json!({"type": "string"})),
+            "empty schema must NOT be ADF-backed via is_adf_field_value"
+        );
+        // non-object value
+        assert!(
+            !is_adf_field_value(&json!(null)),
+            "null value must NOT be ADF-backed via is_adf_field_value"
         );
     }
 
