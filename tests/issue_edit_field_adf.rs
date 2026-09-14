@@ -814,6 +814,92 @@ async fn test_bc_3_4_035_live_edit_field_description_shows_adf_not_updated() {
 // AC-004 Axis A / VP-FIELD-ADF-003 Axis A
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// BC-3.4.037 / AC-002(d) — customfield-id bypass regression pin (M4 pin)
+// ---------------------------------------------------------------------------
+
+/// BC-3.4.037 / AC-002(d) regression pin (M4): `--field customfield_NNNNN=VALUE`
+/// (the LITERAL customfield-id bypass form, not the display-name form) against
+/// a `:textarea` ADF-backed field must place an ADF doc object in the PUT wire
+/// body — not a plain `Value::String`.
+///
+/// ADF detection gates on `is_adf_field(&meta_field.schema)`, which inspects
+/// the `system`/`custom` allowlist, NOT the `--field` key form (display-name
+/// vs. customfield-id). This test pins that the bypass form routes through the
+/// same ADF branch as the display-name form — a pure regression guard for
+/// already-correct behavior, not a RED/GREEN TDD cycle.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_037_customfield_id_bypass_fires_adf_conversion() {
+    let h = Harness::new().await;
+    // Use the customfield-id form directly — no display-name cache needed.
+    const FIELD_ID: &str = "customfield_99999";
+    const FIELD_NAME: &str = "Acceptance Criteria";
+    const KEY: &str = "TEST-10";
+    const INPUT: &str = "Must pass all tests";
+
+    // Provide the fields cache so the display-name → field-id look-up succeeds
+    // (the bypass form `customfield_NNNNN` is still looked up in editmeta to
+    // obtain its schema; a cache entry is not required for the bypass path but
+    // is harmless).  Omit it deliberately here — the bypass form skips the
+    // name-resolution step and reads schema directly from editmeta.
+    mount_list_fields_textarea(&h.server, FIELD_ID, FIELD_NAME).await;
+    mount_editmeta_textarea(&h.server, KEY, FIELD_ID, FIELD_NAME).await;
+    mount_put_204(&h.server, KEY).await;
+
+    let out = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            KEY,
+            "--field",
+            &format!("{FIELD_ID}={INPUT}"),
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        out.status.success(),
+        "BC-3.4.037 M4: command must exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Assert the PUT wire body carries an ADF doc object (type="doc", version=1,
+    // non-empty content) — NOT a plain string.
+    let reqs = h.server.received_requests().await.unwrap();
+    let put_req = reqs
+        .iter()
+        .find(|r| r.method == wiremock::http::Method::PUT)
+        .expect("BC-3.4.037 M4: PUT request must have been made");
+    let put_body: Value =
+        serde_json::from_slice(&put_req.body).expect("BC-3.4.037 M4: PUT body must be valid JSON");
+
+    let wire_field = &put_body["fields"][FIELD_ID];
+    assert_eq!(
+        wire_field.get("type").and_then(Value::as_str),
+        Some("doc"),
+        "BC-3.4.037 M4: customfield-id bypass — wire body must be ADF doc object \
+         (type=doc), not Value::String; got: {wire_field}"
+    );
+    assert_eq!(
+        wire_field.get("version").and_then(Value::as_i64),
+        Some(1),
+        "BC-3.4.037 M4: ADF object must have version=1; got: {wire_field}"
+    );
+    let content = wire_field.get("content").and_then(Value::as_array);
+    assert!(
+        matches!(content, Some(v) if !v.is_empty()),
+        "BC-3.4.037 M4: ADF object must have non-empty content for non-empty input; \
+         got: {wire_field}"
+    );
+    // Confirm this is NOT a plain string.
+    assert!(
+        !wire_field.is_string(),
+        "BC-3.4.037 M4: wire field value must NOT be a plain string; got: {wire_field}"
+    );
+}
+
 /// AC-004 Axis A: platform edit with empty bare ADF-backed `--field NAME=`
 /// must send the clear-doc `{type:doc,version:1,content:[]}` in the PUT body.
 ///
