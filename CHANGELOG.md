@@ -144,7 +144,11 @@ All notable changes to jr will be documented here.
   addition to the pre-existing `--description` channel (BC-3.8.022); a `GET
   .../requesttype/{id}/field` metadata fetch (cache-first, 7-day TTL) is added when at least one
   bare `--field` pair is present, failing open (a single stderr warning, plain-string fallback,
-  never exit 64) if the fetch itself fails (BC-3.8.019 EC-3.8.019-2).
+  never exit 64) if the fetch itself fails (BC-3.8.019 EC-3.8.019-2). On the JSM create path,
+  when both `--description` and a `--field description=` extra-field entry are supplied together
+  (no `--markdown`), assembly order is deterministic — `--description`'s ADF insert supersedes
+  the `--field description=` extra-field entry, so the created issue's description is always
+  `--description`'s value (EC-3.8.019-4, AC-006, ADR-0024 §L-3).
 
 - **`jr auth login --help` and `jr auth refresh --help` `--oauth` flag help text
   accuracy fixes** (S-cycle7-oauth-help-text-fix, issue #790, BC-1.2.049
