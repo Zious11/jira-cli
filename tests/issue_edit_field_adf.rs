@@ -1,15 +1,17 @@
-//! RED-phase failing tests for ADF auto-conversion on the platform EDIT path.
+//! Tests for ADF auto-conversion on the platform EDIT path.
 //!
 //! Covers VP-FIELD-ADF-002/003/004 Axes E/F/H/h2 plus AC-004 Axis A, AC-007,
 //! AC-008, AC-009, AC-010, AC-011 from S-cycle12-platform-adf-autoconvert.
 //!
-//! RED expectations:
-//! - AC-007: current edit guard exits 64 with wrong message substring.
-//! - AC-008/009: dry-run paths store Value::String in plannedChanges/table,
-//!   not ADF doc object / "(adf)" sentinel.
-//! - AC-010/011: live-edit wire PUT body carries plain string; table shows raw
+//! Pre-fix (RED) behavioral gaps that drove these tests:
+//! - AC-007: edit guard exited 64 with wrong message substring.
+//! - AC-008/009: dry-run paths stored Value::String in plannedChanges/table
+//!   instead of ADF doc object / "(adf)" sentinel.
+//! - AC-010/011: live-edit wire PUT body carried plain string; table showed raw
 //!   value / "(updated)" rather than "(adf)".
-//! - AC-004 Axis A: edit empty ADF field sends empty string on wire, not clear-doc.
+//! - AC-004 Axis A: [pre-fix BUG] edit empty ADF field sent plain empty string
+//!   on wire instead of the required clear-doc ({type:doc,version:1,content:[]});
+//!   post-fix behavior (the contract) is that the clear-doc is sent.
 
 #[allow(dead_code)]
 mod common;
