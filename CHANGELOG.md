@@ -125,6 +125,18 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **ADF auto-conversion for `--field` on rich-text fields (S-cycle12-platform-adf-autoconvert,
+  BC-3.4.033/035/036, BC-3.3.013/014/015, BC-3.4.035 AC-011):** `issue edit --field NAME=VALUE`
+  and `issue create --field NAME=VALUE` now auto-convert plain text to ADF (`text_to_adf`) when
+  the target field has ADF schema (`schema.system == "description"` / `schema.system ==
+  "environment"` / `schema.custom` ends with `":textarea"`). Table output shows `(adf)` marker
+  (not raw value); JSON `changed_fields[field_id]` carries the raw user-supplied input string
+  (lossless, BC-3.4.035 AC-011 / #398 invariant). Empty-value clear (`--field description=`)
+  sends `{"type":"doc","version":1,"content":[]}` (BC-3.4.036). `--markdown + --field
+  description` on create exits 64 (BC-3.3.014 AC-006); on edit exits 64 (AC-007). System
+  fields resolved via `--field` use the field_id (`"description"`) as the JSON
+  `changed_fields` key, matching the `--description` path convention.
+
 - **`jr auth login --help` and `jr auth refresh --help` `--oauth` flag help text
   accuracy fixes** (S-cycle7-oauth-help-text-fix, issue #790, BC-1.2.049
   EC-1.2.049-3; adversary pass-1 OBS-1, adversary pass-2 F1).

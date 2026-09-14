@@ -12,7 +12,7 @@ use crate::error::JrError;
 use crate::output;
 use crate::partial_match::MatchResult;
 
-use super::field_resolve;
+use super::field_resolve::{self, FieldResolutionOutputs};
 use super::format;
 use super::helpers;
 use super::jsm_create::{JsmCreateArgs, handle_jsm_create};
@@ -226,6 +226,27 @@ pub(super) async fn handle_create(
         })
         .ok_or_else(|| JrError::UserError("Summary is required. Use --summary".into()))?;
 
+    // Step 2c (S-cycle12, BC-3.3.014): --markdown + --field description conflict.
+    // ADF conversion via --field uses text_to_adf; --markdown uses markdown_to_adf.
+    // Both write the same field via different rendering paths — mixing them is
+    // ambiguous. Checked AFTER project/type/summary resolution (Steps 3a-3c) so
+    // missing --project or --type errors fire first (test AC-17 discriminating
+    // invariant: without --project, "Project key is required" fires, not this guard).
+    // Checked BEFORE the blocking --description-stdin read (Step 4a).
+    if markdown
+        && field_spec_map
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("description"))
+    {
+        return Err(crate::error::JrError::UserError(
+            "--field description cannot be combined with `--markdown`. \
+             Use --description with --markdown to set the description, \
+             or use --field description=VALUE without --markdown."
+                .into(),
+        )
+        .into());
+    }
+
     // Resolve description. spawn_blocking isolates the blocking stdin read
     // from the tokio runtime so later async work isn't starved while waiting
     // on piped input.
@@ -333,6 +354,9 @@ pub(super) async fn handle_create(
     // `get_issue_types_for_project` (S-331) verbatim (Architecture
     // Compliance Rule 1) — both calls live inside the `FieldMetaSource::Create`
     // branch of `resolve_edit_fields` (`resolve_against_createmeta`).
+    // create_field_markers carries ADF display sentinels ("(adf)") keyed by
+    // human_name for the table-emit loop (AC-003, S-cycle12-platform-adf-autoconvert).
+    let mut create_field_markers: BTreeMap<String, String> = BTreeMap::new();
     if !field_spec_map.is_empty() {
         field_resolve::resolve_edit_fields(
             client,
@@ -342,9 +366,12 @@ pub(super) async fn handle_create(
                 issue_type_name: &issue_type_name,
             },
             &field_spec_map,
-            &mut fields,
-            &mut create_echo,
-            &mut BTreeMap::new(),
+            FieldResolutionOutputs {
+                fields: &mut fields,
+                changed_fields: &mut create_echo,
+                planned_preview: &mut BTreeMap::new(),
+                field_markers: &mut create_field_markers,
+            },
         )
         .await?;
     }
@@ -402,9 +429,18 @@ pub(super) async fn handle_create(
         OutputFormat::Table => {
             // BC-3.4.014: emit confirmation, then field echo lines (alphabetical via BTreeMap),
             // then browse URL. This matches BC-3.4.012's table-mode ordering invariant.
+            // AC-003: ADF fields show their marker from create_field_markers instead of
+            // the raw create_echo value.
             output::print_success(&format!("Created issue {}", response.key));
             for (field, value) in &create_echo {
-                eprintln!("  {} \u{2192} {}", field, value);
+                if let Some(marker) = create_field_markers.get(field) {
+                    // ADF field: emit marker to stdout so callers can detect
+                    // ADF conversion programmatically even in table mode
+                    // (mirrors edit dry-run's all-stdout preview stream).
+                    println!("  {} \u{2192} {}", field, marker);
+                } else {
+                    eprintln!("  {} \u{2192} {}", field, value);
+                }
             }
             eprintln!("{}", browse_url);
         }

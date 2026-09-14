@@ -51,10 +51,8 @@ fn write_minimal_config(config_home: &std::path::Path, url: &str) {
 fn write_fields_cache(cache_home: &std::path::Path, profile: &str, fields: &[(&str, &str)]) {
     let dir = cache_home.join("jr").join("v1").join(profile);
     std::fs::create_dir_all(&dir).unwrap();
-    let tuples: Vec<serde_json::Value> = fields
-        .iter()
-        .map(|(id, name)| json!([id, name]))
-        .collect();
+    let tuples: Vec<serde_json::Value> =
+        fields.iter().map(|(id, name)| json!([id, name])).collect();
     let cache = json!({
         "fields": tuples,
         "fetched_at": chrono::Utc::now().to_rfc3339()
@@ -95,11 +93,7 @@ impl Harness {
 }
 
 /// Mount `GET /rest/api/3/field` with a single textarea field.
-async fn mount_list_fields_textarea(
-    server: &MockServer,
-    field_id: &str,
-    field_name: &str,
-) {
+async fn mount_list_fields_textarea(server: &MockServer, field_id: &str, field_name: &str) {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/field"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
@@ -118,12 +112,7 @@ async fn mount_list_fields_textarea(
 }
 
 /// Mount `GET .../editmeta` returning a textarea custom field.
-async fn mount_editmeta_textarea(
-    server: &MockServer,
-    key: &str,
-    field_id: &str,
-    field_name: &str,
-) {
+async fn mount_editmeta_textarea(server: &MockServer, key: &str, field_id: &str, field_name: &str) {
     Mock::given(method("GET"))
         .and(path(format!("/rest/api/3/issue/{key}/editmeta")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -604,8 +593,7 @@ async fn test_bc_3_4_036_live_edit_json_changed_fields_raw_empty_input_not_clear
         serde_json::from_slice(&put_req.body).expect("AC-010c: PUT body must be valid JSON");
     let clear_doc = json!({"type": "doc", "version": 1, "content": []});
     assert_eq!(
-        put_body["fields"][FIELD_ID],
-        clear_doc,
+        put_body["fields"][FIELD_ID], clear_doc,
         "AC-010c: PUT wire body must contain clear-doc for empty ADF field; got: {:?}",
         put_body["fields"][FIELD_ID]
     );
@@ -629,6 +617,13 @@ async fn test_bc_3_4_035_live_edit_field_description_shows_adf_not_updated() {
     const KEY: &str = "TEST-8";
     const INPUT: &str = "Some description text";
 
+    // Pre-populate the fields cache so the `list_fields()` HTTP call is not
+    // needed; "description"'s field_id IS "description" (system field).
+    write_fields_cache(
+        h.cache_dir.path(),
+        "default",
+        &[("description", "Description")],
+    );
     mount_editmeta_description_system(&h.server, KEY).await;
     mount_put_204(&h.server, KEY).await;
 
@@ -743,8 +738,7 @@ async fn test_bc_3_4_036_edit_empty_adf_field_resolves_to_clear_doc() {
 
     let expected_clear_doc = json!({"type": "doc", "version": 1, "content": []});
     assert_eq!(
-        put_body["fields"][FIELD_ID],
-        expected_clear_doc,
+        put_body["fields"][FIELD_ID], expected_clear_doc,
         "AC-004A: PUT body must contain clear-doc for empty ADF field; got: {:?}",
         put_body["fields"][FIELD_ID]
     );

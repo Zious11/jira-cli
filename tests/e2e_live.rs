@@ -14105,7 +14105,8 @@ async fn test_e2e_adf_textarea_create_path_smoke() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let test_value = "ADF autoconvert smoke test — created by test_e2e_adf_textarea_create_path_smoke";
+    let test_value =
+        "ADF autoconvert smoke test — created by test_e2e_adf_textarea_create_path_smoke";
     let summary = format!("[jr-test-adf] textarea create smoke {nonce}");
 
     // Create the issue with the textarea field set.
@@ -14163,8 +14164,8 @@ async fn test_e2e_adf_textarea_create_path_smoke() {
         String::from_utf8_lossy(&fetch_out.stderr)
     );
 
-    let issue: serde_json::Value = serde_json::from_slice(&fetch_out.stdout)
-        .expect("AC-014: issue fetch must be valid JSON");
+    let issue: serde_json::Value =
+        serde_json::from_slice(&fetch_out.stdout).expect("AC-014: issue fetch must be valid JSON");
 
     let field_value = &issue["fields"][&field_id];
     assert!(

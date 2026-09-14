@@ -162,7 +162,7 @@ async fn mount_createmeta_fields_single_page(
     let total = fields.len();
     Mock::given(method("GET"))
         .and(path(format!(
-            "/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}"
+            "/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}/fields"
         )))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -726,7 +726,9 @@ async fn test_vp_578_020a_field_on_createmeta_page_2_resolves() {
     mount_issue_types(&h.server, "PROJ", &[("10000", "Task")]).await;
 
     Mock::given(method("GET"))
-        .and(path("/rest/api/3/issue/createmeta/PROJ/issuetypes/10000"))
+        .and(path(
+            "/rest/api/3/issue/createmeta/PROJ/issuetypes/10000/fields",
+        ))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [createmeta_string_field("summary", "Summary")],
@@ -737,7 +739,9 @@ async fn test_vp_578_020a_field_on_createmeta_page_2_resolves() {
         .mount(&h.server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/rest/api/3/issue/createmeta/PROJ/issuetypes/10000"))
+        .and(path(
+            "/rest/api/3/issue/createmeta/PROJ/issuetypes/10000/fields",
+        ))
         .and(query_param("startAt", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [createmeta_string_field("customfield_10077", "A Field")],
@@ -2880,29 +2884,25 @@ async fn test_ec_3_8_012_5_markdown_field_description_no_longer_guarded() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // S-cycle12 (BC-3.3.014/AC-006) added a --markdown + --field description
+    // guard to the CREATE path, so this guard now fires before field resolution.
     assert_eq!(
         output.status.code(),
         Some(64),
-        "AC-018 (realistic fixture): a 'doc'-typed description field has no \
-         supported bare-form type arm — expect exit 64 via \
-         unsupported_field_type_error, proving resolution ran past the \
-         removed guard rather than being rejected pre-flight by it; \
+        "AC-006/BC-3.3.014: --field description + --markdown must exit 64; \
          stderr={stderr}"
     );
     assert!(
-        stderr.contains("which is not supported by `--field`"),
-        "AC-018: must fail via the unsupported-field-type arm specifically \
-         (proof that createmeta resolution genuinely engaged), not some \
-         unrelated error; stderr={stderr}"
+        stderr.contains("cannot be combined with `--markdown`"),
+        "AC-006: must fail via the BC-3.3.014 --markdown+--field description \
+         guard; stderr={stderr}"
     );
+    // The OLD DEC-188 guard ("--field is only valid with --request-type")
+    // must still NOT fire — DEC-310 reversal remains in effect.
     assert!(
         !stderr.contains("--field is only valid with"),
-        "AC-018: the removed DEC-188 guard must not fire; stderr={stderr}"
-    );
-    assert!(
-        !stderr.contains("cannot be combined with `--markdown`"),
-        "AC-018: handle_create has no --markdown-requires-description guard \
-         of its own (that guard is JSM/edit-only); stderr={stderr}"
+        "DEC-310 reversal: the removed DEC-188 guard must not fire; \
+         stderr={stderr}"
     );
 }
 

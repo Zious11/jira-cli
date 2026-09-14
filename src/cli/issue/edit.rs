@@ -17,7 +17,7 @@ use crate::output;
 use crate::partial_match::MatchResult;
 
 use super::create::parse_field_kv;
-use super::field_resolve::FieldMetaSource;
+use super::field_resolve::{FieldMetaSource, FieldResolutionOutputs};
 use super::format;
 use super::helpers;
 use super::json_output;
@@ -96,6 +96,24 @@ pub(super) async fn handle_edit(
             "--max requires --jql. It cannot be used with positional keys because \
              it only limits the number of issues matched by a JQL query. \
              Remove --max or switch to --jql <query>."
+                .into(),
+        )
+        .into());
+    }
+
+    // AC-007 guard (BC-3.4.035, S-cycle12): --field description=VALUE is
+    // incompatible with --markdown; both would write to the description field,
+    // but via different rendering paths (ADF raw text vs. markdown→ADF).
+    // Checked BEFORE the --markdown guard so users get the most specific error.
+    if markdown
+        && field_pairs
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("description"))
+    {
+        return Err(JrError::UserError(
+            "--field description cannot be combined with `--markdown`. \
+             Use --description with --markdown to set the description, \
+             or use --field description=VALUE without --markdown."
                 .into(),
         )
         .into());
@@ -552,6 +570,10 @@ pub(super) async fn handle_edit(
         // :asset), or the same simplified display string dr_changed carries
         // for a bare field (documented exception to the general rule).
         let mut dr_planned: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        // dr_field_markers carries ADF display sentinels ("(adf)" / "(adf-clear)")
+        // keyed by human_name for the dry-run table-emit loop (AC-003,
+        // S-cycle12-platform-adf-autoconvert).
+        let mut dr_field_markers: BTreeMap<String, String> = BTreeMap::new();
         if !field_pairs.is_empty() {
             let dr_key = &effective_keys[0];
             let mut dr_fields = json!({});
@@ -565,9 +587,12 @@ pub(super) async fn handle_edit(
                 &config.active_profile_name,
                 FieldMetaSource::Edit { key: dr_key },
                 &field_pairs,
-                &mut dr_fields,
-                &mut dr_changed,
-                &mut dr_planned,
+                FieldResolutionOutputs {
+                    fields: &mut dr_fields,
+                    changed_fields: &mut dr_changed,
+                    planned_preview: &mut dr_planned,
+                    field_markers: &mut dr_field_markers,
+                },
             )
             .await?;
         }
@@ -869,8 +894,14 @@ pub(super) async fn handle_edit(
                 // H-3(a): emit resolved --field entries to stdout (not stderr) so the
                 // entire planned-changes preview is on a single coherent stream.
                 // resolve ran above (before this match arm), so dr_changed is ready.
+                // AC-003: ADF fields show their marker ("(adf)" / "(adf-clear)") from
+                // dr_field_markers instead of the raw input value in dr_changed.
                 for (field, value) in &dr_changed {
-                    println!("  {} \u{2192} {}", field, value);
+                    if let Some(marker) = dr_field_markers.get(field) {
+                        println!("  {} \u{2192} {}", field, marker);
+                    } else {
+                        println!("  {} \u{2192} {}", field, value);
+                    }
                 }
             }
         }
@@ -1068,6 +1099,11 @@ pub(super) async fn handle_edit(
     // failure (unknown field, bad type) exits 64 before any HTTP mutation
     // at all -- unaffected by whether components ends up merged into the
     // same PUT.
+    // field_markers carries ADF display sentinels ("(adf)" / "(adf-clear)")
+    // keyed by human_name for the table-emit loop (AC-003,
+    // S-cycle12-platform-adf-autoconvert). Declared before the if-block so it
+    // is in scope at the emit loop below.
+    let mut field_markers: BTreeMap<String, String> = BTreeMap::new();
     if !field_pairs.is_empty() {
         // S-578-2: real hinted-bypass dispatch (see the dry-run block above);
         // the live path doesn't render a plannedChanges preview, so the new
@@ -1077,9 +1113,12 @@ pub(super) async fn handle_edit(
             &config.active_profile_name,
             FieldMetaSource::Edit { key },
             &field_pairs,
-            &mut fields,
-            &mut changed_fields,
-            &mut BTreeMap::new(),
+            FieldResolutionOutputs {
+                fields: &mut fields,
+                changed_fields: &mut changed_fields,
+                planned_preview: &mut BTreeMap::new(),
+                field_markers: &mut field_markers,
+            },
         )
         .await?;
         has_updates = true;
@@ -1234,9 +1273,17 @@ pub(super) async fn handle_edit(
             // BC-3.4.012: emit one "  field → value" line per changed field, alphabetical.
             // Description asymmetry (AC-016 / CLAUDE.md Gotcha): table shows "(updated)" marker;
             // JSON changed_fields carries the raw input string (see the description insertion above).
+            // AC-003: ADF fields show their marker from field_markers before the legacy description
+            // check, so --field description=VALUE shows "(adf)" not "(updated)".
             for (field, value) in &changed_fields {
-                if field == "description" {
-                    // Table mode: marker only — content never echoed (BC-3.4.012, AC-003).
+                if let Some(marker) = field_markers.get(field) {
+                    // ADF field: emit marker to stdout so callers can detect
+                    // ADF conversion programmatically even in table mode
+                    // (mirrors dry-run's all-stdout preview stream).
+                    println!("  {} \u{2192} {}", field, marker);
+                } else if field == "description" {
+                    // Non-ADF description (--description / --description-stdin path):
+                    // table mode shows marker only — content never echoed (BC-3.4.012).
                     eprintln!("  {} \u{2192} (updated)", field);
                 } else {
                     eprintln!("  {} \u{2192} {}", field, value);

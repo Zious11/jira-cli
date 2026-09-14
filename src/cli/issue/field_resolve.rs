@@ -379,10 +379,14 @@ pub(crate) async fn resolve_edit_fields(
     profile: &crate::profile::Profile,
     source: FieldMetaSource<'_>,
     field_pairs: &HashMap<String, FieldValueSpec>,
-    fields: &mut serde_json::Value,
-    changed_fields: &mut BTreeMap<String, String>,
-    planned_preview: &mut BTreeMap<String, serde_json::Value>,
+    outputs: FieldResolutionOutputs<'_>,
 ) -> Result<()> {
+    let FieldResolutionOutputs {
+        fields,
+        changed_fields,
+        planned_preview,
+        field_markers,
+    } = outputs;
     use crate::cache::{read_fields_cache, write_fields_cache};
 
     if field_pairs.is_empty() {
@@ -524,6 +528,8 @@ pub(crate) async fn resolve_edit_fields(
                 .into());
             } else {
                 // Field not found in cache (or no cache). Fetch fresh from API once.
+                // Any HTTP error from list_fields() propagates immediately (exit 1
+                // per test_bc_3_3_011_error_taxonomy_all_10_rows row10).
                 let raw_fields = client.list_fields().await?;
                 let fresh: Vec<(String, String)> = raw_fields
                     .iter()
@@ -551,6 +557,16 @@ pub(crate) async fn resolve_edit_fields(
                 }
             };
 
+            // For system fields (non-customfield_), use the field_id as human_name
+            // so the changed_fields JSON key matches the convention used by dedicated
+            // flags (e.g. `--description` inserts "description", not "Description").
+            // BC-3.4.035 AC-011: `changed_fields["description"]` must use lowercase.
+            let human_name = if field_id.starts_with("customfield_") {
+                human_name
+            } else {
+                field_id.clone()
+            };
+
             resolved.push((field_id, human_name, spec.clone()));
         }
     }
@@ -566,6 +582,7 @@ pub(crate) async fn resolve_edit_fields(
                 fields,
                 changed_fields,
                 planned_preview,
+                field_markers,
             )
             .await
         }
@@ -578,9 +595,12 @@ pub(crate) async fn resolve_edit_fields(
                 project_key,
                 issue_type_name,
                 resolved,
-                fields,
-                changed_fields,
-                planned_preview,
+                FieldResolutionOutputs {
+                    fields,
+                    changed_fields,
+                    planned_preview,
+                    field_markers,
+                },
             )
             .await
         }
@@ -605,10 +625,14 @@ async fn resolve_against_createmeta(
     project_key: &str,
     issue_type_name: &str,
     resolved: Vec<(String, String, FieldValueSpec)>,
-    fields: &mut serde_json::Value,
-    changed_fields: &mut BTreeMap<String, String>,
-    planned_preview: &mut BTreeMap<String, serde_json::Value>,
+    outputs: FieldResolutionOutputs<'_>,
 ) -> Result<()> {
+    let FieldResolutionOutputs {
+        fields,
+        changed_fields,
+        planned_preview,
+        field_markers,
+    } = outputs;
     // Step 3 (issue-type name → id, S-331 reuse, AC-007): case-insensitive,
     // offset-paginated internally inside get_issue_types_for_project.
     let issue_types = client.get_issue_types_for_project(project_key).await?;
@@ -671,6 +695,14 @@ async fn resolve_against_createmeta(
             auto_complete_url: meta_field.auto_complete_url.clone(),
         };
 
+        // ADF empty-omit pre-check (BC-3.3.015, S-cycle12): on create, an
+        // empty value for an ADF-backed field is OMITTED from the POST body
+        // entirely (not sent as a clear-doc). Only applies to bare-form
+        // (kind == None) — hinted values bypass this check.
+        if spec.kind.is_none() && is_adf_field(&adapted.schema) && spec.value.trim().is_empty() {
+            continue;
+        }
+
         dispatch_field_value(
             client,
             &field_id,
@@ -681,7 +713,7 @@ async fn resolve_against_createmeta(
                 fields,
                 changed_fields,
                 planned_preview,
-                field_markers: BTreeMap::new(),
+                field_markers,
             },
         )
         .await?;
@@ -702,6 +734,7 @@ async fn resolve_against_editmeta(
     fields: &mut serde_json::Value,
     changed_fields: &mut BTreeMap<String, String>,
     planned_preview: &mut BTreeMap<String, serde_json::Value>,
+    field_markers: &mut BTreeMap<String, String>,
 ) -> Result<()> {
     // --- Phase 2: Fetch editmeta once (Step 3). ---
     // Only reached when all field names were resolved successfully (Phase 1 has no errors).
@@ -729,6 +762,18 @@ async fn resolve_against_editmeta(
             .into());
         }
 
+        // ADF empty-clear pre-check (BC-3.4.036, S-cycle12): on edit, an empty
+        // value for an ADF-backed field writes a clear-doc (empty content array).
+        // Only applies to bare-form (kind == None) — hinted values bypass this.
+        if spec.kind.is_none() && is_adf_field(&meta_field.schema) && spec.value.trim().is_empty() {
+            let clear_doc = serde_json::json!({"type": "doc", "version": 1, "content": []});
+            fields[field_id.as_str()] = clear_doc.clone();
+            changed_fields.insert(human_name.clone(), String::new());
+            planned_preview.insert(human_name.clone(), clear_doc);
+            field_markers.insert(human_name, "(adf-clear)".to_string());
+            continue;
+        }
+
         dispatch_field_value(
             client,
             &field_id,
@@ -739,7 +784,7 @@ async fn resolve_against_editmeta(
                 fields,
                 changed_fields,
                 planned_preview,
-                field_markers: BTreeMap::new(),
+                field_markers,
             },
         )
         .await?;
@@ -756,39 +801,19 @@ async fn resolve_against_editmeta(
 /// - `system == "environment"`
 /// - `custom` ends with `":textarea"`
 ///
-/// `is_adf_field` and `is_adf_field_value` are the two entry points that
-/// delegate here — neither duplicates this logic (Architecture Compliance
-/// Rule 1, S-cycle12-platform-adf-autoconvert).
-///
-/// **Stub** — `todo!()` body. Implementation: S-cycle12-platform-adf-autoconvert Step 4.
-fn is_adf_schema(_system: Option<&str>, _custom: Option<&str>) -> bool {
-    todo!("S-cycle12: implement is_adf_schema three-arm allowlist")
+/// `is_adf_field` is the entry point that delegates here (Architecture
+/// Compliance Rule 1, S-cycle12-platform-adf-autoconvert).
+fn is_adf_schema(system: Option<&str>, custom: Option<&str>) -> bool {
+    matches!(system, Some("description") | Some("environment"))
+        || custom.map(|c| c.ends_with(":textarea")).unwrap_or(false)
 }
 
 /// ADF field detection predicate for `EditMetaFieldSchema` (AC-001, BC-3.4.033
 /// precondition).
 ///
 /// Delegates to [`is_adf_schema`]; contains NO allowlist logic itself.
-///
-/// **Stub** — `todo!()` body. Implementation: S-cycle12-platform-adf-autoconvert Step 4.
 fn is_adf_field(schema: &crate::types::jira::EditMetaFieldSchema) -> bool {
-    todo!(
-        "S-cycle12: implement is_adf_field delegating to is_adf_schema; schema.system={:?} schema.custom={:?}",
-        schema.system,
-        schema.custom
-    )
-}
-
-/// ADF field detection predicate for a raw `serde_json::Value` schema (AC-001,
-/// ADR-0024 AC-003).
-///
-/// Called from `jsm_create.rs` (Story 2) which works with JSON schema values
-/// rather than typed `EditMetaFieldSchema` structs. Delegates to
-/// [`is_adf_schema`]; contains NO allowlist logic itself.
-///
-/// **Stub** — `todo!()` body. Implementation: S-cycle12-platform-adf-autoconvert Step 4.
-pub(crate) fn is_adf_field_value(_value: &serde_json::Value) -> bool {
-    todo!("S-cycle12: implement is_adf_field_value delegating to is_adf_schema")
+    is_adf_schema(schema.system.as_deref(), schema.custom.as_deref())
 }
 
 /// Output/accumulator bundle for [`dispatch_field_value`].
@@ -804,14 +829,19 @@ pub(crate) fn is_adf_field_value(_value: &serde_json::Value) -> bool {
 /// (`"(adf)"` / `"(adf-clear)"`) for the table-emit loop priority rule in
 /// `edit.rs` and `create.rs`. Initialized empty at every construction site;
 /// populated ONLY at two PLATFORM-PATH sites (implementation: Step 5/7).
-struct FieldResolutionOutputs<'a> {
-    fields: &'a mut serde_json::Value,
-    changed_fields: &'a mut BTreeMap<String, String>,
-    planned_preview: &'a mut BTreeMap<String, serde_json::Value>,
+///
+/// `pub(crate)` so that `edit.rs` and `create.rs` can construct it before
+/// calling [`resolve_edit_fields`] (avoids the clippy `too_many_arguments`
+/// lint on the public API — bundles the 4 output sinks into one struct).
+pub(crate) struct FieldResolutionOutputs<'a> {
+    pub fields: &'a mut serde_json::Value,
+    pub changed_fields: &'a mut BTreeMap<String, String>,
+    pub planned_preview: &'a mut BTreeMap<String, serde_json::Value>,
     /// ADF marker side-channel (AC-003, S-cycle12-platform-adf-autoconvert).
     /// Keyed by `human_name`; values are `"(adf)"` or `"(adf-clear)"`.
-    /// Empty at stub stage; populated by implementation.
-    field_markers: BTreeMap<String, String>,
+    /// Populated by the ADF branch in `dispatch_field_value` and the ADF
+    /// empty-clear pre-check in `resolve_against_editmeta`.
+    pub field_markers: &'a mut BTreeMap<String, String>,
 }
 
 /// Shared per-pair Step 4-6 dispatch (hinted-bypass + bare-form type
@@ -863,6 +893,22 @@ async fn dispatch_field_value(
 
     match field_type {
         "string" | "text" => {
+            // ADF non-empty path (BC-3.4.033, BC-3.3.013, S-cycle12):
+            // convert plain text to ADF doc, record "(adf)" marker,
+            // store ADF object in planned_preview (not display string).
+            // #398 invariant: changed_fields carries raw input string.
+            if is_adf_field(&meta_field.schema) {
+                let adf_doc = crate::adf::text_to_adf(&value);
+                outputs
+                    .field_markers
+                    .insert(human_name.clone(), "(adf)".to_string());
+                outputs
+                    .planned_preview
+                    .insert(human_name.clone(), adf_doc.clone());
+                outputs.fields[field_id] = adf_doc;
+                outputs.changed_fields.insert(human_name, value);
+                return Ok(());
+            }
             wire_value = serde_json::Value::String(value.clone());
             display_value = value.clone();
         }
@@ -1753,7 +1799,10 @@ mod tests {
     /// RED: panics via todo!() until is_adf_schema is implemented.
     #[test]
     fn test_bc_3_4_033_is_adf_field_allowlist_positive_and_negative_anchors() {
-        fn mk(system: Option<&str>, custom: Option<&str>) -> crate::types::jira::EditMetaFieldSchema {
+        fn mk(
+            system: Option<&str>,
+            custom: Option<&str>,
+        ) -> crate::types::jira::EditMetaFieldSchema {
             crate::types::jira::EditMetaFieldSchema {
                 field_type: "string".to_string(),
                 system: system.map(|s| s.to_string()),
@@ -1763,7 +1812,10 @@ mod tests {
         // Positive anchors (must return true):
         // ":textarea" custom type
         assert!(
-            is_adf_field(&mk(None, Some("com.atlassian.jira.plugin.system.customfieldtypes:textarea"))),
+            is_adf_field(&mk(
+                None,
+                Some("com.atlassian.jira.plugin.system.customfieldtypes:textarea")
+            )),
             ":textarea custom must be ADF-backed"
         );
         // "description" system field
@@ -1786,7 +1838,10 @@ mod tests {
         // Negative anchors (must return false):
         // ":textfield" — NOT ":textarea"
         assert!(
-            !is_adf_field(&mk(None, Some("com.atlassian.jira.plugin.system.customfieldtypes:textfield"))),
+            !is_adf_field(&mk(
+                None,
+                Some("com.atlassian.jira.plugin.system.customfieldtypes:textfield")
+            )),
             ":textfield must NOT be ADF-backed"
         );
         // "summary" system field
@@ -1842,11 +1897,12 @@ mod tests {
                 let mut fields = serde_json::json!({});
                 let mut changed_fields = std::collections::BTreeMap::new();
                 let mut planned_preview = std::collections::BTreeMap::new();
+                let mut field_markers = std::collections::BTreeMap::new();
                 let mut outputs = FieldResolutionOutputs {
                     fields: &mut fields,
                     changed_fields: &mut changed_fields,
                     planned_preview: &mut planned_preview,
-                    field_markers: std::collections::BTreeMap::new(),
+                    field_markers: &mut field_markers,
                 };
                 let spec = crate::cli::issue::create::FieldValueSpec {
                     value: value.clone(),

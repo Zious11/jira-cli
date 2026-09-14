@@ -81,7 +81,9 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     //                --no-mentions added in S-cycle5-mention-resolution-wiring AC-014/AC-017,
     //                issue #674 — declared on the real clap surface, not yet exercised by
     //                e2e_live.rs's mention round-trip tests, which resolve mentions rather
-    //                than suppress them)
+    //                than suppress them;
+    //                --field/--no-input added in S-cycle12-platform-adf-autoconvert AC-014
+    //                ADF textarea create e2e smoke test)
     (
         &["issue", "create"],
         &[
@@ -98,6 +100,8 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--points",
             "--parent",
             "--component",
+            "--field",
+            "--no-input",
         ],
     ),
     // issue edit  (--priority added: used in e2e_live.rs priority round-trip test;
@@ -264,8 +268,10 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["worklog", "add"], &["--output"]),
     // worklog list  (positional: key)
     (&["worklog", "list"], &["--output"]),
-    // api  (positional: path; used by E2E-HV-2 story-points field discovery)
-    (&["api"], &[]),
+    // api  (positional: path; used by E2E-HV-2 story-points field discovery;
+    //       --output added in S-cycle12-platform-adf-autoconvert AC-014
+    //       ADF textarea create e2e smoke test)
+    (&["api"], &["--output"]),
     // component list  (added in S-605-2 AC-010: discovers an existing component
     // on the smoke-test project, per BC-3.4.023 Delivery note's precondition
     // that the project must have >= 1 component defined)

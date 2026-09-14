@@ -19,7 +19,7 @@ mod common;
 
 use assert_cmd::Command;
 use serde_json::{Value, json};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ---------------------------------------------------------------------------
@@ -39,10 +39,7 @@ fn write_minimal_config(config_home: &std::path::Path, url: &str) {
 fn write_fields_cache(cache_home: &std::path::Path, profile: &str, fields: &[(&str, &str)]) {
     let dir = cache_home.join("jr").join("v1").join(profile);
     std::fs::create_dir_all(&dir).unwrap();
-    let tuples: Vec<Value> = fields
-        .iter()
-        .map(|(id, name)| json!([id, name]))
-        .collect();
+    let tuples: Vec<Value> = fields.iter().map(|(id, name)| json!([id, name])).collect();
     let cache = json!({
         "fields": tuples,
         "fetched_at": chrono::Utc::now().to_rfc3339()
@@ -140,18 +137,37 @@ async fn mount_createmeta_textarea(
         .await;
 }
 
+/// Descriptor for a single ADF field in the mixed-fields createmeta mock.
+struct AdfFieldDesc<'a> {
+    id: &'a str,
+    name: &'a str,
+    schema_system: Option<&'a str>,
+    schema_custom: Option<&'a str>,
+}
+
 /// Mount `GET .../createmeta/.../fields` with BOTH a textarea field AND a
 /// system field (description/environment) to test multi-field ADF detection.
 async fn mount_createmeta_mixed_adf_fields(
     server: &MockServer,
     project: &str,
     it_id: &str,
-    textarea_id: &str,
-    textarea_name: &str,
-    system_id: &str,
-    system_name_display: &str,
-    system_schema_name: &str,
+    textarea_field: AdfFieldDesc<'_>,
+    system_field: AdfFieldDesc<'_>,
 ) {
+    let ta_id = textarea_field.id;
+    let ta_name = textarea_field.name;
+    let ta_schema = json!({
+        "type": "string",
+        "system": textarea_field.schema_system,
+        "custom": textarea_field.schema_custom,
+    });
+    let sys_id = system_field.id;
+    let sys_name = system_field.name;
+    let sys_schema = json!({
+        "type": "string",
+        "system": system_field.schema_system,
+        "custom": system_field.schema_custom,
+    });
     Mock::given(method("GET"))
         .and(path(format!(
             "/rest/api/3/issue/createmeta/{project}/issuetypes/{it_id}/fields"
@@ -164,25 +180,17 @@ async fn mount_createmeta_mixed_adf_fields(
                     "schema": {"type": "string", "system": "summary"},
                     "operations": ["set"]
                 },
-                textarea_id: {
-                    "name": textarea_name,
+                ta_id: {
+                    "name": ta_name,
                     "required": false,
-                    "schema": {
-                        "type": "string",
-                        "system": null,
-                        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textarea"
-                    },
+                    "schema": ta_schema,
                     "operations": ["set"],
                     "allowedValues": null
                 },
-                system_id: {
-                    "name": system_name_display,
+                sys_id: {
+                    "name": sys_name,
                     "required": false,
-                    "schema": {
-                        "type": "string",
-                        "system": system_schema_name,
-                        "custom": null
-                    },
+                    "schema": sys_schema,
                     "operations": ["set"],
                     "allowedValues": null
                 }
@@ -434,11 +442,18 @@ async fn test_bc_3_3_013_014_createmeta_adaptation_preserves_system_custom_for_a
         &h.server,
         "TEST",
         "10001",
-        TEXTAREA_ID,
-        TEXTAREA_NAME,
-        ENV_ID,
-        ENV_DISPLAY_NAME,
-        "environment",
+        AdfFieldDesc {
+            id: TEXTAREA_ID,
+            name: TEXTAREA_NAME,
+            schema_system: None,
+            schema_custom: Some("com.atlassian.jira.plugin.system.customfieldtypes:textarea"),
+        },
+        AdfFieldDesc {
+            id: ENV_ID,
+            name: ENV_DISPLAY_NAME,
+            schema_system: Some("environment"),
+            schema_custom: None,
+        },
     )
     .await;
     mount_post_issue(&h.server).await;
