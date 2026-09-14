@@ -162,7 +162,7 @@ async fn mount_createmeta_fields_single_page(
     let total = fields.len();
     Mock::given(method("GET"))
         .and(path(format!(
-            "/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}/fields"
+            "/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}"
         )))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -726,9 +726,7 @@ async fn test_vp_578_020a_field_on_createmeta_page_2_resolves() {
     mount_issue_types(&h.server, "PROJ", &[("10000", "Task")]).await;
 
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/PROJ/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/PROJ/issuetypes/10000"))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [createmeta_string_field("summary", "Summary")],
@@ -739,9 +737,7 @@ async fn test_vp_578_020a_field_on_createmeta_page_2_resolves() {
         .mount(&h.server)
         .await;
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/PROJ/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/PROJ/issuetypes/10000"))
         .and(query_param("startAt", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [createmeta_string_field("customfield_10077", "A Field")],

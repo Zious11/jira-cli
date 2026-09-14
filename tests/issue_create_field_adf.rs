@@ -96,8 +96,8 @@ async fn mount_issue_types(server: &MockServer, project: &str) {
         .await;
 }
 
-/// Mount `GET /rest/api/3/issue/createmeta/{project}/issuetypes/{itid}/fields`
-/// returning a textarea custom field and optionally a system field.
+/// Mount `GET /rest/api/3/issue/createmeta/{project}/issuetypes/{itid}`
+/// returning a textarea custom field and a summary system field as an array.
 async fn mount_createmeta_textarea(
     server: &MockServer,
     project: &str,
@@ -107,28 +107,28 @@ async fn mount_createmeta_textarea(
 ) {
     Mock::given(method("GET"))
         .and(path(format!(
-            "/rest/api/3/issue/createmeta/{project}/issuetypes/{it_id}/fields"
+            "/rest/api/3/issue/createmeta/{project}/issuetypes/{it_id}"
         )))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "fields": {
-                "summary": {
+            "fields": [
+                {
+                    "fieldId": "summary",
                     "name": "Summary",
                     "required": true,
                     "schema": {"type": "string", "system": "summary"},
                     "operations": ["set"]
                 },
-                field_id: {
+                {
+                    "fieldId": field_id,
                     "name": field_name,
                     "required": false,
                     "schema": {
                         "type": "string",
-                        "system": null,
                         "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textarea"
                     },
-                    "operations": ["set"],
-                    "allowedValues": null
+                    "operations": ["set"]
                 }
-            },
+            ],
             "total": 2,
             "maxResults": 50,
             "startAt": 0
@@ -145,8 +145,9 @@ struct AdfFieldDesc<'a> {
     schema_custom: Option<&'a str>,
 }
 
-/// Mount `GET .../createmeta/.../fields` with BOTH a textarea field AND a
-/// system field (description/environment) to test multi-field ADF detection.
+/// Mount `GET .../createmeta/.../issuetypes/{it_id}` with BOTH a textarea
+/// field AND a system field (description/environment) as an array, to test
+/// multi-field ADF detection with the correct Jira Cloud REST API v3 shape.
 async fn mount_createmeta_mixed_adf_fields(
     server: &MockServer,
     project: &str,
@@ -170,31 +171,32 @@ async fn mount_createmeta_mixed_adf_fields(
     });
     Mock::given(method("GET"))
         .and(path(format!(
-            "/rest/api/3/issue/createmeta/{project}/issuetypes/{it_id}/fields"
+            "/rest/api/3/issue/createmeta/{project}/issuetypes/{it_id}"
         )))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "fields": {
-                "summary": {
+            "fields": [
+                {
+                    "fieldId": "summary",
                     "name": "Summary",
                     "required": true,
                     "schema": {"type": "string", "system": "summary"},
                     "operations": ["set"]
                 },
-                ta_id: {
+                {
+                    "fieldId": ta_id,
                     "name": ta_name,
                     "required": false,
                     "schema": ta_schema,
-                    "operations": ["set"],
-                    "allowedValues": null
+                    "operations": ["set"]
                 },
-                sys_id: {
+                {
+                    "fieldId": sys_id,
                     "name": sys_name,
                     "required": false,
                     "schema": sys_schema,
-                    "operations": ["set"],
-                    "allowedValues": null
+                    "operations": ["set"]
                 }
-            },
+            ],
             "total": 3,
             "maxResults": 50,
             "startAt": 0

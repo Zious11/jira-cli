@@ -1177,7 +1177,7 @@ impl JiraClient {
             pages_fetched += 1;
             let response: CreateMetaFieldsResponse = self
                 .get(&format!(
-                    "/rest/api/3/issue/createmeta/{}/issuetypes/{}/fields?startAt={}&maxResults={}",
+                    "/rest/api/3/issue/createmeta/{}/issuetypes/{}?startAt={}&maxResults={}",
                     urlencoding::encode(project_key),
                     urlencoding::encode(issue_type_id),
                     start_at,
@@ -1245,100 +1245,21 @@ pub(crate) struct CreateMetaField {
 }
 
 /// Response wrapper for
-/// `GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}/fields`.
+/// `GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}`.
 ///
 /// Offset-paginated (`startAt`/`maxResults`/`total`); prefers the `fields`
 /// key, tolerates the OpenAPI-synonymous `results` key (AC-008) — no
 /// `values`, no `nextPageToken`, same pagination family as the sibling
 /// [`CreatemetaIssueTypesResponse`].
 ///
-/// Dual-format `fields` deserialization:
-/// - Array format: `[{"fieldId":"x","name":"y","schema":{...}}]` (Jira Cloud REST API v3)
-/// - Object format: `{"fieldId":{"name":"y","schema":{...}}}` (some endpoint variants)
-///
-/// Both formats produce the same `Vec<CreateMetaField>` output.
-#[derive(Debug)]
+/// Wire shape: `{"fields": [...], "startAt": 0, "maxResults": N, "total": N}`.
+/// Each element is a `FieldCreateMetadata` object (`fieldId`, `name`, `schema`, …).
+#[derive(Debug, Deserialize)]
 struct CreateMetaFieldsResponse {
+    #[serde(alias = "results", default)]
     pub fields: Vec<CreateMetaField>,
+    #[serde(default)]
     pub total: u32,
-}
-
-impl<'de> Deserialize<'de> for CreateMetaFieldsResponse {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // Bring trait into scope so `D::Error::custom` resolves.
-        use serde::de::Error;
-        let value = serde_json::Value::deserialize(deserializer)?;
-
-        let total = value
-            .get("total")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32)
-            .unwrap_or(0);
-
-        let fields_raw = value.get("fields").or_else(|| value.get("results"));
-
-        let fields = match fields_raw {
-            None => Vec::new(),
-            Some(serde_json::Value::Array(arr)) => arr
-                .iter()
-                .map(|v| {
-                    serde_json::from_value::<CreateMetaField>(v.clone())
-                        .map_err(|e| D::Error::custom(e.to_string()))
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            Some(serde_json::Value::Object(map)) => map
-                .iter()
-                .map(|(field_id, body)| {
-                    let name = body
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            D::Error::custom(format!("missing name for field {field_id}"))
-                        })?
-                        .to_string();
-                    let schema = body
-                        .get("schema")
-                        .ok_or_else(|| {
-                            D::Error::custom(format!("missing schema for field {field_id}"))
-                        })
-                        .and_then(|s| {
-                            serde_json::from_value::<EditMetaFieldSchema>(s.clone())
-                                .map_err(|e| D::Error::custom(e.to_string()))
-                        })?;
-                    // Treat missing OR explicit null as None (some endpoints
-                    // return `"allowedValues": null` instead of omitting the key).
-                    let allowed_values = match body.get("allowedValues") {
-                        None | Some(serde_json::Value::Null) => None,
-                        Some(v) => Some(
-                            serde_json::from_value::<Vec<AllowedValue>>(v.clone())
-                                .map_err(|e| D::Error::custom(e.to_string()))?,
-                        ),
-                    };
-                    let auto_complete_url = body
-                        .get("autoCompleteUrl")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    Ok(CreateMetaField {
-                        field_id: field_id.clone(),
-                        name,
-                        schema,
-                        allowed_values,
-                        auto_complete_url,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            Some(_) => {
-                return Err(D::Error::custom(
-                    "createmeta fields must be an array or object",
-                ));
-            }
-        };
-
-        Ok(CreateMetaFieldsResponse { fields, total })
-    }
 }
 
 /// Issue type entry returned by `GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes`.

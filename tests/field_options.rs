@@ -206,7 +206,7 @@ async fn mount_createmeta_fields_single_page(
     let total = fields.len();
     Mock::given(method("GET"))
         .and(path(format!(
-            "/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}/fields"
+            "/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}"
         )))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -559,9 +559,7 @@ async fn test_bc_x_14_004_ec_x_14_004_4_unknown_type_exits_64_before_createmeta(
     mount_issue_types(&h.server, "HELP", &[("10000", "Bug"), ("10001", "Task")]).await;
 
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .expect(0)
         .mount(&h.server)
@@ -604,9 +602,7 @@ async fn test_bc_x_14_004_m2_project_404_exits_64_message() {
     let h = Harness::new().await;
     mount_issue_types_not_found(&h.server, "NOPE").await;
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/NOPE/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/NOPE/issuetypes/10000"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .expect(0)
         .mount(&h.server)
@@ -652,9 +648,7 @@ async fn test_bc_x_14_004_createmeta_fields_400_exits_1_not_64() {
     let h = Harness::new().await;
     mount_issue_types(&h.server, "HELP", &[("10000", "Bug")]).await;
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .respond_with(ResponseTemplate::new(400).set_body_json(json!({
             "errorMessages": ["The issue type selected is invalid."],
             "errors": {}
@@ -694,9 +688,7 @@ async fn test_bc_x_14_004_createmeta_fields_500_exits_1_not_64() {
     let h = Harness::new().await;
     mount_issue_types(&h.server, "HELP", &[("10000", "Bug")]).await;
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .respond_with(ResponseTemplate::new(500).set_body_json(json!({
             "errorMessages": ["Internal server error."],
             "errors": {}
@@ -1226,9 +1218,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_paginates_all_pages() {
 
     // Page 1: one unrelated field, total = 2.
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [{
@@ -1246,9 +1236,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_paginates_all_pages() {
 
     // Page 2 (startAt derived from actual page-1 length, 1): target field.
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .and(query_param("startAt", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [createmeta_field_10084()],
@@ -1321,9 +1309,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_continues_pagination_when_total_
         })
         .collect();
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": page_1_fields,
@@ -1336,9 +1322,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_continues_pagination_when_total_
 
     // Page 2 (startAt=200): the target field. `total` also absent.
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .and(query_param("startAt", "200"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [createmeta_field_10084()],
@@ -1411,9 +1395,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_hard_cap_prevents_infinite_loop(
         })
         .collect();
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": full_page,
             "maxResults": 200
@@ -2494,9 +2476,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_empty_page_terminates_not_infini
     assert_eq!(page_1_fields.len(), 200, "page 1 must be a full page");
 
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": page_1_fields,
@@ -2510,9 +2490,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_empty_page_terminates_not_infini
     // Page 2 (startAt=200): EMPTY fields despite total=250 still exceeding
     // start_at + page_len (200 + 0 = 200 < 250) -- must still terminate.
     Mock::given(method("GET"))
-        .and(path(
-            "/rest/api/3/issue/createmeta/HELP/issuetypes/10000/fields",
-        ))
+        .and(path("/rest/api/3/issue/createmeta/HELP/issuetypes/10000"))
         .and(query_param("startAt", "200"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "fields": [],
