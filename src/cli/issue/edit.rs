@@ -118,8 +118,7 @@ pub(super) async fn handle_edit(
     {
         return Err(JrError::UserError(
             "--field description cannot be combined with `--markdown`. \
-             Use --description with --markdown to set the description, \
-             or use --field description=VALUE without --markdown."
+             Pass `--description` with `--markdown`, or omit `--markdown`."
                 .into(),
         )
         .into());

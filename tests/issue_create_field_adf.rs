@@ -280,7 +280,12 @@ async fn test_bc_3_3_014_5_markdown_field_description_conflict_exits_64_create()
     );
     assert!(
         stderr.contains("cannot be combined with `--markdown`"),
-        "AC-006: stderr must contain 'cannot be combined with `--markdown`'; got: {stderr}"
+        "AC-006: stderr must contain pinned substring 'cannot be combined with `--markdown`'; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("Pass `--description` with `--markdown`, or omit `--markdown`."),
+        "AC-006: stderr must contain ADR-0024 remediation phrase \
+         'Pass `--description` with `--markdown`, or omit `--markdown`.'; got: {stderr}"
     );
     assert!(
         out.stdout.is_empty(),
