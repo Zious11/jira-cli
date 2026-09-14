@@ -5245,7 +5245,7 @@ fn extract_field_text(v: &Value) -> String {
 /// by `test_e2e_issue_edit_custom_field` when no `JR_E2E_EDIT_FIELD` override
 /// is set.
 ///
-/// Returns `(cli_field_ref, wire_key)`:
+/// Returns `(cli_field_ref, wire_key, is_adf_backed)`:
 /// - `cli_field_ref` is what to pass as the NAME half of `--field NAME=VALUE`
 ///   — the standard `"Environment"` display name (resolves via `issue edit
 ///   --field`'s cache-first name lookup) for the preferred field, or the bare
@@ -5255,13 +5255,20 @@ fn extract_field_text(v: &Value) -> String {
 /// - `wire_key` is the JSON key to read back from a fresh `GET
 ///   .../issue/<key>` to verify the write (e.g. `"environment"` or
 ///   `"customfield_10063"`).
+/// - `is_adf_backed` is `true` when the chosen field stores its value as an
+///   ADF document object on Jira Cloud REST v3 (i.e. the field is
+///   `schema.system == "environment"` / `"description"`, or a custom field
+///   whose `schema.custom` ends with `":textarea"`). `false` for plain-string
+///   fields (`:textfield` and similar). The caller gates the ADF doc-shape
+///   assertion on this flag to avoid false-failing on non-ADF fallback fields
+///   (E2E-EDIT-FIELD-ADF-HEURISTIC).
 ///
 /// Preference order: the standard `"Environment"` field (`editmeta` id
 /// `"environment"`) if present with `schema.type == "string"`, else the first
 /// other editable field (excluding `summary`/`description`) with
 /// `schema.type == "string"`. Returns `None` when no such field exists — the
 /// clean-skip signal.
-fn discover_safe_edit_field(h: &E2eHarness, key: &str) -> Option<(String, String)> {
+fn discover_safe_edit_field(h: &E2eHarness, key: &str) -> Option<(String, String, bool)> {
     let v = fetch_raw(h, &format!("/rest/api/3/issue/{key}/editmeta"))?;
     let fields = v.get("fields")?.as_object()?;
 
@@ -5272,9 +5279,26 @@ fn discover_safe_edit_field(h: &E2eHarness, key: &str) -> Option<(String, String
             == Some("string")
     };
 
+    // Detect ADF-backed string fields: system "environment"/"description", or
+    // a custom textarea (schema.custom ends with ":textarea").  This mirrors
+    // the product's own allowlist for ADF auto-conversion on write paths.
+    let field_is_adf_backed = |meta: &Value| -> bool {
+        let schema = meta.get("schema");
+        let system = schema
+            .and_then(|s| s.get("system"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let custom = schema
+            .and_then(|s| s.get("custom"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        system == "environment" || system == "description" || custom.ends_with(":textarea")
+    };
+
     if let Some(env_meta) = fields.get("environment") {
         if is_string_field(env_meta) {
-            return Some(("Environment".to_string(), "environment".to_string()));
+            // `environment` is always ADF-backed on Jira Cloud REST v3.
+            return Some(("Environment".to_string(), "environment".to_string(), true));
         }
     }
 
@@ -5287,7 +5311,8 @@ fn discover_safe_edit_field(h: &E2eHarness, key: &str) -> Option<(String, String
         } else {
             meta.get("name").and_then(Value::as_str)?.to_string()
         };
-        Some((cli_ref, id.clone()))
+        let is_adf = field_is_adf_backed(meta);
+        Some((cli_ref, id.clone(), is_adf))
     })
 }
 
@@ -5316,28 +5341,30 @@ fn test_e2e_issue_edit_custom_field() {
     let h = e2e_harness();
     let key = seed_issue(&h, &label, &format!("[e2e {label}] custom field edit"));
 
-    // (--field NAME=VALUE argument, wire key to verify via a fresh GET). The
-    // wire key is only known for the dynamic-discovery path below — an
-    // explicit `JR_E2E_EDIT_FIELD` override supplies an arbitrary display
-    // name whose resolved wire key this test does not attempt to re-derive.
-    let (field_arg, wire_key): (String, Option<String>) = match env::var("JR_E2E_EDIT_FIELD") {
-        Ok(f) if f.contains('=') && !f.trim().is_empty() => (f, None),
-        _ => match discover_safe_edit_field(&h, &key) {
-            Some((cli_ref, wire_key)) => {
-                let value = format!("e2e dynamic edit {label}");
-                (format!("{cli_ref}={value}"), Some(wire_key))
-            }
-            None => {
-                eprintln!(
-                    "[SKIP] no JR_E2E_EDIT_FIELD override and no safe editable string field \
-                     found on {key}'s Edit screen — skipping dynamic edit --field round-trip \
-                     (test_e2e_issue_edit_custom_field)"
-                );
-                best_effort_close(&h, &key);
-                return;
-            }
-        },
-    };
+    // (--field NAME=VALUE argument, wire key to verify via a fresh GET, ADF-ness
+    // flag). The wire key and ADF flag are only known for the dynamic-discovery
+    // path below — an explicit `JR_E2E_EDIT_FIELD` override supplies an
+    // arbitrary display name whose resolved wire key and ADF-ness this test
+    // cannot determine (defaults to non-ADF lenient check).
+    let (field_arg, wire_key, is_adf_backed): (String, Option<String>, bool) =
+        match env::var("JR_E2E_EDIT_FIELD") {
+            Ok(f) if f.contains('=') && !f.trim().is_empty() => (f, None, false),
+            _ => match discover_safe_edit_field(&h, &key) {
+                Some((cli_ref, wire_key, is_adf)) => {
+                    let value = format!("e2e dynamic edit {label}");
+                    (format!("{cli_ref}={value}"), Some(wire_key), is_adf)
+                }
+                None => {
+                    eprintln!(
+                        "[SKIP] no JR_E2E_EDIT_FIELD override and no safe editable string field \
+                         found on {key}'s Edit screen — skipping dynamic edit --field round-trip \
+                         (test_e2e_issue_edit_custom_field)"
+                    );
+                    best_effort_close(&h, &key);
+                    return;
+                }
+            },
+        };
 
     let edit = h
         .cmd()
@@ -5368,19 +5395,38 @@ fn test_e2e_issue_edit_custom_field() {
     if let Some(wire_key) = wire_key {
         let fetched = fetch_raw(&h, &format!("/rest/api/3/issue/{key}"))
             .expect("fresh GET on the edited issue must succeed");
-        // The persisted value may be a plain JSON string (non-ADF field) or an
-        // ADF document object (ADF-backed field, e.g. `environment`).
-        // `extract_field_text` handles both shapes so this assertion is correct
-        // regardless of which field was selected by `discover_safe_edit_field`
-        // (E2E-EDIT-FIELD-ADF-HEURISTIC).
         let field_val = fetched.get("fields").and_then(|f| f.get(&wire_key));
-        let got_text = field_val.map(extract_field_text);
-        assert!(
-            got_text
-                .as_deref()
-                .is_some_and(|v| v.contains(label.as_str())),
-            "edit --field must persist the written value under fields.{wire_key}; got: {fetched}"
-        );
+
+        if is_adf_backed {
+            // ADF-backed field (e.g. `environment`, `:textarea` custom field):
+            // Jira Cloud REST v3 always persists these as an ADF doc object
+            // with `{"type":"doc","version":1,"content":[…]}`.
+            // Asserting the shape here is the core of E2E-EDIT-FIELD-ADF-HEURISTIC.
+            assert!(
+                field_val.is_some_and(|v| !v.is_null()),
+                "edit --field {wire_key}: expected a persisted ADF doc, got null/absent; fetched: {fetched}"
+            );
+            assert!(
+                field_val.is_some_and(|v| v.get("type").and_then(Value::as_str) == Some("doc")),
+                "ADF-backed field {wire_key} must persist as an ADF doc (type==\"doc\"); got: {fetched}"
+            );
+            let got_text = field_val.map(extract_field_text);
+            assert!(
+                got_text
+                    .as_deref()
+                    .is_some_and(|v| v.contains(label.as_str())),
+                "edit --field must persist the written value under fields.{wire_key}; got: {fetched}"
+            );
+        } else {
+            // Non-ADF plain-string field: the persisted value is a JSON string.
+            let got_text = field_val.map(extract_field_text);
+            assert!(
+                got_text
+                    .as_deref()
+                    .is_some_and(|v| v.contains(label.as_str())),
+                "edit --field must persist the written value under fields.{wire_key}; got: {fetched}"
+            );
+        }
     }
 
     best_effort_close(&h, &key);
