@@ -768,7 +768,11 @@ async fn resolve_against_editmeta(
         if is_bare_empty_adf_field(spec.kind, &meta_field.schema, &spec.value) {
             let clear_doc = serde_json::json!({"type": "doc", "version": 1, "content": []});
             fields[field_id.as_str()] = clear_doc.clone();
-            changed_fields.insert(human_name.clone(), String::new());
+            // #398 lossless-machine-channel invariant (BC-3.4.036 / AC-010):
+            // carry the raw untrimmed user-supplied value in changed_fields,
+            // NOT String::new() — a whitespace-only input like "   " must
+            // round-trip as "   ", not silently collapse to "".
+            changed_fields.insert(human_name.clone(), spec.value.clone());
             planned_preview.insert(human_name.clone(), clear_doc);
             field_markers.insert(human_name, "(adf-clear)".to_string());
             continue;
@@ -1803,9 +1807,7 @@ mod tests {
     // AC-001 / VP-FIELD-ADF-001: ADF detection predicate tests
     // (S-cycle12-platform-adf-autoconvert)
     //
-    // RED: is_adf_schema / is_adf_field are todo!() stubs; every call panics
-    // with "not yet implemented".  These tests will show FAILED until Step 4 of
-    // the implementation lands.
+    // is_adf_schema and is_adf_field are fully implemented (GREEN).
     // -------------------------------------------------------------------------
 
     use proptest::prelude::*;
@@ -1815,19 +1817,35 @@ mod tests {
         /// VP-FIELD-ADF-001 two-sided IFF property: `is_adf_field` fires ONLY on
         /// the three-arm allowlist and on NO other arbitrary `system`/`custom` pair.
         ///
-        /// RED: panics via todo!() until is_adf_schema is implemented.
+        /// Generator uses `prop_oneof!` to produce BOTH allowlist members (system
+        /// `"description"` / `"environment"`, custom ending `":textarea"`) AND random
+        /// non-members for balanced positive/negative mutation coverage (O1, AC-001).
         #[test]
         fn prop_bc_3_4_033_is_adf_field_fires_only_on_allowlist(
-            system in proptest::option::of("[a-z]{0,20}"),
-            custom in proptest::option::of("[a-z.:]{0,40}"),
+            system in prop_oneof![
+                // Allowlist positives for system arm.
+                Just(Some("description".to_string())),
+                Just(Some("environment".to_string())),
+                // Non-member randoms.
+                proptest::option::of("[a-z]{0,20}").prop_filter("not allowlist", |s| {
+                    !matches!(s.as_deref(), Some("description") | Some("environment"))
+                }),
+            ],
+            custom in prop_oneof![
+                // Allowlist positive: ends with ":textarea".
+                Just(Some("com.atlassian.jira.plugin.system.customfieldtypes:textarea".to_string())),
+                // Non-member randoms.
+                proptest::option::of("[a-z.:]{0,40}").prop_filter("not textarea", |c| {
+                    !c.as_deref().map(|s| s.ends_with(":textarea")).unwrap_or(false)
+                }),
+            ],
         ) {
             let schema = crate::types::jira::EditMetaFieldSchema {
                 field_type: "string".to_string(),
                 system: system.clone(),
                 custom: custom.clone(),
             };
-            let result = is_adf_field(&schema); // panics with todo!() → RED
-            // After implementation: result must be true IFF allowlist match.
+            let result = is_adf_field(&schema);
             let expected = matches!(system.as_deref(), Some("description") | Some("environment"))
                 || custom.as_deref().map(|c| c.ends_with(":textarea")).unwrap_or(false);
             prop_assert_eq!(
@@ -1844,8 +1862,6 @@ mod tests {
 
     /// VP-FIELD-ADF-001 example-based: all anchor rows from the allowlist
     /// spec verified explicitly.
-    ///
-    /// RED: panics via todo!() until is_adf_schema is implemented.
     #[test]
     fn test_bc_3_4_033_is_adf_field_allowlist_positive_and_negative_anchors() {
         fn mk(

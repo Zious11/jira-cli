@@ -651,6 +651,76 @@ async fn test_bc_3_4_036_live_edit_json_changed_fields_raw_empty_input_not_clear
     );
 }
 
+/// AC-010c-ws: live edit whitespace-only ADF-backed field, JSON channel:
+/// `changed_fields[human_name]` carries the RAW whitespace-only input string
+/// (e.g. `"   "`) — NOT `""` and NOT the clear-doc (#398 lossless-machine-channel
+/// invariant; BC-3.4.036 Postcondition / AC-010).
+///
+/// The empty-clear pre-check correctly fires for whitespace-only input
+/// (`value.trim().is_empty()` is true), so the wire body must still carry the
+/// clear-doc. Only the JSON echo channel is affected: it must preserve the raw
+/// untrimmed value, not silently replace it with `String::new()`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_036_live_edit_json_changed_fields_raw_whitespace_input_not_empty_string() {
+    let h = Harness::new().await;
+    const FIELD_ID: &str = "customfield_12345";
+    const FIELD_NAME: &str = "My Textarea";
+    const KEY: &str = "TEST-7";
+    const WHITESPACE: &str = "   ";
+
+    write_fields_cache(h.cache_dir.path(), "default", &[(FIELD_ID, FIELD_NAME)]);
+    mount_list_fields_textarea(&h.server, FIELD_ID, FIELD_NAME).await;
+    mount_editmeta_textarea(&h.server, KEY, FIELD_ID, FIELD_NAME).await;
+    mount_put_204(&h.server, KEY).await;
+
+    let out = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            KEY,
+            "--field",
+            &format!("{FIELD_NAME}={WHITESPACE}"),
+            "--output",
+            "json",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        out.status.success(),
+        "AC-010c-ws: command must exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout_json: Value =
+        serde_json::from_slice(&out.stdout).expect("AC-010c-ws: stdout must be valid JSON");
+
+    // #398 invariant: JSON channel carries the raw whitespace string, not "".
+    assert_eq!(
+        stdout_json["changed_fields"][FIELD_NAME].as_str(),
+        Some(WHITESPACE),
+        "AC-010c-ws: changed_fields must carry raw whitespace string '   ', not empty string"
+    );
+
+    // Wire body must still carry the clear-doc (whitespace triggers the
+    // empty-clear path, same as truly-empty input).
+    let reqs = h.server.received_requests().await.unwrap();
+    let put_req = reqs
+        .iter()
+        .find(|r| r.method == wiremock::http::Method::PUT)
+        .expect("AC-010c-ws: PUT request must have been made");
+    let put_body: Value =
+        serde_json::from_slice(&put_req.body).expect("AC-010c-ws: PUT body must be valid JSON");
+    let clear_doc = json!({"type": "doc", "version": 1, "content": []});
+    assert_eq!(
+        put_body["fields"][FIELD_ID], clear_doc,
+        "AC-010c-ws: PUT wire body must contain clear-doc for whitespace-only ADF field; got: {:?}",
+        put_body["fields"][FIELD_ID]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // AC-011 / VP-FIELD-ADF-002 live-echo axis
 // ---------------------------------------------------------------------------
