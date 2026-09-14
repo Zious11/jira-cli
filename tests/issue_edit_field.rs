@@ -4080,3 +4080,68 @@ async fn test_edit_field_bare_pair_unaffected_by_kind_hint_guard_s578_1() {
          stderr={stderr} stdout={stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 50 — OBS-1 / BC-3.4.035 AC-011 scope correction (cycle-012 F5, DEC-357)
+//
+// AC-011 / BC-3.4.035 only requires the `changed_fields` key-lowering-to-
+// `field_id` remap for the two ADF-backed system fields this cycle converts
+// (`description`, `environment`). A NON-ADF system field (e.g. "Due date",
+// field_id `duedate`) resolved by display name must keep using its DISPLAY
+// NAME as the `changed_fields` key — the pre-cycle-012 behavior (see
+// `git show 30bb1a18:src/cli/issue/field_resolve.rs`, where `human_name` was
+// never remapped for non-customfield_ fields at all). Before the OBS-1 fix,
+// the code broadened the remap to ALL non-customfield_ (system) fields,
+// silently changing this key for fields like `duedate`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_obs_1_non_adf_system_field_changed_fields_key_is_display_name() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_list_fields(&server, "duedate", "Due date").await;
+    mount_editmeta_string(&server, "TEST-1", "duedate", "Due date").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Due date=2026-12-31",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
+
+    // OBS-1: a non-ADF system field must keep its DISPLAY NAME as the
+    // changed_fields key — NOT the lowercase field_id ("duedate").
+    assert_eq!(
+        parsed["changed_fields"]["Due date"].as_str(),
+        Some("2026-12-31"),
+        "OBS-1: changed_fields[\"Due date\"] must be \"2026-12-31\" (display-name key \
+         preserved for non-ADF system fields); stdout={stdout}"
+    );
+    assert!(
+        parsed["changed_fields"].get("duedate").is_none(),
+        "OBS-1: changed_fields must NOT contain 'duedate' as key — the field_id remap is \
+         scoped to ADF fields only (description/environment), not all system fields; \
+         stdout={stdout}"
+    );
+}
