@@ -56,14 +56,16 @@ impl JiraClient {
 /// }
 /// ```
 ///
-/// Per BC-3.8.006: `isAdfRequest: true` is included if and only if
-/// `description` is `Some`. Per BC-3.8.009: `raiseOnBehalfOf` is included
-/// if and only if `on_behalf_of` is `Some` (the key is completely absent
-/// otherwise — NOT null). Per BC-3.8.007: `labels` is a plain string array,
-/// NOT an object array.
+/// Per BC-3.8.006/BC-3.8.022: `isAdfRequest: true` is included if EITHER
+/// `description` is `Some` OR the resolution layer ADF-converted at least
+/// one `--field` extra field (`self.is_adf_request`) — ABSENT (never
+/// explicit `false`) when neither is true. Per BC-3.8.009: `raiseOnBehalfOf`
+/// is included if and only if `on_behalf_of` is `Some` (the key is
+/// completely absent otherwise — NOT null). Per BC-3.8.007: `labels` is a
+/// plain string array, NOT an object array.
 ///
 /// Traces: BC-3.8.001, BC-3.8.005, BC-3.8.006, BC-3.8.007, BC-3.8.008,
-///         BC-3.8.009
+///         BC-3.8.009, BC-3.8.019, BC-3.8.020, BC-3.8.021, BC-3.8.022
 pub struct JsmRequestBuilder<'a> {
     pub service_desk_id: &'a str,
     pub request_type_id: &'a str,
@@ -98,29 +100,20 @@ pub struct JsmRequestBuilder<'a> {
     /// AC-001/004/013, ADR-0024 DQ-6 Option (b) — see the DQ-6 decision
     /// rustdoc on [`crate::cli::issue::jsm_create::JsmAdfFieldResolution`]).
     /// Populated exclusively by the resolution layer (`jsm_create.rs`);
-    /// `build()` must insert these into `requestFieldValues`, superseding
-    /// any string-wrap for the same key from `extra_fields` above — it must
-    /// NEVER derive ADF-ness by inspecting value shapes itself (AC-013).
-    ///
-    /// STUB NOTE (Red Gate, S-cycle12-jsm-adf-autoconvert): this field is
-    /// declared but NOT YET consumed by `build()`'s body — the merge logic
-    /// (AC-004/007/013) is implementation work for the TDD implementer step,
-    /// gated on RED tests authored against this shape first. Every existing
-    /// caller passes an empty map, preserving pre-cycle-012 `build()` output
-    /// byte-for-byte.
+    /// `build()` inserts these into `requestFieldValues` (after the
+    /// `extra_fields` loop), superseding any string-wrap for the same key —
+    /// it never derives ADF-ness by inspecting value shapes itself (AC-013).
+    /// Every pre-cycle-012 caller passes an empty map, preserving `build()`
+    /// output byte-for-byte.
     pub(crate) resolved_adf_values: &'a BTreeMap<String, serde_json::Value>,
     /// Accumulated `isAdfRequest` contribution from the resolution layer's
     /// `--field` extra-field ADF conversions (S-cycle12-jsm-adf-autoconvert
-    /// AC-001/013, BC-3.8.022). `build()` must OR this with its own
-    /// `self.description`-derived flag — it must NEVER derive this flag by
+    /// AC-001/013, BC-3.8.022). `build()` ORs this with its own
+    /// `self.description`-derived flag — it never derives this flag by
     /// inspecting `requestFieldValues`/`extra_fields` value shapes
     /// (`.is_object()` derivation is the specific mutant class AC-013 exists
-    /// to kill; see VP-FIELD-ADF-004 Axis (c) I-2).
-    ///
-    /// STUB NOTE: NOT YET consumed by `build()`'s body — see
-    /// `resolved_adf_values` STUB NOTE above. Every existing caller passes
-    /// `false`, preserving pre-cycle-012 `isAdfRequest` output byte-for-byte
-    /// (the description-only channel, BC-3.8.006, is unaffected).
+    /// to kill; see VP-FIELD-ADF-004 Axis (c) I-2). Every pre-cycle-012
+    /// caller passes `false`, preserving `isAdfRequest` output byte-for-byte.
     pub(crate) is_adf_request: bool,
 }
 
@@ -139,25 +132,6 @@ impl<'a> JsmRequestBuilder<'a> {
             "summary".to_string(),
             serde_json::Value::String(self.summary.to_string()),
         );
-
-        // Optional description → ADF (BC-3.8.006).
-        let is_adf_request = if let Some(desc_text) = self.description {
-            let adf_body = if self.markdown {
-                if self.no_mentions {
-                    adf::markdown_to_adf_no_mentions(desc_text)?
-                } else {
-                    let empty = MentionResolutions::empty();
-                    let resolved = self.mentions.unwrap_or(&empty);
-                    adf::markdown_to_adf_with_mentions(desc_text, resolved)?
-                }
-            } else {
-                adf::text_to_adf(desc_text)
-            };
-            rfv.insert("description".to_string(), adf_body);
-            true
-        } else {
-            false
-        };
 
         // Optional priority → {"name": "<priority>"} (BC-3.8.007).
         if let Some(prio) = self.priority {
@@ -191,6 +165,51 @@ impl<'a> JsmRequestBuilder<'a> {
             };
             rfv.insert(k.clone(), wire_value);
         }
+
+        // S-cycle12-jsm-adf-autoconvert AC-001/004/013: insert the
+        // resolution-layer's ADF-converted extra-field values, superseding
+        // any string-wrap for the same key from the loop above. By
+        // construction (`jsm_create.rs::resolve_jsm_adf_extra_fields`) these
+        // keys never overlap `self.extra_fields`, but insertion order still
+        // guarantees supersession if that invariant is ever violated.
+        for (k, adf_value) in self.resolved_adf_values {
+            rfv.insert(k.clone(), adf_value.clone());
+        }
+
+        // Optional description → ADF (BC-3.8.006).
+        //
+        // AC-006 (EC-3.8.019-4 assembly-order rule): this insert MUST run
+        // AFTER the extra_fields loop (and the resolved_adf_values merge
+        // above) so `self.description` deterministically supersedes any
+        // `requestFieldValues["description"]` entry produced by the
+        // resolution layer — including a fail-open `Value::String(Y)` under
+        // EC-3.8.019-2. Only this insert moves; every other dedicated-flag
+        // insert (summary/priority/labels) stays before the loop, preserving
+        // last-wins for non-description keys (BC-3.8.008).
+        let description_is_adf = if let Some(desc_text) = self.description {
+            let adf_body = if self.markdown {
+                if self.no_mentions {
+                    adf::markdown_to_adf_no_mentions(desc_text)?
+                } else {
+                    let empty = MentionResolutions::empty();
+                    let resolved = self.mentions.unwrap_or(&empty);
+                    adf::markdown_to_adf_with_mentions(desc_text, resolved)?
+                }
+            } else {
+                adf::text_to_adf(desc_text)
+            };
+            rfv.insert("description".to_string(), adf_body);
+            true
+        } else {
+            false
+        };
+
+        // AC-001/013: isAdfRequest reflects the OR of the description channel
+        // and the resolution layer's pre-computed flag — build() NEVER
+        // derives it by inspecting requestFieldValues/extra_fields value
+        // shapes (the specific mutant class AC-013 exists to kill; see
+        // VP-FIELD-ADF-004 Axis (c) I-2).
+        let is_adf_request = description_is_adf || self.is_adf_request;
 
         // Assemble top-level body.
         let mut body = serde_json::Map::new();

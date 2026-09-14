@@ -656,20 +656,104 @@ async fn resolve_jsm_adf_extra_fields(
     request_type_id: &str,
     extra_fields: std::collections::HashMap<String, FieldValueSpec>,
 ) -> JsmAdfFieldResolution {
-    todo!(
-        "AC-003/004/007/008: cache-first get_request_type_fields fetch (fail-open on any \
-         error — single global stderr warning, ALL bare fields degrade to Value::String, \
-         never exit 64; client/profile/service_desk_id/request_type_id/extra_fields params \
-         reserved for this); for each bare (kind.is_none(), see \
-         jsm_adf_empty_omit_guard_applies) extra field whose resolved \
-         RequestTypeField.jira_schema passes field_resolve::is_adf_field_value (receive the \
-         inner schema DIRECTLY — no double-nesting, ADR-0024/AC-002): non-empty value -> \
-         text_to_adf conversion into resolved_adf_values + is_adf_request=true; \
-         empty/whitespace value -> OMIT from extra_fields (AC-007), do NOT set \
-         is_adf_request. A NAME absent from a successfully-fetched RT field list falls \
-         through verbatim (I-1 rule, AC-005 OBS-1 item 3) — no warning, unchanged \
-         string-wrap."
-    )
+    let Some(fields_response) =
+        fetch_request_type_fields_cached(client, profile, service_desk_id, request_type_id).await
+    else {
+        // AC-008: fail-open — exactly one global warning; ALL bare --field values
+        // degrade to Value::String (this is already `extra_fields`'s untouched
+        // shape — build()'s pre-existing None-kind string-wrap arm handles it),
+        // isAdfRequest stays ABSENT, and the create is NEVER aborted here.
+        eprintln!(
+            "warning: could not fetch request type fields; --field values will be sent as \
+             plain strings"
+        );
+        return JsmAdfFieldResolution {
+            extra_fields,
+            resolved_adf_values: std::collections::BTreeMap::new(),
+            is_adf_request: false,
+        };
+    };
+
+    let mut output_extra_fields = std::collections::HashMap::with_capacity(extra_fields.len());
+    let mut resolved_adf_values = std::collections::BTreeMap::new();
+    let mut is_adf_request = false;
+
+    for (name, spec) in extra_fields {
+        // Hinted kinds bypass ADF detection entirely (AC-009, ADR-0024 "Hint
+        // kinds opt out of ADF" invariant) — pass through unchanged.
+        if !jsm_adf_empty_omit_guard_applies(spec.kind) {
+            output_extra_fields.insert(name, spec);
+            continue;
+        }
+
+        let rt_field = fields_response
+            .request_type_fields
+            .iter()
+            .find(|f| f.field_id == name);
+
+        // I-1 rule: NAME absent from a successfully-fetched RT field list falls
+        // through verbatim — no warning, unchanged string-wrap (AC-005 OBS-1 item 3).
+        let Some(rt_field) = rt_field else {
+            output_extra_fields.insert(name, spec);
+            continue;
+        };
+
+        // AC-002: pass the inner schema block DIRECTLY — no double-nesting.
+        if !crate::cli::issue::field_resolve::is_adf_field_value(&rt_field.jira_schema) {
+            output_extra_fields.insert(name, spec);
+            continue;
+        }
+
+        if spec.value.trim().is_empty() {
+            // AC-007: omit entirely — do NOT set is_adf_request, do NOT
+            // re-insert into output_extra_fields (JSM create-omit semantics,
+            // distinct from platform edit's clear-doc).
+            continue;
+        }
+
+        resolved_adf_values.insert(name, crate::adf::text_to_adf(&spec.value));
+        is_adf_request = true;
+    }
+
+    JsmAdfFieldResolution {
+        extra_fields: output_extra_fields,
+        resolved_adf_values,
+        is_adf_request,
+    }
+}
+
+/// Cache-first, network-fallback fetch of a request type's field metadata
+/// (AC-003, AC-015(b)). Returns `None` on ANY failure — network error,
+/// non-200 status, or deserialization error — so the caller can fail open
+/// (AC-008). Never propagates an error and never panics.
+async fn fetch_request_type_fields_cached(
+    client: &JiraClient,
+    profile: &crate::profile::Profile,
+    service_desk_id: &str,
+    request_type_id: &str,
+) -> Option<crate::types::jsm::RequestTypeFieldsResponse> {
+    if let Ok(Some(cached)) =
+        cache::read_request_type_fields_cache(profile, service_desk_id, request_type_id)
+    {
+        return Some(cached);
+    }
+
+    match client
+        .get_request_type_fields(service_desk_id, request_type_id)
+        .await
+    {
+        Ok(fetched) => {
+            // Best-effort writer per CLAUDE.md gotcha — swallows IO errors.
+            let _ = cache::write_request_type_fields_cache(
+                profile,
+                service_desk_id,
+                request_type_id,
+                &fetched,
+            );
+            Some(fetched)
+        }
+        Err(_) => None,
+    }
 }
 
 /// Resolve a request type name to its ID for the JSM create path.
