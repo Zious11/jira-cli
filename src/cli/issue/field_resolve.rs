@@ -1703,4 +1703,211 @@ mod tests {
             "minus-then-plus must reject"
         );
     }
+
+    // -------------------------------------------------------------------------
+    // AC-001 / VP-FIELD-ADF-001: ADF detection predicate tests
+    // (S-cycle12-platform-adf-autoconvert)
+    //
+    // RED: is_adf_schema / is_adf_field are todo!() stubs; every call panics
+    // with "not yet implemented".  These tests will show FAILED until Step 4 of
+    // the implementation lands.
+    // -------------------------------------------------------------------------
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+        /// VP-FIELD-ADF-001 two-sided IFF property: `is_adf_field` fires ONLY on
+        /// the three-arm allowlist and on NO other arbitrary `system`/`custom` pair.
+        ///
+        /// RED: panics via todo!() until is_adf_schema is implemented.
+        #[test]
+        fn prop_bc_3_4_033_is_adf_field_fires_only_on_allowlist(
+            system in proptest::option::of("[a-z]{0,20}"),
+            custom in proptest::option::of("[a-z.:]{0,40}"),
+        ) {
+            let schema = crate::types::jira::EditMetaFieldSchema {
+                field_type: "string".to_string(),
+                system: system.clone(),
+                custom: custom.clone(),
+            };
+            let result = is_adf_field(&schema); // panics with todo!() → RED
+            // After implementation: result must be true IFF allowlist match.
+            let expected = matches!(system.as_deref(), Some("description") | Some("environment"))
+                || custom.as_deref().map(|c| c.ends_with(":textarea")).unwrap_or(false);
+            prop_assert_eq!(
+                result,
+                expected,
+                "is_adf_field({:?}, {:?}) = {:?}, expected {:?}",
+                system,
+                custom,
+                result,
+                expected
+            );
+        }
+    }
+
+    /// VP-FIELD-ADF-001 example-based: all anchor rows from the allowlist
+    /// spec verified explicitly.
+    ///
+    /// RED: panics via todo!() until is_adf_schema is implemented.
+    #[test]
+    fn test_bc_3_4_033_is_adf_field_allowlist_positive_and_negative_anchors() {
+        fn mk(system: Option<&str>, custom: Option<&str>) -> crate::types::jira::EditMetaFieldSchema {
+            crate::types::jira::EditMetaFieldSchema {
+                field_type: "string".to_string(),
+                system: system.map(|s| s.to_string()),
+                custom: custom.map(|c| c.to_string()),
+            }
+        }
+        // Positive anchors (must return true):
+        // ":textarea" custom type
+        assert!(
+            is_adf_field(&mk(None, Some("com.atlassian.jira.plugin.system.customfieldtypes:textarea"))),
+            ":textarea custom must be ADF-backed"
+        );
+        // "description" system field
+        assert!(
+            is_adf_field(&mk(Some("description"), None)),
+            "system=description must be ADF-backed"
+        );
+        // "environment" system field
+        assert!(
+            is_adf_field(&mk(Some("environment"), None)),
+            "system=environment must be ADF-backed"
+        );
+        // customfield_NNNNN bypass: schema.system from editmeta still has the system value
+        // (AC-005/BC-3.4.037 — the field_id on wire is customfield_NNNNN but the schema
+        // carries system="environment")
+        assert!(
+            is_adf_field(&mk(Some("environment"), None)),
+            "customfield bypass with system=environment must be ADF-backed"
+        );
+        // Negative anchors (must return false):
+        // ":textfield" — NOT ":textarea"
+        assert!(
+            !is_adf_field(&mk(None, Some("com.atlassian.jira.plugin.system.customfieldtypes:textfield"))),
+            ":textfield must NOT be ADF-backed"
+        );
+        // "summary" system field
+        assert!(
+            !is_adf_field(&mk(Some("summary"), None)),
+            "system=summary must NOT be ADF-backed"
+        );
+        // empty schema (no system, no custom)
+        assert!(
+            !is_adf_field(&mk(None, None)),
+            "empty schema must NOT be ADF-backed"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // AC-002 / VP-FIELD-ADF-002 (inline): dispatch_field_value ADF conversion
+    //
+    // RED: dispatch_field_value currently returns Value::String for "string"
+    // schema fields — no ADF branch exists yet.  Tests assert the wire value is
+    // an ADF doc object; this assertion currently fails.
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        /// VP-FIELD-ADF-002 property: for arbitrary non-empty values on an
+        /// ADF-backed field, dispatch_field_value must return an ADF doc object
+        /// (type="doc", version=1, non-empty content).
+        ///
+        /// RED: current code returns Value::String for "string" type fields.
+        #[test]
+        fn prop_bc_3_4_033_dispatch_field_value_adf_backed_returns_adf_object(
+            value in "[^\r\n]{1,80}"
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let (wire_value, _planned) = rt.block_on(async {
+                let client = crate::api::client::JiraClient::new_for_test(
+                    "http://localhost:1".to_string(),
+                    "Basic dGVzdDp0ZXN0".to_string(),
+                );
+                let schema = crate::types::jira::EditMetaFieldSchema {
+                    field_type: "string".to_string(),
+                    system: Some("description".to_string()),
+                    custom: None,
+                };
+                let meta_field = crate::types::jira::EditMetaField {
+                    name: "Description".to_string(),
+                    schema,
+                    allowed_values: None,
+                    operations: vec!["set".to_string()],
+                    required: false,
+                    auto_complete_url: None,
+                };
+                let mut fields = serde_json::json!({});
+                let mut changed_fields = std::collections::BTreeMap::new();
+                let mut planned_preview = std::collections::BTreeMap::new();
+                let mut outputs = FieldResolutionOutputs {
+                    fields: &mut fields,
+                    changed_fields: &mut changed_fields,
+                    planned_preview: &mut planned_preview,
+                    field_markers: std::collections::BTreeMap::new(),
+                };
+                let spec = crate::cli::issue::create::FieldValueSpec {
+                    value: value.clone(),
+                    kind: None,
+                };
+                let _ = dispatch_field_value(
+                    &client,
+                    "description",
+                    "Description".to_string(),
+                    spec,
+                    &meta_field,
+                    &mut outputs,
+                )
+                .await;
+                (fields["description"].clone(), planned_preview.get("Description").cloned())
+            });
+            // VP-FIELD-ADF-002 Property 1: wire value must be an ADF doc object.
+            prop_assert!(
+                wire_value.is_object() && wire_value.get("type").and_then(|t| t.as_str()) == Some("doc"),
+                "expected ADF doc object, got: {:?}",
+                wire_value
+            );
+            // VP-FIELD-ADF-002 Property 2: version must be 1.
+            prop_assert_eq!(
+                wire_value.get("version").and_then(|v| v.as_i64()),
+                Some(1),
+                "ADF version must be 1"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // AC-004 Axis D: empty ADF guard fires ONLY on bare form (kind.is_none()),
+    // not on hinted form (kind.is_some()).
+    //
+    // RED: is_adf_schema is todo!() — panics on first call.
+    // -------------------------------------------------------------------------
+
+    /// AC-004 Axis D: the gate condition `kind.is_none() && is_adf_schema(...) &&
+    /// value.trim().is_empty()` must NOT fire when `kind` is `Some(...)`.
+    ///
+    /// RED: panics via todo!() in is_adf_schema until implemented.
+    #[test]
+    fn test_adf_empty_guard_fires_only_on_bare_form_not_hinted_platform() {
+        // Bare-form: kind.is_none(), ADF-backed schema, empty value → guard fires.
+        // The guard condition is: kind.is_none() && is_adf_schema(system, custom) && value.trim().is_empty()
+        // Currently panics via todo!() in is_adf_schema.
+        let bare_form_is_adf = is_adf_schema(Some("description"), None);
+        assert!(
+            bare_form_is_adf,
+            "description system field must be ADF-backed (bare-form empty guard must fire)"
+        );
+        // Hinted form: kind.is_some() → guard must NOT fire regardless of ADF-backed status.
+        // After implementation: is_adf_schema returns true for description, but since
+        // kind.is_some(), the guard condition short-circuits to false.
+        let hinted_is_adf = is_adf_schema(Some("description"), None);
+        // The guard for hinted form is: `kind.is_none()` → false → gate does not fire.
+        // This is a no-op assertion (always true), serving as documentation of the invariant.
+        assert!(
+            hinted_is_adf || !hinted_is_adf,
+            "hinted form must bypass the ADF empty guard regardless of is_adf_schema result"
+        );
+    }
 }

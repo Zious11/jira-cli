@@ -14020,3 +14020,157 @@ fn test_e2e_mention_jsm_create_roundtrip() {
          node with attrs.id == {account_id}; desc={desc}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// AC-014 / BC-3.3.013: E2E `:textarea` create-path smoke
+// (S-cycle12-platform-adf-autoconvert)
+//
+// Gated: JR_RUN_E2E=1 + --include-ignored.
+// Clean-skips if no `:textarea` field is discoverable on the E2E instance.
+// ---------------------------------------------------------------------------
+
+/// AC-014: create a Jira issue via `jr issue create --field TEXTAREA=VALUE`
+/// on a live instance; confirm the fetched issue's ADF field contains content
+/// (i.e. the wire value was accepted as a valid ADF doc, not rejected as a 400).
+///
+/// Clean-skips when no `:textarea` field is available in the E2E project's
+/// createmeta (per BC-3.3.013 §M1 residual — not every test org has a
+/// custom textarea field on their Task screen).
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_e2e_adf_textarea_create_path_smoke() {
+    if !e2e_enabled() {
+        return;
+    }
+    let h = E2eHarness::new();
+    let proj = project();
+    let itype = issue_type();
+
+    // Discover whether a `:textarea` field is available on the create screen.
+    // We use `jr api` to fetch the createmeta and look for a textarea field.
+    let cm_out = h
+        .cmd()
+        .args([
+            "api",
+            &format!(
+                "/rest/api/3/issue/createmeta?projectKeys={proj}&issuetypeNames={itype}&expand=projects.issuetypes.fields"
+            ),
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    if !cm_out.status.success() {
+        // Cannot discover createmeta — skip rather than fail.
+        eprintln!(
+            "[SKIP] test_e2e_adf_textarea_create_path_smoke: createmeta fetch failed; \
+             stderr: {}",
+            String::from_utf8_lossy(&cm_out.stderr)
+        );
+        return;
+    }
+
+    let cm_json: serde_json::Value = serde_json::from_slice(&cm_out.stdout).unwrap_or_default();
+
+    // Walk the createmeta fields looking for a textarea custom field.
+    let textarea_field = cm_json["projects"]
+        .as_array()
+        .and_then(|projects| projects.first())
+        .and_then(|p| p["issuetypes"].as_array())
+        .and_then(|its| its.first())
+        .and_then(|it| it["fields"].as_object())
+        .and_then(|fields| {
+            fields.iter().find(|(_, v)| {
+                v["schema"]["custom"]
+                    .as_str()
+                    .map(|c| c.ends_with(":textarea"))
+                    .unwrap_or(false)
+            })
+        })
+        .map(|(id, v)| (id.clone(), v["name"].as_str().unwrap_or("").to_string()));
+
+    let (field_id, field_name) = match textarea_field {
+        Some(pair) => pair,
+        None => {
+            eprintln!(
+                "[SKIP] test_e2e_adf_textarea_create_path_smoke: no :textarea field found \
+                 in createmeta for project={proj} type={itype}"
+            );
+            return;
+        }
+    };
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let test_value = "ADF autoconvert smoke test — created by test_e2e_adf_textarea_create_path_smoke";
+    let summary = format!("[jr-test-adf] textarea create smoke {nonce}");
+
+    // Create the issue with the textarea field set.
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &summary,
+            "--field",
+            &format!("{field_name}={test_value}"),
+            "--output",
+            "json",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        create_out.status.success(),
+        "AC-014: create must succeed; stderr: {}",
+        String::from_utf8_lossy(&create_out.stderr)
+    );
+
+    let created: serde_json::Value = serde_json::from_slice(&create_out.stdout)
+        .expect("AC-014: create --output json must be valid JSON");
+    let key = created["key"]
+        .as_str()
+        .expect("AC-014: created issue JSON must have 'key' field")
+        .to_string();
+
+    // Fetch the issue back and assert the textarea field is an ADF doc (not a plain string).
+    let fetch_out = h
+        .cmd()
+        .args([
+            "api",
+            &format!("/rest/api/3/issue/{key}?fields={field_id}"),
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    // Best-effort teardown before assertions so the issue is closed even on failure.
+    best_effort_close(&h, &key);
+
+    assert!(
+        fetch_out.status.success(),
+        "AC-014: issue fetch must succeed; stderr: {}",
+        String::from_utf8_lossy(&fetch_out.stderr)
+    );
+
+    let issue: serde_json::Value = serde_json::from_slice(&fetch_out.stdout)
+        .expect("AC-014: issue fetch must be valid JSON");
+
+    let field_value = &issue["fields"][&field_id];
+    assert!(
+        field_value.is_object() && field_value["type"].as_str() == Some("doc"),
+        "AC-014: fetched {field_id} must be an ADF doc object (type=doc); \
+         the wire value was accepted by Jira (exit 0) but must be ADF-structured; \
+         got: {field_value}"
+    );
+}
