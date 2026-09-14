@@ -450,14 +450,17 @@ async fn test_bc_3_3_013_create_table_shows_adf_marker() {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // Live table-mode ADF marker is on stderr (Symmetric convention: human echoes
+    // → stderr; stdout reserved for --output json). Do NOT check stdout.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("(adf)"),
+        "AC-012: create table must show '(adf)' for ADF-backed field; stderr: {stderr}"
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("(adf)"),
-        "AC-012: create table must show '(adf)' for ADF-backed field; stdout: {stdout}"
-    );
-    assert!(
         !stdout.contains(INPUT),
-        "AC-012: create table must NOT show raw input '{INPUT}'; stdout: {stdout}"
+        "AC-012: create table must NOT show raw input '{INPUT}' on stdout; stdout: {stdout}"
     );
 }
 

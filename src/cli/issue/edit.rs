@@ -1283,10 +1283,11 @@ pub(super) async fn handle_edit(
             // check, so --field description=VALUE shows "(adf)" not "(updated)".
             for (field, value) in &changed_fields {
                 if let Some(marker) = field_markers.get(field) {
-                    // ADF field: emit marker to stdout so callers can detect
-                    // ADF conversion programmatically even in table mode
-                    // (mirrors dry-run's all-stdout preview stream).
-                    println!("  {} \u{2192} {}", field, marker);
+                    // ADF field: emit marker on stderr, same stream as sibling
+                    // non-ADF echoes (Symmetric output-channel convention).
+                    // Dry-run output is all-stdout (data); live echoes are
+                    // all-stderr (diagnostic). Do NOT use println! here.
+                    eprintln!("  {} \u{2192} {}", field, marker);
                 } else if field == "description" {
                     // Non-ADF description (--description / --description-stdin path):
                     // table mode shows marker only — content never echoed (BC-3.4.012).

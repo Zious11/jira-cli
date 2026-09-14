@@ -565,14 +565,17 @@ async fn test_bc_3_4_033_live_edit_table_shows_adf_marker_not_raw_value() {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // Live table-mode ADF marker is on stderr (Symmetric convention: human echoes
+    // → stderr; stdout reserved for --output json). Do NOT check stdout.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("(adf)"),
+        "AC-010b: table must show '(adf)' for ADF-backed field; stderr: {stderr}"
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("(adf)"),
-        "AC-010b: table must show '(adf)' for ADF-backed field; stdout: {stdout}"
-    );
-    assert!(
         !stdout.contains(INPUT),
-        "AC-010b: table must NOT show raw input value '{INPUT}'; stdout: {stdout}"
+        "AC-010b: table must NOT show raw input value '{INPUT}' on stdout; stdout: {stdout}"
     );
 }
 
@@ -688,15 +691,17 @@ async fn test_bc_3_4_035_live_edit_field_description_shows_adf_not_updated() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Live table-mode ADF marker is on stderr (Symmetric convention: human echoes
+    // → stderr; stdout reserved for --output json). Do NOT check stdout.
+    let stderr = String::from_utf8_lossy(&out.stderr);
     // Must show "(adf)", NOT "(updated)".
     assert!(
-        stdout.contains("(adf)"),
-        "AC-011: table must show '(adf)' for --field description=VALUE; stdout: {stdout}"
+        stderr.contains("(adf)"),
+        "AC-011: table must show '(adf)' for --field description=VALUE; stderr: {stderr}"
     );
     assert!(
-        !stdout.contains("(updated)"),
-        "AC-011: table must NOT show '(updated)' when --field description= is used; stdout: {stdout}"
+        !stderr.contains("(updated)"),
+        "AC-011: table must NOT show '(updated)' when --field description= is used; stderr: {stderr}"
     );
 
     // JSON channel: changed_fields must carry raw input string.

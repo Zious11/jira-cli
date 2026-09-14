@@ -440,10 +440,11 @@ pub(super) async fn handle_create(
             output::print_success(&format!("Created issue {}", response.key));
             for (field, value) in &create_echo {
                 if let Some(marker) = create_field_markers.get(field) {
-                    // ADF field: emit marker to stdout so callers can detect
-                    // ADF conversion programmatically even in table mode
-                    // (mirrors edit dry-run's all-stdout preview stream).
-                    println!("  {} \u{2192} {}", field, marker);
+                    // ADF field: emit marker on stderr, same stream as sibling
+                    // non-ADF echoes (Symmetric output-channel convention).
+                    // Dry-run output is all-stdout (data); live echoes are
+                    // all-stderr (diagnostic). Do NOT use println! here.
+                    eprintln!("  {} \u{2192} {}", field, marker);
                 } else {
                     eprintln!("  {} \u{2192} {}", field, value);
                 }
