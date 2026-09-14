@@ -557,14 +557,19 @@ pub(crate) async fn resolve_edit_fields(
                 }
             };
 
-            // For system fields (non-customfield_), use the field_id as human_name
-            // so the changed_fields JSON key matches the convention used by dedicated
-            // flags (e.g. `--description` inserts "description", not "Description").
-            // BC-3.4.035 AC-011: `changed_fields["description"]` must use lowercase.
-            let human_name = if field_id.starts_with("customfield_") {
-                human_name
-            } else {
+            // Scoped to ADF system fields ONLY (description/environment) — NOT
+            // every non-customfield_ system field. Use the field_id as human_name
+            // so the changed_fields JSON key matches the convention used by the
+            // dedicated `--description` flag (which inserts "description", not
+            // "Description"). BC-3.4.035 AC-011 requires this for `description`;
+            // this cycle's approved scope (DEC-357, human ruling OBS-1) extends
+            // it only to `environment` — the other ADF-converted field — and
+            // explicitly NOT to arbitrary system fields like `duedate`/`priority`,
+            // which must keep their resolved display name as the JSON key.
+            let human_name = if field_id == "description" || field_id == "environment" {
                 field_id.clone()
+            } else {
+                human_name
             };
 
             resolved.push((field_id, human_name, spec.clone()));
