@@ -7440,6 +7440,19 @@ async fn test_bc_3_8_019_jsm_create_output_is_key_only_no_adf_marker() {
 
     // Table mode (default, no --output json): success output must be
     // exactly "Created request <KEY>" with no per-field ADF marker.
+    //
+    // NOTE: the story's AC-012 text says this lands on "stdout" — that
+    // wording is factually wrong about the channel. The actual, universal
+    // convention (CLAUDE.md's Symmetric output-channel profile) is that
+    // `output::print_success` (src/cli/issue/jsm_create.rs) writes the
+    // human success line via `eprintln!` -> STDERR; stdout carries data
+    // only (empty in table mode). Every other create test
+    // (tests/issue_create_field.rs, issue_create_echo.rs, cli_handler.rs)
+    // asserts "Created issue"/"Created request" on stderr, not stdout.
+    // The behavioral INTENT this test protects — key-only success output,
+    // no per-field table echo, no `(adf)` marker anywhere — is unchanged;
+    // only the channel assertion below was corrected to match reality.
+    // Do NOT "fix" this back to stdout.
     let output = Command::cargo_bin("jr")
         .unwrap()
         .env("JR_BASE_URL", server.uri())
@@ -7471,16 +7484,21 @@ async fn test_bc_3_8_019_jsm_create_output_is_key_only_no_adf_marker() {
         "AC-012: expected exit 0; got {:?}. stderr: {stderr}",
         output.status.code()
     );
-    assert_eq!(
-        stdout.trim(),
-        "Created request HELP-42",
-        "AC-012: JSM create success output must be key-only with no per-field ADF \
-         marker; got stdout: {stdout}"
+    assert!(
+        stdout.trim().is_empty(),
+        "AC-012: table-mode JSM create writes no data to stdout (Symmetric \
+         output-channel profile); got stdout: {stdout}"
     );
     assert!(
-        !stdout.contains("(adf)"),
-        "AC-012: JSM create has no per-field echo surface — '(adf)' must never appear; \
-         got stdout: {stdout}"
+        stderr.contains("Created request HELP-42"),
+        "AC-012: JSM create success output must be key-only with no per-field ADF \
+         marker; the human success line is written via output::print_success \
+         (eprintln! -> stderr); got stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("(adf)") && !stderr.contains("(adf)"),
+        "AC-012: JSM create has no per-field echo surface — '(adf)' must never appear \
+         on either channel; got stdout: {stdout}, stderr: {stderr}"
     );
 }
 
