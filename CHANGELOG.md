@@ -126,16 +126,25 @@ All notable changes to jr will be documented here.
 ### Fixed
 
 - **ADF auto-conversion for `--field` on rich-text fields (S-cycle12-platform-adf-autoconvert,
-  BC-3.4.033/035/036, BC-3.3.013/014/015, BC-3.4.035 AC-011):** `issue edit --field NAME=VALUE`
-  and `issue create --field NAME=VALUE` now auto-convert plain text to ADF (`text_to_adf`) when
-  the target field has ADF schema (`schema.system == "description"` / `schema.system ==
-  "environment"` / `schema.custom` ends with `":textarea"`). Table output shows `(adf)` marker
-  (not raw value); JSON `changed_fields[field_id]` carries the raw user-supplied input string
-  (lossless, BC-3.4.035 AC-011 / #398 invariant). Empty-value clear (`--field description=`)
-  sends `{"type":"doc","version":1,"content":[]}` (BC-3.4.036). `--markdown + --field
-  description` on create exits 64 (BC-3.3.014 AC-006); on edit exits 64 (AC-007). System
-  fields resolved via `--field` use the field_id (`"description"`) as the JSON
-  `changed_fields` key, matching the `--description` path convention.
+  S-cycle12-jsm-adf-autoconvert, BC-3.4.033/035/036, BC-3.3.013/014/015, BC-3.4.035 AC-011,
+  BC-3.8.019/020/021/022, ADR-0024):** `issue edit --field NAME=VALUE`, `issue create --field
+  NAME=VALUE`, and `issue create --request-type RT --field NAME=VALUE` (JSM) now auto-convert
+  plain text to ADF (`text_to_adf`) when the target field has ADF schema (`schema.system ==
+  "description"` / `schema.system == "environment"` / `schema.custom` ends with `":textarea"`).
+  Table output shows `(adf)` marker (not raw value) on the platform paths; JSON
+  `changed_fields[field_id]` carries the raw user-supplied input string (lossless, BC-3.4.035
+  AC-011 / #398 invariant). Empty-value clear (`--field description=`) sends
+  `{"type":"doc","version":1,"content":[]}` on the platform edit path (BC-3.4.036); the JSM
+  create path OMITS an empty ADF-backed field entirely instead (BC-3.8.021, distinct create-omit
+  semantics). `--markdown + --field description` exits 64 uniformly across all three write paths
+  (platform create: BC-3.3.014 AC-006; platform edit: AC-007; JSM create: BC-3.8.017, unchanged).
+  System fields resolved via `--field` use the field_id (`"description"`) as the JSON
+  `changed_fields` key, matching the `--description` path convention. On the JSM create path,
+  `isAdfRequest: true` is now accumulated whenever any `--field` extra field is ADF-converted, in
+  addition to the pre-existing `--description` channel (BC-3.8.022); a `GET
+  .../requesttype/{id}/field` metadata fetch (cache-first, 7-day TTL) is added when at least one
+  bare `--field` pair is present, failing open (a single stderr warning, plain-string fallback,
+  never exit 64) if the fetch itself fails (BC-3.8.019 EC-3.8.019-2).
 
 - **`jr auth login --help` and `jr auth refresh --help` `--oauth` flag help text
   accuracy fixes** (S-cycle7-oauth-help-text-fix, issue #790, BC-1.2.049
