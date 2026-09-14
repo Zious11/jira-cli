@@ -681,6 +681,7 @@ async fn resolve_against_createmeta(
                 fields,
                 changed_fields,
                 planned_preview,
+                field_markers: BTreeMap::new(),
             },
         )
         .await?;
@@ -738,6 +739,7 @@ async fn resolve_against_editmeta(
                 fields,
                 changed_fields,
                 planned_preview,
+                field_markers: BTreeMap::new(),
             },
         )
         .await?;
@@ -746,17 +748,70 @@ async fn resolve_against_editmeta(
     Ok(())
 }
 
+/// Three-arm ADF allowlist predicate core (AC-001, ADR-0024 §"Single allowlist
+/// core").
+///
+/// Returns `true` IFF the schema matches exactly one of:
+/// - `system == "description"`
+/// - `system == "environment"`
+/// - `custom` ends with `":textarea"`
+///
+/// `is_adf_field` and `is_adf_field_value` are the two entry points that
+/// delegate here — neither duplicates this logic (Architecture Compliance
+/// Rule 1, S-cycle12-platform-adf-autoconvert).
+///
+/// **Stub** — `todo!()` body. Implementation: S-cycle12-platform-adf-autoconvert Step 4.
+fn is_adf_schema(_system: Option<&str>, _custom: Option<&str>) -> bool {
+    todo!("S-cycle12: implement is_adf_schema three-arm allowlist")
+}
+
+/// ADF field detection predicate for `EditMetaFieldSchema` (AC-001, BC-3.4.033
+/// precondition).
+///
+/// Delegates to [`is_adf_schema`]; contains NO allowlist logic itself.
+///
+/// **Stub** — `todo!()` body. Implementation: S-cycle12-platform-adf-autoconvert Step 4.
+fn is_adf_field(schema: &crate::types::jira::EditMetaFieldSchema) -> bool {
+    todo!(
+        "S-cycle12: implement is_adf_field delegating to is_adf_schema; schema.system={:?} schema.custom={:?}",
+        schema.system,
+        schema.custom
+    )
+}
+
+/// ADF field detection predicate for a raw `serde_json::Value` schema (AC-001,
+/// ADR-0024 AC-003).
+///
+/// Called from `jsm_create.rs` (Story 2) which works with JSON schema values
+/// rather than typed `EditMetaFieldSchema` structs. Delegates to
+/// [`is_adf_schema`]; contains NO allowlist logic itself.
+///
+/// **Stub** — `todo!()` body. Implementation: S-cycle12-platform-adf-autoconvert Step 4.
+pub(crate) fn is_adf_field_value(_value: &serde_json::Value) -> bool {
+    todo!("S-cycle12: implement is_adf_field_value delegating to is_adf_schema")
+}
+
 /// Output/accumulator bundle for [`dispatch_field_value`].
 ///
 /// Reduces argument count on `dispatch_field_value` to satisfy
 /// `clippy::too_many_arguments` (CLAUDE.md policy: refactor rather than
-/// `#[allow]`) by bundling the three `&mut` output sinks each call site
-/// already threads through together. Pure signature refactor (S-578-4) —
-/// no behavior change at either call site.
+/// `#[allow]`) by bundling the output sinks each call site already threads
+/// through together. Pure signature refactor (S-578-4) — no behavior change
+/// at either call site.
+///
+/// `field_markers` (S-cycle12-platform-adf-autoconvert, AC-003): keyed by
+/// `human_name` (display name), records ADF-specific display sentinels
+/// (`"(adf)"` / `"(adf-clear)"`) for the table-emit loop priority rule in
+/// `edit.rs` and `create.rs`. Initialized empty at every construction site;
+/// populated ONLY at two PLATFORM-PATH sites (implementation: Step 5/7).
 struct FieldResolutionOutputs<'a> {
     fields: &'a mut serde_json::Value,
     changed_fields: &'a mut BTreeMap<String, String>,
     planned_preview: &'a mut BTreeMap<String, serde_json::Value>,
+    /// ADF marker side-channel (AC-003, S-cycle12-platform-adf-autoconvert).
+    /// Keyed by `human_name`; values are `"(adf)"` or `"(adf-clear)"`.
+    /// Empty at stub stage; populated by implementation.
+    field_markers: BTreeMap<String, String>,
 }
 
 /// Shared per-pair Step 4-6 dispatch (hinted-bypass + bare-form type
