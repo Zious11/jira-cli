@@ -5205,6 +5205,41 @@ fn test_e2e_issue_parent_roundtrip() {
     );
 }
 
+/// Walk an ADF content node depth-first, appending the `"text"` value of
+/// every `{"type":"text",…}` node to `out`.  Used by `extract_field_text`.
+fn extract_adf_text_walk(node: &Value, out: &mut String) {
+    if node.get("type").and_then(Value::as_str) == Some("text") {
+        if let Some(text) = node.get("text").and_then(Value::as_str) {
+            out.push_str(text);
+        }
+    }
+    if let Some(content) = node.get("content").and_then(Value::as_array) {
+        for child in content {
+            extract_adf_text_walk(child, out);
+        }
+    }
+}
+
+/// Extract the effective text from a field value returned by the Jira API.
+///
+/// The value may be either:
+/// - A plain JSON string — returned as-is.
+/// - An ADF document object (`{"type":"doc","content":[…]}`) — the text of
+///   every `text`-typed node is concatenated via a depth-first walk.
+///
+/// This makes read-back assertions in `test_e2e_issue_edit_custom_field`
+/// correct for both plain-string fields and ADF-backed fields (e.g.
+/// `environment`) that now correctly persist as ADF documents
+/// (E2E-EDIT-FIELD-ADF-HEURISTIC).
+fn extract_field_text(v: &Value) -> String {
+    if let Some(s) = v.as_str() {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    extract_adf_text_walk(v, &mut out);
+    out
+}
+
 /// Discover a safe, benign string field on `key`'s Edit screen via
 /// `GET /rest/api/3/issue/<key>/editmeta` (`jr api`, S-E2E-DYNAMIC), for use
 /// by `test_e2e_issue_edit_custom_field` when no `JR_E2E_EDIT_FIELD` override
@@ -5333,12 +5368,17 @@ fn test_e2e_issue_edit_custom_field() {
     if let Some(wire_key) = wire_key {
         let fetched = fetch_raw(&h, &format!("/rest/api/3/issue/{key}"))
             .expect("fresh GET on the edited issue must succeed");
-        let got = fetched
-            .get("fields")
-            .and_then(|f| f.get(&wire_key))
-            .and_then(Value::as_str);
+        // The persisted value may be a plain JSON string (non-ADF field) or an
+        // ADF document object (ADF-backed field, e.g. `environment`).
+        // `extract_field_text` handles both shapes so this assertion is correct
+        // regardless of which field was selected by `discover_safe_edit_field`
+        // (E2E-EDIT-FIELD-ADF-HEURISTIC).
+        let field_val = fetched.get("fields").and_then(|f| f.get(&wire_key));
+        let got_text = field_val.map(extract_field_text);
         assert!(
-            got.is_some_and(|v| v.contains(&label)),
+            got_text
+                .as_deref()
+                .is_some_and(|v| v.contains(label.as_str())),
             "edit --field must persist the written value under fields.{wire_key}; got: {fetched}"
         );
     }
