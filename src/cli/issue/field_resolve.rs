@@ -699,7 +699,7 @@ async fn resolve_against_createmeta(
         // empty value for an ADF-backed field is OMITTED from the POST body
         // entirely (not sent as a clear-doc). Only applies to bare-form
         // (kind == None) — hinted values bypass this check.
-        if spec.kind.is_none() && is_adf_field(&adapted.schema) && spec.value.trim().is_empty() {
+        if is_bare_empty_adf_field(spec.kind, &adapted.schema, &spec.value) {
             continue;
         }
 
@@ -765,7 +765,7 @@ async fn resolve_against_editmeta(
         // ADF empty-clear pre-check (BC-3.4.036, S-cycle12): on edit, an empty
         // value for an ADF-backed field writes a clear-doc (empty content array).
         // Only applies to bare-form (kind == None) — hinted values bypass this.
-        if spec.kind.is_none() && is_adf_field(&meta_field.schema) && spec.value.trim().is_empty() {
+        if is_bare_empty_adf_field(spec.kind, &meta_field.schema, &spec.value) {
             let clear_doc = serde_json::json!({"type": "doc", "version": 1, "content": []});
             fields[field_id.as_str()] = clear_doc.clone();
             changed_fields.insert(human_name.clone(), String::new());
@@ -839,6 +839,30 @@ fn is_adf_field(schema: &crate::types::jira::EditMetaFieldSchema) -> bool {
         "custom": schema.custom,
     });
     is_adf_field_value(&v)
+}
+
+/// Empty-value gate for ADF-backed fields on the bare (un-hinted) form only
+/// (AC-004, BC-3.3.015, BC-3.4.036, S-cycle12).
+///
+/// Returns `true` IFF ALL three conditions hold:
+/// 1. `kind` is `None` (bare form — hinted values bypass this gate and route
+///    to the hint composer instead).
+/// 2. The field's schema is ADF-backed ([`is_adf_field`] returns true).
+/// 3. `value.trim().is_empty()` — the user supplied an empty or whitespace-only value.
+///
+/// Call sites:
+/// - [`resolve_against_createmeta`]: empty bare-form → OMIT the field from POST.
+/// - [`resolve_against_editmeta`]: empty bare-form → write a clear-doc
+///   (`{"type":"doc","version":1,"content":[]}`).
+///
+/// Extracted as a pure, network-free helper so VP-FIELD-ADF-003 Axis D can be
+/// unit-tested without a MockServer (AC-004 F4 obligation).
+fn is_bare_empty_adf_field(
+    kind: Option<crate::cli::issue::create::FieldValueKind>,
+    schema: &crate::types::jira::EditMetaFieldSchema,
+    value: &str,
+) -> bool {
+    kind.is_none() && is_adf_field(schema) && value.trim().is_empty()
 }
 
 /// Output/accumulator bundle for [`dispatch_field_value`].
@@ -1938,25 +1962,65 @@ mod tests {
 
     // -------------------------------------------------------------------------
     // AC-002 / VP-FIELD-ADF-002 (inline): dispatch_field_value ADF conversion
-    //
-    // RED: dispatch_field_value currently returns Value::String for "string"
-    // schema fields — no ADF branch exists yet.  Tests assert the wire value is
-    // an ADF doc object; this assertion currently fails.
     // -------------------------------------------------------------------------
 
+    /// Recursive INV-1 tree-walk: returns `true` iff NO text node anywhere in
+    /// the ADF `node` value contains a raw `\n` or `\r` character.
+    /// Called by VP-FIELD-ADF-002 Property 3.
+    fn adf_no_raw_newline_in_text_nodes(node: &serde_json::Value) -> bool {
+        if node.get("type").and_then(|t| t.as_str()) == Some("text") {
+            if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
+                if text.contains('\n') || text.contains('\r') {
+                    return false;
+                }
+            }
+        }
+        if let Some(children) = node.get("content").and_then(|c| c.as_array()) {
+            if children
+                .iter()
+                .any(|child| !adf_no_raw_newline_in_text_nodes(child))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(100))]
+        #![proptest_config(ProptestConfig::with_cases(200))]
         /// VP-FIELD-ADF-002 property: for arbitrary non-empty values on an
-        /// ADF-backed field, dispatch_field_value must return an ADF doc object
-        /// (type="doc", version=1, non-empty content).
+        /// ADF-backed field, `dispatch_field_value` must return an ADF doc object
+        /// satisfying all three properties:
         ///
-        /// RED: current code returns Value::String for "string" type fields.
+        /// Property 1: type="doc", version=1.
+        /// Property 2: `content` is a non-empty array containing ≥1 "paragraph" node.
+        /// Property 3 (INV-1): no `text` node anywhere in the tree contains a raw
+        ///   `\n` or `\r` character — multi-line inputs must produce `hardBreak` nodes,
+        ///   not raw newlines in text nodes.
+        ///
+        /// Generator mixes single-line and multi-line inputs (including `\n`, `\r`,
+        /// `\r\n`) so the hardBreak path and INV-1 are both exercised.
+        /// Empty/whitespace-only inputs are skipped (they route to the empty guard).
         #[test]
         fn prop_bc_3_4_033_dispatch_field_value_adf_backed_returns_adf_object(
-            value in "[^\r\n]{1,80}"
+            value in prop_oneof![
+                // 4 parts: plain single-line strings (no newlines).
+                4 => "[^\r\n]{1,40}",
+                // 2 parts: strings with an embedded LF.
+                2 => "[^\r\n]{0,19}\n[^\r\n]{0,19}",
+                // 1 part: strings with an embedded CR.
+                1 => "[^\r\n]{0,19}\r[^\r\n]{0,19}",
+                // 1 part: strings with an embedded CRLF sequence.
+                1 => "[^\r\n]{0,9}\r\n[^\r\n]{0,9}",
+            ]
         ) {
+            // Skip inputs that are empty or all-whitespace after trim — those route
+            // to the ADF empty guard (bare-form + ADF schema + empty value) and do
+            // not reach dispatch_field_value.
+            prop_assume!(!value.trim().is_empty());
+
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let (wire_value, _planned) = rt.block_on(async {
+            let wire_value = rt.block_on(async {
                 let client = crate::api::client::JiraClient::new_for_test(
                     "http://localhost:1".to_string(),
                     "Basic dGVzdDp0ZXN0".to_string(),
@@ -1997,53 +2061,188 @@ mod tests {
                     &mut outputs,
                 )
                 .await;
-                (fields["description"].clone(), planned_preview.get("Description").cloned())
+                fields["description"].clone()
             });
-            // VP-FIELD-ADF-002 Property 1: wire value must be an ADF doc object.
+
+            // Property 1: wire value must be an ADF doc object (type="doc", version=1).
             prop_assert!(
-                wire_value.is_object() && wire_value.get("type").and_then(|t| t.as_str()) == Some("doc"),
-                "expected ADF doc object, got: {:?}",
+                wire_value.is_object()
+                    && wire_value.get("type").and_then(|t| t.as_str()) == Some("doc"),
+                "VP-FIELD-ADF-002 Property 1: expected ADF doc object, got: {:?}",
                 wire_value
             );
-            // VP-FIELD-ADF-002 Property 2: version must be 1.
             prop_assert_eq!(
                 wire_value.get("version").and_then(|v| v.as_i64()),
                 Some(1),
-                "ADF version must be 1"
+                "VP-FIELD-ADF-002 Property 1: ADF version must be 1"
+            );
+
+            // Property 2: content must be non-empty and contain at least one "paragraph".
+            let content = wire_value.get("content").and_then(|c| c.as_array());
+            prop_assert!(
+                content.map(|c| !c.is_empty()).unwrap_or(false),
+                "VP-FIELD-ADF-002 Property 2: content array must be non-empty; got: {:?}",
+                wire_value
+            );
+            prop_assert!(
+                content
+                    .map(|c| {
+                        c.iter().any(|n| {
+                            n.get("type").and_then(|t| t.as_str()) == Some("paragraph")
+                        })
+                    })
+                    .unwrap_or(false),
+                "VP-FIELD-ADF-002 Property 2: content must contain ≥1 paragraph node; got: {:?}",
+                wire_value
+            );
+
+            // Property 3 (INV-1): no text node in the tree may contain a raw \n or \r.
+            prop_assert!(
+                adf_no_raw_newline_in_text_nodes(&wire_value),
+                "VP-FIELD-ADF-002 Property 3 (INV-1): found text node with raw newline in: {:?}",
+                wire_value
             );
         }
     }
 
+    /// VP-FIELD-ADF-002 example-based: multi-line input produces `hardBreak`
+    /// nodes and no raw newline in any text node (BC-7.2.011 INV-1, ADR-0024 §ADF).
+    #[test]
+    fn test_bc_3_4_033_dispatch_field_value_multiline_uses_hardbreak() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let wire_value = rt.block_on(async {
+            let client = crate::api::client::JiraClient::new_for_test(
+                "http://localhost:1".to_string(),
+                "Basic dGVzdDp0ZXN0".to_string(),
+            );
+            let schema = crate::types::jira::EditMetaFieldSchema {
+                field_type: "string".to_string(),
+                system: Some("description".to_string()),
+                custom: None,
+            };
+            let meta_field = crate::types::jira::EditMetaField {
+                name: "Description".to_string(),
+                schema,
+                allowed_values: None,
+                operations: vec!["set".to_string()],
+                required: false,
+                auto_complete_url: None,
+            };
+            let mut fields = serde_json::json!({});
+            let mut changed_fields = std::collections::BTreeMap::new();
+            let mut planned_preview = std::collections::BTreeMap::new();
+            let mut field_markers = std::collections::BTreeMap::new();
+            let mut outputs = FieldResolutionOutputs {
+                fields: &mut fields,
+                changed_fields: &mut changed_fields,
+                planned_preview: &mut planned_preview,
+                field_markers: &mut field_markers,
+            };
+            let spec = crate::cli::issue::create::FieldValueSpec {
+                value: "line one\nline two\r\nline three".to_string(),
+                kind: None,
+            };
+            let _ = dispatch_field_value(
+                &client,
+                "description",
+                "Description".to_string(),
+                spec,
+                &meta_field,
+                &mut outputs,
+            )
+            .await;
+            fields["description"].clone()
+        });
+
+        // Must be an ADF doc object.
+        assert!(
+            wire_value.get("type").and_then(|t| t.as_str()) == Some("doc"),
+            "expected ADF doc object, got: {wire_value:?}"
+        );
+        // INV-1: no raw newlines in text nodes.
+        assert!(
+            adf_no_raw_newline_in_text_nodes(&wire_value),
+            "INV-1: found text node with raw newline in: {wire_value:?}"
+        );
+        // At least one hardBreak node must appear in the tree (multi-line input).
+        fn has_hard_break(node: &serde_json::Value) -> bool {
+            if node.get("type").and_then(|t| t.as_str()) == Some("hardBreak") {
+                return true;
+            }
+            node.get("content")
+                .and_then(|c| c.as_array())
+                .map(|c| c.iter().any(has_hard_break))
+                .unwrap_or(false)
+        }
+        assert!(
+            has_hard_break(&wire_value),
+            "multi-line input must produce at least one hardBreak node; got: {wire_value:?}"
+        );
+    }
+
     // -------------------------------------------------------------------------
-    // AC-004 Axis D: empty ADF guard fires ONLY on bare form (kind.is_none()),
-    // not on hinted form (kind.is_some()).
+    // AC-004 Axis D (VP-FIELD-ADF-003): empty ADF guard fires ONLY on bare
+    // form (kind.is_none()), not on hinted form (kind.is_some()).
     //
-    // RED: is_adf_schema is todo!() — panics on first call.
+    // Extracted helper: `is_bare_empty_adf_field(kind, schema, value)`.
+    // Tested here without a MockServer (AC-004 F4 extraction obligation).
     // -------------------------------------------------------------------------
 
-    /// AC-004 Axis D: the gate condition `kind.is_none() && is_adf_schema(...) &&
-    /// value.trim().is_empty()` must NOT fire when `kind` is `Some(...)`.
+    /// AC-004 Axis D: `is_bare_empty_adf_field` returns `true` IFF
+    /// `kind.is_none() && is_adf_field(schema) && value.trim().is_empty()`.
     ///
-    /// RED: panics via todo!() in is_adf_schema until implemented.
+    /// Pins the `kind.is_none()` conjunct: a mutant that drops it would make
+    /// the hinted-form case incorrectly return `true`, failing this test.
     #[test]
     fn test_adf_empty_guard_fires_only_on_bare_form_not_hinted_platform() {
-        // Bare-form: kind.is_none(), ADF-backed schema, empty value → guard fires.
-        // The guard condition is: kind.is_none() && is_adf_schema(system, custom) && value.trim().is_empty()
-        // Currently panics via todo!() in is_adf_schema.
-        let bare_form_is_adf = is_adf_schema(Some("description"), None);
+        fn mk_schema(
+            system: Option<&str>,
+            custom: Option<&str>,
+        ) -> crate::types::jira::EditMetaFieldSchema {
+            crate::types::jira::EditMetaFieldSchema {
+                field_type: "string".to_string(),
+                system: system.map(|s| s.to_string()),
+                custom: custom.map(|c| c.to_string()),
+            }
+        }
+
+        let adf_schema = mk_schema(Some("description"), None);
+        let non_adf_schema = mk_schema(Some("summary"), None);
+
+        // TRUE: bare form (kind=None) + ADF-backed schema + empty value.
         assert!(
-            bare_form_is_adf,
-            "description system field must be ADF-backed (bare-form empty guard must fire)"
+            is_bare_empty_adf_field(None, &adf_schema, ""),
+            "Axis D TRUE: bare-form empty value on ADF schema must return true"
         );
-        // Hinted form: kind.is_some() → guard must NOT fire regardless of ADF-backed status.
-        // After implementation: is_adf_schema returns true for description, but since
-        // kind.is_some(), the guard condition short-circuits to false.
-        let hinted_is_adf = is_adf_schema(Some("description"), None);
-        // The guard for hinted form is: `kind.is_none()` → false → gate does not fire.
-        // This is a no-op assertion (always true), serving as documentation of the invariant.
+        // TRUE: whitespace-only value is also "empty" after trim.
         assert!(
-            hinted_is_adf || !hinted_is_adf,
-            "hinted form must bypass the ADF empty guard regardless of is_adf_schema result"
+            is_bare_empty_adf_field(None, &adf_schema, "   "),
+            "Axis D TRUE: bare-form whitespace-only value on ADF schema must return true"
+        );
+
+        // FALSE: hinted form (kind=Some) + ADF-backed schema + empty value.
+        // The kind.is_none() conjunct is the discriminator: it gates the hinted path
+        // out of the empty-guard, routing it to the hint composer instead.
+        // A mutant dropping kind.is_none() would make this return true, failing here.
+        assert!(
+            !is_bare_empty_adf_field(
+                Some(crate::cli::issue::create::FieldValueKind::Option),
+                &adf_schema,
+                ""
+            ),
+            "Axis D FALSE: hinted-form (kind=Some) must NOT fire the empty ADF guard"
+        );
+
+        // FALSE: bare form + ADF-backed schema + non-empty value.
+        assert!(
+            !is_bare_empty_adf_field(None, &adf_schema, "hello"),
+            "Axis D FALSE: bare-form non-empty value must return false"
+        );
+
+        // FALSE: bare form + non-ADF schema + empty value.
+        assert!(
+            !is_bare_empty_adf_field(None, &non_adf_schema, ""),
+            "Axis D FALSE: bare-form empty value on non-ADF schema must return false"
         );
     }
 }
