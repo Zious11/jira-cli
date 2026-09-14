@@ -226,7 +226,10 @@ impl<'a> JsmRequestBuilder<'a> {
             serde_json::Value::Object(rfv),
         );
 
-        // isAdfRequest only when description is present (BC-3.8.006).
+        // isAdfRequest key is present only when true (BC-3.8.006); its value
+        // is `is_adf_request`, computed above from BOTH the description
+        // channel AND the resolution layer's pre-computed ADF flag — NOT
+        // gated on description alone (see the comment at its computation).
         if is_adf_request {
             body.insert("isAdfRequest".to_string(), serde_json::Value::Bool(true));
         }
