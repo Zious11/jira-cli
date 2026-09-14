@@ -195,6 +195,15 @@ All notable changes to jr will be documented here.
   unchanged). "Profile exists but has no stored credentials" (exit 2) is categorically
   distinct from "profile does not exist" (exit 64).
 
+### Security
+
+- **Bump rustls to 0.23.45 (RUSTSEC-2026-0285):** Resolves a TLS 1.3 handshake
+  vulnerability in rustls where certain handshake messages were not properly rejected.
+  The handshake transcript remains authenticated (no MITM, no attacker handshake
+  completion); the practical risk is low but the fix is straightforward. Also bumps
+  aws-lc-rs 1.16.2 → 1.18.1 and aws-lc-sys 0.39.0 → 0.45.0 (Cargo.lock-only,
+  no source changes). Verified clean under MSRV 1.85.
+
 ## [0.7.0-dev.5] - 2026-09-06
 
 ### Changed
