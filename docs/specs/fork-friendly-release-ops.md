@@ -30,6 +30,7 @@ in both repos, so syncs are conflict-free.
 | `.github/workflows/backfill-release.yml` | Build + release an existing tag that has no GitHub Release (manual dispatch); optionally sign/publish | always manual; sign job needs `SIGNING_ENABLED`, homebrew job needs `HOMEBREW_TAP_REPO` |
 | `.github/workflows/release-gap-fill.yml` | Daily tag-vs-release reconciliation; dispatches backfill for missing releases | `vars.RELEASE_GAP_FILL_ENABLED == 'true'` (manual dispatch always works) |
 | `.github/workflows/sync-upstream.yml` | Scheduled fork→upstream merge with protected-file auto-resolution | `vars.SYNC_UPSTREAM_REPO` set |
+| `.github/workflows/mutants-nightly.yml` | Advisory full (non-diff-scoped) cargo-mutants run, 08:00 UTC nightly; never gates a merge | `vars.MUTANTS_NIGHTLY_ENABLED == 'true'` |
 | `.github/local-workflows.txt` | Registry of fork-local files that survive a sync ("ours" on conflict) | n/a (empty template here) |
 | `Formula/*.rb` | Homebrew formula templates (placeholders sed'd at publish time) | only read by the jobs above |
 | `packaging/Info.plist`, `scripts/create-{app,dmg,pkg}.sh` | macOS .app/.dmg/.pkg packaging helpers | only invoked by sign jobs |
@@ -43,6 +44,7 @@ in both repos, so syncs are conflict-free.
 | `RELEASE_GAP_FILL_ENABLED` | `'true'` enables the daily gap-fill schedule | unset |
 | `SYNC_UPSTREAM_REPO` | `owner/repo` to merge from on a schedule (forks only) | unset |
 | `GITLEAKS_DISABLED` | `'true'` disables the gitleaks secret-scan job in `ci.yml`; for forks that cannot obtain a gitleaks org/commercial license or prefer an alternative scanner | unset |
+| `MUTANTS_NIGHTLY_ENABLED` | `'true'` runs the advisory `mutants-nightly.yml` full mutation nightly; unset skips it cleanly | `'true'` (the canonical repo sets it to keep the nightly it has always run; forks leave it unset) |
 
 This is the same fail-safe pattern as `vars.JR_E2E_ENABLED`
 (`docs/specs/e2e-fork-safe-ci-enablement.md`): scheduling-time gates on

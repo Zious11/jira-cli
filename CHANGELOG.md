@@ -4,6 +4,16 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`mutants-nightly.yml` gated behind `vars.MUTANTS_NIGHTLY_ENABLED` (fork-friendly-release-ops):**
+  the advisory full mutation nightly now runs only where the repository variable
+  `MUTANTS_NIGHTLY_ENABLED` is set to `'true'`, matching the fail-safe opt-in pattern of
+  `JR_E2E_ENABLED` and `SIGNING_ENABLED`. A publishing fork inherits the workflow file but
+  does not spend runner-minutes on a full mutation run it did not ask for. The canonical
+  repo sets the variable to `'true'` to keep the nightly it has always run.
+  See `docs/specs/fork-friendly-release-ops.md`.
+
 ## [0.7.0-dev.7] - 2026-09-16
 
 ### Changed

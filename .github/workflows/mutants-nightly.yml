@@ -21,7 +21,14 @@ jobs:
     # No pull_request trigger at all in `on:` above; this belt-and-suspenders
     # if: mirrors e2e.yml's own convention (never run this against a PR
     # even if `on:` is later edited).
-    if: github.event_name != 'pull_request'
+    #
+    # Opt-in, default off (same fail-safe pattern as JR_E2E_ENABLED and
+    # SIGNING_ENABLED): the advisory nightly runs only where the repository
+    # variable MUTANTS_NIGHTLY_ENABLED is set, so a publishing fork does not
+    # burn runner-minutes on a full mutation run it did not ask for. The
+    # canonical repo sets it to 'true' to keep running (see
+    # docs/specs/fork-friendly-release-ops.md).
+    if: github.event_name != 'pull_request' && vars.MUTANTS_NIGHTLY_ENABLED == 'true'
     timeout-minutes: 300  # full, non-diff-scoped scope; advisory, not
                            # required, so a long/occasionally-timing-out run
                            # here is acceptable (does not block any merge).
