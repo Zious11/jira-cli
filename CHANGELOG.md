@@ -102,9 +102,10 @@ All notable changes to jr will be documented here.
   sites across `src/` and several integration test files. All were collapsed,
   either via `cargo clippy --fix` (the mechanical majority, each diff manually
   reviewed for behavior preservation — no dropped `else` branches, no reordered
-  side effects) or by hand for the three call sites CLAUDE.md's own convention
+  side effects) or by hand for the four call sites CLAUDE.md's own convention
   entry had explicitly carved out as workarounds:
-  `src/cli/auth/keychain.rs::resolve_credential` (simple two-level collapse) and
+  `src/cli/auth/keychain.rs::resolve_credential` (simple two-level collapse),
+  `tests/common/wf.rs::WfDoc::parse` (simple two-level collapse), and
   the structurally-identical three-level Team-column gating sites in
   `src/cli/board.rs::handle_view` / `src/cli/issue/list.rs::handle_list`, where
   only the outer two gates (`output_format == Table` and `team_field_id.is_some()`)
@@ -116,10 +117,10 @@ All notable changes to jr will be documented here.
   `tests/team_column_parity.rs` + `tests/cli_handler.rs` team-column suites
   verified red→green around the change). The now-fulfilled "No let-chains"
   Conventions entry and its three citing `// Nested if (not a let-chain)` marker
-  comments are removed. `tests/common/wf.rs` carries one remaining
-  `collapsible_if` site, deliberately left untouched — that file is owned by a
-  separate CI-gate story's file-surface boundary. No behavior change anywhere in
-  this entry; syntax-only.
+  comments are removed. `tests/common/wf.rs`'s `collapsible_if` site
+  (`WfDoc::parse`) is converted in this same PR, not left as an exception — an
+  earlier draft of this entry incorrectly described it as deliberately
+  untouched. No behavior change anywhere in this entry; syntax-only.
 
 - **CI: sharded mutation-testing gate replaces the single 240-minute `mutants` job
   (S-cycle6-mutants-ci-sharding, cycle-006).** Internal CI/CD infrastructure only —
