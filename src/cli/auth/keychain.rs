@@ -47,11 +47,10 @@ pub(crate) fn resolve_credential(
     if let Some(v) = flag_value.filter(|v| !v.is_empty()) {
         return Ok(v);
     }
-    // Nested if (not a let-chain): let-chains require Rust >= 1.88 + edition 2024; MSRV is 1.85. See CLAUDE.md Conventions — No let-chains.
-    if let Ok(v) = std::env::var(env_name) {
-        if !v.is_empty() {
-            return Ok(v);
-        }
+    if let Ok(v) = std::env::var(env_name)
+        && !v.is_empty()
+    {
+        return Ok(v);
     }
     if no_input {
         let base = format!("{prompt_label} is required. Provide {flag_name} or set ${env_name}.");
