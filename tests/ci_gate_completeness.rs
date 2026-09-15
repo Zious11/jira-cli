@@ -1673,7 +1673,7 @@ const PINNED_ALWAYS_RUN_STEP_KEY_SETS: &[(&str, &[&[&str]])] = &[
             &["uses"],                 // actions/checkout
             &["uses", "with"],         // dtolnay/rust-toolchain
             &["uses"],                 // Swatinem/rust-cache
-            &["env", "run"],           // cargo check --all-features --locked
+            &["env", "run"],           // cargo check --all-targets --all-features --locked
         ],
     ),
     (
@@ -3563,10 +3563,10 @@ fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
 }
 
 // ---------------------------------------------------------------------------
-// S-626-1 AC-3 — `msrv` job genuinely validates 1.85.0
+// S-626-1 AC-3 — `msrv` job genuinely validates 1.88.0
 // ---------------------------------------------------------------------------
 
-/// S-626-1 AC-3: the `msrv` job must genuinely compile at Rust 1.85.0,
+/// S-626-1 AC-3: the `msrv` job must genuinely compile at Rust 1.88.0,
 /// not silently fall through to
 /// `rust-toolchain.toml`'s `channel = "stable"`.
 ///
@@ -3588,31 +3588,33 @@ fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
 /// have kept passing while validating `stable` again.
 ///
 /// This test makes THREE assertions, not two. The first two asserted
-/// strings are exact, quote-included forms (`toolchain: "1.85.0"` and
-/// `RUSTUP_TOOLCHAIN: "1.85.0"`) that appear exactly once each in the whole
+/// strings are exact, quote-included forms (`toolchain: "1.88.0"` and
+/// `RUSTUP_TOOLCHAIN: "1.88.0"`) that appear exactly once each in the whole
 /// of `ci.yml`, both in operative `with:`/`env:` key-value position — never
-/// inside a comment. (The bare substring `1.85.0` also appears in the job's
-/// `name:` line, the `dtolnay/rust-toolchain` version-pin comment, and two
-/// scope-rationale comments — which is why the assertions below match the
-/// longer, key-qualified forms rather than the bare version string.)
+/// inside a comment. (The bare substring `1.88.0` also appears in the job's
+/// `name:` line and the `dtolnay/rust-toolchain` version-pin comment — which
+/// is why the assertions below match the longer, key-qualified forms rather
+/// than the bare version string. The job's prior "two scope-rationale
+/// comments" bare-`1.85.0` source no longer exists: the `--all-targets`
+/// scope-widening below removed that comment block entirely — see the third
+/// assertion's doc comment.)
 ///
-/// The third assertion, `cargo check --all-features --locked` (added when
-/// `d848d9a5` pinned `--locked` to close a dependency-drift gap — see the
-/// AC-3 rationale above), is a different shape: it is the literal `run:`
-/// step command itself, not a `with:`/`env:` key-value pair. It also
-/// appears exactly once in the whole of `ci.yml`, in operative position.
-/// The `msrv` job carries a 10-line scope-rationale comment discussing
-/// `--all-targets` and `--all-features` (why the job omits the former and
-/// why the latter is a no-op for this crate) — that comment does NOT
-/// currently reproduce the full concatenated substring
-/// `cargo check --all-features --locked`, so today this assertion is not
-/// comment-satisfiable. That is, as with the `toolchain`/`RUSTUP_TOOLCHAIN`
-/// pair above, an incidental property of the current comment wording, not a
-/// structural guarantee: a future edit to that scope comment that happened
-/// to quote the full command verbatim would satisfy this assertion without
-/// the operative `run:` line needing to match it — this is a live,
-/// unresolved question this docstring does not close, not a claim that it
-/// cannot happen.
+/// The third assertion, `cargo check --all-targets --all-features --locked`
+/// (widened from `cargo check --all-features --locked` once the MSRV floor
+/// moved to 1.88 — the sole reason for the narrower `lib + bins`-only scope,
+/// `wiremock`'s ≥1.88 requirement, no longer applies once the floor itself
+/// is 1.88; `--locked` was originally pinned by `d848d9a5` to close a
+/// dependency-drift gap — see the AC-3 rationale above), is a different
+/// shape: it is the literal `run:` step command itself, not a `with:`/
+/// `env:` key-value pair. It also appears exactly once in the whole of
+/// `ci.yml`, in operative position. The `msrv` job's `cargo check` step now
+/// runs `--all-targets` directly — the wiremock-scope-justification comment
+/// block that used to explain why the job omitted `--all-targets` has been
+/// removed from `ci.yml` entirely, so there is no longer a scope-rationale
+/// comment for this assertion to be incidentally, non-structurally
+/// satisfied by; the "not currently comment-satisfiable because the comment
+/// doesn't quote the full run-line" caveat that used to apply here is
+/// retired along with that comment.
 ///
 /// Anchoring: assertion is made only within the `msrv` job block, so a
 /// matching substring in an unrelated job (e.g. `coverage`, which pins a
@@ -3642,8 +3644,8 @@ fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
 ///      `"dtolnay/rust-toolchain@"` (`@`-anchored at the version-pin
 ///      boundary, not a bare-prefix `starts_with` that would also match a
 ///      same-org decoy action name), and the cargo-check step by its
-///      `run:` value being exactly `"cargo check --all-features
-///      --locked"`. This replaces a raw, unchecked
+///      `run:` value being exactly `"cargo check --all-targets
+///      --all-features --locked"`. This replaces a raw, unchecked
 ///      `job.steps.iter().find(...)` for BOTH steps — the msrv job has
 ///      FOUR steps that all carry a `uses:` key (harden-runner, checkout,
 ///      dtolnay/rust-toolchain, Swatinem/rust-cache), so an anchor as weak
@@ -3660,9 +3662,9 @@ fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
 ///      design had, and the reason this dedicated function exists — see
 ///      its own doc comment).
 ///
-/// AC-004 quoting fidelity: `toolchain: "1.85.0"` and
-/// `RUSTUP_TOOLCHAIN: "1.85.0"` are asserted as `ScalarStyle::DoubleQuoted`
-/// (matching `ci.yml`'s current spelling — an unquoted `toolchain: 1.85.0`
+/// AC-004 quoting fidelity: `toolchain: "1.88.0"` and
+/// `RUSTUP_TOOLCHAIN: "1.88.0"` are asserted as `ScalarStyle::DoubleQuoted`
+/// (matching `ci.yml`'s current spelling — an unquoted `toolchain: 1.88.0`
 /// would parse to a YAML FLOAT, not the string the `dtolnay/rust-toolchain`
 /// action expects, so this is a real behavioral distinction, not
 /// cosmetic); the `run:` line is asserted as `ScalarStyle::Plain` (its
@@ -3676,7 +3678,7 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
         panic!(
             "FAIL: `.github/workflows/ci.yml` does not contain an `msrv:` job.\n\
              Required: the `msrv` job must exist and genuinely validate Rust \
-             1.85.0 (S-626-1 AC-3)."
+             1.88.0 (S-626-1 AC-3)."
         )
     });
     let job = WfDoc::parse_single_job(msrv_block);
@@ -3734,7 +3736,7 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
         );
     });
 
-    // toolchain: "1.85.0" on the dtolnay/rust-toolchain step's `with:` block.
+    // toolchain: "1.88.0" on the dtolnay/rust-toolchain step's `with:` block.
     match common::wf::step_mapping_child_value_for_step(
         msrv_block,
         dtolnay_step,
@@ -3743,19 +3745,19 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
     ) {
         Some(Value::Scalar { text, style, .. }) => {
             assert_eq!(
-                text, "1.85.0",
+                text, "1.88.0",
                 "FAIL (S-626-1): the `msrv` job's `with.toolchain` value is \
-                 {text:?}, not \"1.85.0\".\n\
+                 {text:?}, not \"1.88.0\".\n\
                  Current msrv job block:\n{msrv_block}"
             );
             assert_eq!(
                 style,
                 ScalarStyle::DoubleQuoted,
                 "FAIL (S-626-1, AC-004 quoting fidelity): the `msrv` job's \
-                 `with.toolchain: \"1.85.0\"` value must be a DOUBLE-QUOTED \
+                 `with.toolchain: \"1.88.0\"` value must be a DOUBLE-QUOTED \
                  scalar (matching ci.yml's current spelling) — found \
-                 {style:?} instead. A bare `toolchain: 1.85.0` (unquoted) \
-                 would parse to a YAML FLOAT, not the string \"1.85.0\" the \
+                 {style:?} instead. A bare `toolchain: 1.88.0` (unquoted) \
+                 would parse to a YAML FLOAT, not the string \"1.88.0\" the \
                  `dtolnay/rust-toolchain` action expects — re-quoting it any \
                  other way is a real behavioral change this pin must catch, \
                  not a cosmetic one.\n\
@@ -3763,10 +3765,10 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
             );
         }
         other => panic!(
-            "FAIL (S-626-1): The `msrv` job does not pin `toolchain: \"1.85.0\"` \
+            "FAIL (S-626-1): The `msrv` job does not pin `toolchain: \"1.88.0\"` \
              on its `dtolnay/rust-toolchain` step (found {other:?} instead of \
              a scalar `with.toolchain`).\n\
-             Required: at the pinned SHA (`fa04a1451ff1842e2626ccb99004d0195b455a88`), \
+             Required: at the pinned SHA (`6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772`), \
              `toolchain` is a required input with no default — omitting the `with:` \
              block does not fall back to `rust-toolchain.toml` or a default; the \
              action exits 1 with `'toolchain' is a required input`, failing the job \
@@ -3778,8 +3780,9 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
         ),
     }
 
-    // The `cargo check --all-features --locked` step, found by its OWN
-    // `run:` value via tree membership — not a byte-offset anchor + slice.
+    // The `cargo check --all-targets --all-features --locked` step, found
+    // by its OWN `run:` value via tree membership — not a byte-offset
+    // anchor + slice.
     //
     // # S-CIGATE-3 fix-burst-7 (ADV-SC3-P5-MED-001, the finding's PRIMARY
     // concrete bypass): OUTER selection is now ambiguity-checked
@@ -3789,7 +3792,7 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
     // left to silently violate" — true of `step_mapping_child_value_for_
     // step`'s byte-span anchoring, but NOT of the selection immediately
     // above it: `job.steps.iter().find(...)` picked the SOURCE-ORDER-FIRST
-    // step with `run: cargo check --all-features --locked`, unchecked for
+    // step with `run: cargo check --all-targets --all-features --locked`, unchecked for
     // a second match. Concrete bypass (RED-proven this pass — see this
     // pass's completion report): insert a decoy step with the identical
     // `run:` text immediately before the real one, give the decoy its own
@@ -3805,11 +3808,11 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
     // than one match instead of silently preferring the first.
     let cargo_check_step = find_sole_step_by(
         &job.steps,
-        "with a `run:` value of exactly \"cargo check --all-features --locked\"",
+        "with a `run:` value of exactly \"cargo check --all-targets --all-features --locked\"",
         |s| {
             matches!(
                 s.value_of("run"),
-                Some(Value::Scalar { text, .. }) if text == "cargo check --all-features --locked"
+                Some(Value::Scalar { text, .. }) if text == "cargo check --all-targets --all-features --locked"
             )
         },
     )
@@ -3833,8 +3836,8 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
             *style,
             ScalarStyle::Plain,
             "FAIL (S-626-1 AC-3, AC-004 quoting fidelity): the `msrv` job's \
-             `run: cargo check --all-features --locked` step must be a \
-             PLAIN (unquoted) scalar — found {style:?} instead.\n\
+             `run: cargo check --all-targets --all-features --locked` step \
+             must be a PLAIN (unquoted) scalar — found {style:?} instead.\n\
              Current msrv job block:\n{msrv_block}"
         );
     }
@@ -3894,25 +3897,25 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
     ) {
         Some(Value::Scalar { text, style, .. }) => {
             assert_eq!(
-                text, "1.85.0",
+                text, "1.88.0",
                 "FAIL (S-626-1): the `msrv` job's `cargo check` step's \
-                 `env.RUSTUP_TOOLCHAIN` value is {text:?}, not \"1.85.0\".\n\
+                 `env.RUSTUP_TOOLCHAIN` value is {text:?}, not \"1.88.0\".\n\
                  Current msrv job block:\n{msrv_block}"
             );
             assert_eq!(
                 style,
                 ScalarStyle::DoubleQuoted,
                 "FAIL (S-626-1, AC-004 quoting fidelity): \
-                 `RUSTUP_TOOLCHAIN: \"1.85.0\"` must be a double-quoted \
+                 `RUSTUP_TOOLCHAIN: \"1.88.0\"` must be a double-quoted \
                  scalar (matching ci.yml's current spelling) — found \
                  {style:?} instead.\n\
                  Current msrv job block:\n{msrv_block}"
             );
         }
         other => panic!(
-            "FAIL (S-626-1 AC-3 / F-02): `RUSTUP_TOOLCHAIN: \"1.85.0\"` is \
-             not an `env:` child of THE `cargo check --all-features \
-             --locked` step itself (found {other:?} instead) — this check \
+            "FAIL (S-626-1 AC-3 / F-02): `RUSTUP_TOOLCHAIN: \"1.88.0\"` is \
+             not an `env:` child of THE `cargo check --all-targets \
+             --all-features --locked` step itself (found {other:?} instead) — this check \
              is anchored to that exact step's own byte span, not to \
              \"some step with a `run:` key\", so a decoy step elsewhere in \
              `steps:` cannot satisfy it.\n\
