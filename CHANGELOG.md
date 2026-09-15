@@ -67,6 +67,33 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+- **MSRV raised to 1.88, `msrv` CI job widened to `--all-targets`, `comfy-table` re-pinned
+  to 7.2.2 (S-cycle13-msrv-cargo-ci-atomic-bump, cycle-013, ADR-0025):** `Cargo.toml`'s
+  `rust-version` moves from `"1.85"` to `"1.88"`, closing the false-MSRV gap the S-626-1
+  `comfy-table = "=7.2.1"` pin worked around (`comfy-table` 7.2.2 uses let-chains requiring
+  Rust ≥1.88 and ships no `rust-version` manifest field of its own). `comfy-table` is
+  re-pinned from the stale `=7.2.1` to an exact, human-reviewed `=7.2.2` — the current latest
+  `7.x` release — mirroring the `saphyr-parser = "=0.0.11"` exact-pin-with-review convention
+  rather than a caret range. The `msrv` CI job's name moves to `MSRV (1.88.0)`, its
+  `dtolnay/rust-toolchain` `toolchain:`/`cargo check`'s `RUSTUP_TOOLCHAIN:` values move to
+  `"1.88.0"` (action SHA unchanged), and its `cargo check` invocation widens from
+  `--all-features --locked` (an implicit `lib + bins`-only scope) to
+  `--all-targets --all-features --locked` — the stale wiremock-scope-carve-out comment
+  explaining the narrower scope is removed, since `wiremock`'s ≥1.88 requirement (the sole
+  reason for the carve-out) no longer applies once the floor itself is 1.88. This is the
+  first time this repo's `tests/`/inline `#[cfg(test)]` code is validated against the MSRV
+  floor rather than just `lib + bins`; doing so surfaced one genuine 1.88-only borrow-checker
+  pattern in a proptest in `src/cli/issue/create.rs` (a temporary-value-lifetime issue newer
+  rustc's borrow checker accepts but 1.88 rejects), fixed by binding the value to a `let`
+  first — no behavior change. `tests/ci_gate_completeness.rs`'s pinned literals (toolchain
+  version, `cargo check` run-line selector) were updated in the same atomic commit as the
+  `ci.yml` changes, per the CI-Gate six-file review-scope convention (CLAUDE.md), so the
+  `ci-gate` required check never goes red from a self-test/workflow-file mismatch. The
+  comfy-table re-pin's one table-rendering insta snapshot
+  (`src/cli/auth/tests/snapshots/jr__cli__auth__tests__list_table_snapshot.snap`) showed no
+  diff under 7.2.2. User impact: None for binary/Homebrew users; source-builders need
+  Rust ≥1.88.
+
 - **CI: sharded mutation-testing gate replaces the single 240-minute `mutants` job
   (S-cycle6-mutants-ci-sharding, cycle-006).** Internal CI/CD infrastructure only —
   no user-facing `jr` binary behavior changed. The required mutation-testing gate is
