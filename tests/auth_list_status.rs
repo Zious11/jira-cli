@@ -134,6 +134,74 @@ fn test_bc_1_6_049_renderers_are_probe_free() {
     );
 }
 
+/// CR-002 / F-C007-M1 (cycle-007 F5 fix bundle) — parity-by-construction pin
+/// (OBS-3).
+///
+/// `auth list` and `auth status` both need the same kind-specific keychain
+/// probe (`auth_method == "oauth"` → `load_oauth_tokens`, else →
+/// `load_api_token`). Before this fix the two call sites carried
+/// byte-identical, independently maintained copies of
+/// `probe_matching_kind_credential` — a duplication that could silently
+/// drift (one site fixed, the other not) without any test catching it. The
+/// fix consolidates both into ONE implementation,
+/// `api::auth::probe_matching_kind_credential`.
+///
+/// This is a DEFAULT-CI source-scan (no keychain access) asserting, by
+/// construction, that re-duplication cannot silently recur:
+/// 1. `src/api/auth.rs` defines exactly one `probe_matching_kind_credential`
+///    function — the single shared source.
+/// 2. Neither `src/cli/auth/list.rs` nor `src/cli/auth/status.rs` defines a
+///    local `fn probe_matching_kind_credential` of its own.
+/// 3. Both `list.rs` and `status.rs` still REFERENCE
+///    `probe_matching_kind_credential` somewhere — i.e. they call the shared
+///    function rather than silently dropping the probe.
+#[test]
+fn test_probe_matching_kind_credential_single_shared_source() {
+    let auth_src = include_str!("../src/api/auth.rs");
+    let list_src = include_str!("../src/cli/auth/list.rs");
+    let status_src = include_str!("../src/cli/auth/status.rs");
+
+    // 1. Exactly one definition, in api/auth.rs — the single shared source.
+    let auth_def_count = auth_src
+        .matches("fn probe_matching_kind_credential")
+        .count();
+    assert_eq!(
+        auth_def_count, 1,
+        "CR-002 FAIL: expected exactly one `probe_matching_kind_credential` \
+         definition, in src/api/auth.rs (the single shared source); found \
+         {auth_def_count} in that file."
+    );
+
+    // 2. No local re-definition in either call-site file.
+    assert!(
+        !list_src.contains("fn probe_matching_kind_credential"),
+        "CR-002 FAIL: src/cli/auth/list.rs re-defines `probe_matching_kind_credential` \
+         locally — this duplicates the shared src/api/auth.rs implementation. Call the \
+         shared function instead of re-defining it."
+    );
+    assert!(
+        !status_src.contains("fn probe_matching_kind_credential"),
+        "CR-002 FAIL: src/cli/auth/status.rs re-defines `probe_matching_kind_credential` \
+         locally — this duplicates the shared src/api/auth.rs implementation. Call the \
+         shared function instead of re-defining it."
+    );
+
+    // 3. Both call sites still reference the shared function — the probe was
+    //    not silently dropped in the course of consolidating it.
+    assert!(
+        list_src.contains("probe_matching_kind_credential"),
+        "CR-002 FAIL: src/cli/auth/list.rs no longer references \
+         `probe_matching_kind_credential` at all — the credential probe may have been \
+         silently dropped from `auth list`."
+    );
+    assert!(
+        status_src.contains("probe_matching_kind_credential"),
+        "CR-002 FAIL: src/cli/auth/status.rs no longer references \
+         `probe_matching_kind_credential` at all — the credential probe may have been \
+         silently dropped from `auth status`."
+    );
+}
+
 /// Extract the precise body of a named function from source text using
 /// brace-balanced extraction.
 ///
