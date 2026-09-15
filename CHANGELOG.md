@@ -98,7 +98,7 @@ All notable changes to jr will be documented here.
   convention retired (S-cycle13-letchain-retrofit-convention-cleanup, cycle-013,
   ADR-0025):** Raising `rust-version` to 1.88 (previous entry) made clippy's
   MSRV-aware `collapsible_if` lint fire on every nested-`if`-without-`else` site
-  that a let-chain (`if let … && …`) could now express in one condition — ~75
+  that a let-chain (`if let … && …`) could now express in one condition — 73
   sites across `src/` and several integration test files. All were collapsed,
   either via `cargo clippy --fix` (the mechanical majority, each diff manually
   reviewed for behavior preservation — no dropped `else` branches, no reordered
@@ -281,7 +281,10 @@ All notable changes to jr will be documented here.
   The handshake transcript remains authenticated (no MITM, no attacker handshake
   completion); the practical risk is low but the fix is straightforward. Also bumps
   aws-lc-rs 1.16.2 → 1.18.1 and aws-lc-sys 0.39.0 → 0.45.0 (Cargo.lock-only,
-  no source changes). Verified clean under MSRV 1.85.
+  no source changes). Verified clean under MSRV 1.85 at the time of this fix — the MSRV
+  floor within this same Unreleased set was subsequently raised to 1.88 (see the "MSRV
+  raised to 1.88" entry above); this bump remains verified clean under the new floor too,
+  since raising a floor cannot reintroduce a lower-Rust-version incompatibility.
 
 ## [0.7.0-dev.6] - 2026-09-15
 
