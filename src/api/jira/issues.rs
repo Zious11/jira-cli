@@ -281,12 +281,12 @@ impl JiraClient {
                 }
             }
 
-            if let Some(max) = limit {
-                if all_issues.len() >= max as usize {
-                    more_available = all_issues.len() > max as usize || page_has_more;
-                    all_issues.truncate(max as usize);
-                    break;
-                }
+            if let Some(max) = limit
+                && all_issues.len() >= max as usize
+            {
+                more_available = all_issues.len() > max as usize || page_has_more;
+                all_issues.truncate(max as usize);
+                break;
             }
 
             if !page_has_more {
@@ -382,12 +382,12 @@ impl JiraClient {
                 }
             }
 
-            if let Some(max) = limit {
-                if all_issues.len() >= max as usize {
-                    more_available = all_issues.len() > max as usize || page_has_more;
-                    all_issues.truncate(max as usize);
-                    break;
-                }
+            if let Some(max) = limit
+                && all_issues.len() >= max as usize
+            {
+                more_available = all_issues.len() > max as usize || page_has_more;
+                all_issues.truncate(max as usize);
+                break;
             }
 
             if !page_has_more {
@@ -504,20 +504,20 @@ impl JiraClient {
                 }
             }
 
-            if let Some(max) = limit {
-                if all_keys.len() >= max as usize {
-                    // `all_keys.len() > max` handles the Apr 2025 regression
-                    // (community.developer.atlassian.com thread 88287; see Validated
-                    // API Facts §7 in docs/specs/2026-05-13-search-issue-keys.md)
-                    // where the server overshoots maxResults AND sets isLast:true —
-                    // the overshoot proves more data existed.
-                    // `page_has_more` handles the normal "server said more pages" case.
-                    // Do NOT simplify to `page_has_more` alone — that would miss the
-                    // regression scenario.
-                    more_available = all_keys.len() > max as usize || page_has_more;
-                    all_keys.truncate(max as usize);
-                    break;
-                }
+            if let Some(max) = limit
+                && all_keys.len() >= max as usize
+            {
+                // `all_keys.len() > max` handles the Apr 2025 regression
+                // (community.developer.atlassian.com thread 88287; see Validated
+                // API Facts §7 in docs/specs/2026-05-13-search-issue-keys.md)
+                // where the server overshoots maxResults AND sets isLast:true —
+                // the overshoot proves more data existed.
+                // `page_has_more` handles the normal "server said more pages" case.
+                // Do NOT simplify to `page_has_more` alone — that would miss the
+                // regression scenario.
+                more_available = all_keys.len() > max as usize || page_has_more;
+                all_keys.truncate(max as usize);
+                break;
             }
 
             if !page_has_more {
@@ -1014,11 +1014,11 @@ impl JiraClient {
             let next = page.next_start();
             all.append(&mut page.comments.unwrap_or_default());
 
-            if let Some(cap) = limit {
-                if all.len() >= cap as usize {
-                    all.truncate(cap as usize);
-                    break;
-                }
+            if let Some(cap) = limit
+                && all.len() >= cap as usize
+            {
+                all.truncate(cap as usize);
+                break;
             }
             if !has_more {
                 break;

@@ -130,10 +130,10 @@ where
     let mut state = inner_arc.lock().await;
 
     // Step 3a: a prior waiter's refresh succeeded — reuse cached token (no HTTP call)
-    if let Some(Ok(())) = &state.last_result {
-        if let Some(token) = &state.last_access_token {
-            return Ok(token.clone());
-        }
+    if let Some(Ok(())) = &state.last_result
+        && let Some(token) = &state.last_access_token
+    {
+        return Ok(token.clone());
     }
 
     // Step 3b: a prior waiter's refresh failed — short-circuit (no thundering herd)

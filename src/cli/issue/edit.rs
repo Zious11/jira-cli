@@ -309,16 +309,17 @@ pub(super) async fn handle_edit(
     // cannot see whether --component is present, so it now accepts up to
     // JQL_MAX_CEILING unconditionally (src/cli/mod.rs); this runtime check
     // is what actually enforces the tighter ceiling for every other flag.
-    if let Some(m) = max {
-        if components.is_empty() && m > BULK_MAX_KEYS as u32 {
-            return Err(JrError::UserError(format!(
-                "--max {m} exceeds the {BULK_MAX_KEYS}-issue hard ceiling for this edit. \
+    if let Some(m) = max
+        && components.is_empty()
+        && m > BULK_MAX_KEYS as u32
+    {
+        return Err(JrError::UserError(format!(
+            "--max {m} exceeds the {BULK_MAX_KEYS}-issue hard ceiling for this edit. \
                  --component bulk edits chunk internally and accept up to {JQL_MAX_CEILING}; \
                  every other bulk field is capped at {BULK_MAX_KEYS} per Atlassian's bulk \
                  API limit."
-            ))
-            .into());
-        }
+        ))
+        .into());
     }
     let effective_max = max.unwrap_or(50).min(if components.is_empty() {
         BULK_MAX_KEYS as u32
@@ -1190,69 +1191,67 @@ pub(super) async fn handle_edit(
         // --type arm: evaluated FIRST (dual-gate precedence, BC-3.4.010 invariant).
         // HTTP-400 gate: downcast to JrError::ApiError { status: 400, .. }.
         // Non-400 (401, 403, 5xx, network) → R0b: no enrichment, fall through.
-        if let Some(ref type_name) = issue_type {
-            if let Some(JrError::ApiError {
+        if let Some(ref type_name) = issue_type
+            && let Some(JrError::ApiError {
                 status: 400,
                 message: api_msg,
             }) = e.downcast_ref::<JrError>()
-            {
-                let api_msg = api_msg.clone();
-                let type_name_lower = type_name.to_ascii_lowercase();
+        {
+            let api_msg = api_msg.clone();
+            let type_name_lower = type_name.to_ascii_lowercase();
 
-                // Call ordering (BC-3.4.010 precondition):
-                // 1. get_issue first; on Err → Indeterminate immediately (no project-types call).
-                // 2. get_project_issue_types next; on Err → Indeterminate.
-                // 3. Case-insensitive exact name match; not found → typo hint.
-                // 4. Found → classify with is_cross_hierarchy_type_error.
-                //
-                // Fetch failure gate uses Result::is_err() (not a status downcast) so
-                // JrError::NotAuthenticated, InsufficientScope, and all other Err variants
-                // correctly trigger Indeterminate (BC-3.4.010 invariant 3).
-                let issue_res = client.get_issue(key, &[]).await;
-                if let Ok(issue) = issue_res {
-                    let src_subtask = issue.fields.issue_type.as_ref().and_then(|t| t.subtask);
-                    let project_key = issue
-                        .fields
-                        .project
-                        .as_ref()
-                        .map(|p| p.key.clone())
-                        .unwrap_or_default();
+            // Call ordering (BC-3.4.010 precondition):
+            // 1. get_issue first; on Err → Indeterminate immediately (no project-types call).
+            // 2. get_project_issue_types next; on Err → Indeterminate.
+            // 3. Case-insensitive exact name match; not found → typo hint.
+            // 4. Found → classify with is_cross_hierarchy_type_error.
+            //
+            // Fetch failure gate uses Result::is_err() (not a status downcast) so
+            // JrError::NotAuthenticated, InsufficientScope, and all other Err variants
+            // correctly trigger Indeterminate (BC-3.4.010 invariant 3).
+            let issue_res = client.get_issue(key, &[]).await;
+            if let Ok(issue) = issue_res {
+                let src_subtask = issue.fields.issue_type.as_ref().and_then(|t| t.subtask);
+                let project_key = issue
+                    .fields
+                    .project
+                    .as_ref()
+                    .map(|p| p.key.clone())
+                    .unwrap_or_default();
 
-                    let types_res = client.get_project_issue_types(&project_key).await;
-                    if let Ok(project_types) = types_res {
-                        if let Some(target) = project_types
-                            .iter()
-                            .find(|t| t.name.to_ascii_lowercase() == type_name_lower)
-                        {
-                            let tgt_subtask = target.subtask;
-                            match is_cross_hierarchy_type_error(src_subtask, tgt_subtask, &api_msg)
-                            {
-                                Classification::CrossHierarchy => {
-                                    eprintln!("{CROSS_HIERARCHY_HINT}");
-                                    bail!("{api_msg}");
-                                }
-                                Classification::SameCategory => {
-                                    eprintln!("{TYPO_HINT}");
-                                    bail!("{api_msg}");
-                                }
-                                Classification::Indeterminate => {
-                                    // src or tgt subtask field absent; surface raw
-                                    // 400 unchanged — fall through to edit_result?.
-                                }
+                let types_res = client.get_project_issue_types(&project_key).await;
+                if let Ok(project_types) = types_res {
+                    if let Some(target) = project_types
+                        .iter()
+                        .find(|t| t.name.to_ascii_lowercase() == type_name_lower)
+                    {
+                        let tgt_subtask = target.subtask;
+                        match is_cross_hierarchy_type_error(src_subtask, tgt_subtask, &api_msg) {
+                            Classification::CrossHierarchy => {
+                                eprintln!("{CROSS_HIERARCHY_HINT}");
+                                bail!("{api_msg}");
                             }
-                        } else {
-                            // Type name not in project's list → unresolvable-name
-                            // sub-path: typo hint (classifier is NOT invoked).
-                            eprintln!("{TYPO_HINT}");
-                            bail!("{api_msg}");
+                            Classification::SameCategory => {
+                                eprintln!("{TYPO_HINT}");
+                                bail!("{api_msg}");
+                            }
+                            Classification::Indeterminate => {
+                                // src or tgt subtask field absent; surface raw
+                                // 400 unchanged — fall through to edit_result?.
+                            }
                         }
+                    } else {
+                        // Type name not in project's list → unresolvable-name
+                        // sub-path: typo hint (classifier is NOT invoked).
+                        eprintln!("{TYPO_HINT}");
+                        bail!("{api_msg}");
                     }
-                    // types_res.is_err() → Indeterminate Cause-1 R2: fall through.
                 }
-                // issue_res.is_err() → Indeterminate Cause-1 R1: fall through.
+                // types_res.is_err() → Indeterminate Cause-1 R2: fall through.
             }
-            // Non-400 → R0b: fall through.
+            // issue_res.is_err() → Indeterminate Cause-1 R1: fall through.
         }
+        // Non-400 → R0b: fall through.
 
         // --no-parent arm: only reached when --type arm emitted no hint
         // (dual-gate first-hint-wins: if --type arm bailed, we never reach here).
@@ -2921,12 +2920,11 @@ pub enum IssueCommand {
             .filter_map(|line| {
                 let trimmed = line.trim();
                 // Match lines of the form: conflicting.push("--<flag>");
-                if let Some(rest) = trimmed.strip_prefix("conflicting.push(\"") {
-                    if let Some(flag) = rest.strip_suffix("\");") {
-                        if flag.starts_with("--") {
-                            return Some(flag.to_string());
-                        }
-                    }
+                if let Some(rest) = trimmed.strip_prefix("conflicting.push(\"")
+                    && let Some(flag) = rest.strip_suffix("\");")
+                    && flag.starts_with("--")
+                {
+                    return Some(flag.to_string());
                 }
                 None
             })
@@ -2996,12 +2994,11 @@ pub enum IssueCommand {
             .lines()
             .filter_map(|line| {
                 let trimmed = line.trim();
-                if let Some(rest) = trimmed.strip_prefix("conflicting.push(\"") {
-                    if let Some(flag) = rest.strip_suffix("\");") {
-                        if flag.starts_with("--") {
-                            return Some(flag.to_string());
-                        }
-                    }
+                if let Some(rest) = trimmed.strip_prefix("conflicting.push(\"")
+                    && let Some(flag) = rest.strip_suffix("\");")
+                    && flag.starts_with("--")
+                {
+                    return Some(flag.to_string());
                 }
                 None
             })

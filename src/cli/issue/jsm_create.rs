@@ -945,13 +945,13 @@ mod adf_resolution_tests {
     fn assert_no_raw_newline_in_text_nodes(value: &Value) {
         match value {
             Value::Object(map) => {
-                if map.get("type").and_then(Value::as_str) == Some("text") {
-                    if let Some(t) = map.get("text").and_then(Value::as_str) {
-                        assert!(
-                            !t.contains('\n') && !t.contains('\r'),
-                            "INV-1: ADF text node must not contain a raw newline; got: {t:?}"
-                        );
-                    }
+                if map.get("type").and_then(Value::as_str) == Some("text")
+                    && let Some(t) = map.get("text").and_then(Value::as_str)
+                {
+                    assert!(
+                        !t.contains('\n') && !t.contains('\r'),
+                        "INV-1: ADF text node must not contain a raw newline; got: {t:?}"
+                    );
                 }
                 for v in map.values() {
                     assert_no_raw_newline_in_text_nodes(v);

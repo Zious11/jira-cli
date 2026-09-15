@@ -412,10 +412,10 @@ impl Config {
                 self.active_profile_name, self.active_profile_name
             ))
         })?;
-        if let Some(cloud_id) = &profile.cloud_id {
-            if profile.auth_method.as_deref() == Some("oauth") {
-                return Ok(format!("https://api.atlassian.com/ex/jira/{cloud_id}"));
-            }
+        if let Some(cloud_id) = &profile.cloud_id
+            && profile.auth_method.as_deref() == Some("oauth")
+        {
+            return Ok(format!("https://api.atlassian.com/ex/jira/{cloud_id}"));
         }
         Ok(url.trim_end_matches('/').to_string())
     }

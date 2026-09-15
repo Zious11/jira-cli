@@ -556,20 +556,19 @@ impl JiraClient {
         //   - bug-symmetry: the clamp inside the loop already enforces "no
         //     sleep on expired", so this just extends that invariant to
         //     "no request on expired" — one consistent semantic.
-        if let Some(d) = deadline {
-            if let ClampResult::Expired { remaining_ms } =
+        if let Some(d) = deadline
+            && let ClampResult::Expired { remaining_ms } =
                 clamp_retry_sleep(Duration::ZERO, Some(d))
-            {
-                return Err(JrError::DeadlineExceeded {
-                    remaining_ms,
-                    message: format!(
-                        "[deadline:send-entry] Caller-supplied deadline already \
+        {
+            return Err(JrError::DeadlineExceeded {
+                remaining_ms,
+                message: format!(
+                    "[deadline:send-entry] Caller-supplied deadline already \
                          expired at send entry (remaining budget {remaining_ms}ms). \
                          The request was not issued. Rerun with a larger timeout."
-                    ),
-                }
-                .into());
+                ),
             }
+            .into());
         }
 
         // We need to be able to retry, so we clone the request builder.
@@ -598,28 +597,28 @@ impl JiraClient {
 
                 let req = req.header("Authorization", &self.auth_header);
 
-                if self.verbose || self.verbose_bodies {
-                    if let Some(ref r) = req.try_clone().and_then(|r| r.build().ok()) {
-                        if self.verbose {
-                            // AC-003: log request method+URL to stderr under --verbose.
-                            // The [verbose] prefix is retained because cli_handler tests
-                            // (SD-003 contract guards) assert on stderr.contains("[verbose] GET/PUT/...")
-                            // and the verbose_bodies.rs tests assert on the same prefix.
-                            // Tracing handles rate-limit and other diagnostic events.
-                            // Method and URL are extracted to variables before the print call
-                            // so no single source line contains both the eprintln and method().
-                            let method_str = r.method().as_str();
-                            let url_str = r.url().as_str();
-                            eprintln!("[verbose] {method_str} {url_str}");
-                        }
-                        if let Some(bytes) = r.body().and_then(|b| b.as_bytes()) {
-                            if self.verbose_bodies {
-                                eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
-                            } else {
-                                eprintln!(
-                                    "[verbose] body suppressed (use --verbose-bodies to inspect, will print PII)"
-                                );
-                            }
+                if (self.verbose || self.verbose_bodies)
+                    && let Some(ref r) = req.try_clone().and_then(|r| r.build().ok())
+                {
+                    if self.verbose {
+                        // AC-003: log request method+URL to stderr under --verbose.
+                        // The [verbose] prefix is retained because cli_handler tests
+                        // (SD-003 contract guards) assert on stderr.contains("[verbose] GET/PUT/...")
+                        // and the verbose_bodies.rs tests assert on the same prefix.
+                        // Tracing handles rate-limit and other diagnostic events.
+                        // Method and URL are extracted to variables before the print call
+                        // so no single source line contains both the eprintln and method().
+                        let method_str = r.method().as_str();
+                        let url_str = r.url().as_str();
+                        eprintln!("[verbose] {method_str} {url_str}");
+                    }
+                    if let Some(bytes) = r.body().and_then(|b| b.as_bytes()) {
+                        if self.verbose_bodies {
+                            eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
+                        } else {
+                            eprintln!(
+                                "[verbose] body suppressed (use --verbose-bodies to inspect, will print PII)"
+                            );
                         }
                     }
                 }
@@ -1676,85 +1675,84 @@ fn extract_error_message_raw(body: &[u8]) -> String {
                 return joined;
             }
         }
-        if let Some(errors) = json.get("errors").and_then(|v| v.as_object()) {
-            if !errors.is_empty() {
-                // Memory-amplification defense (OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling), same threat
-                // class as the errorMessages streaming join earlier). Three
-                // server-controlled vectors are bounded here:
-                //
-                // 1. Entry count — `take(MAX_ERROR_PAIRS)` before collect/sort
-                //    so a hostile response with 1M keys cannot force a 1M-entry
-                //    intermediate Vec.
-                //
-                // 2. Key length — each key passes through `cap_entry` BEFORE
-                //    format!. Without this cap, a hostile response with a
-                //    small number of pathologically large keys (e.g., 1 MB
-                //    key name) would amplify intermediate allocations in the
-                //    formatted pair string even with the entry-count cap.
-                //
-                // 3. Non-string value size/depth — `serialize_value_bounded`
-                //    serializes via a byte-limited writer instead of
-                //    `Value::to_string()`. A hostile response with deeply
-                //    nested or huge non-string values cannot force a full
-                //    serialization allocation before cap_entry truncates.
-                //
-                // MAX_ERROR_PAIRS = 256 is generous (legitimate Jira responses
-                // have 1-10 field-level errors). Per-pair memory is bounded
-                // by 2 × MAX_ERROR_ENTRY_LEN (capped key + capped value) plus
-                // ~4 bytes of format overhead, so the intermediate Vec is
-                // bounded at roughly 256 × 2 × 1024 ≈ 512 KiB worst case.
-                // The downstream streaming join further bounds OUTPUT to
-                // MAX_SANITIZED_OUTPUT_LEN.
-                const MAX_ERROR_PAIRS: usize = 256;
-                let total_keys = errors.len();
-                let mut pairs: Vec<String> = errors
-                    .iter()
-                    .take(MAX_ERROR_PAIRS)
-                    .map(|(k, v)| {
-                        // Cap server-controlled key length BEFORE format!
-                        // (see comment block above).
-                        let k_capped = cap_entry(k);
-                        if let Some(s) = v.as_str() {
-                            // String value: borrow via Cow when no truncation.
-                            format!("{}: {}", k_capped, cap_entry(s))
-                        } else {
-                            // Non-string value: bounded serialization avoids
-                            // full Value::to_string() allocation against
-                            // hostile deeply-nested / huge values.
-                            let serialized = serialize_value_bounded(v, MAX_ERROR_ENTRY_LEN);
-                            format!("{}: {}", k_capped, cap_entry(&serialized))
-                        }
-                    })
-                    .collect();
-                pairs.sort();
-                let pairs_truncated = total_keys > MAX_ERROR_PAIRS;
+        if let Some(errors) = json.get("errors").and_then(|v| v.as_object())
+            && !errors.is_empty()
+        {
+            // Memory-amplification defense (OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling), same threat
+            // class as the errorMessages streaming join earlier). Three
+            // server-controlled vectors are bounded here:
+            //
+            // 1. Entry count — `take(MAX_ERROR_PAIRS)` before collect/sort
+            //    so a hostile response with 1M keys cannot force a 1M-entry
+            //    intermediate Vec.
+            //
+            // 2. Key length — each key passes through `cap_entry` BEFORE
+            //    format!. Without this cap, a hostile response with a
+            //    small number of pathologically large keys (e.g., 1 MB
+            //    key name) would amplify intermediate allocations in the
+            //    formatted pair string even with the entry-count cap.
+            //
+            // 3. Non-string value size/depth — `serialize_value_bounded`
+            //    serializes via a byte-limited writer instead of
+            //    `Value::to_string()`. A hostile response with deeply
+            //    nested or huge non-string values cannot force a full
+            //    serialization allocation before cap_entry truncates.
+            //
+            // MAX_ERROR_PAIRS = 256 is generous (legitimate Jira responses
+            // have 1-10 field-level errors). Per-pair memory is bounded
+            // by 2 × MAX_ERROR_ENTRY_LEN (capped key + capped value) plus
+            // ~4 bytes of format overhead, so the intermediate Vec is
+            // bounded at roughly 256 × 2 × 1024 ≈ 512 KiB worst case.
+            // The downstream streaming join further bounds OUTPUT to
+            // MAX_SANITIZED_OUTPUT_LEN.
+            const MAX_ERROR_PAIRS: usize = 256;
+            let total_keys = errors.len();
+            let mut pairs: Vec<String> = errors
+                .iter()
+                .take(MAX_ERROR_PAIRS)
+                .map(|(k, v)| {
+                    // Cap server-controlled key length BEFORE format!
+                    // (see comment block above).
+                    let k_capped = cap_entry(k);
+                    if let Some(s) = v.as_str() {
+                        // String value: borrow via Cow when no truncation.
+                        format!("{}: {}", k_capped, cap_entry(s))
+                    } else {
+                        // Non-string value: bounded serialization avoids
+                        // full Value::to_string() allocation against
+                        // hostile deeply-nested / huge values.
+                        let serialized = serialize_value_bounded(v, MAX_ERROR_ENTRY_LEN);
+                        format!("{}: {}", k_capped, cap_entry(&serialized))
+                    }
+                })
+                .collect();
+            pairs.sort();
+            let pairs_truncated = total_keys > MAX_ERROR_PAIRS;
 
-                // Streaming join with upfront marker reservation (same pattern
-                // as the errorMessages path above).
-                const JOIN_MARKER: &str = " [...truncated]";
-                let content_budget_join =
-                    MAX_SANITIZED_OUTPUT_LEN.saturating_sub(JOIN_MARKER.len());
-                let mut joined = String::with_capacity(MAX_SANITIZED_OUTPUT_LEN);
-                let mut first = true;
-                let mut join_truncated = false;
-                for p in &pairs {
-                    let separator_len = if first { 0 } else { 2 };
-                    if joined.len() + separator_len + p.len() > content_budget_join {
-                        join_truncated = true;
-                        break;
-                    }
-                    if !first {
-                        joined.push_str("; ");
-                    }
-                    joined.push_str(p);
-                    first = false;
+            // Streaming join with upfront marker reservation (same pattern
+            // as the errorMessages path above).
+            const JOIN_MARKER: &str = " [...truncated]";
+            let content_budget_join = MAX_SANITIZED_OUTPUT_LEN.saturating_sub(JOIN_MARKER.len());
+            let mut joined = String::with_capacity(MAX_SANITIZED_OUTPUT_LEN);
+            let mut first = true;
+            let mut join_truncated = false;
+            for p in &pairs {
+                let separator_len = if first { 0 } else { 2 };
+                if joined.len() + separator_len + p.len() > content_budget_join {
+                    join_truncated = true;
+                    break;
                 }
-                if join_truncated || pairs_truncated {
-                    joined.push_str(JOIN_MARKER);
+                if !first {
+                    joined.push_str("; ");
                 }
-                debug_assert!(joined.len() <= MAX_SANITIZED_OUTPUT_LEN);
-                return joined;
+                joined.push_str(p);
+                first = false;
             }
+            if join_truncated || pairs_truncated {
+                joined.push_str(JOIN_MARKER);
+            }
+            debug_assert!(joined.len() <= MAX_SANITIZED_OUTPUT_LEN);
+            return joined;
         }
         if let Some(msg) = json.get("message").and_then(|v| v.as_str()) {
             return cap_entry(msg).into_owned();

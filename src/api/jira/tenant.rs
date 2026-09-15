@@ -128,12 +128,12 @@ pub async fn fetch_cloud_id(site_url: &str) -> anyhow::Result<String> {
     // buffering it. Content-Length is checked first as a fast rejection
     // path; the streamed read below is authoritative regardless, since
     // Content-Length can be absent (chunked transfer) or misreported.
-    if let Some(len) = response.content_length() {
-        if len > MAX_TENANT_INFO_RESPONSE_BYTES as u64 {
-            anyhow::bail!(
-                "tenant_info response body too large ({len} bytes, max {MAX_TENANT_INFO_RESPONSE_BYTES})"
-            );
-        }
+    if let Some(len) = response.content_length()
+        && len > MAX_TENANT_INFO_RESPONSE_BYTES as u64
+    {
+        anyhow::bail!(
+            "tenant_info response body too large ({len} bytes, max {MAX_TENANT_INFO_RESPONSE_BYTES})"
+        );
     }
     let mut body: Vec<u8> = Vec::new();
     let mut stream = response.bytes_stream();

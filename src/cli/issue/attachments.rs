@@ -169,15 +169,15 @@ fn format_author(author: &Option<serde_json::Value>) -> String {
     let Some(obj) = author else {
         return "(anonymous)".to_string();
     };
-    if let Some(dn) = obj.get("displayName").and_then(|v| v.as_str()) {
-        if !dn.is_empty() {
-            return dn.to_string();
-        }
+    if let Some(dn) = obj.get("displayName").and_then(|v| v.as_str())
+        && !dn.is_empty()
+    {
+        return dn.to_string();
     }
-    if let Some(aid) = obj.get("accountId").and_then(|v| v.as_str()) {
-        if !aid.is_empty() {
-            return aid.to_string();
-        }
+    if let Some(aid) = obj.get("accountId").and_then(|v| v.as_str())
+        && !aid.is_empty()
+    {
+        return aid.to_string();
     }
     "(anonymous)".to_string()
 }
@@ -813,13 +813,11 @@ async fn handle_single_download(
     // BC-2.7.012 body-surfacing asymmetry (F5-R3-001): download emits canonical-only;
     // get_attachment_metadata passes 404 through as ApiError so callers choose the format.
     let metadata = client.get_attachment_metadata(id_str).await.map_err(|e| {
-        if let Some(JrError::ApiError { status, .. }) = e.downcast_ref::<JrError>() {
-            if *status == 404 {
-                return JrError::UserError(format!(
-                    "Attachment {id_str} not found or not accessible."
-                ))
+        if let Some(JrError::ApiError { status, .. }) = e.downcast_ref::<JrError>()
+            && *status == 404
+        {
+            return JrError::UserError(format!("Attachment {id_str} not found or not accessible."))
                 .into();
-            }
         }
         e
     })?;
@@ -1179,12 +1177,10 @@ pub async fn handle_attachment_download(
     let out_dir = out_dir.as_deref();
 
     // Handler-level --newest N > 0 guard (clap accepts any i64; EC-2.7.009-1).
-    if let Some(n) = newest {
-        if n <= 0 {
-            return Err(
-                JrError::UserError("--newest requires a positive integer.".to_string()).into(),
-            );
-        }
+    if let Some(n) = newest
+        && n <= 0
+    {
+        return Err(JrError::UserError("--newest requires a positive integer.".to_string()).into());
     }
 
     if let Some(id_str) = id {
@@ -2000,13 +1996,12 @@ pub async fn handle_attachment_delete(
                 // with body intact; we format it here as canonical + "\n{body}".
                 let meta = client.get_attachment_metadata(aid).await.map_err(|e| {
                     if let Some(JrError::ApiError { status, message }) = e.downcast_ref::<JrError>()
+                        && *status == 404
                     {
-                        if *status == 404 {
-                            return JrError::UserError(format!(
-                                "Attachment {aid} not found or not accessible.\n{message}"
-                            ))
-                            .into();
-                        }
+                        return JrError::UserError(format!(
+                            "Attachment {aid} not found or not accessible.\n{message}"
+                        ))
+                        .into();
                     }
                     e
                 })?;

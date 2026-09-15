@@ -230,10 +230,10 @@ pub(super) async fn resolve_mentions(
     let mut first_err: Option<JrError> = None;
 
     for id in &unique_brackets {
-        if let Err(e) = resolve_bracket_candidate(client, id, &mut resolutions).await {
-            if first_err.is_none() {
-                first_err = Some(e);
-            }
+        if let Err(e) = resolve_bracket_candidate(client, id, &mut resolutions).await
+            && first_err.is_none()
+        {
+            first_err = Some(e);
         }
     }
 
@@ -272,10 +272,9 @@ pub(super) async fn resolve_mentions(
         let effective_no_input = no_input || first_err.is_some();
         if let Err(e) =
             resolve_at_name_candidate(client, span, effective_no_input, &mut resolutions).await
+            && first_err.is_none()
         {
-            if first_err.is_none() {
-                first_err = Some(e);
-            }
+            first_err = Some(e);
         }
     }
 

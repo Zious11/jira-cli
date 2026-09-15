@@ -40,18 +40,16 @@ pub async fn handle_search(
                             if let Some(attr_id) = attr_value
                                 .get("objectTypeAttributeId")
                                 .and_then(|v| v.as_str())
+                                && let Some(def) = attr_map.get(attr_id)
+                                && let Some(map) = attr_value.as_object_mut()
                             {
-                                if let Some(def) = attr_map.get(attr_id) {
-                                    if let Some(map) = attr_value.as_object_mut() {
-                                        map.insert(
-                                            "objectTypeAttribute".to_string(),
-                                            serde_json::json!({
-                                                "name": def.name,
-                                                "position": def.position,
-                                            }),
-                                        );
-                                    }
-                                }
+                                map.insert(
+                                    "objectTypeAttribute".to_string(),
+                                    serde_json::json!({
+                                        "name": def.name,
+                                        "position": def.position,
+                                    }),
+                                );
                             }
                         }
                         // Filter out system and hidden attributes

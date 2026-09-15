@@ -1069,10 +1069,10 @@ pub fn try_load_oauth_app_credentials() -> Result<Option<(String, String)>> {
 pub fn clear_profile_oauth_pair(profile: &Profile) -> Result<()> {
     let mut first_error: Option<anyhow::Error> = None;
     let mut attempt = |result: Result<()>| {
-        if let Err(e) = result {
-            if first_error.is_none() {
-                first_error = Some(e);
-            }
+        if let Err(e) = result
+            && first_error.is_none()
+        {
+            first_error = Some(e);
         }
     };
     attempt(delete_credential_tolerating_no_entry(&oauth_access_key(
@@ -1149,10 +1149,10 @@ fn clear_api_token_pair_attempt_all(
     if let Err(e) = clear_email() {
         first_error = Some(e);
     }
-    if let Err(e) = clear_token() {
-        if first_error.is_none() {
-            first_error = Some(e);
-        }
+    if let Err(e) = clear_token()
+        && first_error.is_none()
+    {
+        first_error = Some(e);
     }
     match first_error {
         Some(e) => Err(e),
@@ -1213,10 +1213,10 @@ fn clear_api_token_pair_attempt_all(
 pub fn clear_profile_creds(profile: &Profile) -> Result<()> {
     let mut first_error: Option<anyhow::Error> = None;
     let mut attempt = |result: Result<()>| {
-        if let Err(e) = result {
-            if first_error.is_none() {
-                first_error = Some(e);
-            }
+        if let Err(e) = result
+            && first_error.is_none()
+        {
+            first_error = Some(e);
         }
     };
     attempt(delete_credential_tolerating_no_entry(&oauth_access_key(
@@ -2194,10 +2194,10 @@ fn extract_query_param(request: &str, param: &str) -> Option<String> {
     let query = &request[query_start + 1..query_end];
     for pair in query.split('&') {
         let mut parts = pair.splitn(2, '=');
-        if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-            if key == param {
-                return Some(value.to_string());
-            }
+        if let (Some(key), Some(value)) = (parts.next(), parts.next())
+            && key == param
+        {
+            return Some(value.to_string());
         }
     }
     None

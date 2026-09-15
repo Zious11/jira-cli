@@ -99,18 +99,16 @@ fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result
 /// response is visible.
 async fn load_resolutions(client: &JiraClient, refresh: bool) -> Result<Vec<Resolution>> {
     let profile = client.profile_name();
-    if !refresh {
-        if let Some(c) = crate::cache::read_resolutions_cache(profile)? {
-            return Ok(c
-                .resolutions
-                .into_iter()
-                .map(|r| Resolution {
-                    id: Some(r.id),
-                    name: r.name,
-                    description: r.description,
-                })
-                .collect());
-        }
+    if !refresh && let Some(c) = crate::cache::read_resolutions_cache(profile)? {
+        return Ok(c
+            .resolutions
+            .into_iter()
+            .map(|r| Resolution {
+                id: Some(r.id),
+                name: r.name,
+                description: r.description,
+            })
+            .collect());
     }
 
     let fetched = client.get_resolutions().await?;
@@ -1068,28 +1066,25 @@ pub(super) async fn handle_assign(
 
     // Idempotent: check if already assigned to target user
     let issue = client.get_issue(&key, &[]).await?;
-    if let Some(ref assignee) = issue.fields.assignee {
-        if assignee.account_id == account_id {
-            match output_format {
-                OutputFormat::Json => {
-                    println!(
-                        "{}",
-                        output::render_json(&json_output::assign_unchanged_response(
-                            &key,
-                            &display_name,
-                            &account_id,
-                        ))?
-                    );
-                }
-                OutputFormat::Table => {
-                    output::print_success(&format!(
-                        "{} is already assigned to {}",
-                        key, display_name
-                    ));
-                }
+    if let Some(ref assignee) = issue.fields.assignee
+        && assignee.account_id == account_id
+    {
+        match output_format {
+            OutputFormat::Json => {
+                println!(
+                    "{}",
+                    output::render_json(&json_output::assign_unchanged_response(
+                        &key,
+                        &display_name,
+                        &account_id,
+                    ))?
+                );
             }
-            return Ok(());
+            OutputFormat::Table => {
+                output::print_success(&format!("{} is already assigned to {}", key, display_name));
+            }
         }
+        return Ok(());
     }
 
     client.assign_issue(&key, Some(&account_id)).await?;

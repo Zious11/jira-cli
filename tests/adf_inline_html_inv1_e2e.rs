@@ -94,23 +94,23 @@ fn assert_no_raw_newline_in_adf(node: &serde_json::Value, in_code_block: bool, c
         let is_code_block = node_type == "codeBlock";
         let ctx_code = in_code_block || is_code_block;
 
-        if node_type == "text" {
-            if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
-                // INV-1 \n clause: forbidden in paragraph/inline text (codeBlock exempt).
-                if !ctx_code {
-                    assert!(
-                        !text.contains('\n'),
-                        "INV-1 VIOLATED: non-codeBlock text node contains raw \\n.\n\
-                         context={context}\ntext node={text:?}\nfull adf={node}"
-                    );
-                }
-                // INV-1 \r clause: unconditional — all code paths normalize CR.
+        if node_type == "text"
+            && let Some(text) = obj.get("text").and_then(|t| t.as_str())
+        {
+            // INV-1 \n clause: forbidden in paragraph/inline text (codeBlock exempt).
+            if !ctx_code {
                 assert!(
-                    !text.contains('\r'),
-                    "INV-1 VIOLATED: text node contains raw \\r (CR normalization failed).\n\
-                     context={context}\ntext node={text:?}\nfull adf={node}"
+                    !text.contains('\n'),
+                    "INV-1 VIOLATED: non-codeBlock text node contains raw \\n.\n\
+                         context={context}\ntext node={text:?}\nfull adf={node}"
                 );
             }
+            // INV-1 \r clause: unconditional — all code paths normalize CR.
+            assert!(
+                !text.contains('\r'),
+                "INV-1 VIOLATED: text node contains raw \\r (CR normalization failed).\n\
+                     context={context}\ntext node={text:?}\nfull adf={node}"
+            );
         }
 
         if let Some(content) = obj.get("content").and_then(|c| c.as_array()) {
@@ -134,10 +134,10 @@ fn collect_adf_text_strings(node: &serde_json::Value) -> Vec<String> {
 
 fn collect_adf_text_strings_inner(node: &serde_json::Value, out: &mut Vec<String>) {
     if let Some(obj) = node.as_object() {
-        if obj.get("type").and_then(|t| t.as_str()) == Some("text") {
-            if let Some(t) = obj.get("text").and_then(|t| t.as_str()) {
-                out.push(t.to_owned());
-            }
+        if obj.get("type").and_then(|t| t.as_str()) == Some("text")
+            && let Some(t) = obj.get("text").and_then(|t| t.as_str())
+        {
+            out.push(t.to_owned());
         }
         if let Some(content) = obj.get("content").and_then(|c| c.as_array()) {
             for child in content {

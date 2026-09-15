@@ -981,14 +981,14 @@ fn collect_mention_candidates_walk(
         match node_type {
             "codeBlock" => {}
             "text" => {
-                if !has_code_mark(node) {
-                    if let Some(text) = node.get("text").and_then(Value::as_str) {
-                        for span in scan_mention_spans(text) {
-                            out.push(MentionCandidate {
-                                kind: span.kind,
-                                span: span.reported,
-                            });
-                        }
+                if !has_code_mark(node)
+                    && let Some(text) = node.get("text").and_then(Value::as_str)
+                {
+                    for span in scan_mention_spans(text) {
+                        out.push(MentionCandidate {
+                            kind: span.kind,
+                            span: span.reported,
+                        });
                     }
                 }
             }
@@ -1062,10 +1062,10 @@ fn split_text_node_on_mentions(node: &Value, resolved: &MentionResolutions) -> O
     let base_marks = node.get("marks").and_then(Value::as_array).cloned();
     let make_text = |slice: &str| -> Value {
         let mut out = json!({ "type": "text", "text": slice });
-        if let Some(m) = &base_marks {
-            if !m.is_empty() {
-                out["marks"] = json!(m);
-            }
+        if let Some(m) = &base_marks
+            && !m.is_empty()
+        {
+            out["marks"] = json!(m);
         }
         out
     };
@@ -1134,13 +1134,13 @@ fn convert_mentions(
         match node_type {
             "codeBlock" => {}
             "text" => {
-                if !has_code_mark(&nodes[i]) {
-                    if let Some(replacement) = split_text_node_on_mentions(&nodes[i], resolved) {
-                        let len = replacement.len();
-                        nodes.splice(i..=i, replacement);
-                        i += len;
-                        continue;
-                    }
+                if !has_code_mark(&nodes[i])
+                    && let Some(replacement) = split_text_node_on_mentions(&nodes[i], resolved)
+                {
+                    let len = replacement.len();
+                    nodes.splice(i..=i, replacement);
+                    i += len;
+                    continue;
                 }
             }
             _ => {
@@ -1222,38 +1222,38 @@ fn restore_mention_sentinels(nodes: &mut [Value], depth: usize) -> Result<(), Jr
         match node_type {
             "codeBlock" => {}
             "text" => {
-                if !has_code_mark(node) {
-                    if let Some(text) = node.get("text").and_then(Value::as_str) {
-                        let needs_restore = text.chars().any(|c| {
-                            matches!(
-                                c,
-                                SENTINEL_ESCAPE
-                                    | SENTINEL_GUARD
-                                    | BRACKET_SENTINEL_OPEN_GUARD
-                                    | BRACKET_SENTINEL_CLOSE_GUARD
-                            ) || unguard_char_for_bracket_collision(c).is_some()
-                                || is_stray_primary_bracket_sentinel(c)
-                        });
-                        if needs_restore {
-                            let restored: String = text
-                                .chars()
-                                .filter_map(|c| match c {
-                                    SENTINEL_ESCAPE => Some('@'),
-                                    SENTINEL_GUARD => Some(SENTINEL_ESCAPE),
-                                    // LOW-2 defense-in-depth scrub: drop a
-                                    // stray, un-restorable primary
-                                    // bracket-sentinel/encode-block codepoint
-                                    // rather than let it leak into the ADF
-                                    // POSTed to Jira. See this function's
-                                    // doc comment.
-                                    other if is_stray_primary_bracket_sentinel(other) => None,
-                                    other => Some(
-                                        unguard_char_for_bracket_collision(other).unwrap_or(other),
-                                    ),
-                                })
-                                .collect();
-                            node["text"] = json!(restored);
-                        }
+                if !has_code_mark(node)
+                    && let Some(text) = node.get("text").and_then(Value::as_str)
+                {
+                    let needs_restore = text.chars().any(|c| {
+                        matches!(
+                            c,
+                            SENTINEL_ESCAPE
+                                | SENTINEL_GUARD
+                                | BRACKET_SENTINEL_OPEN_GUARD
+                                | BRACKET_SENTINEL_CLOSE_GUARD
+                        ) || unguard_char_for_bracket_collision(c).is_some()
+                            || is_stray_primary_bracket_sentinel(c)
+                    });
+                    if needs_restore {
+                        let restored: String = text
+                            .chars()
+                            .filter_map(|c| match c {
+                                SENTINEL_ESCAPE => Some('@'),
+                                SENTINEL_GUARD => Some(SENTINEL_ESCAPE),
+                                // LOW-2 defense-in-depth scrub: drop a
+                                // stray, un-restorable primary
+                                // bracket-sentinel/encode-block codepoint
+                                // rather than let it leak into the ADF
+                                // POSTed to Jira. See this function's
+                                // doc comment.
+                                other if is_stray_primary_bracket_sentinel(other) => None,
+                                other => {
+                                    Some(unguard_char_for_bracket_collision(other).unwrap_or(other))
+                                }
+                            })
+                            .collect();
+                        node["text"] = json!(restored);
                     }
                 }
             }
@@ -1382,13 +1382,11 @@ fn autolink_bare_urls(nodes: &mut Vec<Value>, depth: usize) -> Result<(), JrErro
                                 )
                             })
                         });
-                if !has_link_or_code {
-                    if let Some(replacement) = split_text_node_on_urls(&nodes[i]) {
-                        let len = replacement.len();
-                        nodes.splice(i..=i, replacement);
-                        i += len;
-                        continue;
-                    }
+                if !has_link_or_code && let Some(replacement) = split_text_node_on_urls(&nodes[i]) {
+                    let len = replacement.len();
+                    nodes.splice(i..=i, replacement);
+                    i += len;
+                    continue;
                 }
             }
             _ => {
@@ -2348,10 +2346,10 @@ impl AdfBuilder {
     /// (e.g. inside image alt text) so the marker is dropped there like any other
     /// inline content.
     fn push_footnote_marker(&mut self, label: &str) {
-        if let Some(top) = self.stack.last() {
-            if matches!(top.kind, NodeKind::Sink) {
-                return;
-            }
+        if let Some(top) = self.stack.last()
+            && matches!(top.kind, NodeKind::Sink)
+        {
+            return;
         }
         self.append_child(json!({ "type": "text", "text": format!("[{label}]") }));
     }
@@ -2439,10 +2437,10 @@ impl AdfBuilder {
         if text.is_empty() {
             return;
         }
-        if let Some(top) = self.stack.last() {
-            if matches!(top.kind, NodeKind::Sink) {
-                return;
-            }
+        if let Some(top) = self.stack.last()
+            && matches!(top.kind, NodeKind::Sink)
+        {
+            return;
         }
         // BC-7.2.011 EC-11: no text node may contain a raw \r or \n (same invariant as
         // push_text Other context). Structural precondition: push_code is only ever
@@ -3230,10 +3228,10 @@ fn extract_inline_from_list_item_content(list_item: &Value) -> Vec<Value> {
         // CR-007: non-paragraph blocks (e.g. nested bulletList) cannot fit in
         // taskItem.content (inline-only) and are skipped — the caller's hoist
         // path is responsible for propagating them to the parent.
-        if block.get("type").and_then(Value::as_str) == Some("paragraph") {
-            if let Some(inline) = block.get("content").and_then(|c| c.as_array()) {
-                result.extend(inline.iter().cloned());
-            }
+        if block.get("type").and_then(Value::as_str) == Some("paragraph")
+            && let Some(inline) = block.get("content").and_then(|c| c.as_array())
+        {
+            result.extend(inline.iter().cloned());
         }
     }
     result
@@ -6298,17 +6296,17 @@ mod tests {
     /// Helper: recursively assert no node of the given `block_type` appears
     /// anywhere inside any `taskItem.content` in the ADF value tree.
     fn assert_no_block_in_task_item_content(v: &Value, block_type: &str) {
-        if v.get("type").and_then(Value::as_str) == Some("taskItem") {
-            if let Some(content) = v.get("content").and_then(|c| c.as_array()) {
-                for child in content {
-                    assert_ne!(
-                        child["type"], block_type,
-                        "block node type '{}' must NOT appear inside taskItem.content: {}",
-                        block_type, child
-                    );
-                    // Recurse into child in case of deep nesting
-                    assert_no_block_in_task_item_content(child, block_type);
-                }
+        if v.get("type").and_then(Value::as_str) == Some("taskItem")
+            && let Some(content) = v.get("content").and_then(|c| c.as_array())
+        {
+            for child in content {
+                assert_ne!(
+                    child["type"], block_type,
+                    "block node type '{}' must NOT appear inside taskItem.content: {}",
+                    block_type, child
+                );
+                // Recurse into child in case of deep nesting
+                assert_no_block_in_task_item_content(child, block_type);
             }
         }
         // Recurse into all children/content arrays
@@ -7042,11 +7040,11 @@ mod tests {
             "tableHeader",
         ];
         fn walk(n: &Value) {
-            if let Some(t) = n["type"].as_str() {
-                if REQUIRES_CONTENT.contains(&t) {
-                    let empty = n["content"].as_array().is_some_and(|c| c.is_empty());
-                    assert!(!empty, "invalid empty `{t}` content (Jira 400): {n}");
-                }
+            if let Some(t) = n["type"].as_str()
+                && REQUIRES_CONTENT.contains(&t)
+            {
+                let empty = n["content"].as_array().is_some_and(|c| c.is_empty());
+                assert!(!empty, "invalid empty `{t}` content (Jira 400): {n}");
             }
             if let Some(arr) = n["content"].as_array() {
                 arr.iter().for_each(walk);
@@ -8273,10 +8271,8 @@ mod tests {
     /// the document (the panel's direct and transitive content).
     fn panel_descendant_types(adf: &Value) -> Vec<String> {
         fn walk(node: &Value, in_panel: bool, acc: &mut Vec<String>) {
-            if in_panel {
-                if let Some(t) = node.get("type").and_then(Value::as_str) {
-                    acc.push(t.to_string());
-                }
+            if in_panel && let Some(t) = node.get("type").and_then(Value::as_str) {
+                acc.push(t.to_string());
             }
             let now_in_panel =
                 in_panel || node.get("type").and_then(Value::as_str) == Some("panel");
@@ -8420,12 +8416,11 @@ mod tests {
         let descendants_have_panel = {
             fn has_panel_in_listitem(node: &Value) -> bool {
                 let is_li = node.get("type").and_then(Value::as_str) == Some("listItem");
-                if is_li {
-                    if let Some(c) = node.get("content").and_then(Value::as_array) {
-                        if c.iter().any(|n| n["type"] == "panel") {
-                            return true;
-                        }
-                    }
+                if is_li
+                    && let Some(c) = node.get("content").and_then(Value::as_array)
+                    && c.iter().any(|n| n["type"] == "panel")
+                {
+                    return true;
                 }
                 node.get("content")
                     .and_then(Value::as_array)
@@ -10935,26 +10930,26 @@ mod tests {
     /// The `\r` clause applies everywhere (no exemption).
     fn assert_no_raw_newline_in_text_nodes(adf: &serde_json::Value, input: &str) {
         for_each_adf_node_ctx(adf, false, &mut |node, in_code_block| {
-            if node.get("type").and_then(|t| t.as_str()) == Some("text") {
-                if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
-                    // `\n` clause: forbidden in paragraph/inline text; codeBlock
-                    // interiors are exempt (preformatted, embedded \n is valid).
-                    if !in_code_block {
-                        assert!(
-                            !text.contains('\n'),
-                            "INV-1 VIOLATED: non-codeBlock text node contains raw \\n.\n\
-                             input={input:?}\ntext node={text:?}\nfull adf={adf}"
-                        );
-                    }
-                    // `\r` clause: unconditional — all code paths normalize CR before
-                    // constructing any text node (#492 Algorithm B + #522 push_text).
+            if node.get("type").and_then(|t| t.as_str()) == Some("text")
+                && let Some(text) = node.get("text").and_then(|t| t.as_str())
+            {
+                // `\n` clause: forbidden in paragraph/inline text; codeBlock
+                // interiors are exempt (preformatted, embedded \n is valid).
+                if !in_code_block {
                     assert!(
-                        !text.contains('\r'),
-                        "INV-1 VIOLATED: text node contains raw \\r \
-                         (CR normalization failed).\n\
-                         input={input:?}\ntext node={text:?}\nfull adf={adf}"
+                        !text.contains('\n'),
+                        "INV-1 VIOLATED: non-codeBlock text node contains raw \\n.\n\
+                             input={input:?}\ntext node={text:?}\nfull adf={adf}"
                     );
                 }
+                // `\r` clause: unconditional — all code paths normalize CR before
+                // constructing any text node (#492 Algorithm B + #522 push_text).
+                assert!(
+                    !text.contains('\r'),
+                    "INV-1 VIOLATED: text node contains raw \\r \
+                         (CR normalization failed).\n\
+                         input={input:?}\ntext node={text:?}\nfull adf={adf}"
+                );
             }
         });
     }
@@ -10990,14 +10985,14 @@ mod tests {
     /// the empty-listItem-placeholder paragraph that the arbitrary generator can.)
     fn assert_no_empty_paragraph_strict(adf: &serde_json::Value, input: &str) {
         for_each_adf_node(adf, &mut |node| {
-            if node.get("type").and_then(|t| t.as_str()) == Some("paragraph") {
-                if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
-                    assert!(
-                        !content.is_empty(),
-                        "INV-2 VIOLATED (strict): block-HTML produced a paragraph \
+            if node.get("type").and_then(|t| t.as_str()) == Some("paragraph")
+                && let Some(content) = node.get("content").and_then(|c| c.as_array())
+            {
+                assert!(
+                    !content.is_empty(),
+                    "INV-2 VIOLATED (strict): block-HTML produced a paragraph \
                          with an empty content array.\ninput={input:?}\nfull adf={adf}"
-                    );
-                }
+                );
             }
         });
     }
@@ -11013,24 +11008,24 @@ mod tests {
     /// would false-positive on that construct.
     fn assert_no_paragraph_edge_hardbreak(adf: &serde_json::Value, input: &str) {
         for_each_adf_node(adf, &mut |node| {
-            if node.get("type").and_then(|t| t.as_str()) == Some("paragraph") {
-                if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
-                    if let Some(first) = content.first() {
-                        assert_ne!(
-                            first.get("type").and_then(|t| t.as_str()),
-                            Some("hardBreak"),
-                            "INV-3 VIOLATED: paragraph begins with hardBreak.\n\
+            if node.get("type").and_then(|t| t.as_str()) == Some("paragraph")
+                && let Some(content) = node.get("content").and_then(|c| c.as_array())
+            {
+                if let Some(first) = content.first() {
+                    assert_ne!(
+                        first.get("type").and_then(|t| t.as_str()),
+                        Some("hardBreak"),
+                        "INV-3 VIOLATED: paragraph begins with hardBreak.\n\
                              input={input:?}\nfull adf={adf}"
-                        );
-                    }
-                    if let Some(last) = content.last() {
-                        assert_ne!(
-                            last.get("type").and_then(|t| t.as_str()),
-                            Some("hardBreak"),
-                            "INV-3 VIOLATED: paragraph ends with hardBreak.\n\
+                    );
+                }
+                if let Some(last) = content.last() {
+                    assert_ne!(
+                        last.get("type").and_then(|t| t.as_str()),
+                        Some("hardBreak"),
+                        "INV-3 VIOLATED: paragraph ends with hardBreak.\n\
                              input={input:?}\nfull adf={adf}"
-                        );
-                    }
+                    );
                 }
             }
         });
@@ -11263,10 +11258,10 @@ mod tests {
     fn collect_all_text_nodes(adf: &serde_json::Value) -> Vec<String> {
         let mut out = Vec::new();
         for_each_adf_node(adf, &mut |node| {
-            if node.get("type").and_then(|t| t.as_str()) == Some("text") {
-                if let Some(t) = node.get("text").and_then(|t| t.as_str()) {
-                    out.push(t.to_string());
-                }
+            if node.get("type").and_then(|t| t.as_str()) == Some("text")
+                && let Some(t) = node.get("text").and_then(|t| t.as_str())
+            {
+                out.push(t.to_string());
             }
         });
         out
@@ -13329,19 +13324,18 @@ mod tests {
     /// every text-bearing field, per BC-7.2.017's own cross-reference).
     fn collect_all_text_strings(value: &Value, out: &mut Vec<String>) {
         let node_type = value.get("type").and_then(Value::as_str);
-        if node_type == Some("text") {
-            if let Some(t) = value.get("text").and_then(Value::as_str) {
-                out.push(t.to_string());
-            }
+        if node_type == Some("text")
+            && let Some(t) = value.get("text").and_then(Value::as_str)
+        {
+            out.push(t.to_string());
         }
-        if node_type == Some("mention") {
-            if let Some(t) = value
+        if node_type == Some("mention")
+            && let Some(t) = value
                 .get("attrs")
                 .and_then(|a| a.get("text"))
                 .and_then(Value::as_str)
-            {
-                out.push(t.to_string());
-            }
+        {
+            out.push(t.to_string());
         }
         match value {
             Value::Array(items) => {

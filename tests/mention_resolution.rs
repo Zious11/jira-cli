@@ -201,10 +201,10 @@ fn has_mention_with_id(body: &Value, id: &str) -> bool {
 
 /// Recursively concatenate every plain `text` node's string content.
 fn collect_text(v: &Value, out: &mut String) {
-    if v.get("type").and_then(Value::as_str) == Some("text") {
-        if let Some(s) = v.get("text").and_then(Value::as_str) {
-            out.push_str(s);
-        }
+    if v.get("type").and_then(Value::as_str) == Some("text")
+        && let Some(s) = v.get("text").and_then(Value::as_str)
+    {
+        out.push_str(s);
     }
     if let Some(children) = v.get("content").and_then(Value::as_array) {
         for c in children {

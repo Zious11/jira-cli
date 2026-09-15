@@ -65,12 +65,12 @@ impl JiraClient {
             all_issues.extend(page.issues.unwrap_or_default());
 
             // Early-stop: if we have enough issues, truncate and break
-            if let Some(max) = limit {
-                if all_issues.len() >= max as usize {
-                    result_has_more = all_issues.len() > max as usize || page_has_more;
-                    all_issues.truncate(max as usize);
-                    break;
-                }
+            if let Some(max) = limit
+                && all_issues.len() >= max as usize
+            {
+                result_has_more = all_issues.len() > max as usize || page_has_more;
+                all_issues.truncate(max as usize);
+                break;
             }
 
             if !page_has_more {

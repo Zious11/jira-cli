@@ -810,54 +810,54 @@ fn poll_jql(
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Ok(v) = serde_json::from_str::<Value>(stdout.trim()) {
-                if let Some(arr) = v.as_array() {
-                    last_count = arr.len();
-                    let predicate_met = last_count > 0 && predicate(&v);
-                    let budget_exhausted = attempt == max_attempts;
-                    let decision = poll_outcome(last_count, predicate_met, budget_exhausted, mode);
+            if let Ok(v) = serde_json::from_str::<Value>(stdout.trim())
+                && let Some(arr) = v.as_array()
+            {
+                last_count = arr.len();
+                let predicate_met = last_count > 0 && predicate(&v);
+                let budget_exhausted = attempt == max_attempts;
+                let decision = poll_outcome(last_count, predicate_met, budget_exhausted, mode);
 
-                    match decision {
-                        PollDecision::Return => {
-                            let elapsed = start.elapsed().as_millis();
-                            if predicate_met {
-                                eprintln!(
-                                    "poll_jql: predicate satisfied after {attempt} attempt(s) \
-                                     ({elapsed} ms elapsed)"
-                                );
-                            } else {
-                                eprintln!(
-                                    "poll_jql: non-zero result ({last_count}) but predicate not \
-                                     satisfied after {attempt} attempt(s) ({elapsed} ms elapsed)"
-                                );
-                            }
-                            return Some(v);
-                        }
-                        PollDecision::Retry => {
-                            last_value = Some(v);
-                            // Fall through to sleep/retry below.
-                        }
-                        PollDecision::SkipNone => {
-                            let elapsed = start.elapsed().as_millis();
+                match decision {
+                    PollDecision::Return => {
+                        let elapsed = start.elapsed().as_millis();
+                        if predicate_met {
                             eprintln!(
-                                "poll_jql: budget exhausted after {max_attempts} attempt(s) \
-                                 ({elapsed} ms); 0 results — treating as index lag, clean-skip"
+                                "poll_jql: predicate satisfied after {attempt} attempt(s) \
+                                     ({elapsed} ms elapsed)"
                             );
-                            return None;
+                        } else {
+                            eprintln!(
+                                "poll_jql: non-zero result ({last_count}) but predicate not \
+                                     satisfied after {attempt} attempt(s) ({elapsed} ms elapsed)"
+                            );
                         }
-                        PollDecision::FailPanic => {
-                            let elapsed = start.elapsed().as_millis();
-                            let min = match mode {
-                                PollJqlMode::FailOnShort(m) => m,
-                                PollJqlMode::SkipOnEmpty => unreachable!(),
-                            };
-                            panic!(
-                                "REGRESSION: poll_jql expected at least {min} results after \
+                        return Some(v);
+                    }
+                    PollDecision::Retry => {
+                        last_value = Some(v);
+                        // Fall through to sleep/retry below.
+                    }
+                    PollDecision::SkipNone => {
+                        let elapsed = start.elapsed().as_millis();
+                        eprintln!(
+                            "poll_jql: budget exhausted after {max_attempts} attempt(s) \
+                                 ({elapsed} ms); 0 results — treating as index lag, clean-skip"
+                        );
+                        return None;
+                    }
+                    PollDecision::FailPanic => {
+                        let elapsed = start.elapsed().as_millis();
+                        let min = match mode {
+                            PollJqlMode::FailOnShort(m) => m,
+                            PollJqlMode::SkipOnEmpty => unreachable!(),
+                        };
+                        panic!(
+                            "REGRESSION: poll_jql expected at least {min} results after \
                                  full poll budget ({max_attempts} attempts, {elapsed} ms), \
                                  but got {last_count}. \
                                  This is a persistent short count, not index lag."
-                            );
-                        }
+                        );
                     }
                 }
             }
@@ -1279,13 +1279,13 @@ fn test_every_ignored_test_has_gate_guard() {
                 // Check 2: guard appears BEFORE the first live-call token.
                 let guard_pos = body.find("e2e_enabled()").unwrap();
                 for token in LIVE_CALL_TOKENS {
-                    if let Some(call_pos) = body.find(token) {
-                        if call_pos < guard_pos {
-                            violations.push(format!(
-                                "{fn_name}: live-call token `{token}` appears at byte {call_pos} \
+                    if let Some(call_pos) = body.find(token)
+                        && call_pos < guard_pos
+                    {
+                        violations.push(format!(
+                            "{fn_name}: live-call token `{token}` appears at byte {call_pos} \
                                  before `e2e_enabled()` at byte {guard_pos}"
-                            ));
-                        }
+                        ));
                     }
                 }
 
@@ -2928,11 +2928,11 @@ fn test_e2e_jsm_create_request_roundtrip() {
             .args(["issue", "view", &key, "--output", "json"])
             .output()
             .expect("failed to spawn jr for view poll");
-        if out.status.success() {
-            if let Ok(v) = serde_json::from_slice::<Value>(out.stdout.as_slice()) {
-                view_result = Some(v);
-                break;
-            }
+        if out.status.success()
+            && let Ok(v) = serde_json::from_slice::<Value>(out.stdout.as_slice())
+        {
+            view_result = Some(v);
+            break;
         }
         if attempt < MAX_VIEW_ATTEMPTS {
             std::thread::sleep(Duration::from_millis(
@@ -3123,11 +3123,11 @@ fn test_e2e_jsm_create_adf_field_description_roundtrip() {
             .args(["issue", "view", &key, "--output", "json"])
             .output()
             .expect("failed to spawn jr for view poll");
-        if out.status.success() {
-            if let Ok(v) = serde_json::from_slice::<Value>(out.stdout.as_slice()) {
-                view_result = Some(v);
-                break;
-            }
+        if out.status.success()
+            && let Ok(v) = serde_json::from_slice::<Value>(out.stdout.as_slice())
+        {
+            view_result = Some(v);
+            break;
         }
         if attempt < MAX_VIEW_ATTEMPTS {
             std::thread::sleep(Duration::from_millis(
@@ -3563,20 +3563,20 @@ fn test_e2e_jsm_resolution_enforcement() {
             .args(["issue", "view", &key_a, "--output", "json"])
             .output()
             .expect("failed to spawn jr issue view (ticket A)");
-        if vout.status.success() {
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&vout.stdout) {
-                // Predicate: fields.resolution.name is present and non-empty.
-                let has_resolution = v
-                    .get("fields")
-                    .and_then(|f| f.get("resolution"))
-                    .and_then(|r| r.get("name"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(|s| !s.is_empty())
-                    .unwrap_or(false);
-                if has_resolution {
-                    view_a = Some(v);
-                    break;
-                }
+        if vout.status.success()
+            && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&vout.stdout)
+        {
+            // Predicate: fields.resolution.name is present and non-empty.
+            let has_resolution = v
+                .get("fields")
+                .and_then(|f| f.get("resolution"))
+                .and_then(|r| r.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            if has_resolution {
+                view_a = Some(v);
+                break;
             }
         }
         if attempt < MAX_VIEW_ATTEMPTS {
@@ -4934,19 +4934,18 @@ fn adf_has_linked_url(node: &Value, url: &str) -> bool {
     let target = norm(url);
     if node.get("type").and_then(Value::as_str) == Some("text")
         && node.get("text").and_then(Value::as_str).map(&norm) == Some(target.clone())
+        && let Some(marks) = node.get("marks").and_then(Value::as_array)
     {
-        if let Some(marks) = node.get("marks").and_then(Value::as_array) {
-            let hit = marks.iter().any(|m| {
-                m.get("type").and_then(Value::as_str) == Some("link")
-                    && m.get("attrs")
-                        .and_then(|a| a.get("href"))
-                        .and_then(Value::as_str)
-                        .map(&norm)
-                        == Some(target.clone())
-            });
-            if hit {
-                return true;
-            }
+        let hit = marks.iter().any(|m| {
+            m.get("type").and_then(Value::as_str) == Some("link")
+                && m.get("attrs")
+                    .and_then(|a| a.get("href"))
+                    .and_then(Value::as_str)
+                    .map(&norm)
+                    == Some(target.clone())
+        });
+        if hit {
+            return true;
         }
     }
     match node {
@@ -5402,10 +5401,10 @@ fn test_e2e_issue_parent_roundtrip() {
 /// Walk an ADF content node depth-first, appending the `"text"` value of
 /// every `{"type":"text",…}` node to `out`.  Used by `extract_field_text`.
 fn extract_adf_text_walk(node: &Value, out: &mut String) {
-    if node.get("type").and_then(Value::as_str) == Some("text") {
-        if let Some(text) = node.get("text").and_then(Value::as_str) {
-            out.push_str(text);
-        }
+    if node.get("type").and_then(Value::as_str) == Some("text")
+        && let Some(text) = node.get("text").and_then(Value::as_str)
+    {
+        out.push_str(text);
     }
     if let Some(content) = node.get("content").and_then(Value::as_array) {
         for child in content {
@@ -5489,11 +5488,11 @@ fn discover_safe_edit_field(h: &E2eHarness, key: &str) -> Option<(String, String
         system == "environment" || system == "description" || custom.ends_with(":textarea")
     };
 
-    if let Some(env_meta) = fields.get("environment") {
-        if is_string_field(env_meta) {
-            // `environment` is always ADF-backed on Jira Cloud REST v3.
-            return Some(("Environment".to_string(), "environment".to_string(), true));
-        }
+    if let Some(env_meta) = fields.get("environment")
+        && is_string_field(env_meta)
+    {
+        // `environment` is always ADF-backed on Jira Cloud REST v3.
+        return Some(("Environment".to_string(), "environment".to_string(), true));
     }
 
     fields.iter().find_map(|(id, meta)| {
@@ -9831,17 +9830,14 @@ fn poll_component_filter(h: &E2eHarness, proj: &str, comp: &str, key: &str) -> b
             ])
             .output()
             .expect("failed to spawn jr for issue list --component (poll)");
-        if out.status.success() {
-            if let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) {
-                if let Some(arr) = v.as_array() {
-                    if arr
-                        .iter()
-                        .any(|i| i.get("key").and_then(Value::as_str) == Some(key))
-                    {
-                        return true;
-                    }
-                }
-            }
+        if out.status.success()
+            && let Ok(v) = serde_json::from_slice::<Value>(&out.stdout)
+            && let Some(arr) = v.as_array()
+            && arr
+                .iter()
+                .any(|i| i.get("key").and_then(Value::as_str) == Some(key))
+        {
+            return true;
         }
         if attempt < max_attempts {
             std::thread::sleep(Duration::from_millis(schedule[attempt - 1]));
@@ -10876,12 +10872,11 @@ fn adf_has_task_item(node: &Value, text: &str, state: &str) -> bool {
 /// Returns `true` if any descendant `text` node in `node` contains `needle`
 /// as a substring.
 fn adf_contains_text(node: &Value, needle: &str) -> bool {
-    if node.get("type").and_then(Value::as_str) == Some("text") {
-        if let Some(t) = node.get("text").and_then(Value::as_str) {
-            if t.contains(needle) {
-                return true;
-            }
-        }
+    if node.get("type").and_then(Value::as_str) == Some("text")
+        && let Some(t) = node.get("text").and_then(Value::as_str)
+        && t.contains(needle)
+    {
+        return true;
     }
     match node {
         Value::Array(items) => items.iter().any(|v| adf_contains_text(v, needle)),
@@ -10933,18 +10928,18 @@ fn adf_has_panel(node: &Value, panel_type: &str) -> bool {
 /// `subsup` mark whose `attrs.type` equals `mark_type` (e.g. `"sub"` or
 /// `"sup"`).
 fn adf_has_subsup_mark(node: &Value, mark_type: &str) -> bool {
-    if node.get("type").and_then(Value::as_str) == Some("text") {
-        if let Some(marks) = node.get("marks").and_then(Value::as_array) {
-            let hit = marks.iter().any(|m| {
-                m.get("type").and_then(Value::as_str) == Some("subsup")
-                    && m.get("attrs")
-                        .and_then(|a| a.get("type"))
-                        .and_then(Value::as_str)
-                        == Some(mark_type)
-            });
-            if hit {
-                return true;
-            }
+    if node.get("type").and_then(Value::as_str) == Some("text")
+        && let Some(marks) = node.get("marks").and_then(Value::as_array)
+    {
+        let hit = marks.iter().any(|m| {
+            m.get("type").and_then(Value::as_str) == Some("subsup")
+                && m.get("attrs")
+                    .and_then(|a| a.get("type"))
+                    .and_then(Value::as_str)
+                    == Some(mark_type)
+        });
+        if hit {
+            return true;
         }
     }
     match node {
@@ -11413,15 +11408,13 @@ fn test_e2e_markdown_block_html_preserved() {
 /// `type` only. Recursion is unbounded by depth, safe because the only input
 /// is the small, self-created issue description read back via `poll_view`.
 fn adf_has_blockquote_in_list_item(node: &Value) -> bool {
-    if node.get("type").and_then(Value::as_str) == Some("listItem") {
-        if let Some(content) = node.get("content").and_then(Value::as_array) {
-            if content
-                .iter()
-                .any(|child| child.get("type").and_then(Value::as_str) == Some("blockquote"))
-            {
-                return true;
-            }
-        }
+    if node.get("type").and_then(Value::as_str) == Some("listItem")
+        && let Some(content) = node.get("content").and_then(Value::as_array)
+        && content
+            .iter()
+            .any(|child| child.get("type").and_then(Value::as_str) == Some("blockquote"))
+    {
+        return true;
     }
     match node {
         Value::Array(items) => items.iter().any(adf_has_blockquote_in_list_item),
@@ -12554,12 +12547,11 @@ fn test_e2e_jsm_attachment_upload_public() {
     // GET /rest/api/3/issue/{key}?fields=attachment returns the raw Jira attachment
     // objects before jr curates them — the platform wire format evidence for BC-3.9.007.
     let raw_path = format!("/rest/api/3/issue/{key}?fields=attachment");
-    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output() {
-        if raw_out.status.success() {
-            if let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout) {
-                p2_3c_print("RAW-PLATFORM-attachment-public", &raw_v);
-            }
-        }
+    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output()
+        && raw_out.status.success()
+        && let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout)
+    {
+        p2_3c_print("RAW-PLATFORM-attachment-public", &raw_v);
     }
 
     // Step 8: minimal shape check (BC-3.9.007 curated keys).
@@ -12784,12 +12776,11 @@ fn test_e2e_jsm_attachment_upload_internal() {
 
     // P2-3c schema probe B: raw platform attachment JSON (BC-3.9.007 wire source).
     let raw_path = format!("/rest/api/3/issue/{key}?fields=attachment");
-    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output() {
-        if raw_out.status.success() {
-            if let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout) {
-                p2_3c_print("RAW-PLATFORM-attachment-internal", &raw_v);
-            }
-        }
+    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output()
+        && raw_out.status.success()
+        && let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout)
+    {
+        p2_3c_print("RAW-PLATFORM-attachment-internal", &raw_v);
     }
 
     // Step 8: minimal shape check (BC-3.9.007 curated keys).

@@ -75,13 +75,13 @@ async fn handle_view(
     let user = match client.get_user(account_id).await {
         Ok(u) => u,
         Err(e) => {
-            if let Some(JrError::ApiError { status, .. }) = e.downcast_ref::<JrError>() {
-                if *status == 404 || *status == 400 {
-                    return Err(JrError::UserError(format!(
-                        "User with accountId '{account_id}' not found."
-                    ))
-                    .into());
-                }
+            if let Some(JrError::ApiError { status, .. }) = e.downcast_ref::<JrError>()
+                && (*status == 404 || *status == 400)
+            {
+                return Err(JrError::UserError(format!(
+                    "User with accountId '{account_id}' not found."
+                ))
+                .into());
             }
             return Err(e);
         }

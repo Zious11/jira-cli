@@ -66,18 +66,18 @@ async fn main() {
             if under_issue_comment {
                 // Pull the attempted token from the InvalidSubcommand context entry.
                 let attempted_token = err.context().find_map(|(kind, value)| {
-                    if kind == ContextKind::InvalidSubcommand {
-                        if let ContextValue::String(s) = value {
-                            return Some(s.clone());
-                        }
+                    if kind == ContextKind::InvalidSubcommand
+                        && let ContextValue::String(s) = value
+                    {
+                        return Some(s.clone());
                     }
                     None
                 });
-                if let Some(ref token) = attempted_token {
-                    if token.eq_ignore_ascii_case("list") || token.eq_ignore_ascii_case("ls") {
-                        eprintln!("error: to list all comments, use `jr issue comments` (plural)");
-                        std::process::exit(2);
-                    }
+                if let Some(ref token) = attempted_token
+                    && (token.eq_ignore_ascii_case("list") || token.eq_ignore_ascii_case("ls"))
+                {
+                    eprintln!("error: to list all comments, use `jr issue comments` (plural)");
+                    std::process::exit(2);
                 }
                 eprintln!("error: use `jr issue comment add` instead");
                 eprintln!(

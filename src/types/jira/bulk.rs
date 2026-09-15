@@ -439,11 +439,11 @@ impl BulkActionError {
         if !self.error_messages.is_empty() {
             return self.error_messages.join("; ");
         }
-        if let Some(obj) = self.errors.as_object() {
-            if !obj.is_empty() {
-                let pairs: Vec<String> = obj.iter().map(|(k, v)| format!("{k}: {v}")).collect();
-                return pairs.join("; ");
-            }
+        if let Some(obj) = self.errors.as_object()
+            && !obj.is_empty()
+        {
+            let pairs: Vec<String> = obj.iter().map(|(k, v)| format!("{k}: {v}")).collect();
+            return pairs.join("; ");
         }
         "unknown error".to_string()
     }

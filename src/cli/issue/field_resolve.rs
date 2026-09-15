@@ -275,10 +275,10 @@ pub(crate) fn detect_flag_field_overlap(
     // never a display-name lookup (would require HTTP, violating the
     // zero-HTTP boundary this guard runs within).
     for (label, resolved_id) in resolved_id_flags {
-        if let Some(id) = resolved_id {
-            if field_keys_lower.contains(&id.to_lowercase()) {
-                return Err(collision_error(label));
-            }
+        if let Some(id) = resolved_id
+            && field_keys_lower.contains(&id.to_lowercase())
+        {
+            return Err(collision_error(label));
         }
     }
 
@@ -456,12 +456,12 @@ pub(crate) async fn resolve_edit_fields(
             // warn + Ok(None) self-heal; genuine I/O → Err. The previous
             // .ok().flatten() negated the careful tri-state design by swallowing
             // the Err arm. Consistent with every other cache-reader call site in src/.
-            if field_list.is_none() {
-                if let Some(fc) = read_fields_cache(profile)? {
-                    field_list = Some(fc.fields);
-                }
-                // If still None, we'll fetch from API when needed below.
+            if field_list.is_none()
+                && let Some(fc) = read_fields_cache(profile)?
+            {
+                field_list = Some(fc.fields);
             }
+            // If still None, we'll fetch from API when needed below.
 
             // Try to find the field in whatever list we have so far.
             fn search_field(
@@ -1989,20 +1989,18 @@ mod tests {
     /// the ADF `node` value contains a raw `\n` or `\r` character.
     /// Called by VP-FIELD-ADF-002 Property 3.
     fn adf_no_raw_newline_in_text_nodes(node: &serde_json::Value) -> bool {
-        if node.get("type").and_then(|t| t.as_str()) == Some("text") {
-            if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
-                if text.contains('\n') || text.contains('\r') {
-                    return false;
-                }
-            }
+        if node.get("type").and_then(|t| t.as_str()) == Some("text")
+            && let Some(text) = node.get("text").and_then(|t| t.as_str())
+            && (text.contains('\n') || text.contains('\r'))
+        {
+            return false;
         }
-        if let Some(children) = node.get("content").and_then(|c| c.as_array()) {
-            if children
+        if let Some(children) = node.get("content").and_then(|c| c.as_array())
+            && children
                 .iter()
                 .any(|child| !adf_no_raw_newline_in_text_nodes(child))
-            {
-                return false;
-            }
+        {
+            return false;
         }
         true
     }

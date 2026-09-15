@@ -448,10 +448,10 @@ async fn resolve_field_id(
 
     let query_lower = query.to_lowercase();
 
-    if let Some(fc) = cache::read_fields_cache(profile)? {
-        if let Some(found) = search_field_list(&fc.fields, &query_lower, query)? {
-            return Ok(found);
-        }
+    if let Some(fc) = cache::read_fields_cache(profile)?
+        && let Some(found) = search_field_list(&fc.fields, &query_lower, query)?
+    {
+        return Ok(found);
     }
 
     // Cache miss (or field absent from the cached list) — fetch fresh once.

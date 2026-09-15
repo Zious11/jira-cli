@@ -369,15 +369,15 @@ async fn handle_create(
     })?;
 
     // BC-8.1.006: `--lead ""` has no effect on create — exit 64 before any HTTP.
-    if let Some(ref lead_val) = lead {
-        if lead_val.is_empty() {
-            return Err(JrError::UserError(
-                "--lead \"\" has no effect on create \u{2014} there is no existing lead to clear. \
+    if let Some(ref lead_val) = lead
+        && lead_val.is_empty()
+    {
+        return Err(JrError::UserError(
+            "--lead \"\" has no effect on create \u{2014} there is no existing lead to clear. \
                  Omit --lead, or supply a name."
-                    .into(),
-            )
-            .into());
-        }
+                .into(),
+        )
+        .into());
     }
 
     // BC-8.1.006: resolve lead via assignable-user search when --lead is supplied.
@@ -563,14 +563,14 @@ async fn handle_edit(
         };
         // If --project was supplied, verify it matches the derived project.
         // (Only reached when derived_project is non-empty per the guard above.)
-        if let Some(ref user_project) = project {
-            if !user_project.eq_ignore_ascii_case(&derived_project) {
-                return Err(JrError::UserError(format!(
-                    "Component {} belongs to project {}, not {}.",
-                    name_or_id, derived_project, user_project
-                ))
-                .into());
-            }
+        if let Some(ref user_project) = project
+            && !user_project.eq_ignore_ascii_case(&derived_project)
+        {
+            return Err(JrError::UserError(format!(
+                "Component {} belongs to project {}, not {}.",
+                name_or_id, derived_project, user_project
+            ))
+            .into());
         }
 
         (comp.id.clone(), final_project_key)
@@ -959,14 +959,14 @@ async fn handle_delete(
                 .into());
             };
 
-            if let Some(ref user_project) = project {
-                if !user_project.eq_ignore_ascii_case(&derived_project) {
-                    return Err(JrError::UserError(format!(
-                        "Component {} belongs to project {}, not {}.",
-                        name_or_id, derived_project, user_project
-                    ))
-                    .into());
-                }
+            if let Some(ref user_project) = project
+                && !user_project.eq_ignore_ascii_case(&derived_project)
+            {
+                return Err(JrError::UserError(format!(
+                    "Component {} belongs to project {}, not {}.",
+                    name_or_id, derived_project, user_project
+                ))
+                .into());
             }
 
             (comp.id, final_project_key, comp.name)
@@ -1051,15 +1051,15 @@ async fn handle_delete(
 
     // BC-8.2.005: self-move guard — ID equality (not name-string equality),
     // fires BEFORE the snapshot and the DELETE.
-    if let Some(ref tid) = target_id {
-        if *tid == component_id {
-            return Err(JrError::UserError(
-                "--move-to target is the same component being deleted. \
+    if let Some(ref tid) = target_id
+        && *tid == component_id
+    {
+        return Err(JrError::UserError(
+            "--move-to target is the same component being deleted. \
                  Choose a different component, or use --orphan."
-                    .into(),
-            )
-            .into());
-        }
+                .into(),
+        )
+        .into());
     }
 
     // BC-8.2.007: pre-delete JQL snapshot — the resolved NUMERIC id, never

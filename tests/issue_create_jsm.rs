@@ -2437,13 +2437,12 @@ async fn test_jsm_create_markdown_description_yields_adf_with_strong_marks() {
 
     // Walk content to find any text node with a "strong" mark — produced by **bold**.
     fn has_strong_mark(node: &Value) -> bool {
-        if let Some(marks) = node.get("marks").and_then(Value::as_array) {
-            if marks
+        if let Some(marks) = node.get("marks").and_then(Value::as_array)
+            && marks
                 .iter()
                 .any(|m| m.get("type").and_then(Value::as_str) == Some("strong"))
-            {
-                return true;
-            }
+        {
+            return true;
         }
         if let Some(children) = node.get("content").and_then(Value::as_array) {
             return children.iter().any(has_strong_mark);

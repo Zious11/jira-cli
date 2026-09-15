@@ -81,10 +81,10 @@ const DEFAULT_BULK_AWAIT_TIMEOUT_SECS: u64 = 300;
 pub fn resolve_bulk_await_timeout() -> Duration {
     #[cfg(debug_assertions)]
     {
-        if let Ok(s) = std::env::var("JR_BULK_AWAIT_TIMEOUT_SECS") {
-            if let Ok(secs) = s.parse::<u64>() {
-                return Duration::from_secs(secs);
-            }
+        if let Ok(s) = std::env::var("JR_BULK_AWAIT_TIMEOUT_SECS")
+            && let Ok(secs) = s.parse::<u64>()
+        {
+            return Duration::from_secs(secs);
         }
     }
     Duration::from_secs(DEFAULT_BULK_AWAIT_TIMEOUT_SECS)
@@ -149,10 +149,10 @@ fn format_grace_duration(d: Duration) -> String {
 fn resolve_unknown_status_grace() -> Duration {
     #[cfg(debug_assertions)]
     {
-        if let Ok(s) = std::env::var("JR_BULK_UNKNOWN_GRACE_SECS") {
-            if let Ok(secs) = s.parse::<u64>() {
-                return Duration::from_secs(secs);
-            }
+        if let Ok(s) = std::env::var("JR_BULK_UNKNOWN_GRACE_SECS")
+            && let Ok(secs) = s.parse::<u64>()
+        {
+            return Duration::from_secs(secs);
         }
     }
     Duration::from_secs(DEFAULT_UNKNOWN_STATUS_GRACE_SECS)

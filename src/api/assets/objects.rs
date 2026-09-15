@@ -48,11 +48,11 @@ impl JiraClient {
             let next = page.next_start();
             all.extend(page.values);
 
-            if let Some(cap) = limit {
-                if all.len() >= cap as usize {
-                    all.truncate(cap as usize);
-                    break;
-                }
+            if let Some(cap) = limit
+                && all.len() >= cap as usize
+            {
+                all.truncate(cap as usize);
+                break;
             }
             if !has_more {
                 break;

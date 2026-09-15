@@ -27,15 +27,15 @@ pub async fn handle() -> Result<()> {
         Ok(c) => Some(c),
         Err(e) => {
             let path = crate::config::global_config_path();
-            if let Some(je) = e.downcast_ref::<crate::error::JrError>() {
-                if matches!(je, crate::error::JrError::UserError(_)) {
-                    return Err(e.context(
-                        "config refused to load due to a user-input issue. \
+            if let Some(je) = e.downcast_ref::<crate::error::JrError>()
+                && matches!(je, crate::error::JrError::UserError(_))
+            {
+                return Err(e.context(
+                    "config refused to load due to a user-input issue. \
                          If JR_PROFILE points to a profile that doesn't exist, \
                          unset it; or run 'jr auth list' to see configured \
                          profiles.",
-                    ));
-                }
+                ));
             }
             if path.exists() {
                 return Err(e.context(format!(
@@ -47,41 +47,41 @@ pub async fn handle() -> Result<()> {
         }
     };
     let mut new_profile_override: Option<String> = None;
-    if let Some(c) = existing.as_ref() {
-        if !c.global.profiles.is_empty() {
-            let names: Vec<String> = c.global.profiles.keys().cloned().collect();
-            eprintln!("Profiles already configured: {}", names.join(", "));
-            let add = Confirm::new()
-                .with_prompt("Add another profile?")
-                .default(false)
-                .interact()
-                .context("failed to prompt for additional profile")?;
-            if !add {
-                return Ok(());
-            }
-            // Re-prompt on collision so a typo matching an existing profile
-            // name doesn't silently overwrite that profile's URL/auth
-            // settings later in the flow.
-            let profile_name: String = loop {
-                let candidate: String = Input::new()
-                    .with_prompt("Name for the new profile")
-                    .interact_text()
-                    .context("failed to read profile name")?;
-                if let Err(e) = crate::config::validate_profile_name(&candidate) {
-                    eprintln!("invalid profile name: {e}");
-                    continue;
-                }
-                if c.global.profiles.contains_key(&candidate) {
-                    eprintln!(
-                        "profile {candidate:?} already exists. Pick a different name, or run \
-                         'jr auth remove {candidate}' first to overwrite."
-                    );
-                    continue;
-                }
-                break candidate;
-            };
-            new_profile_override = Some(profile_name);
+    if let Some(c) = existing.as_ref()
+        && !c.global.profiles.is_empty()
+    {
+        let names: Vec<String> = c.global.profiles.keys().cloned().collect();
+        eprintln!("Profiles already configured: {}", names.join(", "));
+        let add = Confirm::new()
+            .with_prompt("Add another profile?")
+            .default(false)
+            .interact()
+            .context("failed to prompt for additional profile")?;
+        if !add {
+            return Ok(());
         }
+        // Re-prompt on collision so a typo matching an existing profile
+        // name doesn't silently overwrite that profile's URL/auth
+        // settings later in the flow.
+        let profile_name: String = loop {
+            let candidate: String = Input::new()
+                .with_prompt("Name for the new profile")
+                .interact_text()
+                .context("failed to read profile name")?;
+            if let Err(e) = crate::config::validate_profile_name(&candidate) {
+                eprintln!("invalid profile name: {e}");
+                continue;
+            }
+            if c.global.profiles.contains_key(&candidate) {
+                eprintln!(
+                    "profile {candidate:?} already exists. Pick a different name, or run \
+                         'jr auth remove {candidate}' first to overwrite."
+                );
+                continue;
+            }
+            break candidate;
+        };
+        new_profile_override = Some(profile_name);
     }
 
     // Step 1: Instance URL
