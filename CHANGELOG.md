@@ -94,6 +94,33 @@ All notable changes to jr will be documented here.
   diff under 7.2.2. User impact: None for binary/Homebrew users; source-builders need
   Rust ≥1.88.
 
+- **Let-chain retrofit across `src/` and 4 test files; CLAUDE.md's "No let-chains"
+  convention retired (S-cycle13-letchain-retrofit-convention-cleanup, cycle-013,
+  ADR-0025):** Raising `rust-version` to 1.88 (previous entry) made clippy's
+  MSRV-aware `collapsible_if` lint fire on every nested-`if`-without-`else` site
+  that a let-chain (`if let … && …`) could now express in one condition — ~75
+  sites across `src/` and several integration test files. All were collapsed,
+  either via `cargo clippy --fix` (the mechanical majority, each diff manually
+  reviewed for behavior preservation — no dropped `else` branches, no reordered
+  side effects) or by hand for the three call sites CLAUDE.md's own convention
+  entry had explicitly carved out as workarounds:
+  `src/cli/auth/keychain.rs::resolve_credential` (simple two-level collapse) and
+  the structurally-identical three-level Team-column gating sites in
+  `src/cli/board.rs::handle_view` / `src/cli/issue/list.rs::handle_list`, where
+  only the outer two gates (`output_format == Table` and `team_field_id.is_some()`)
+  fold into the let-chain condition — the third gate
+  (`uuids.iter().any(|u| u.is_some())`) stays a separate nested `if` after the
+  `let uuids = …` statement, preserving lazy evaluation of both the in-memory
+  `uuids` allocation and the `crate::cache::read_team_cache` filesystem read
+  (BC-5.3.001/BC-5.3.002 outcome-level behavior unchanged; full
+  `tests/team_column_parity.rs` + `tests/cli_handler.rs` team-column suites
+  verified red→green around the change). The now-fulfilled "No let-chains"
+  Conventions entry and its three citing `// Nested if (not a let-chain)` marker
+  comments are removed. `tests/common/wf.rs` carries one remaining
+  `collapsible_if` site, deliberately left untouched — that file is owned by a
+  separate CI-gate story's file-surface boundary. No behavior change anywhere in
+  this entry; syntax-only.
+
 - **CI: sharded mutation-testing gate replaces the single 240-minute `mutants` job
   (S-cycle6-mutants-ci-sharding, cycle-006).** Internal CI/CD infrastructure only —
   no user-facing `jr` binary behavior changed. The required mutation-testing gate is
