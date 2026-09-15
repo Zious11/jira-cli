@@ -402,71 +402,71 @@ impl WfDoc {
         let root_keys: Vec<String> = root_entries.iter().map(|e| e.key.clone()).collect();
 
         let mut jobs = Vec::new();
-        if let Some(jobs_entry) = find_unique_entry(&root_entries, "jobs", "WfDoc::parse") {
-            if matches!(events[jobs_entry.value_start].0, Event::MappingStart(..)) {
-                // `jobs:` need not be the workflow's FINAL top-level key —
-                // `concurrency:`, `defaults:`, `env:`, `permissions:`,
-                // `on:` are all legal AFTER `jobs:` (S-CIGATE-3 adversarial
-                // pass 5, MEDIUM). `find_unique_entry` above already
-                // proved there is at most one `jobs:` key among
-                // `root_entries`, so locating IT by key text again here is
-                // safe (no duplicate to silently pick a winner between).
-                // If a root key follows `jobs:` in source order, the LAST
-                // job's span must be bounded by that key's own line start
-                // — never by `yaml.len()` — or the last job's block would
-                // silently swallow it.
-                let next_root_key_start_byte = root_entries
-                    .iter()
-                    .position(|e| e.key == "jobs")
-                    .and_then(|jobs_idx| root_entries.get(jobs_idx + 1))
-                    .map(|next_root_entry| byte_of(line_start_char_idx(&next_root_entry.key_span)));
+        if let Some(jobs_entry) = find_unique_entry(&root_entries, "jobs", "WfDoc::parse")
+            && matches!(events[jobs_entry.value_start].0, Event::MappingStart(..))
+        {
+            // `jobs:` need not be the workflow's FINAL top-level key —
+            // `concurrency:`, `defaults:`, `env:`, `permissions:`,
+            // `on:` are all legal AFTER `jobs:` (S-CIGATE-3 adversarial
+            // pass 5, MEDIUM). `find_unique_entry` above already
+            // proved there is at most one `jobs:` key among
+            // `root_entries`, so locating IT by key text again here is
+            // safe (no duplicate to silently pick a winner between).
+            // If a root key follows `jobs:` in source order, the LAST
+            // job's span must be bounded by that key's own line start
+            // — never by `yaml.len()` — or the last job's block would
+            // silently swallow it.
+            let next_root_key_start_byte = root_entries
+                .iter()
+                .position(|e| e.key == "jobs")
+                .and_then(|jobs_idx| root_entries.get(jobs_idx + 1))
+                .map(|next_root_entry| byte_of(line_start_char_idx(&next_root_entry.key_span)));
 
-                let (job_entries, _) = read_mapping(&events, jobs_entry.value_start);
-                assert_no_duplicate_keys(&job_entries, "WfDoc::parse (jobs:)");
-                let job_count = job_entries.len();
-                for (idx, entry) in job_entries.iter().enumerate() {
-                    let start_byte = byte_of(line_start_char_idx(&entry.key_span));
-                    let end_byte = if idx + 1 < job_count {
-                        byte_of(line_start_char_idx(&job_entries[idx + 1].key_span))
+            let (job_entries, _) = read_mapping(&events, jobs_entry.value_start);
+            assert_no_duplicate_keys(&job_entries, "WfDoc::parse (jobs:)");
+            let job_count = job_entries.len();
+            for (idx, entry) in job_entries.iter().enumerate() {
+                let start_byte = byte_of(line_start_char_idx(&entry.key_span));
+                let end_byte = if idx + 1 < job_count {
+                    byte_of(line_start_char_idx(&job_entries[idx + 1].key_span))
+                } else {
+                    // Last job in `jobs:`: bound to the next ROOT
+                    // key's line start when one follows `jobs:`
+                    // (mirrors the inter-job boundary above, one level
+                    // out — everything up to that line, including any
+                    // trailing blank lines/comments and a trailing
+                    // block scalar's full content, still belongs to
+                    // this job). Only fall back to `yaml.len()` when
+                    // `jobs:` genuinely IS the workflow's last root
+                    // key — preserving the original, deliberately
+                    // undershoot-proof behavior for that case (see
+                    // `Job::span`'s own doc comment on
+                    // `sync-upstream.yml`'s trailing block scalar).
+                    next_root_key_start_byte.unwrap_or(yaml.len())
+                };
+
+                let (keys, values, steps) =
+                    if matches!(events[entry.value_start].0, Event::MappingStart(..)) {
+                        let (body_entries, _) = read_mapping(&events, entry.value_start);
+                        let keys: Vec<String> =
+                            body_entries.iter().map(|e| e.key.clone()).collect();
+                        let values: Vec<Value> = body_entries
+                            .iter()
+                            .map(|e| resolve_value(&events, e.value_start))
+                            .collect();
+                        let steps = extract_steps(&events, &body_entries, &table);
+                        (keys, values, steps)
                     } else {
-                        // Last job in `jobs:`: bound to the next ROOT
-                        // key's line start when one follows `jobs:`
-                        // (mirrors the inter-job boundary above, one level
-                        // out — everything up to that line, including any
-                        // trailing blank lines/comments and a trailing
-                        // block scalar's full content, still belongs to
-                        // this job). Only fall back to `yaml.len()` when
-                        // `jobs:` genuinely IS the workflow's last root
-                        // key — preserving the original, deliberately
-                        // undershoot-proof behavior for that case (see
-                        // `Job::span`'s own doc comment on
-                        // `sync-upstream.yml`'s trailing block scalar).
-                        next_root_key_start_byte.unwrap_or(yaml.len())
+                        (Vec::new(), Vec::new(), Vec::new())
                     };
 
-                    let (keys, values, steps) =
-                        if matches!(events[entry.value_start].0, Event::MappingStart(..)) {
-                            let (body_entries, _) = read_mapping(&events, entry.value_start);
-                            let keys: Vec<String> =
-                                body_entries.iter().map(|e| e.key.clone()).collect();
-                            let values: Vec<Value> = body_entries
-                                .iter()
-                                .map(|e| resolve_value(&events, e.value_start))
-                                .collect();
-                            let steps = extract_steps(&events, &body_entries, &table);
-                            (keys, values, steps)
-                        } else {
-                            (Vec::new(), Vec::new(), Vec::new())
-                        };
-
-                    jobs.push(Job {
-                        id: entry.key.clone(),
-                        span: start_byte..end_byte,
-                        keys,
-                        values,
-                        steps,
-                    });
-                }
+                jobs.push(Job {
+                    id: entry.key.clone(),
+                    span: start_byte..end_byte,
+                    keys,
+                    values,
+                    steps,
+                });
             }
         }
 
