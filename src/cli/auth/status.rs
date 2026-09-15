@@ -66,35 +66,15 @@ pub(crate) fn peek_oauth_app_source_for_test(
     OAuthAppSource::None
 }
 
-/// Select and invoke the kind-specific keychain probe for `auth status`.
-///
-/// `auth_method == "oauth"` → `load_oauth_tokens(profile).is_ok()`;
-/// anything else (including `"api_token"`, `None`/legacy) →
-/// `load_api_token(profile).is_ok()`.
-///
-/// This function is EFFECTFUL — it reads the OS keychain. It has no
-/// in-memory injection seam and is NOT default-CI-testable by DEFAULT-CI
-/// tests. It is therefore `exclude_re`'d from `cargo-mutants` reporting
-/// (S-cycle7-auth-status-json B2 Mutation Testing Scope).
-///
-/// Named function (not anonymous closure) specifically so the `exclude_re`
-/// can be file+function-name anchored — mirrors `list.rs`'s
-/// `probe_matching_kind_credential` pattern.
-fn probe_matching_kind_credential(profile: &Profile, method: &str) -> bool {
-    if method == "oauth" {
-        auth::load_oauth_tokens(profile).is_ok()
-    } else {
-        auth::load_api_token(profile).is_ok()
-    }
-}
-
 /// Build the 6-key JSON object for `auth status --output json` (BC-1.6.050).
 ///
 /// **PURE** — performs NO keychain access and NO config load. All inputs are
 /// pre-resolved by the effectful `status()` caller: it computes
-/// `matching_kind_present` ONCE via `probe_matching_kind_credential` (the
-/// same single kind-specific probe that drives the human-text `Credentials:`
-/// line), then feeds it here alongside the other pre-resolved fields.
+/// `matching_kind_present` ONCE via the shared
+/// `api::auth::probe_matching_kind_credential` (the same single kind-specific
+/// probe that also drives `auth list`'s STATUS column, and the human-text
+/// `Credentials:` line below), then feeds it here alongside the other
+/// pre-resolved fields.
 ///
 /// Fields emitted (set-equality, BC-1.6.050 postcondition 1):
 /// - `profile`:     the active profile name
@@ -130,6 +110,12 @@ pub(crate) fn build_status_json(
 /// When `profile_arg` is `Some`, reports for that profile. Otherwise reports
 /// for the active profile (resolved via the usual flag → env → config →
 /// "default" precedence chain at `Config::load` time).
+///
+/// **Per-invocation keychain read (CR-003):** performs exactly one real
+/// keychain probe via `api::auth::probe_matching_kind_credential` for the
+/// target profile — see `list.rs::handle_list`'s doc comment for the
+/// analogous, O(profiles) case and the macOS Keychain-consent-dialog
+/// consequence documented in the CHANGELOG.
 pub async fn status(profile_arg: Option<&str>, output: &crate::cli::OutputFormat) -> Result<()> {
     // `profile_arg` is the explicit per-subcommand override (`--profile`
     // on `auth status`); when absent we still let Config::load apply the
@@ -191,7 +177,7 @@ pub async fn status(profile_arg: Option<&str>, output: &crate::cli::OutputFormat
     // profile as of S-cycle3-percred-storage (BC-1.4.031) — mirrors
     // `load_oauth_tokens`'s per-profile lookup.
     let target_profile = Profile::from(target.clone());
-    let matching_kind_present = probe_matching_kind_credential(&target_profile, method);
+    let matching_kind_present = auth::probe_matching_kind_credential(&target_profile, method);
 
     match output {
         crate::cli::OutputFormat::Json => {

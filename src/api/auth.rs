@@ -2269,6 +2269,38 @@ pub fn derive_auth_state(url: Option<&str>, matching_kind_present: bool) -> Auth
     }
 }
 
+/// Select and invoke the kind-specific keychain probe for a profile.
+///
+/// `auth_method == "oauth"` → `load_oauth_tokens(profile).is_ok()`;
+/// anything else (including `"api_token"`, `""`, `"(not configured)"`,
+/// `None`/legacy) → `load_api_token(profile).is_ok()`.
+///
+/// Consolidated (CR-002 / F-C007-M1, cycle-007 F5) from two byte-identical
+/// copies that previously lived in `cli/auth/list.rs` and
+/// `cli/auth/status.rs` — both call sites now share this single
+/// implementation. The two call sites pass different sentinel strings for
+/// "no auth method configured" (`""` vs `"(not configured)"`); both
+/// correctly fall through to the non-oauth (`load_api_token`) arm since
+/// neither equals `"oauth"`.
+///
+/// This function is EFFECTFUL — it reads the OS keychain. It has no
+/// in-memory injection seam and is NOT default-CI-testable by either call
+/// site's own tests (each injects `probe_results` or a counting closure
+/// DIRECTLY, deliberately bypassing this function's body). It is therefore
+/// `exclude_re`'d from `cargo-mutants` reporting wherever this file enters
+/// mutation-testing scope (see `.cargo/mutants.toml`).
+///
+/// Named function (not anonymous closure) specifically so the `exclude_re`
+/// can be file+function-name anchored — mirrors the pre-consolidation
+/// per-file pattern from `cli/auth/list.rs`/`cli/auth/status.rs`.
+pub(crate) fn probe_matching_kind_credential(profile: &Profile, auth_method: &str) -> bool {
+    if auth_method == "oauth" {
+        load_oauth_tokens(profile).is_ok()
+    } else {
+        load_api_token(profile).is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::api::auth::{derive_auth_state, load_api_token, load_oauth_tokens};
+use crate::api::auth::derive_auth_state;
 use crate::output;
-use crate::profile::Profile;
 
 /// Render a profile's `env` tag for the `auth list` table's `ENV` column
 /// (BC-1.6.046 EC-1.6.046-1): `None` -> `-` placeholder; `Some(s)` -> the
@@ -20,39 +19,16 @@ pub(crate) fn render_env_column(env: Option<&str>) -> String {
     }
 }
 
-/// Select and invoke the kind-specific keychain probe for a profile.
-///
-/// `auth_method == "oauth"` → `load_oauth_tokens(profile).is_ok()`;
-/// anything else (including `"api_token"`, `None`/legacy) →
-/// `load_api_token(profile).is_ok()`.
-///
-/// This function is EFFECTFUL — it reads the OS keychain. It has no
-/// in-memory injection seam and is NOT default-CI-testable by this story's
-/// own tests (AC-005/006/009/010 inject `probe_results` or a counting
-/// closure DIRECTLY, deliberately bypassing this function's body). It is
-/// therefore `exclude_re`'d from `cargo-mutants` reporting per
-/// S-cycle7-auth-state-derivation's Mutation Testing Scope section.
-///
-/// Named function (not anonymous closure) specifically so the `exclude_re`
-/// can be file+function-name anchored (F3 adversary pass-3, finding MED-1 —
-/// mirrors Story A's `load_api_token` exclusion design).
-pub(crate) fn probe_matching_kind_credential(profile: &str, auth_method: &str) -> bool {
-    let p = Profile::from(profile);
-    if auth_method == "oauth" {
-        load_oauth_tokens(&p).is_ok()
-    } else {
-        load_api_token(&p).is_ok()
-    }
-}
-
 /// Collect per-profile `matching_kind_present` booleans by invoking the
 /// given probe for each profile that has a URL configured.
 ///
 /// Profiles with `url: None` are NEVER probed (BC-1.6.049 invariant 1).
 ///
-/// `probe` is an injectable parameter — production code passes
-/// `probe_matching_kind_credential`; tests pass a call-counting closure,
-/// making the call-count / gating logic DEFAULT-CI-testable (AC-009).
+/// `probe` is an injectable parameter — production code (`handle_list`)
+/// passes a thin closure wrapping the shared
+/// `api::auth::probe_matching_kind_credential`; tests pass a call-counting
+/// closure, making the call-count / gating logic DEFAULT-CI-testable
+/// (AC-009).
 ///
 /// Returns a `HashMap<String, bool>` keyed by profile name. Profiles with
 /// `url: None` are absent from the map; the renderers treat an absent entry
@@ -152,12 +128,24 @@ pub(crate) fn render_list_json(
 }
 
 /// `jr auth list` — print every configured profile, marking the active one.
+///
+/// **Per-invocation keychain reads (CR-003):** `collect_probe_results`
+/// invokes the shared `api::auth::probe_matching_kind_credential` probe once
+/// per URL-having profile — O(profiles) real keychain reads on every `jr
+/// auth list` call, not a cached/batched lookup. On macOS this can surface a
+/// Keychain-access consent dialog per profile on first use; see the
+/// CHANGELOG for the user-facing consequence and mitigation guidance.
 pub async fn handle_list(
     output: &crate::cli::OutputFormat,
     cli_profile: Option<&str>,
 ) -> Result<()> {
     let config = crate::config::Config::load_with(cli_profile)?;
-    let probe_results = collect_probe_results(&config.global, probe_matching_kind_credential);
+    let probe_results = collect_probe_results(&config.global, |profile, auth_method| {
+        crate::api::auth::probe_matching_kind_credential(
+            &crate::profile::Profile::from(profile),
+            auth_method,
+        )
+    });
     let rendered = match output {
         crate::cli::OutputFormat::Table => render_list_table(
             &config.global,

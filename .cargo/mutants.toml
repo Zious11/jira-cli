@@ -95,13 +95,16 @@ examine_globs = [
     "src/cli/issue/mentions.rs",
     # S-cycle7-auth-state-derivation (B1): pure `derive_auth_state` +
     # injection-seam `collect_probe_results` + renderer purity wiring.
-    # `probe_matching_kind_credential` is in the same file but excluded below
-    # (keychain-gated, no injection seam, exclude_re pair below).
+    # `probe_matching_kind_credential` was consolidated (CR-002/F-C007-M1,
+    # cycle-007 F5) into `api/auth.rs` and is no longer defined in this file —
+    # see the exclude_re pair anchored to `src/api/auth.rs` below.
     "src/cli/auth/list.rs",
     # S-cycle7-auth-status-json (B2): `build_status_json` pure JSON builder
-    # + `status()` OutputFormat dispatch. `probe_matching_kind_credential`
-    # and `peek_oauth_app_source` are in the same file but excluded below
-    # (both keychain-gated, no injection seam, exclude_re pairs below).
+    # + `status()` OutputFormat dispatch. `peek_oauth_app_source` is in the
+    # same file but excluded below (keychain-gated, no injection seam,
+    # exclude_re pair below). `probe_matching_kind_credential` was
+    # consolidated (CR-002/F-C007-M1, cycle-007 F5) into `api/auth.rs` and is
+    # no longer defined in this file.
     "src/cli/auth/status.rs",
 ]
 
@@ -141,36 +144,33 @@ additional_cargo_test_args = ["--all-features"]
 # any of the sibling `>`/`>=`/`||`/`&&`/`==` mutants at nearby lines in the same function.
 exclude_re = [
     '^src/api/jira/issues\.rs:374:16: delete ! in JiraClient::search_issues_with_fields$',
-    # S-cycle7-auth-state-derivation B1: `probe_matching_kind_credential` reads
-    # the OS keychain and has no injection seam — its mutations cannot be caught
-    # by DEFAULT-CI tests. TWO regexes are required (Task-14a):
+    # CR-002 / F-C007-M1 (cycle-007 F5 fix bundle): `probe_matching_kind_credential`
+    # was consolidated from two byte-identical per-file copies (formerly in
+    # `cli/auth/list.rs` and `cli/auth/status.rs`) into ONE shared implementation in
+    # `api/auth.rs`. It reads the OS keychain and has no injection seam — its
+    # mutations cannot be caught by DEFAULT-CI tests. `src/api/auth.rs` is not
+    # currently in `examine_globs` (see docs/specs/cargo-mutants-policy.md
+    # "FIX-F6-1 deferred, not added"), so this pair is presently inert, but is kept
+    # so the exclusion travels with the function if/when that file enters scope.
+    # TWO regexes are required (mirrors the pre-consolidation per-file pattern):
     #
     # Regex A — operator/expression mutants (e.g. `delete ==`, `replace &&`,
     # `replace .is_ok() with false`):
     #     cargo-mutants names these
-    #     "src/cli/auth/list.rs:N:C: <op> in probe_matching_kind_credential"
-    # Anchored to file + function suffix per Task-14a spec (adversary pass-3
-    # FIX F-2: restore full anchor for spec-faithfulness + defense-in-depth).
-    # Does NOT match derive_auth_state, collect_probe_results, or renderers.
-    '^src/cli/auth/list\.rs:\d+:\d+: .+ in probe_matching_kind_credential$',
+    #     "src/api/auth.rs:N:C: <op> in probe_matching_kind_credential"
+    # Anchored to file + function suffix. Does NOT match derive_auth_state,
+    # collect_probe_results, or any renderer.
+    '^src/api/auth\.rs:\d+:\d+: .+ in probe_matching_kind_credential$',
     # Regex B — whole-function-body replacement mutants (e.g.
     #     `replace probe_matching_kind_credential -> bool with true`):
     #     cargo-mutants names these
-    #     "src/cli/auth/list.rs:N:C: replace probe_matching_kind_credential … with …"
+    #     "src/api/auth.rs:N:C: replace probe_matching_kind_credential … with …"
     #     These do NOT end in "in probe_matching_kind_credential" so Regex A
     #     does not cover them → they would report MISSED (no DEFAULT-CI test
     #     exercises the real keychain probe, by design).
     # Anchored to file + function name; does NOT match derive_auth_state,
     # collect_probe_results, render_list_table, render_list_json, or handle_list.
-    '^src/cli/auth/list\.rs:\d+:\d+: replace probe_matching_kind_credential .*$',
-    # S-cycle7-auth-status-json B2: `probe_matching_kind_credential` in
-    # status.rs reads the OS keychain and has no injection seam — its
-    # mutations cannot be caught by DEFAULT-CI tests. TWO regexes required:
-    #
-    # Regex A — operator/expression mutants:
-    '^src/cli/auth/status\.rs:\d+:\d+: .+ in probe_matching_kind_credential$',
-    # Regex B — whole-function-body replacement mutants:
-    '^src/cli/auth/status\.rs:\d+:\d+: replace probe_matching_kind_credential .*$',
+    '^src/api/auth\.rs:\d+:\d+: replace probe_matching_kind_credential .*$',
     # S-cycle7-auth-status-json B2: `peek_oauth_app_source` in status.rs
     # reads the OS keychain (try_load_oauth_app_credentials + embedded flag)
     # and has no injection seam — mutations cannot be caught by DEFAULT-CI
