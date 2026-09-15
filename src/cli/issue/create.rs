@@ -1247,12 +1247,13 @@ mod parse_field_kv_proptests {
                 _ => unreachable!("strategy only generates the four known kind strings"),
             });
 
+            let expected_spec = FieldValueSpec {
+                kind: expected_kind,
+                value: last_value.clone(),
+            };
             prop_assert_eq!(
                 result.get(&name),
-                Some(&FieldValueSpec {
-                    kind: expected_kind,
-                    value: last_value.clone(),
-                }),
+                Some(&expected_spec),
                 "VP-578-006: the LAST occurrence's whole FieldValueSpec (kind AND value) must \
                  win across kind boundaries, not just across value boundaries"
             );
