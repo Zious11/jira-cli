@@ -4,7 +4,7 @@ version = "0.7.0-dev.6"
 edition = "2024"
 description = "A fast CLI for Jira Cloud"
 repository = "https://github.com/Zious11/jira-cli"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 
 [[bin]]
@@ -25,12 +25,16 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "3"
-# Pinned to 7.2.1: 7.2.2 uses let-chains (edition 2024, requires Rust ≥1.88) and
-# deleted the rust-version manifest field, so a caret range resolves to an
-# incompatible version without any MSRV enforcement from cargo. Pin holds until
-# MSRV is raised to 1.88 in a dedicated story.
-# See: issue #626.
-comfy-table = "=7.2.1"
+# Pinned to 7.2.2 (exact, not a caret range): 7.2.2 uses let-chains (edition
+# 2024, requires Rust ≥1.88) and deleted the rust-version manifest field, so a
+# caret range resolves to whatever's newest without any MSRV enforcement from
+# cargo. Now that this crate's own rust-version (above) is 1.88, 7.2.2's
+# let-chain usage compiles cleanly — the exact pin here is retained (not
+# relaxed to a caret) purely to keep future comfy-table bumps going through a
+# reviewed Cargo.toml diff rather than a silent `cargo update`, mirroring the
+# saphyr-parser convention below.
+# See: issue #626, ADR-0025.
+comfy-table = "=7.2.2"
 dialoguer = "0.12"
 dirs = "6"
 figment = { version = "0.10", features = ["toml", "env"] }
@@ -74,10 +78,11 @@ sha1 = { version = "^0.11" }
 # saphyr-parser: event-stream-only YAML parsing for tests/ci_gate_completeness.rs (S-CIGATE-3).
 # Exact-version pin (not a caret range) — 0.0.x carries no semver guarantee by convention,
 # so a 0.0.x bump can be breaking; the exact pin forces any upgrade through a reviewed
-# Cargo.toml diff rather than a silent `cargo update`. (Note: this crate's own MSRV happens
-# to be exactly 1.85.0 against this repo's rust-version = "1.85", zero headroom — but that is
-# NOT enforced by the msrv CI job, since it's a dev-dependency and that job's `cargo check`
-# scope is lib + bins only, not --all-targets.) See CLAUDE.md ci-gate bullet / AC-006.
+# Cargo.toml diff rather than a silent `cargo update`. (Note: this crate's own MSRV sits at
+# 1.85.0, below this repo's rust-version = "1.88" WITH headroom — no longer zero headroom
+# now that the floor has moved. It IS enforced by the msrv CI job: as a [dev-dependencies]
+# entry it now genuinely compiles and is checked under the job's widened
+# `--all-targets` `cargo check` scope.) See CLAUDE.md ci-gate bullet / AC-006.
 saphyr-parser = "=0.0.11"
 # libc: already a resolved transitive dependency (pulled in by tokio/reqwest on
 # Unix; 0.2.183 in Cargo.lock) but Rust requires an explicit Cargo.toml edge
