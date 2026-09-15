@@ -3575,17 +3575,21 @@ fn extract_if_block<'a>(job_block: &'a str, condition_line: &str) -> &'a str {
 /// version-branch action, which has no `toolchain` input and only sets
 /// `rustup default` — so `cargo check` silently ran under `stable` in the
 /// repo root, a false-green (documented in this project's CLAUDE.md under
-/// "`rust-toolchain.toml` outranks `rustup default`"). The fix requires
-/// TWO cooperating pieces: (1) `with: {toolchain: "1.85.0"}` on the
-/// `dtolnay/rust-toolchain` step, to install the correct toolchain, and
-/// (2) `env: {RUSTUP_TOOLCHAIN: "1.85.0"}` on the `cargo check` step,
-/// which outranks `rust-toolchain.toml` at process level and is the part
-/// that actually forces the check to run at 1.85.0. Deleting only the
-/// `env:` block is a two-line, silent regression: before this test
-/// existed, nothing else in CI or the test suite *asserted* on
-/// `RUSTUP_TOOLCHAIN` — CLAUDE.md and CHANGELOG.md both mention it in
-/// prose, but documentation references are not guards — so `msrv` would
-/// have kept passing while validating `stable` again.
+/// "`rust-toolchain.toml` outranks `rustup default`"). S-626-1's original
+/// fix set (still the mechanism today, now re-pinned to 1.88.0 by
+/// S-cycle13-msrv-1.88-atomic-bump) requires TWO cooperating pieces: (1)
+/// `with: {toolchain: "1.85.0"}` on the `dtolnay/rust-toolchain` step, to
+/// install the correct toolchain, and (2) `env: {RUSTUP_TOOLCHAIN:
+/// "1.85.0"}` on the `cargo check` step, which outranks
+/// `rust-toolchain.toml` at process level and is the part that actually
+/// forced the check to run at 1.85.0 (the `1.85.0` literals here describe
+/// that original S-626-1 fix; the job now runs both pieces at 1.88.0 — see
+/// the assertions below). Deleting only the `env:` block is a two-line,
+/// silent regression: before this test existed, nothing else in CI or the
+/// test suite *asserted* on `RUSTUP_TOOLCHAIN` — CLAUDE.md and
+/// CHANGELOG.md both mention it in prose, but documentation references
+/// are not guards — so `msrv` would have kept passing while validating
+/// `stable` again.
 ///
 /// This test makes THREE assertions, not two. The first two asserted
 /// strings are exact, quote-included forms (`toolchain: "1.88.0"` and
