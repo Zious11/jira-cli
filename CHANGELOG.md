@@ -229,6 +229,8 @@ All notable changes to jr will be documented here.
   aws-lc-rs 1.16.2 → 1.18.1 and aws-lc-sys 0.39.0 → 0.45.0 (Cargo.lock-only,
   no source changes). Verified clean under MSRV 1.85.
 
+## [0.7.0-dev.6] - 2026-09-15
+
 ## [0.7.0-dev.5] - 2026-09-06
 
 ### Changed
