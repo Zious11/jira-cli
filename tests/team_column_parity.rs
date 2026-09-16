@@ -424,13 +424,16 @@ async fn sprint_current_falls_back_to_uuid_when_team_not_cached() {
 
 /// `jr board view` (kanban) omits the Team column when `team_field_id` is NOT
 /// configured, even if the returned issue carries a team UUID in its response.
-/// Exercises the outer-true / inner-None path introduced by the S-626-1
-/// let-chain rewrite in `src/cli/board.rs::handle_view`: the outer
-/// `if matches!(output_format, OutputFormat::Table)` is true, but the inner
-/// `if let Some(field_id) = team_field_id` hits the new `else { Vec::new() }`
-/// branch. If that branch were broken (e.g. returned a populated vec),
-/// `show_team_col` would be true and the "Team" header would appear — causing
-/// this test to fail.
+/// Exercises the `else` arm of the S-cycle13 let-chain in
+/// `src/cli/board.rs::handle_view`: `output_format == Table` and
+/// `team_field_id` are folded into ONE condition
+/// (`if matches!(output_format, OutputFormat::Table) && let Some(field_id) =
+/// team_field_id { .. } else { Vec::new() }`) — with `team_field_id` absent,
+/// the whole let-chain condition is false and the `else { Vec::new() }` arm
+/// fires (the separate inner `uuids.iter().any(..)` gate is not reached).
+/// If that branch were broken (e.g. returned a populated vec), `show_team_col`
+/// would be true and the "Team" header would appear — causing this test to
+/// fail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_board_view_omits_team_column_when_field_unconfigured() {
     let server = MockServer::start().await;
@@ -474,13 +477,16 @@ async fn test_board_view_omits_team_column_when_field_unconfigured() {
 
 /// `jr issue list` omits the Team column when `team_field_id` is NOT
 /// configured, even if the returned issue carries a team UUID in its response.
-/// Exercises the outer-true / inner-None path introduced by the S-626-1
-/// let-chain rewrite in `src/cli/issue/list.rs::handle_list`: the outer
-/// `if matches!(output_format, OutputFormat::Table)` is true, but the inner
-/// `if let Some(field_id) = team_field_id` hits the new `else { Vec::new() }`
-/// branch. If that branch were broken (e.g. returned a populated vec),
-/// `show_team_col` would be true and the "Team" header would appear — causing
-/// this test to fail.
+/// Exercises the `else` arm of the S-cycle13 let-chain in
+/// `src/cli/issue/list.rs::handle_list`: `output_format == Table` and
+/// `team_field_id` are folded into ONE condition
+/// (`if matches!(output_format, OutputFormat::Table) && let Some(field_id) =
+/// team_field_id { .. } else { Vec::new() }`) — with `team_field_id` absent,
+/// the whole let-chain condition is false and the `else { Vec::new() }` arm
+/// fires (the separate inner `uuids.iter().any(..)` gate is not reached).
+/// If that branch were broken (e.g. returned a populated vec), `show_team_col`
+/// would be true and the "Team" header would appear — causing this test to
+/// fail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_issue_list_omits_team_column_when_field_unconfigured() {
     let server = MockServer::start().await;

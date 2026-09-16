@@ -613,7 +613,7 @@ Triggers on every push and PR. Runs in parallel:
 1. **Format check:** `cargo fmt --all -- --check`
 2. **Lint:** `cargo clippy --all --all-features --tests -- -D warnings`
 3. **Test:** `cargo test --all-features`
-4. **MSRV check:** Test against the declared minimum Rust version (1.85.0)
+4. **MSRV check:** Test against the currently-declared MSRV floor — see §MSRV Policy
 5. **Security audit:** `cargo deny check` for license compliance and known vulnerabilities
 6. **Code coverage:** `cargo llvm-cov` with results uploaded to Codecov
 
@@ -655,7 +655,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 ### MSRV Policy
 
-Minimum Supported Rust Version: **1.85.0** (or latest stable minus 3 releases). MSRV bumps increment the minor version. Tested in CI on every PR.
+Minimum Supported Rust Version: bump as needed (currently **1.88.0**), driven by dependency floor and ecosystem pressure, evaluated ad hoc per cycle — not a fixed "latest stable minus N releases" cadence. MSRV bumps increment the minor version. Tested in CI on every PR. (ADR-0025)
 
 ## Roadmap (Post-v1)
 

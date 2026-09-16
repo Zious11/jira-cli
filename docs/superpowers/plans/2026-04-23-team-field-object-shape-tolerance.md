@@ -108,7 +108,7 @@ pub fn team_id(&self, field_id: &str, verbose: bool) -> Option<String> {
 }
 ```
 
-Note: this plan originally prescribed let-chain syntax (`if let Some(obj) = ... && let Some(id) = ...`), which stabilized in Rust 1.88 and breaks the crate's MSRV of 1.85. The snippet above uses the MSRV-safe `.and_then()` chain that the final code landed. The warning text includes the "Expected string UUID or object with string" suffix added during local review.
+Note: this plan originally prescribed let-chain syntax (`if let Some(obj) = ... && let Some(id) = ...`), which stabilized in Rust 1.88 and breaks the crate's MSRV of 1.85. The snippet above uses the MSRV-safe `.and_then()` chain that the final code landed. The warning text includes the "Expected string UUID or object with string" suffix added during local review. (MSRV since raised to 1.88 in cycle-013 — this note is dated-historical, describing the constraint at the time this plan was written, not the current MSRV.)
 
 Also update the doc comment immediately above the function to reflect the new contract:
 
