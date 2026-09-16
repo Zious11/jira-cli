@@ -295,9 +295,9 @@ messages, the MSRV-bump entry already covers their content in full).
   completion); the practical risk is low but the fix is straightforward. Also bumps
   aws-lc-rs 1.16.2 → 1.18.1 and aws-lc-sys 0.39.0 → 0.45.0 (Cargo.lock-only,
   no source changes). Verified clean under MSRV 1.85 at the time of this fix — the MSRV
-  floor within this same Unreleased set was subsequently raised to 1.88 (see the "MSRV
-  raised to 1.88" entry above); this bump remains verified clean under the new floor too,
-  since raising a floor cannot reintroduce a lower-Rust-version incompatibility.
+  floor was subsequently raised to 1.88 in the 0.7.0-dev.7 release (see that section
+  above); this bump remains verified clean under the new floor too, since raising a
+  floor cannot reintroduce a lower-Rust-version incompatibility.
 
 ## [0.7.0-dev.5] - 2026-09-06
 
