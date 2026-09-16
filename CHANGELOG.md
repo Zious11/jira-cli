@@ -67,61 +67,6 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
-- **MSRV raised to 1.88, `msrv` CI job widened to `--all-targets`, `comfy-table` re-pinned
-  to 7.2.2 (S-cycle13-msrv-cargo-ci-atomic-bump, cycle-013, ADR-0025):** `Cargo.toml`'s
-  `rust-version` moves from `"1.85"` to `"1.88"`, closing the false-MSRV gap the S-626-1
-  `comfy-table = "=7.2.1"` pin worked around (`comfy-table` 7.2.2 uses let-chains requiring
-  Rust ≥1.88 and ships no `rust-version` manifest field of its own). `comfy-table` is
-  re-pinned from the stale `=7.2.1` to an exact, human-reviewed `=7.2.2` — the current latest
-  `7.x` release — mirroring the `saphyr-parser = "=0.0.11"` exact-pin-with-review convention
-  rather than a caret range. The `msrv` CI job's name moves to `MSRV (1.88.0)`, its
-  `dtolnay/rust-toolchain` `toolchain:`/`cargo check`'s `RUSTUP_TOOLCHAIN:` values move to
-  `"1.88.0"` (action SHA unchanged), and its `cargo check` invocation widens from
-  `--all-features --locked` (an implicit `lib + bins`-only scope) to
-  `--all-targets --all-features --locked` — the stale wiremock-scope-carve-out comment
-  explaining the narrower scope is removed, since `wiremock`'s ≥1.88 requirement (the sole
-  reason for the carve-out) no longer applies once the floor itself is 1.88. This is the
-  first time this repo's `tests/`/inline `#[cfg(test)]` code is validated against the MSRV
-  floor rather than just `lib + bins`; doing so surfaced one genuine 1.88-only borrow-checker
-  pattern in a proptest in `src/cli/issue/create.rs` (a temporary-value-lifetime issue newer
-  rustc's borrow checker accepts but 1.88 rejects), fixed by binding the value to a `let`
-  first — no behavior change. `tests/ci_gate_completeness.rs`'s pinned literals (toolchain
-  version, `cargo check` run-line selector) were updated in the same atomic commit as the
-  `ci.yml` changes, per the CI-Gate six-file review-scope convention (CLAUDE.md), so the
-  `ci-gate` required check never goes red from a self-test/workflow-file mismatch. The
-  comfy-table re-pin's one table-rendering insta snapshot
-  (`src/cli/auth/tests/snapshots/jr__cli__auth__tests__list_table_snapshot.snap`) showed no
-  diff under 7.2.2. User impact: None for binary/Homebrew users; source-builders need
-  Rust ≥1.88.
-
-- **Let-chain retrofit across `src/` and 4 test files; CLAUDE.md's "No let-chains"
-  convention retired (S-cycle13-letchain-retrofit-convention-cleanup, cycle-013,
-  ADR-0025):** Raising `rust-version` to 1.88 (previous entry) made clippy's
-  MSRV-aware `collapsible_if` lint fire on every nested-`if`-without-`else` site
-  that a let-chain (`if let … && …`) could now express in one condition — 73
-  sites across `src/` and several integration test files. All were collapsed,
-  either via `cargo clippy --fix` (the mechanical majority, each diff manually
-  reviewed for behavior preservation — no dropped `else` branches, no reordered
-  side effects) or by hand for the four call sites CLAUDE.md's own convention
-  entry had explicitly carved out as workarounds:
-  `src/cli/auth/keychain.rs::resolve_credential` (simple two-level collapse),
-  `tests/common/wf.rs::WfDoc::parse` (simple two-level collapse), and
-  the structurally-identical three-level Team-column gating sites in
-  `src/cli/board.rs::handle_view` / `src/cli/issue/list.rs::handle_list`, where
-  only the outer two gates (`output_format == Table` and `team_field_id.is_some()`)
-  fold into the let-chain condition — the third gate
-  (`uuids.iter().any(|u| u.is_some())`) stays a separate nested `if` after the
-  `let uuids = …` statement, preserving lazy evaluation of both the in-memory
-  `uuids` allocation and the `crate::cache::read_team_cache` filesystem read
-  (BC-5.3.001/BC-5.3.002 outcome-level behavior unchanged; full
-  `tests/team_column_parity.rs` + `tests/cli_handler.rs` team-column suites
-  verified red→green around the change). The now-fulfilled "No let-chains"
-  Conventions entry and its three citing `// Nested if (not a let-chain)` marker
-  comments are removed. `tests/common/wf.rs`'s `collapsible_if` site
-  (`WfDoc::parse`) is converted in this same PR, not left as an exception — an
-  earlier draft of this entry incorrectly described it as deliberately
-  untouched. No behavior change anywhere in this entry; syntax-only.
-
 - **CI: sharded mutation-testing gate replaces the single 240-minute `mutants` job
   (S-cycle6-mutants-ci-sharding, cycle-006).** Internal CI/CD infrastructure only —
   no user-facing `jr` binary behavior changed. The required mutation-testing gate is
@@ -286,6 +231,71 @@ All notable changes to jr will be documented here.
   floor within this same Unreleased set was subsequently raised to 1.88 (see the "MSRV
   raised to 1.88" entry above); this bump remains verified clean under the new floor too,
   since raising a floor cannot reintroduce a lower-Rust-version incompatibility.
+
+## [0.7.0-dev.7] - 2026-09-16
+
+### Changed
+
+- **MSRV raised to 1.88, `msrv` CI job widened to `--all-targets`, `comfy-table` re-pinned
+  to 7.2.2 (S-cycle13-msrv-cargo-ci-atomic-bump, cycle-013, ADR-0025):** `Cargo.toml`'s
+  `rust-version` moves from `"1.85"` to `"1.88"`, closing the false-MSRV gap the S-626-1
+  `comfy-table = "=7.2.1"` pin worked around (`comfy-table` 7.2.2 uses let-chains requiring
+  Rust ≥1.88 and ships no `rust-version` manifest field of its own). `comfy-table` is
+  re-pinned from the stale `=7.2.1` to an exact, human-reviewed `=7.2.2` — the current latest
+  `7.x` release — mirroring the `saphyr-parser = "=0.0.11"` exact-pin-with-review convention
+  rather than a caret range. The `msrv` CI job's name moves to `MSRV (1.88.0)`, its
+  `dtolnay/rust-toolchain` `toolchain:`/`cargo check`'s `RUSTUP_TOOLCHAIN:` values move to
+  `"1.88.0"` (action SHA unchanged), and its `cargo check` invocation widens from
+  `--all-features --locked` (an implicit `lib + bins`-only scope) to
+  `--all-targets --all-features --locked` — the stale wiremock-scope-carve-out comment
+  explaining the narrower scope is removed, since `wiremock`'s ≥1.88 requirement (the sole
+  reason for the carve-out) no longer applies once the floor itself is 1.88. This is the
+  first time this repo's `tests/`/inline `#[cfg(test)]` code is validated against the MSRV
+  floor rather than just `lib + bins`; doing so surfaced one genuine 1.88-only borrow-checker
+  pattern in a proptest in `src/cli/issue/create.rs` (a temporary-value-lifetime issue newer
+  rustc's borrow checker accepts but 1.88 rejects), fixed by binding the value to a `let`
+  first — no behavior change. `tests/ci_gate_completeness.rs`'s pinned literals (toolchain
+  version, `cargo check` run-line selector) were updated in the same atomic commit as the
+  `ci.yml` changes, per the CI-Gate six-file review-scope convention (CLAUDE.md), so the
+  `ci-gate` required check never goes red from a self-test/workflow-file mismatch. The
+  comfy-table re-pin's one table-rendering insta snapshot
+  (`src/cli/auth/tests/snapshots/jr__cli__auth__tests__list_table_snapshot.snap`) showed no
+  diff under 7.2.2. User impact: None for binary/Homebrew users; source-builders need
+  Rust ≥1.88.
+
+- **Let-chain retrofit across `src/` and 4 test files; CLAUDE.md's "No let-chains"
+  convention retired (S-cycle13-letchain-retrofit-convention-cleanup, cycle-013,
+  ADR-0025):** Raising `rust-version` to 1.88 (previous entry) made clippy's
+  MSRV-aware `collapsible_if` lint fire on every nested-`if`-without-`else` site
+  that a let-chain (`if let … && …`) could now express in one condition — 73
+  sites across `src/` and several integration test files. All were collapsed,
+  either via `cargo clippy --fix` (the mechanical majority, each diff manually
+  reviewed for behavior preservation — no dropped `else` branches, no reordered
+  side effects) or by hand for the four call sites CLAUDE.md's own convention
+  entry had explicitly carved out as workarounds:
+  `src/cli/auth/keychain.rs::resolve_credential` (simple two-level collapse),
+  `tests/common/wf.rs::WfDoc::parse` (simple two-level collapse), and
+  the structurally-identical three-level Team-column gating sites in
+  `src/cli/board.rs::handle_view` / `src/cli/issue/list.rs::handle_list`, where
+  only the outer two gates (`output_format == Table` and `team_field_id.is_some()`)
+  fold into the let-chain condition — the third gate
+  (`uuids.iter().any(|u| u.is_some())`) stays a separate nested `if` after the
+  `let uuids = …` statement, preserving lazy evaluation of both the in-memory
+  `uuids` allocation and the `crate::cache::read_team_cache` filesystem read
+  (BC-5.3.001/BC-5.3.002 outcome-level behavior unchanged; full
+  `tests/team_column_parity.rs` + `tests/cli_handler.rs` team-column suites
+  verified red→green around the change). The now-fulfilled "No let-chains"
+  Conventions entry and its three citing `// Nested if (not a let-chain)` marker
+  comments are removed. `tests/common/wf.rs`'s `collapsible_if` site
+  (`WfDoc::parse`) is converted in this same PR, not left as an exception — an
+  earlier draft of this entry incorrectly described it as deliberately
+  untouched. No behavior change anywhere in this entry; syntax-only.
+
+Also includes two docs-only reconciliation PRs (#819, #820/#822) that updated
+README/CLAUDE.md/design-spec/ci-gate-completeness.md references to the new MSRV
+floor and `--all-targets` scope — no additional user-facing behavior, and no
+separate CHANGELOG entries beyond the two above (per #818/#819's own commit
+messages, the MSRV-bump entry already covers their content in full).
 
 ## [0.7.0-dev.6] - 2026-09-15
 
