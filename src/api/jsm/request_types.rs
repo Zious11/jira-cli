@@ -43,7 +43,7 @@ impl JiraClient {
                 ),
                 None => format!("{}?start={}&limit={}", base, start, page_size),
             };
-            let page: ServiceDeskPage<RequestType> = self.get_from_instance(&path).await?;
+            let page: ServiceDeskPage<RequestType> = self.get(&path).await?;
             let has_more = page.has_more();
             let next = page.next_start();
             all.extend(page.values);
