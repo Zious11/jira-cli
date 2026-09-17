@@ -1028,3 +1028,89 @@ async fn sprint_current_network_drop_surfaces_reach_error() {
     );
     assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
 }
+
+// ---------------------------------------------------------------------------
+// OBS-1 mutation-coverage gap closure (S-cycle8-agile-scope-mismatch-error-mapping)
+//
+// `handle_add`'s `client.add_issues_to_sprint(...)` map_err (the
+// `write:board-scope:jira-software` rewrite) was, until this test, exercised
+// only structurally — `test_bc_x_15_001_sprint_remove_401_scope_mismatch_names_missing_scope`
+// covers the sibling `move_issues_to_backlog` write-scope call, and
+// `test_bc_x_15_001_sprint_add_current_list_sprints_401_scope_mismatch_rewrite`
+// covers `SprintCommand::Add { current: true, .. }`'s `list_sprints` lookup,
+// but no test landed a 401 directly on `add_issues_to_sprint` itself. That
+// left the `handle_add` map_err's mutation coverage weaker than its sibling
+// call sites — a PR-diff-scoped `cargo mutants` run over this area could plausibly
+// miss a mutant deleting or short-circuiting that map_err. This test closes
+// that gap directly, mirroring the `sprint remove` write-hint test's
+// structure/fixtures (adversary finding OBS-1).
+// ---------------------------------------------------------------------------
+
+/// AC-001 (BC-X.15.001 Behavior clause 1): `jr sprint add`'s 401 with a
+/// case-insensitive "scope does not match" body, under OAuth (Bearer) auth,
+/// must be rewritten to name `write:board-scope:jira-software` and direct to
+/// `jr auth login` — not the generic `InsufficientScope` template.
+///
+/// Uses `--sprint 55` (not `--current`) so `SprintCommand::Add`'s `current`
+/// branch — which would otherwise issue its own `list_boards`/`list_sprints`
+/// calls ahead of `add_issues_to_sprint` — is never reached; control passes
+/// straight to `handle_add`, and the mocked 401 lands deterministically on
+/// `add_issues_to_sprint` (`POST /rest/agile/1.0/sprint/55/issue`) itself, not
+/// on any preceding board/sprint resolution call.
+///
+/// This is a direct regression test for `handle_add`'s
+/// `client.add_issues_to_sprint(...).await.map_err(|e| rewrite_agile_scope_error(...))`
+/// wrap in `src/cli/sprint.rs`: removing that `.map_err(...)` (reverting the
+/// call to a bare `.await?`) would let the raw `add_issues_to_sprint` error
+/// surface unchanged — under OAuth with a "scope does not match" body, that
+/// raw error is the generic, POST-framed `InsufficientScope` (issue #185)
+/// message. This test's assertions would then fail on two independent
+/// fronts: the `write:board-scope:jira-software` hint would be absent, and
+/// the `github.com/Zious11/jira-cli/issues/185` template WOULD be present —
+/// so a mutant that deletes/no-ops this specific map_err cannot survive.
+#[tokio::test]
+async fn test_bc_x_15_001_sprint_add_401_scope_mismatch_names_missing_scope() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/sprint/55/issue"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Bearer test-oauth-access-token")
+        .args(["sprint", "add", "--sprint", "55", "FOO-1"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Scope-mismatch 401 on add_issues_to_sprint should exit 2, got: {:?}; stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("write:board-scope:jira-software"),
+        "Expected 'write:board-scope:jira-software' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "Expected 'jr auth login' re-consent guidance in stderr, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("github.com/Zious11/jira-cli/issues/185"),
+        "Must NOT surface the generic POST-framed InsufficientScope template, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
