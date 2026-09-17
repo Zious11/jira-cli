@@ -96,3 +96,8 @@ When reactivated, re-evaluate Options A and B against the new evidence.
 - `src/api/auth_embedded.rs` — XOR-obfuscated embedded credentials
 - RFC 7636 — Proof Key for Code Exchange by OAuth Public Clients
 - RFC 8252 — OAuth 2.0 for Native Apps
+- ADR-0026 (`.factory/specs/architecture/decisions/`) — OAuth 3LO gateway routing
+  invariant. A separate, unrelated-to-PKCE OAuth (3LO) correctness fix: several JSM/Assets
+  API call sites were routing OAuth requests through the wrong host (`instance_url` instead
+  of `base_url`), causing 401s under OAuth profiles independent of this ADR's PKCE-deferral
+  threat model.

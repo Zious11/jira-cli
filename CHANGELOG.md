@@ -14,6 +14,18 @@ All notable changes to jr will be documented here.
   repo sets the variable to `'true'` to keep the nightly it has always run.
   See `docs/specs/fork-friendly-release-ops.md`.
 
+### Fixed
+
+- **`jr queue`, `jr requesttype`, and `jr issue create --request-type` now work under
+  OAuth (3LO) profiles (S-cycle8-jsm-servicedeskapi-oauth-routing, cycle-008, BC-4.2.001,
+  ADR-0026, issue #831):** the six JSM `servicedeskapi` call sites
+  (`list_service_desks`, `list_request_types`, `get_request_type_fields`, `list_queues`,
+  `get_queue_issue_keys`, `create_jsm_request`) now route through `base_url` (the OAuth
+  API gateway) via `get`/`post`, instead of `instance_url` (the site host) via
+  `get_from_instance`/`post_to_instance`. Under OAuth, the two hosts diverge and the old
+  routing 401'd; under API-token auth `base_url() == instance_url()`, so this is a no-op
+  for that auth scheme — no payload/response-shape change anywhere.
+
 ## [0.7.0-dev.7] - 2026-09-16
 
 ### Changed
