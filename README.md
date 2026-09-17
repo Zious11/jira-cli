@@ -19,7 +19,7 @@ A fast, agent-friendly CLI for Jira Cloud, written in Rust. Built for both human
 - **Assets/CMDB support** — search assets, view linked tickets, filter by asset on issues, enriched JSON output
 - **Partial matching** — type `jr issue move KEY "prog"` and it matches "In Progress"
 - **JSM queues** — list and view JSM service desk queues
-- **Shell completions** — bash, zsh, fish
+- **Shell completions** — bash, zsh, fish, elvish, powershell
 
 ## Install
 
@@ -286,6 +286,9 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | `jr issue remote-link KEY --url URL` | Attach a Confluence page or web URL (`--title` optional, defaults to URL) |
 | `jr issue assets KEY`          | Show assets linked to an issue                |
 | `jr issue attachment list KEY` | List attachments on an issue (`--filter mime=`, `--filter name=`, `--filter size-max=`) |
+| `jr issue attachment download KEY` | Download attachments (`--id`/`--all`/`--newest N`, `--out`/`--out-dir`, `--filter`, `--force`) |
+| `jr issue attachment upload KEY FILE...` | Upload one or more files (`--replace-existing`, `--public`/`--internal` for JSM two-step visibility, `--dry-run`) |
+| `jr issue attachment delete AID...` | Delete attachments by ID, or by `--issue KEY --older-than <DUR>` (`--yes`, `--dry-run`) |
 | `jr issue changelog KEY` | Show the audit history (change log) for an issue |
 | `jr board list` | List boards (`--project`, `--type scrum\|kanban`) |
 | `jr board view --board 42` | Show current board issues (`--board` or config, `--limit`/`--all`) |
@@ -310,6 +313,11 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | `jr user view <accountId>` | Look up a single user by accountId |
 | `jr project list` | List accessible projects (`--type`, `--limit`/`--all`) |
 | `jr project fields --project FOO` | Show valid issue types, priorities, statuses, and asset custom fields |
+| `jr component list --project FOO` | List components for a project (`--counts` to enrich with related-issue counts) |
+| `jr component create NAME --project FOO` | Create a component (`--description`, `--lead`, `--assignee-type`) |
+| `jr component edit NAME_OR_ID` | Edit a component's name/description/lead (`--project` required for name lookup) |
+| `jr component delete NAME_OR_ID` | Delete a component — requires `--move-to <component>` or `--orphan` (`--yes` to skip confirmation) |
+| `jr component rename OLD NEW` | Rename a component (`--project` for single-project, or `--all-projects` fan-out; `--dry-run` to preview) |
 | `jr requesttype list` | List JSM request types for the project's service desk (7d cache) |
 | `jr requesttype fields <NAME\|ID>` | Show fields for a request type (partial name match or numeric ID) |
 | `jr field options <NAME>` | Enumerate a custom field's allowed options via one of `--type` (project+issue-type createmeta), `--request-type` (JSM request-type fields), or `--issue KEY` (issue editmeta) — exactly one required. `--project` is a companion flag (required-or-defaulted for `--type`, optional for `--request-type`, ignored for `--issue`). `--value` filters results by a case-insensitive substring |
@@ -471,6 +479,12 @@ eval "$(jr completion zsh)"
 
 # Fish (add to ~/.config/fish/config.fish)
 jr completion fish | source
+
+# Elvish
+jr completion elvish | source
+
+# PowerShell (add to $PROFILE)
+jr completion powershell | Out-String | Invoke-Expression
 ```
 
 ## Exit Codes
