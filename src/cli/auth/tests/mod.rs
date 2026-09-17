@@ -404,23 +404,54 @@ fn default_oauth_scopes_pins_the_full_set_with_offline_access() {
         "DEFAULT_OAUTH_SCOPES must contain exactly 16 scopes: {scopes:?}"
     );
 
-    // Whole-string canary: a single trailing comma or stray comment
-    // would still satisfy the per-scope check above, so pin the full
-    // expected set, exact ordering (AC-001): 8 pre-existing scopes
-    // unchanged in position, then `manage:jira-project`, then the 7
-    // granular Agile scopes in BC-1.3.023's Behavior-section order.
-    let expected = "read:jira-work write:jira-work read:jira-user \
-                        read:servicedesk-request write:servicedesk-request \
-                        read:cmdb-object:jira read:cmdb-schema:jira \
-                        offline_access manage:jira-project \
-                        read:board-scope:jira-software \
-                        read:board-scope.admin:jira-software \
-                        read:sprint:jira-software \
-                        write:board-scope:jira-software \
-                        read:project:jira read:issue-details:jira \
-                        read:jql:jira";
-    let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert_eq!(normalize(scopes), normalize(expected));
+    // Whole-string canary (F1 hardening): a single trailing comma or
+    // stray comment would still satisfy the per-scope check above, so
+    // pin the full expected set, exact ordering AND exact spacing
+    // (AC-001): 8 pre-existing scopes unchanged in position, then
+    // `manage:jira-project`, then the 7 granular Agile scopes in
+    // BC-1.3.023's Behavior-section order.
+    //
+    // This is a RAW exact-literal comparison — deliberately NOT
+    // normalized via `split_whitespace().join(" ")` on either side.
+    // A prior version of this test normalized both `scopes` and
+    // `expected` before comparing, which strips leading/trailing
+    // whitespace and collapses internal runs, so it could never catch
+    // a stray leading/trailing space introduced into
+    // `DEFAULT_OAUTH_SCOPES`. That matters because
+    // `resolve_oauth_scopes`'s `None` path returns
+    // `DEFAULT_OAUTH_SCOPES` verbatim (no `.trim()`) — a stray space
+    // would propagate into the authorize URL as a literal `%20`,
+    // producing `invalid_scope` from Atlassian for every OAuth user.
+    // The `expected` literal below is built with `concat!` (matching
+    // `DEFAULT_OAUTH_SCOPES`'s own definition style) rather than a
+    // `\`-continued multi-line string literal, specifically so this
+    // comparison is NOT accidentally whitespace-forgiving via Rust's
+    // line-continuation whitespace-stripping rule.
+    let expected = concat!(
+        "read:jira-work write:jira-work read:jira-user ",
+        "read:servicedesk-request write:servicedesk-request ",
+        "read:cmdb-object:jira read:cmdb-schema:jira ",
+        "offline_access manage:jira-project ",
+        "read:board-scope:jira-software read:board-scope.admin:jira-software ",
+        "read:sprint:jira-software write:board-scope:jira-software ",
+        "read:project:jira read:issue-details:jira read:jql:jira",
+    );
+    assert_eq!(
+        scopes, expected,
+        "DEFAULT_OAUTH_SCOPES must match the pinned literal exactly \
+         (ordering AND spacing, including no leading/trailing whitespace): {scopes:?}"
+    );
+
+    // Direct leading/trailing-whitespace guard (F1 hardening): belt-and-
+    // suspenders alongside the exact-literal comparison above. A stray
+    // space at either end would fail the `assert_eq!` above too, but
+    // this assertion names the specific failure mode explicitly so a
+    // future reader (or a mutation-testing run) sees exactly what broke.
+    assert_eq!(
+        scopes.trim(),
+        scopes,
+        "DEFAULT_OAUTH_SCOPES must have no leading/trailing whitespace: {scopes:?}"
+    );
 
     // Regression guard for the multi-line literal: assert no double
     // spaces in the actual constant. Atlassian's authorize endpoint
