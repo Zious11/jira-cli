@@ -60,31 +60,59 @@ fn api_token_key(profile: &str) -> String {
 /// config.toml. Covers every API surface `jr` exercises today:
 /// - `read:jira-work` / `write:jira-work` / `read:jira-user` — Jira issues,
 ///   search, projects, fields, users (the bulk of `jr issue/board/sprint`).
-/// - `read:servicedesk-request` — JSM queues and queue issues
-///   (`jr queue list/view`).
+/// - `read:servicedesk-request` / `write:servicedesk-request` — JSM queues,
+///   queue issues (`jr queue list/view`), and JSM request creation.
 /// - `read:cmdb-object:jira` / `read:cmdb-schema:jira` — Assets/CMDB
 ///   discovery (`jr assets search/view/tickets/schemas/types/schema`).
 /// - `offline_access` — required for refresh tokens; without it, OAuth
 ///   sessions die after one hour.
+/// - `manage:jira-project` — component write access (`jr component
+///   create/edit/delete/rename`); classic scope, added S-cycle8 to close
+///   the component-write OAuth gap (ADR-0026 Decision 2a).
+/// - `read:board-scope:jira-software` / `read:board-scope.admin:jira-software`
+///   / `read:sprint:jira-software` / `write:board-scope:jira-software` /
+///   `read:project:jira` / `read:issue-details:jira` / `read:jql:jira` —
+///   the 7 granular Jira-Software/Agile scopes required by the Agile REST
+///   API (`jr board`, `jr sprint`); added S-cycle8 per ADR-0026 Decision 2
+///   full-parity finalization to close the Agile OAuth scope gap. These
+///   are GRANULAR scopes and coexist with the classic scopes above on one
+///   3LO app with no forced migration.
 ///
-/// Users who configured their Developer Console app with granular scopes
+/// Teams scopes (`view:team:teams`, `view:membership:teams`) are
+/// DELIBERATELY EXCLUDED — Workstream D (Teams) is deferred to a future
+/// spike and is not approved to land in this constant yet (ADR-0026
+/// Decision 2 / Decision 4). Do not add them here without a separate
+/// spec-approved decision.
+///
+/// Users who configured their Developer Console app with narrower scopes
 /// (e.g., for least-privilege agent use) should override via
 /// `[profiles.<name>].oauth_scopes` in config.toml. The embedded `jr`
 /// app must be registered with this exact scope set in its Developer
 /// Console permissions, otherwise the authorize call rejects with
 /// `invalid_scope`.
+///
+/// RELEASE GATE (BC-1.3.023): a change to this constant requires the
+/// Atlassian Developer Console registration for the embedded `jr` OAuth
+/// app to be updated with the same scopes BEFORE the change ships in a
+/// tagged release — landing on `develop` ahead of the Console update is
+/// fine, but shipping a release without it hard-fails `invalid_scope` for
+/// EVERY OAuth login/refresh, not just users of the newly-scoped commands.
+/// See CLAUDE.md's "When changing DEFAULT_OAUTH_SCOPES" gotcha.
 // Built via `concat!` (vs. line-continuation in a string literal) to make
 // the absence of double spaces obvious to any reader, not dependent on the
 // `\<newline>` continuation rule that consumes following whitespace. Each
 // fragment ends with exactly one trailing space (or the final fragment has
 // none) so the joined string is single-space separated. A regression test
 // (`default_oauth_scopes_pins_the_full_set_with_offline_access`) asserts
-// no double spaces appear.
+// no double spaces appear and pins the exact 16-scope union + ordering.
 pub const DEFAULT_OAUTH_SCOPES: &str = concat!(
     "read:jira-work write:jira-work read:jira-user ",
     "read:servicedesk-request write:servicedesk-request ",
     "read:cmdb-object:jira read:cmdb-schema:jira ",
-    "offline_access",
+    "offline_access manage:jira-project ",
+    "read:board-scope:jira-software read:board-scope.admin:jira-software ",
+    "read:sprint:jira-software write:board-scope:jira-software ",
+    "read:project:jira read:issue-details:jira read:jql:jira",
 );
 
 /// One Atlassian site returned by the `accessible-resources` endpoint.
