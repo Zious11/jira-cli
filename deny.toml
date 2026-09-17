@@ -175,14 +175,21 @@ reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 
 #   and windows_* 0.53.1. These are unavoidable until jni and keyring converge on the
 #   same windows-sys version. (S-WIN-3, C-V2(b) research finding)
 #
-# The 7 skipped arch crates are: windows_aarch64_gnullvm, windows_aarch64_msvc,
-# windows_i686_gnu, windows_i686_msvc, windows_x86_64_gnu, windows_x86_64_gnullvm,
-# windows_x86_64_msvc. windows_i686_gnullvm is deliberately NOT skipped: it exists
-# in Cargo.lock only at 0.52.6 and 0.53.1 (the i686-gnullvm stub did not exist in
-# the windows 0.42 generation). Because these are Windows-only crates, cargo-deny
-# does not flag them as multiple-version violations when run on Linux or macOS CI
-# (they are absent from the resolved dependency graph on those platforms). A skip
-# entry for either version would produce an `unmatched-skip` error on those runners.
+# 8 arch crates are now skipped total: windows_aarch64_gnullvm, windows_aarch64_msvc,
+# windows_i686_gnu, windows_i686_gnullvm, windows_i686_msvc, windows_x86_64_gnu,
+# windows_x86_64_gnullvm, windows_x86_64_msvc.
+#
+# windows_i686_gnullvm was ORIGINALLY left unskipped: it has no 0.42 lineage, and prior
+# to the clap 4.6.6 bump (PR #727) only one of its two Cargo.lock-listed versions (0.52.6
+# vs 0.53.1) was concurrently reachable in cargo-deny's resolved graph, so no skip was
+# needed and the "absent from the resolved graph on non-Windows CI" reasoning held. The
+# clap 4.6.6 bump added a second concurrently-reachable path to 0.53.1 (clap_builder ->
+# anstream -> anstyle-query's windows-sys resolution shifting from 0.61 to 0.60,
+# alongside keyring's pre-existing windows-sys 0.60 path) -- verified via `cargo deny
+# check bans`, which now flags it as a duplicate on macOS/Linux CI. A skip entry (below)
+# is required as of this bump; if a future dependency shift removes the second path,
+# this skip becomes an unnecessary-skip and should be removed (see its reason text for
+# the exact re-check command).
 #
 # Why no `[[bans.skip]]` for windows-targets/windows_* version "0.52"?
 #
@@ -285,6 +292,11 @@ reason = "transitive arch crate for windows-targets 0.42.2 (via windows-sys 0.45
 name = "windows_x86_64_msvc"
 version = "0.53"
 reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_i686_gnullvm"
+version = "0.53"
+reason = "transitive arch crate for windows-targets 0.53.5, now reachable via TWO independent paths as of the clap 4.6.6 bump (PR #727): (1) windows-sys 0.60 via keyring v3.6.3's windows-native feature (pre-existing, S-WIN-3), and (2) windows-sys 0.60 via clap_builder 4.6.6 -> anstream 1.0.0 -> anstyle-query 1.1.5, whose windows-sys resolution shifted from 0.61 (clap 4.6.1, an already-exempt canonical duplicate that did not reach this arch crate as a second path) to 0.60 as of this bump. windows-targets 0.52.6 (via windows-sys 0.52) remains canonical/un-skipped. Unlike its six sibling arch crates (windows_aarch64_gnullvm, windows_aarch64_msvc, windows_i686_gnu, windows_i686_msvc, windows_x86_64_gnu, windows_x86_64_msvc), windows_i686_gnullvm has no 0.42 lineage (the i686-gnullvm stub did not exist in the windows 0.42 generation jni's windows-sys 0.45 pulls), so only this ONE skip is needed to leave a single canonical un-skipped version, versus the paired 0.42/0.53 skips those siblings carry. Unavoidable until jni and keyring converge on the same windows-sys version (see the S-WIN-3 block above), or a future anstream/anstyle-query release reverts to windows-sys ^0.61. Removal trigger: re-run `cargo tree --target=all -i windows_i686_gnullvm@0.53.1` after any keyring/jni/anstream/clap bump -- if it no longer shows a concurrently-reachable second path alongside windows-targets 0.52.6, remove this skip (an unremoved skip with only one remaining version produces an `unnecessary-skip` warning, per cargo-deny 0.19.6)."
 
 [[bans.skip]]
 name = "cpufeatures"
