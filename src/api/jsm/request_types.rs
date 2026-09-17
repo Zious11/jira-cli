@@ -70,6 +70,6 @@ impl JiraClient {
             urlencoding::encode(service_desk_id),
             urlencoding::encode(request_type_id)
         );
-        self.get_from_instance(&path).await
+        self.get(&path).await
     }
 }
