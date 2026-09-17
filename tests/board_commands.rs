@@ -421,6 +421,253 @@ async fn test_bc_x_15_001_board_401_without_scope_substring_falls_through_to_ref
     }
 }
 
+// ---------------------------------------------------------------------------
+// BC-X.15.001 v1.1 F1 scope expansion (2026-09-17) — AC-009, AC-011: internal
+// board/sprint resolution call sites reachable from `jr board view`, not just
+// its top-level command handler. See the story spec's v1.1 update
+// (S-cycle8-agile-scope-mismatch-error-mapping) and BC-X.15.001's widened
+// Behavior clause 1 call-site → hint mapping.
+//
+// RED GATE STATUS:
+// - `test_bc_x_15_001_resolve_board_id_401_scope_mismatch_rewrite` (AC-009a),
+//   `test_bc_x_15_001_board_view_scrum_list_sprints_401_scope_mismatch_rewrite`
+//   (AC-011a), and
+//   `test_bc_x_15_001_board_view_scrum_get_sprint_issues_401_scope_mismatch_rewrite`
+//   (AC-011b) assert PRESENCE of the shared `rewrite_agile_scope_error` hint
+//   at call sites that are, as of this writing, genuinely UNWRAPPED
+//   (`resolve_board_id`'s `list_boards` call, and `handle_view`'s scrum-branch
+//   `list_sprints`/`get_sprint_issues` calls both use a bare `.await?` with no
+//   `.map_err(...)` rewrite) — these are genuine RED against current code.
+// - AC-010 (`handle_view`'s unconditional `get_board_config` call) is ALREADY
+//   wrapped in current code and is already covered by the pre-existing
+//   `test_bc_x_15_001_board_view_401_scope_mismatch_names_admin_scope` test
+//   above (which uses `--board 99` to bypass `resolve_board_id` and hit
+//   `get_board_config` deterministically) — no new test added for AC-010 to
+//   avoid duplicating that coverage.
+// ---------------------------------------------------------------------------
+
+/// AC-009(a) (BC-X.15.001 Behavior clause 1, widened): `board.rs::resolve_board_id`'s
+/// auto-discovery `list_boards` call, reached via `jr board view` with no
+/// `--board` override and no configured `board_id` (forcing the
+/// `--project`-driven auto-discovery branch), must get the SAME hint as
+/// `jr board list` — `read:board-scope:jira-software` + `read:project:jira`
+/// — on a scope-mismatch 401.
+///
+/// RED GATE: `resolve_board_id`'s `list_boards` call is a bare `.await?`
+/// today with no `rewrite_agile_scope_error` wrapping — fails until wired.
+#[tokio::test]
+async fn test_bc_x_15_001_resolve_board_id_401_scope_mismatch_rewrite() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board"))
+        .and(query_param("projectKeyOrId", "PROJ"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Bearer test-oauth-access-token")
+        .args(["--project", "PROJ", "board", "view"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Scope-mismatch 401 on resolve_board_id's list_boards call should exit 2, \
+         got: {:?}; stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("read:board-scope:jira-software"),
+        "Expected 'read:board-scope:jira-software' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("read:project:jira"),
+        "Expected 'read:project:jira' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "Expected 'jr auth login' re-consent guidance in stderr, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("github.com/Zious11/jira-cli/issues/185"),
+        "Must NOT surface the generic POST-framed InsufficientScope template, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+/// AC-011(a) (BC-X.15.001 Behavior clause 1, widened): `handle_view`'s scrum
+/// branch `list_sprints` call must get the SAME grouped hint `jr sprint
+/// list`/`jr sprint current` use — `read:sprint:jira-software` +
+/// `read:issue-details:jira` + `read:jql:jira` (EC-X.15.001-4) — on a
+/// scope-mismatch 401. `--board 42` bypasses `resolve_board_id` so the board
+/// config call succeeds deterministically (scrum) and the mocked 401 lands
+/// on `list_sprints`.
+///
+/// RED GATE: `handle_view`'s `list_sprints` call is a bare `.await?` today —
+/// fails until wired.
+#[tokio::test]
+async fn test_bc_x_15_001_board_view_scrum_list_sprints_401_scope_mismatch_rewrite() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("scrum")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/sprint"))
+        .and(query_param("state", "active"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Bearer test-oauth-access-token")
+        .args(["board", "view", "--board", "42"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Scope-mismatch 401 on handle_view's list_sprints call should exit 2, \
+         got: {:?}; stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("read:sprint:jira-software"),
+        "Expected 'read:sprint:jira-software' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("read:issue-details:jira"),
+        "Expected 'read:issue-details:jira' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("read:jql:jira"),
+        "Expected 'read:jql:jira' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "Expected 'jr auth login' re-consent guidance in stderr, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("github.com/Zious11/jira-cli/issues/185"),
+        "Must NOT surface the generic POST-framed InsufficientScope template, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+/// AC-011(b) (BC-X.15.001 Behavior clause 1, widened): `handle_view`'s scrum
+/// branch `get_sprint_issues` call — distinct from AC-011(a)'s `list_sprints`
+/// call — must get the SAME grouped sprint-scope hint on a scope-mismatch
+/// 401. `list_sprints` succeeds here (returns one active sprint) so the
+/// mocked 401 is deterministically hit on `get_sprint_issues` instead.
+///
+/// RED GATE: `handle_view`'s `get_sprint_issues` call is a bare `.await?`
+/// today — fails until wired.
+#[tokio::test]
+async fn test_bc_x_15_001_board_view_scrum_get_sprint_issues_401_scope_mismatch_rewrite() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("scrum")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/sprint"))
+        .and(query_param("state", "active"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::sprint_list_response(vec![common::fixtures::sprint(
+                100, "Sprint 1", "active",
+            )]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Bearer test-oauth-access-token")
+        .args(["board", "view", "--board", "42"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Scope-mismatch 401 on handle_view's get_sprint_issues call should exit 2, \
+         got: {:?}; stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("read:sprint:jira-software"),
+        "Expected 'read:sprint:jira-software' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("read:issue-details:jira"),
+        "Expected 'read:issue-details:jira' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("read:jql:jira"),
+        "Expected 'read:jql:jira' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "Expected 'jr auth login' re-consent guidance in stderr, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("github.com/Zious11/jira-cli/issues/185"),
+        "Must NOT surface the generic POST-framed InsufficientScope template, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
 /// Helper: build N issues for testing.
 fn make_issues(count: usize) -> Vec<serde_json::Value> {
     (1..=count)

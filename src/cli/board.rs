@@ -387,4 +387,64 @@ mod tests {
             "project = \"FOO\\\"BAR\" AND statusCategory != Done ORDER BY rank ASC"
         );
     }
+
+    // -----------------------------------------------------------------
+    // F2 gap (S-cycle8-agile-scope-mismatch-error-mapping): mutation-
+    // coverage guard for `rewrite_agile_scope_error`'s OAuth pass-through
+    // arms. These exercise the helper directly at unit level (no subprocess,
+    // no OS keychain, no `send_inner` refresh path) and assert that a
+    // non-`InsufficientScope` `JrError` and a non-`JrError` `anyhow::Error`
+    // both pass through completely UNCHANGED under an OAuth-shaped client
+    // (`is_oauth_auth() == true`). These are expected to PASS against
+    // today's implementation — the pass-through arms already exist in
+    // `rewrite_agile_scope_error`'s `match`; this closes the gap where
+    // those arms had no direct test (a mutation that swapped/deleted an
+    // `Ok(other) => ...` or `Err(other) => ...` arm would previously have
+    // gone undetected).
+    // -----------------------------------------------------------------
+
+    /// AC (F2 gap): a non-`InsufficientScope` `JrError` (here,
+    /// `NotAuthenticated`) passed through an OAuth-constructed client must
+    /// come back byte-for-byte unchanged — no scope hint is added, and the
+    /// original hint text is preserved verbatim.
+    #[test]
+    fn test_rewrite_agile_scope_error_passes_through_non_insufficient_scope_jrerror_unchanged() {
+        let client =
+            JiraClient::new_for_test("http://example.invalid".into(), "Bearer test-token".into());
+        assert!(
+            client.is_oauth_auth(),
+            "test client must be OAuth-shaped (Bearer) for this pass-through guard to be meaningful"
+        );
+        let original_hint = "some pre-existing NotAuthenticated hint text";
+        let err = anyhow::anyhow!(JrError::NotAuthenticated {
+            hint: original_hint.to_string(),
+        });
+
+        let result = rewrite_agile_scope_error(err, &client, "read:board-scope:jira-software");
+
+        match result.downcast::<JrError>() {
+            Ok(JrError::NotAuthenticated { hint }) => assert_eq!(hint, original_hint),
+            other => panic!("expected unchanged NotAuthenticated variant, got: {other:?}"),
+        }
+    }
+
+    /// AC (F2 gap): a non-`JrError` `anyhow::Error` passed through an
+    /// OAuth-constructed client must also pass through completely
+    /// unchanged — the helper only intercepts `JrError::InsufficientScope`
+    /// values reachable via `downcast::<JrError>()`; every other error type
+    /// takes the `Err(other) => other` arm.
+    #[test]
+    fn test_rewrite_agile_scope_error_passes_through_non_jrerror_unchanged() {
+        let client =
+            JiraClient::new_for_test("http://example.invalid".into(), "Bearer test-token".into());
+        assert!(
+            client.is_oauth_auth(),
+            "test client must be OAuth-shaped (Bearer) for this pass-through guard to be meaningful"
+        );
+        let err = anyhow::anyhow!("some generic non-JrError failure");
+
+        let result = rewrite_agile_scope_error(err, &client, "read:board-scope:jira-software");
+
+        assert_eq!(result.to_string(), "some generic non-JrError failure");
+    }
 }
