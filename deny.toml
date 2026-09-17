@@ -84,6 +84,16 @@ version = "1"
 reason = "jr directly depends on toml 1.x (serde_spanned 1.x); figment 0.10.19 pulls toml 0.8 (serde_spanned 0.6). Dual version is unavoidable until figment upgrades to toml 1.x."
 
 [[bans.skip]]
+name = "syn"
+version = "2"
+reason = "syn 3.0.0 shipped 2026-07-18; as of 2026-09-16 three syn-2 holdouts remain with no released syn-3 version: pear_codegen 0.2.9 + proc-macro2-diagnostics 0.10.1 (both last released 2023/2024, reached via figment's optional `pear` feature -- figment is a direct jr dependency for config.rs; figment 0.10.19 is already its ceiling release and still requires pear ^0.2) and tracing-attributes 0.1.31 (reached via tracing, a direct jr dependency already on its latest 0.1.44 release, which requires tracing-attributes ^0.1.31 -- the newest tracing-attributes release, 2025-11-26 -- tracing is actively maintained but has not yet migrated to syn 3). Unavoidable dual version alongside syn 3.x (see skip below) until all three holdouts ship a syn-3-compatible release. REMOVAL TRIGGER: once `cargo tree -i syn` (after `cargo update`) shows only one syn version, delete this skip and the syn-3 skip below together, then confirm `cargo deny check bans` passes with no unmatched-skip/unnecessary-skip warnings before landing the removal."
+
+[[bans.skip]]
+name = "syn"
+version = "3"
+reason = "clap_derive >=4.6.4, futures-macro >=0.3.34, serde_derive >=1.0.229, and thiserror-impl >=2.0.19 have migrated to syn 3.x (the versions pulled in by Dependabot PRs #727/#730/#688/#729, 2026-09). Dual version with syn 2.x (see skip above) is unavoidable until every syn-2 holdout (pear_codegen/proc-macro2-diagnostics via figment's pear feature, tracing-attributes via tracing) ships a syn-3 release. REMOVAL TRIGGER: same as the syn 2 skip above -- remove both entries together once the tree resolves to a single syn version."
+
+[[bans.skip]]
 name = "thiserror"
 version = "1"
 reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires thiserror 1.x; jr and redox_users use thiserror 2.x. Blocked by jni not yet releasing thiserror 2.x support."
