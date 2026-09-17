@@ -41,7 +41,16 @@ pub async fn handle(
             }
             let sprint_id = if current {
                 let board_id = resolve_scrum_board(config, client, board, project_override).await?;
-                let sprints = client.list_sprints(board_id, Some("active")).await?;
+                let sprints = client
+                    .list_sprints(board_id, Some("active"))
+                    .await
+                    .map_err(|e| {
+                        crate::cli::board::rewrite_agile_scope_error(
+                            e,
+                            client,
+                            "read:sprint:jira-software, read:issue-details:jira, and read:jql:jira",
+                        )
+                    })?;
                 if sprints.is_empty() {
                     bail!("No active sprint found for board {}.", board_id);
                 }
@@ -74,7 +83,13 @@ async fn resolve_scrum_board(
     let board_id =
         crate::cli::board::resolve_board_id(config, client, board, project_override, true).await?;
 
-    let board_config = client.get_board_config(board_id).await?;
+    let board_config = client.get_board_config(board_id).await.map_err(|e| {
+        crate::cli::board::rewrite_agile_scope_error(
+            e,
+            client,
+            "read:board-scope.admin:jira-software",
+        )
+    })?;
     let board_type = board_config.board_type.to_lowercase();
     if board_type != "scrum" {
         bail!(

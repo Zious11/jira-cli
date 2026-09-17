@@ -39,7 +39,16 @@ pub async fn resolve_board_id(
     })?;
 
     let type_filter = if require_scrum { Some("scrum") } else { None };
-    let boards = client.list_boards(Some(&project_key), type_filter).await?;
+    let boards = client
+        .list_boards(Some(&project_key), type_filter)
+        .await
+        .map_err(|e| {
+            rewrite_agile_scope_error(
+                e,
+                client,
+                "read:board-scope:jira-software and read:project:jira",
+            )
+        })?;
 
     match boards.len() {
         0 => {
@@ -250,14 +259,20 @@ async fn handle_view(
 
     let (issues, has_more) = if board_type == "scrum" {
         // For scrum boards, fetch the active sprint's issues
-        let sprints = client.list_sprints(board_id, Some("active")).await?;
+        let sprint_scope_hint =
+            "read:sprint:jira-software, read:issue-details:jira, and read:jql:jira";
+        let sprints = client
+            .list_sprints(board_id, Some("active"))
+            .await
+            .map_err(|e| rewrite_agile_scope_error(e, client, sprint_scope_hint))?;
         if sprints.is_empty() {
             bail!("No active sprint found for board {}.", board_id);
         }
         let sprint = &sprints[0];
         let result = client
             .get_sprint_issues(sprint.id, None, effective_limit, &extra)
-            .await?;
+            .await
+            .map_err(|e| rewrite_agile_scope_error(e, client, sprint_scope_hint))?;
         (result.issues, result.has_more)
     } else {
         let project_key = config.project_key(project_override);

@@ -16,7 +16,15 @@ All notable changes to jr will be documented here.
   `read:board-scope.admin:jira-software`, `read:sprint:jira-software`,
   `write:board-scope:jira-software`) and directing the user to `jr auth login` to
   re-consent, rather than the generic, POST-specific `InsufficientScope` template
-  (issue #185) that was misleading for this Agile GET/write scope-mismatch case. No
+  (issue #185) that was misleading for this Agile GET/write scope-mismatch case.
+  **Coverage widened (same-day v1.1 scope expansion, 2026-09-17, AC-009..012):** the
+  same shared rewrite now also covers every *internal* Agile HTTP call reachable within
+  a `jr board`/`jr sprint` invocation, not only the 4 top-level command handlers —
+  `board.rs::resolve_board_id`'s auto-discovery `list_boards` call (shared by both
+  command families), `board.rs::handle_view`'s scrum-branch `list_sprints`/
+  `get_sprint_issues` calls, and `sprint.rs::resolve_scrum_board`'s `get_board_config`
+  call plus `sprint add --current`'s `list_sprints` lookup — each surfacing the same
+  hint as its top-level sibling that calls the identical endpoint. No
   change to Basic-auth (API-token) 401 behavior, to the non-scope-mismatch OAuth
   auto-refresh fall-through, or to any other command family's 401 handling —
   `src/error.rs`'s shared `InsufficientScope` template and
