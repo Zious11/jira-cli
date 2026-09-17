@@ -1917,3 +1917,61 @@ async fn test_bc_4_2_001_get_or_fetch_workspace_id_targets_base_url_under_oauth(
         site_requests.len()
     );
 }
+
+/// AC-002 (regression guard, traces to F1 §1 item 2 — cache-hit path
+/// unaffected by the AC-001 `get_from_instance` -> `get` swap): when
+/// `WorkspaceCache` already holds a valid (non-expired) entry,
+/// `get_or_fetch_workspace_id` must short-circuit on the cache read and issue
+/// NO HTTP call at all — neither `get` nor `get_from_instance` is ever
+/// reached.
+///
+/// This is a direct guard, distinct from the indirect coverage already
+/// provided by `tests/asset_holdouts.rs::
+/// test_s_2_03_h_037_bc_4_2_001_workspace_id_cached_after_first_call` (which
+/// proves a *second* call reuses the cache after a *first* call populated
+/// it) and `tests/cache_warm_hit.rs` (which covers a different cache
+/// family's warm-hit path). Neither of those two named tests directly seeds
+/// the cache and then asserts zero HTTP traffic on a *first* call to
+/// `get_or_fetch_workspace_id` the way this test does.
+///
+/// Deliberately NO mock is registered on the `MockServer` used here. If the
+/// cache-hit short-circuit ever regressed and the function issued a live
+/// HTTP call, that call would hit wiremock's default "no matching mock"
+/// response (a 404), which `get_or_fetch_workspace_id` maps to a
+/// `JrError::UserError` — so the `.expect(...)` below would panic. The
+/// `received_requests().is_empty()` assertion is the second, independent
+/// half of the guard: it fails loudly even in the hypothetical case where a
+/// regression's stray call happened to resolve successfully against some
+/// other mock mounted on this server in the future.
+#[tokio::test]
+async fn test_get_or_fetch_workspace_id_cache_hit_issues_no_http_call() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
+
+    // No mocks mounted at all — see doc comment above for why this makes the
+    // assertion below non-vacuous.
+    let server = MockServer::start().await;
+
+    let profile = jr::profile::Profile::from("default");
+    jr::cache::write_workspace_cache(&profile, "ws-cache-hit-guard-001")
+        .expect("seeding the workspace cache must succeed");
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Bearer fake-token".to_string());
+
+    let workspace_id = jr::api::assets::workspace::get_or_fetch_workspace_id(&client)
+        .await
+        .expect(
+            "cache-hit path must succeed via the cache alone, with zero HTTP calls \
+             issued (no mock is mounted, so any HTTP call would fail this call)",
+        );
+    assert_eq!(workspace_id, "ws-cache-hit-guard-001");
+
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests.is_empty(),
+        "get_or_fetch_workspace_id must issue ZERO HTTP requests when the \
+         workspace-ID cache already holds a valid entry — got {} request(s)",
+        requests.len()
+    );
+}
