@@ -16,8 +16,9 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
-- **`jr assets search/view/schemas/tickets` and `issue create/edit --field :asset` (asset-field
-  resolution) now work under OAuth (3LO) profiles (S-cycle8-assets-workspace-oauth-routing,
+- **`jr assets search/view/schemas/tickets`, `issue list --asset`/`--assets`, and `issue
+  create/edit --field :asset` (including JSM `create --request-type ... --field :asset`) now
+  work under OAuth (3LO) profiles (S-cycle8-assets-workspace-oauth-routing,
   cycle-008, BC-4.2.001, ADR-0026 Decision 1):** `get_or_fetch_workspace_id`
   (`src/api/assets/workspace.rs`) — the sole prerequisite workspace-ID discovery call for the
   entire Assets command family — routed its `GET /rest/servicedeskapi/assets/workspace` request
