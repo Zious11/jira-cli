@@ -170,12 +170,17 @@ jr auth login --oauth --profile my-site --url https://my-site.atlassian.net
 Your browser opens, you click "Allow" on the `jr` consent screen, done.
 
 By default, `jr` requests the Jira platform classic scopes plus the
-granular scopes used for JSM queues and Assets/CMDB features:
+granular scopes used for JSM queues/requests, Assets/CMDB, project
+administration, and Agile boards/sprints:
 
 - `read:jira-work`, `write:jira-work`, `read:jira-user` — Jira platform (issues, search, users)
-- `read:servicedesk-request` — JSM queues (`jr queue list/view`)
+- `read:servicedesk-request`, `write:servicedesk-request` — JSM queues and requests (`jr queue list/view`, `jr issue create --request-type`)
 - `read:cmdb-object:jira`, `read:cmdb-schema:jira` — Assets/CMDB (`jr assets ...`)
 - `offline_access` — refresh tokens (without this, sessions die after one hour)
+- `manage:jira-project` — project administration (`jr component ...`)
+- `read:board-scope:jira-software`, `read:board-scope.admin:jira-software`, `write:board-scope:jira-software` — Agile board access (`jr board ...`)
+- `read:sprint:jira-software` — Agile sprint access (`jr sprint ...`)
+- `read:project:jira`, `read:issue-details:jira`, `read:jql:jira` — granular Jira platform reads required alongside the classic scopes above
 
 Override per profile via `[profiles.<name>].oauth_scopes` in `config.toml`
 — see Configuration below. (Legacy `[instance].oauth_scopes` from
