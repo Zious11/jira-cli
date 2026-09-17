@@ -25,8 +25,7 @@ impl JiraClient {
     ///
     /// Traces: BC-3.8.001
     pub async fn create_jsm_request(&self, body: serde_json::Value) -> Result<JsmRequestCreated> {
-        self.post_to_instance("/rest/servicedeskapi/request", &body)
-            .await
+        self.post("/rest/servicedeskapi/request", &body).await
     }
 }
 

@@ -26,3 +26,10 @@ The embedded app uses a fixed callback URL `http://127.0.0.1:53682/callback` bec
 
 ## Supersedes
 ADR-0002 ("OAuth 2.0 with Embedded Client Secret" → "User-provided OAuth credentials"). The new approach reverses the user-provided default while keeping it as an opt-in escape hatch.
+
+## See Also
+- ADR-0026 (`.factory/specs/architecture/decisions/`) — OAuth 3LO gateway routing invariant.
+  Documents the fix for several JSM/Assets API call sites that were wrongly routing OAuth
+  (3LO) requests through the site host (`instance_url`) instead of the API gateway
+  (`base_url`) this ADR's embedded app authenticates against, causing widespread 401s under
+  OAuth profiles.

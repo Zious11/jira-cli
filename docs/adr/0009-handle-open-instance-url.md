@@ -64,3 +64,9 @@ format!("{}/browse/{}", client.instance_url(), key)
 - `src/cli/issue/workflow.rs::handle_open` — browse URL composition
 - `src/api/client.rs` — `base_url()` and `instance_url()` accessor definitions
 - ADR-0006 — Embedded OAuth app (explains the two-URL regime)
+- ADR-0026 (`.factory/specs/architecture/decisions/`) — OAuth 3LO gateway routing
+  invariant: the inverse-direction rule to this ADR's fix. Where this ADR corrects a
+  browser-facing call site wrongly using `base_url()` (the gateway), ADR-0026 corrects
+  several JSM API call sites wrongly using `instance_url()` (the site host) instead of
+  `base_url()` — the two ADRs together define the full `base_url()`/`instance_url()`
+  routing contract this file's Decision documents one half of.

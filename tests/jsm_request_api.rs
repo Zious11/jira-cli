@@ -390,3 +390,452 @@ fn test_jsm_request_created_extracts_issue_key() {
     assert_eq!(result_no_id.issue_key, "HELPDESK-2");
     assert_eq!(result_no_id.issue_id, None);
 }
+
+// ─── S-cycle8-jsm-servicedeskapi-oauth-routing (issue #831, BC-4.2.001) ────
+//
+// RED GATE — AC-001 through AC-006. Each test constructs a `JiraClient` via
+// `new_for_test_with_instance_url` with a DISTINCT `base_url` (the OAuth API
+// gateway) and `instance_url` (the site host), mounts an identical
+// success-response mock on BOTH servers (so the call succeeds regardless of
+// which host today's code actually targets), then asserts:
+//   1. the `base_url` mock received exactly the expected number of requests
+//      (this is what currently FAILS — today's code calls
+//      `get_from_instance`/`post_to_instance`, which targets `instance_url`,
+//      not `base_url`)
+//   2. the `instance_url` mock received ZERO requests (negative control —
+//      this is what currently FAILS in the opposite direction: today's code
+//      hits this mock instead)
+//
+// Under ADR-0026 Decision 1, the fix is a pure `get_from_instance` -> `get`
+// / `post_to_instance` -> `post` swap at each of the 6 call sites named
+// below. Per the story's `tdd_mode: strict`, these tests must fail against
+// today's (pre-fix) code for exactly this reason.
+
+/// Counts requests captured by a `MockServer` matching an exact method + path.
+async fn count_requests_to(server: &wiremock::MockServer, method: &str, path: &str) -> usize {
+    server
+        .received_requests()
+        .await
+        .expect("wiremock must record requests")
+        .iter()
+        .filter(|r| r.method.as_str().eq_ignore_ascii_case(method) && r.url.path() == path)
+        .count()
+}
+
+/// AC-001 — `list_service_desks` must GET against `base_url` (the OAuth API
+/// gateway), never `instance_url` (the site host), so `jr queue`/`jr
+/// requesttype`/`jr issue create --request-type`'s downstream
+/// `require_service_desk` resolution stops 401ing under OAuth (3LO) profiles.
+///
+/// Traces: BC-4.2.001 (fix-table row 1), ADR-0026 Decision 1.
+#[tokio::test]
+async fn test_bc_4_2_001_list_service_desks_targets_base_url_under_oauth() {
+    let base_server = MockServer::start().await;
+    let instance_server = MockServer::start().await;
+
+    let page_body = json!({
+        "size": 1,
+        "start": 0,
+        "limit": 50,
+        "isLastPage": true,
+        "values": [
+            { "id": "15", "projectId": "10000", "projectName": "HELPDESK Service Desk" }
+        ]
+    });
+
+    for server in [&base_server, &instance_server] {
+        Mock::given(method("GET"))
+            .and(path("/rest/servicedeskapi/servicedesk"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page_body))
+            .mount(server)
+            .await;
+    }
+
+    let client = jr::api::client::JiraClient::new_for_test_with_instance_url(
+        &base_server.uri(),
+        &instance_server.uri(),
+        "Basic dGVzdDp0ZXN0",
+    );
+
+    let result = client
+        .list_service_desks()
+        .await
+        .expect("list_service_desks should succeed");
+    assert_eq!(result.len(), 1);
+
+    let base_calls =
+        count_requests_to(&base_server, "GET", "/rest/servicedeskapi/servicedesk").await;
+    assert_eq!(
+        base_calls, 1,
+        "AC-001: list_service_desks must GET against base_url (OAuth gateway) \
+         exactly once; got {base_calls}. Today's code calls get_from_instance, \
+         which targets instance_url instead — this assertion should currently fail."
+    );
+
+    let instance_calls =
+        count_requests_to(&instance_server, "GET", "/rest/servicedeskapi/servicedesk").await;
+    assert_eq!(
+        instance_calls, 0,
+        "AC-001 negative control: instance_url must receive ZERO requests; \
+         got {instance_calls}. A non-zero count here means list_service_desks \
+         is still routing through get_from_instance (the pre-fix bug)."
+    );
+}
+
+/// AC-002 — `list_request_types` must GET against `base_url`, never
+/// `instance_url`.
+///
+/// Traces: BC-4.2.001 (fix-table row 2), ADR-0026 Decision 1.
+#[tokio::test]
+async fn test_bc_4_2_001_list_request_types_targets_base_url_under_oauth() {
+    let base_server = MockServer::start().await;
+    let instance_server = MockServer::start().await;
+
+    let page_body = json!({
+        "size": 1,
+        "start": 0,
+        "limit": 50,
+        "isLastPage": true,
+        "values": [
+            { "id": "25", "name": "Get IT Help", "description": null, "helpText": null, "issueTypeId": "10001" }
+        ]
+    });
+
+    for server in [&base_server, &instance_server] {
+        Mock::given(method("GET"))
+            .and(path("/rest/servicedeskapi/servicedesk/28/requesttype"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page_body))
+            .mount(server)
+            .await;
+    }
+
+    let client = jr::api::client::JiraClient::new_for_test_with_instance_url(
+        &base_server.uri(),
+        &instance_server.uri(),
+        "Basic dGVzdDp0ZXN0",
+    );
+
+    let result = client
+        .list_request_types("28", None)
+        .await
+        .expect("list_request_types should succeed");
+    assert_eq!(result.len(), 1);
+
+    let base_calls = count_requests_to(
+        &base_server,
+        "GET",
+        "/rest/servicedeskapi/servicedesk/28/requesttype",
+    )
+    .await;
+    assert_eq!(
+        base_calls, 1,
+        "AC-002: list_request_types must GET against base_url exactly once; \
+         got {base_calls}. Today's code calls get_from_instance instead — \
+         this assertion should currently fail."
+    );
+
+    let instance_calls = count_requests_to(
+        &instance_server,
+        "GET",
+        "/rest/servicedeskapi/servicedesk/28/requesttype",
+    )
+    .await;
+    assert_eq!(
+        instance_calls, 0,
+        "AC-002 negative control: instance_url must receive ZERO requests; \
+         got {instance_calls}."
+    );
+}
+
+/// AC-003 — `get_request_type_fields` must GET against `base_url`, never
+/// `instance_url`.
+///
+/// Traces: BC-4.2.001 (fix-table row 3), ADR-0026 Decision 1.
+#[tokio::test]
+async fn test_bc_4_2_001_get_request_type_fields_targets_base_url_under_oauth() {
+    let base_server = MockServer::start().await;
+    let instance_server = MockServer::start().await;
+
+    let body = json!({
+        "canAddRequestParticipants": true,
+        "canRaiseOnBehalfOf": true,
+        "requestTypeFields": []
+    });
+
+    for server in [&base_server, &instance_server] {
+        Mock::given(method("GET"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/28/requesttype/11001/field",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+            .mount(server)
+            .await;
+    }
+
+    let client = jr::api::client::JiraClient::new_for_test_with_instance_url(
+        &base_server.uri(),
+        &instance_server.uri(),
+        "Basic dGVzdDp0ZXN0",
+    );
+
+    client
+        .get_request_type_fields("28", "11001")
+        .await
+        .expect("get_request_type_fields should succeed");
+
+    let base_calls = count_requests_to(
+        &base_server,
+        "GET",
+        "/rest/servicedeskapi/servicedesk/28/requesttype/11001/field",
+    )
+    .await;
+    assert_eq!(
+        base_calls, 1,
+        "AC-003: get_request_type_fields must GET against base_url exactly \
+         once; got {base_calls}. Today's code calls get_from_instance \
+         instead — this assertion should currently fail."
+    );
+
+    let instance_calls = count_requests_to(
+        &instance_server,
+        "GET",
+        "/rest/servicedeskapi/servicedesk/28/requesttype/11001/field",
+    )
+    .await;
+    assert_eq!(
+        instance_calls, 0,
+        "AC-003 negative control: instance_url must receive ZERO requests; \
+         got {instance_calls}."
+    );
+}
+
+/// AC-004 — `list_queues` must GET against `base_url`, never `instance_url`.
+///
+/// Traces: BC-4.2.001 (fix-table row 4), ADR-0026 Decision 1.
+#[tokio::test]
+async fn test_bc_4_2_001_list_queues_targets_base_url_under_oauth() {
+    let base_server = MockServer::start().await;
+    let instance_server = MockServer::start().await;
+
+    let page_body = json!({
+        "size": 1,
+        "start": 0,
+        "limit": 50,
+        "isLastPage": true,
+        "values": [
+            { "id": "10", "name": "Triage", "issueCount": 5 }
+        ]
+    });
+
+    for server in [&base_server, &instance_server] {
+        Mock::given(method("GET"))
+            .and(path("/rest/servicedeskapi/servicedesk/15/queue"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page_body))
+            .mount(server)
+            .await;
+    }
+
+    let client = jr::api::client::JiraClient::new_for_test_with_instance_url(
+        &base_server.uri(),
+        &instance_server.uri(),
+        "Basic dGVzdDp0ZXN0",
+    );
+
+    let result = client
+        .list_queues("15")
+        .await
+        .expect("list_queues should succeed");
+    assert_eq!(result.len(), 1);
+
+    let base_calls = count_requests_to(
+        &base_server,
+        "GET",
+        "/rest/servicedeskapi/servicedesk/15/queue",
+    )
+    .await;
+    assert_eq!(
+        base_calls, 1,
+        "AC-004: list_queues must GET against base_url exactly once; got \
+         {base_calls}. Today's code calls get_from_instance instead — this \
+         assertion should currently fail."
+    );
+
+    let instance_calls = count_requests_to(
+        &instance_server,
+        "GET",
+        "/rest/servicedeskapi/servicedesk/15/queue",
+    )
+    .await;
+    assert_eq!(
+        instance_calls, 0,
+        "AC-004 negative control: instance_url must receive ZERO requests; \
+         got {instance_calls}."
+    );
+}
+
+/// AC-005 — `get_queue_issue_keys` must GET against `base_url`, never
+/// `instance_url`.
+///
+/// Traces: BC-4.2.001 (fix-table row 5), ADR-0026 Decision 1.
+#[tokio::test]
+async fn test_bc_4_2_001_get_queue_issue_keys_targets_base_url_under_oauth() {
+    let base_server = MockServer::start().await;
+    let instance_server = MockServer::start().await;
+
+    let page_body = json!({
+        "size": 1,
+        "start": 0,
+        "limit": 50,
+        "isLastPage": true,
+        "values": [
+            { "key": "HELPDESK-42", "fields": {} }
+        ]
+    });
+
+    for server in [&base_server, &instance_server] {
+        Mock::given(method("GET"))
+            .and(path("/rest/servicedeskapi/servicedesk/15/queue/10/issue"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page_body))
+            .mount(server)
+            .await;
+    }
+
+    let client = jr::api::client::JiraClient::new_for_test_with_instance_url(
+        &base_server.uri(),
+        &instance_server.uri(),
+        "Basic dGVzdDp0ZXN0",
+    );
+
+    let result = client
+        .get_queue_issue_keys("15", "10", None)
+        .await
+        .expect("get_queue_issue_keys should succeed");
+    assert_eq!(result, vec!["HELPDESK-42".to_string()]);
+
+    let base_calls = count_requests_to(
+        &base_server,
+        "GET",
+        "/rest/servicedeskapi/servicedesk/15/queue/10/issue",
+    )
+    .await;
+    assert_eq!(
+        base_calls, 1,
+        "AC-005: get_queue_issue_keys must GET against base_url exactly \
+         once; got {base_calls}. Today's code calls get_from_instance \
+         instead — this assertion should currently fail."
+    );
+
+    let instance_calls = count_requests_to(
+        &instance_server,
+        "GET",
+        "/rest/servicedeskapi/servicedesk/15/queue/10/issue",
+    )
+    .await;
+    assert_eq!(
+        instance_calls, 0,
+        "AC-005 negative control: instance_url must receive ZERO requests; \
+         got {instance_calls}."
+    );
+}
+
+/// AC-006 — `create_jsm_request` must POST against `base_url`, never
+/// `instance_url`, with the POST body byte-for-byte identical to today's
+/// payload shape (no payload/response-shape change is permitted by this
+/// story — ADR-0026 Decision 1).
+///
+/// Traces: BC-4.2.001 (fix-table row 6), ADR-0026 Decision 1.
+#[tokio::test]
+async fn test_bc_4_2_001_create_jsm_request_targets_base_url_under_oauth() {
+    let base_server = MockServer::start().await;
+    let instance_server = MockServer::start().await;
+
+    let response_body = json!({
+        "issueId": "107001",
+        "issueKey": "HELPDESK-1",
+        "summary": "Request JSD help via REST",
+        "requestTypeId": "25",
+        "serviceDeskId": "10",
+        "_links": {
+            "self": "https://example.atlassian.net/rest/servicedeskapi/request/107001",
+            "web": "https://example.atlassian.net/servicedesk/customer/portal/10/HELPDESK-1",
+            "agent": "https://example.atlassian.net/browse/HELPDESK-1",
+            "jiraRest": "https://example.atlassian.net/rest/api/2/issue/107001"
+        }
+    });
+
+    let expected_body = json!({
+        "serviceDeskId": "10",
+        "requestTypeId": "25",
+        "isAdfRequest": true,
+        "requestFieldValues": {
+            "summary": "test",
+            "description": {"type": "doc", "content": []}
+        }
+    });
+
+    for server in [&base_server, &instance_server] {
+        Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request"))
+            .and(body_partial_json(json!({
+                "serviceDeskId": "10",
+                "requestTypeId": "25",
+                "requestFieldValues": {
+                    "summary": "test"
+                }
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(&response_body))
+            .mount(server)
+            .await;
+    }
+
+    let client = jr::api::client::JiraClient::new_for_test_with_instance_url(
+        &base_server.uri(),
+        &instance_server.uri(),
+        "Basic dGVzdDp0ZXN0",
+    );
+
+    let result = client
+        .create_jsm_request(expected_body.clone())
+        .await
+        .expect("create_jsm_request should succeed");
+    assert_eq!(result.issue_key, "HELPDESK-1");
+
+    let base_reqs = base_server
+        .received_requests()
+        .await
+        .expect("wiremock must record requests");
+    let base_matches: Vec<_> = base_reqs
+        .iter()
+        .filter(|r| {
+            r.method.as_str().eq_ignore_ascii_case("POST")
+                && r.url.path() == "/rest/servicedeskapi/request"
+        })
+        .collect();
+    assert_eq!(
+        base_matches.len(),
+        1,
+        "AC-006: create_jsm_request must POST against base_url exactly \
+         once; got {}. Today's code calls post_to_instance instead — this \
+         assertion should currently fail.",
+        base_matches.len()
+    );
+
+    // Byte-for-byte payload-shape assertion (ADR-0026 Decision 1: no
+    // payload change permitted) — the captured body must deep-equal the
+    // exact JSON value passed to create_jsm_request.
+    let captured_body: serde_json::Value =
+        serde_json::from_slice(&base_matches[0].body).expect("POST body must be valid JSON");
+    assert_eq!(
+        captured_body, expected_body,
+        "AC-006: base_url POST body must be byte-for-byte identical to \
+         today's payload shape; got {captured_body}"
+    );
+
+    let instance_calls =
+        count_requests_to(&instance_server, "POST", "/rest/servicedeskapi/request").await;
+    assert_eq!(
+        instance_calls, 0,
+        "AC-006 negative control: instance_url must receive ZERO requests; \
+         got {instance_calls}."
+    );
+}

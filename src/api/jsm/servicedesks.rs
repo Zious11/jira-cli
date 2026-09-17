@@ -19,7 +19,7 @@ impl JiraClient {
                 "/rest/servicedeskapi/servicedesk?start={}&limit={}",
                 start, page_size
             );
-            let page: ServiceDeskPage<ServiceDesk> = self.get_from_instance(&path).await?;
+            let page: ServiceDeskPage<ServiceDesk> = self.get(&path).await?;
             let has_more = page.has_more();
             let next = page.next_start();
             all.extend(page.values);
