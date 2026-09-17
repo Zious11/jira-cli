@@ -6,6 +6,22 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+- **`DEFAULT_OAUTH_SCOPES` grows from 8 to 16 scopes — closes the Agile and component-write
+  OAuth gaps (S-cycle8-agile-oauth-scope-gap, BC-1.3.023, ADR-0026 Decision 2/2a):** the
+  embedded `jr` OAuth app's default scope set gains `manage:jira-project` and the 7 granular
+  Jira-Software/Agile scopes (`read:board-scope:jira-software`,
+  `read:board-scope.admin:jira-software`, `read:sprint:jira-software`,
+  `write:board-scope:jira-software`, `read:project:jira`, `read:issue-details:jira`,
+  `read:jql:jira`), on top of the 8 existing classic/CMDB scopes (unchanged in position, no
+  scope removed). Existing OAuth users will see a re-consent (`prompt=consent`) prompt on
+  their next login or token refresh — this is expected: a new OAuth grant always overrides
+  the prior grant's scopes with the full requested union. This unblocks `jr board`,
+  `jr sprint`, and `jr component create/edit/delete/rename` under OAuth (pending the
+  routing/error-mapping fixes in this cycle's sibling stories where applicable).
+  **RELEASE GATE:** the Atlassian Developer Console registration for the embedded `jr` OAuth
+  app MUST be updated to include all 8 new scopes before this change ships in a tagged
+  release — shipping without the Console update hard-fails `invalid_scope` for every OAuth
+  login/refresh, not just Agile/component-command users.
 - **`mutants-nightly.yml` gated behind `vars.MUTANTS_NIGHTLY_ENABLED` (fork-friendly-release-ops):**
   the advisory full mutation nightly now runs only where the repository variable
   `MUTANTS_NIGHTLY_ENABLED` is set to `'true'`, matching the fail-safe opt-in pattern of
