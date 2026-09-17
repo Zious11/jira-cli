@@ -6,6 +6,286 @@ use serde_json::json;
 use wiremock::matchers::{body_partial_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+// ---------------------------------------------------------------------------
+// BC-X.15.001 — `jr sprint` 401 scope-mismatch disambiguation
+// (S-cycle8-agile-scope-mismatch-error-mapping)
+//
+// See the parallel block at the top of tests/board_commands.rs for the full
+// RED-vs-boundary-guard breakdown shared by both files. Summary for the
+// tests in this file:
+// - `test_bc_x_15_001_sprint_list_401_scope_mismatch_names_missing_scopes`
+//   and `test_bc_x_15_001_sprint_remove_401_scope_mismatch_names_missing_scope`
+//   assert PRESENCE of new behavior — genuine RED against current code.
+// - `test_bc_x_15_001_sprint_401_under_api_token_unaffected` asserts ABSENCE
+//   of the new rewrite for Basic auth — passes today (boundary guard).
+// - `test_bc_x_15_001_sprint_401_without_scope_substring_falls_through_to_refresh`
+//   is keyring-gated and `#[ignore]`d for the same reason as its board.rs
+//   sibling; not executed in this Red Gate's default `cargo test` pass.
+// ---------------------------------------------------------------------------
+
+/// AC-001 (BC-X.15.001 Behavior clause 1): `jr sprint list`'s 401 with a
+/// case-insensitive "scope does not match" body, under OAuth (Bearer) auth,
+/// must be rewritten to name `read:sprint:jira-software`,
+/// `read:issue-details:jira`, and `read:jql:jira`, and direct to
+/// `jr auth login` — not the generic `InsufficientScope` template.
+///
+/// `--board 55` bypasses project-based board auto-discovery; the board
+/// configuration call is mocked to succeed (scrum) so the mocked 401 is
+/// deterministically hit on the sprint-list call itself.
+///
+/// RED GATE: fails until the rewrite is wired into `jr sprint list`.
+#[tokio::test]
+async fn test_bc_x_15_001_sprint_list_401_scope_mismatch_names_missing_scopes() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/55/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("scrum")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/55/sprint"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Bearer test-oauth-access-token")
+        .args(["sprint", "list", "--board", "55"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Scope-mismatch 401 should exit 2, got: {:?}; stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("read:sprint:jira-software"),
+        "Expected 'read:sprint:jira-software' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("read:issue-details:jira"),
+        "Expected 'read:issue-details:jira' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("read:jql:jira"),
+        "Expected 'read:jql:jira' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "Expected 'jr auth login' re-consent guidance in stderr, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("github.com/Zious11/jira-cli/issues/185"),
+        "Must NOT surface the generic POST-framed InsufficientScope template, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+/// AC-001 (BC-X.15.001 Behavior clause 1): `jr sprint remove`'s 401 with a
+/// case-insensitive "scope does not match" body, under OAuth (Bearer) auth,
+/// must be rewritten to name `write:board-scope:jira-software` and direct
+/// to `jr auth login`. `sprint remove` is used as the representative
+/// write-scope command (no board resolution needed — it calls
+/// `move_issues_to_backlog` directly), matching AC-001's "`jr sprint
+/// add`/`jr sprint remove`" family.
+///
+/// RED GATE: fails until the rewrite is wired into `jr sprint remove`.
+#[tokio::test]
+async fn test_bc_x_15_001_sprint_remove_401_scope_mismatch_names_missing_scope() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/backlog/issue"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Bearer test-oauth-access-token")
+        .args(["sprint", "remove", "FOO-1"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Scope-mismatch 401 should exit 2, got: {:?}; stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("write:board-scope:jira-software"),
+        "Expected 'write:board-scope:jira-software' scope hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "Expected 'jr auth login' re-consent guidance in stderr, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("github.com/Zious11/jira-cli/issues/185"),
+        "Must NOT surface the generic POST-framed InsufficientScope template, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+/// AC-004 (BC-X.15.001 Behavior clause 4): under Basic (API-token) auth, the
+/// SAME "scope does not match" 401 body used above must continue to surface
+/// via the pre-existing generic `InsufficientScope` path, unchanged.
+///
+/// BOUNDARY GUARD, not RED: passes today (no rewrite exists yet); pins the
+/// invariant the implementer's change must not violate.
+#[tokio::test]
+async fn test_bc_x_15_001_sprint_401_under_api_token_unaffected() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/backlog/issue"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["sprint", "remove", "FOO-1"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Scope-mismatch 401 under Basic auth should still exit 2, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Insufficient token scope"),
+        "Expected the OLD generic InsufficientScope template to fire for \
+         Basic auth, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("github.com/Zious11/jira-cli/issues/185"),
+        "Expected the OLD template's issue #185 reference for Basic auth, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("write:board-scope:jira-software"),
+        "The new OAuth-only granular-scope hint must NOT fire under Basic \
+         auth, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+/// AC-002 (BC-X.15.001 Behavior clause 2): a 401 without the scope-mismatch
+/// substring, under OAuth auth, must be left UNCHANGED to fall through to
+/// the existing auto-refresh coordinator.
+///
+/// See the identically-reasoned board.rs sibling
+/// (`test_bc_x_15_001_board_401_without_scope_substring_falls_through_to_refresh`
+/// in tests/board_commands.rs) for the full keyring-risk rationale. Gated
+/// behind `JR_RUN_KEYRING_TESTS=1` + `#[ignore]`; NOT executed as part of
+/// this Red Gate's default `cargo test` pass.
+///
+/// KEYRING GATE: `JR_RUN_KEYRING_TESTS=1 JR_SERVICE_NAME=<unique> cargo test \
+/// --test sprint_commands -- --ignored` to run for real.
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_bc_x_15_001_sprint_401_without_scope_substring_falls_through_to_refresh() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
+
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("JR_SERVICE_NAME", "jr-s4-agile-401-test");
+    }
+
+    let server = MockServer::start().await;
+
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var(
+            "JR_OAUTH_TOKEN_URL",
+            format!("{}/oauth/token/bc-x-15-001-sprint", server.uri()),
+        );
+    }
+
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/backlog/issue"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": [
+                "The access token provided is expired, revoked, malformed, \
+                 or invalid for other reasons."
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/oauth/token/bc-x-15-001-sprint"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": "invalid_grant"
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Bearer test-oauth-access-token")
+        .args(["sprint", "remove", "FOO-1"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure (no valid refresh token available), got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !stderr.contains("write:board-scope:jira-software"),
+        "The new call-site rewrite must NOT fire for a non-scope-mismatch \
+         401 — it must fall through to the auto-refresh coordinator, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("JR_OAUTH_TOKEN_URL");
+        std::env::remove_var("JR_SERVICE_NAME");
+    }
+}
+
 /// Helper: build N issues for testing.
 fn make_issues(count: usize) -> Vec<serde_json::Value> {
     (1..=count)

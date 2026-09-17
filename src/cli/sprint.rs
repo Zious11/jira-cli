@@ -113,7 +113,16 @@ async fn handle_add(
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> Result<()> {
-    client.add_issues_to_sprint(sprint_id, &issues).await?;
+    client
+        .add_issues_to_sprint(sprint_id, &issues)
+        .await
+        .map_err(|e| {
+            crate::cli::board::rewrite_agile_scope_error(
+                e,
+                client,
+                "write:board-scope:jira-software",
+            )
+        })?;
 
     match output_format {
         OutputFormat::Json => {
@@ -140,7 +149,9 @@ async fn handle_remove(
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> Result<()> {
-    client.move_issues_to_backlog(&issues).await?;
+    client.move_issues_to_backlog(&issues).await.map_err(|e| {
+        crate::cli::board::rewrite_agile_scope_error(e, client, "write:board-scope:jira-software")
+    })?;
 
     match output_format {
         OutputFormat::Json => {
@@ -159,7 +170,13 @@ async fn handle_list(
     client: &JiraClient,
     output_format: &OutputFormat,
 ) -> Result<()> {
-    let sprints = client.list_sprints(board_id, None).await?;
+    let sprints = client.list_sprints(board_id, None).await.map_err(|e| {
+        crate::cli::board::rewrite_agile_scope_error(
+            e,
+            client,
+            "read:sprint:jira-software, read:issue-details:jira, and read:jql:jira",
+        )
+    })?;
 
     let rows: Vec<Vec<String>> = sprints
         .iter()
@@ -222,7 +239,11 @@ async fn handle_current(
     all: bool,
 ) -> Result<()> {
     let effective_limit = crate::cli::resolve_effective_limit(limit, all);
-    let sprints = client.list_sprints(board_id, Some("active")).await?;
+    let sprint_scope_hint = "read:sprint:jira-software, read:issue-details:jira, and read:jql:jira";
+    let sprints = client
+        .list_sprints(board_id, Some("active"))
+        .await
+        .map_err(|e| crate::cli::board::rewrite_agile_scope_error(e, client, sprint_scope_hint))?;
 
     if sprints.is_empty() {
         bail!("No active sprint found for board {}.", board_id);
@@ -240,7 +261,8 @@ async fn handle_current(
     }
     let result = client
         .get_sprint_issues(sprint.id, None, effective_limit, &extra)
-        .await?;
+        .await
+        .map_err(|e| crate::cli::board::rewrite_agile_scope_error(e, client, sprint_scope_hint))?;
     let issues = result.issues;
     let has_more = result.has_more;
     let issue_count = issues.len();

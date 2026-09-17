@@ -89,6 +89,52 @@ pub async fn resolve_board_id(
     }
 }
 
+/// Rewrite an OAuth granular-scope-mismatch 401 (`JrError::InsufficientScope`)
+/// into an actionable `JrError::NotAuthenticated` hint naming the specific
+/// Agile/Jira-Software scope(s) missing for the failing `jr board`/`jr sprint`
+/// command family (BC-X.15.001, ADR-0026 Decision 3,
+/// S-cycle8-agile-scope-mismatch-error-mapping).
+///
+/// Modeled on `require_service_desk`'s auth-conditional-hint pattern
+/// (`src/api/jsm/servicedesks.rs::require_service_desk`), but narrower: only
+/// `JrError::InsufficientScope` is intercepted here — `NotAuthenticated`
+/// (the non-scope-mismatch 401 shape, including the transparent OAuth
+/// auto-refresh fall-through that happens inside `send_inner` before this
+/// call site ever sees the error) is left completely unchanged (AC-002).
+///
+/// Under Basic (API-token) auth, `client.is_oauth_auth()` is `false` and this
+/// function is a no-op passthrough — the pre-existing generic
+/// `InsufficientScope` Display template (issue #185) continues to surface
+/// unchanged (AC-004). `src/error.rs`'s `InsufficientScope` Display template
+/// and its two construction sites in `client.rs` are never modified by this
+/// function (AC-007) — it only matches on the existing variant and
+/// constructs a new `NotAuthenticated` in its place.
+///
+/// `missing_scopes` should read naturally in the sentence "...missing the
+/// required scope(s): {missing_scopes}." (e.g. a single scope, or an
+/// `", "`/`"and"`-joined list of scopes).
+pub(crate) fn rewrite_agile_scope_error(
+    err: anyhow::Error,
+    client: &JiraClient,
+    missing_scopes: &str,
+) -> anyhow::Error {
+    if !client.is_oauth_auth() {
+        return err;
+    }
+    match err.downcast::<JrError>() {
+        Ok(JrError::InsufficientScope { .. }) => anyhow::anyhow!(JrError::NotAuthenticated {
+            hint: format!(
+                "Your OAuth token is missing the required scope(s): {missing_scopes}. \
+                 Run `jr auth login` to re-consent with the required scopes — \
+                 `jr auth refresh` alone cannot add missing scopes (it re-mints with \
+                 the same granted scope set)."
+            ),
+        }),
+        Ok(other) => anyhow::anyhow!(other),
+        Err(other) => other,
+    }
+}
+
 /// Handle all board subcommands.
 pub async fn handle(
     command: BoardCommand,
@@ -130,7 +176,14 @@ async fn handle_list(
 ) -> Result<()> {
     let boards = client
         .list_boards(project_override, board_type_filter)
-        .await?;
+        .await
+        .map_err(|e| {
+            rewrite_agile_scope_error(
+                e,
+                client,
+                "read:board-scope:jira-software and read:project:jira",
+            )
+        })?;
 
     let rows: Vec<Vec<String>> = boards
         .iter()
@@ -184,7 +237,9 @@ async fn handle_view(
     let board_id =
         resolve_board_id(config, client, board_override, project_override, false).await?;
 
-    let board_config = client.get_board_config(board_id).await?;
+    let board_config = client.get_board_config(board_id).await.map_err(|e| {
+        rewrite_agile_scope_error(e, client, "read:board-scope.admin:jira-software")
+    })?;
     let board_type = board_config.board_type.to_lowercase();
 
     // Request the team field alongside issues so handle_view can surface a
