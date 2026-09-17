@@ -1818,3 +1818,102 @@ async fn assets_schema_type_substring_rejected() {
         "Expected candidate 'Server' in stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S-cycle8-assets-workspace-oauth-routing / BC-4.2.001 fix-table row 7
+// ---------------------------------------------------------------------------
+
+/// AC-001 (BC-4.2.001 fix-table row 7, ADR-0026 Decision 1): under an OAuth
+/// (3LO) profile, `base_url()` is the API gateway
+/// (`https://api.atlassian.com/ex/jira/<cloudId>`) and `instance_url()` is the
+/// real `*.atlassian.net` site host — the two diverge. Every authenticated Jira
+/// Cloud REST call must be routed through the gateway (`client.get`), never the
+/// site host (`client.get_from_instance`).
+///
+/// `get_or_fetch_workspace_id` (`src/api/assets/workspace.rs`) is the sole
+/// prerequisite call for the entire `jr assets *` command family. Today it
+/// calls `client.get_from_instance("/rest/servicedeskapi/assets/workspace")`,
+/// which targets `instance_url` — wrong under OAuth, and the reason `jr assets
+/// search/view/schemas/tickets`, `issue list --component`'s asset-clause path,
+/// and `issue create/edit --field :asset` resolution all 401 for OAuth users.
+///
+/// This test constructs the client via
+/// `JiraClient::new_for_test_with_instance_url` with `base_url != instance_url`,
+/// mounts an identical workspace-discovery mock on BOTH hosts, and asserts:
+///   1. the `base_url`-mounted mock receives exactly one request (positive
+///      control — proves the fix routes through the gateway), and
+///   2. the `instance_url`-mounted mock receives ZERO requests (negative
+///      control — proves the call never reaches the site host).
+///
+/// Red Gate (current code, `get_from_instance`): assertion 1 fails — the
+/// `base_url` mock receives 0 requests because the call is wrongly routed to
+/// `instance_url` instead.
+///
+/// Green Gate (after the `get_from_instance` -> `get` swap): both assertions
+/// pass.
+#[tokio::test]
+async fn test_bc_4_2_001_get_or_fetch_workspace_id_targets_base_url_under_oauth() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
+
+    // Represents the OAuth API gateway (what `base_url()` returns under OAuth).
+    let gateway_server = MockServer::start().await;
+    // Represents the real *.atlassian.net site host (what `instance_url()`
+    // returns under OAuth) — the workspace-discovery call must NEVER reach it.
+    let site_server = MockServer::start().await;
+
+    let workspace_body = json!({
+        "size": 1,
+        "start": 0,
+        "limit": 50,
+        "isLastPage": true,
+        "values": [{ "workspaceId": "ws-oauth-route-001" }]
+    });
+
+    // Mounted on BOTH hosts identically: if the call is (wrongly) routed to
+    // `site_server`, it would still succeed, so the test fails on the
+    // negative-control assertion below rather than on an unrelated HTTP error.
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(workspace_body.clone()))
+        .mount(&gateway_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(workspace_body))
+        .mount(&site_server)
+        .await;
+
+    let client = jr::api::client::JiraClient::new_for_test_with_instance_url(
+        &gateway_server.uri(),
+        &site_server.uri(),
+        "Bearer fake-oauth-token",
+    );
+    assert_ne!(
+        client.base_url(),
+        client.instance_url(),
+        "base_url and instance_url must diverge for this test to be meaningful"
+    );
+
+    let workspace_id = jr::api::assets::workspace::get_or_fetch_workspace_id(&client)
+        .await
+        .expect("workspace discovery should succeed against whichever host it reaches");
+    assert_eq!(workspace_id, "ws-oauth-route-001");
+
+    let gateway_requests = gateway_server.received_requests().await.unwrap();
+    assert_eq!(
+        gateway_requests.len(),
+        1,
+        "get_or_fetch_workspace_id must route through base_url (the OAuth API \
+         gateway) — got {} request(s) to the gateway host",
+        gateway_requests.len()
+    );
+
+    let site_requests = site_server.received_requests().await.unwrap();
+    assert!(
+        site_requests.is_empty(),
+        "negative control failed: get_or_fetch_workspace_id must NEVER hit \
+         instance_url (the site host) under OAuth — got {} request(s)",
+        site_requests.len()
+    );
+}

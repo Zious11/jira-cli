@@ -14,6 +14,20 @@ All notable changes to jr will be documented here.
   repo sets the variable to `'true'` to keep the nightly it has always run.
   See `docs/specs/fork-friendly-release-ops.md`.
 
+### Fixed
+
+- **`jr assets search/view/schemas/tickets`, `issue list --component`, and `issue create/edit
+  --field :asset` now work under OAuth (3LO) profiles (S-cycle8-assets-workspace-oauth-routing,
+  cycle-008, BC-4.2.001, ADR-0026 Decision 1):** `get_or_fetch_workspace_id`
+  (`src/api/assets/workspace.rs`) — the sole prerequisite workspace-ID discovery call for the
+  entire Assets command family — routed its `GET /rest/servicedeskapi/assets/workspace` request
+  through `instance_url` (the real `*.atlassian.net` site host) instead of `base_url` (the OAuth
+  API gateway). Under OAuth, those two hosts diverge and the site host rejects the gateway
+  bearer token with a 401, breaking every downstream Assets command before it could even reach
+  the (already gateway-correct) AQL/object layer. The call now routes through `base_url`, same
+  as every other gateway-scoped Jira Cloud REST call. No behavior change for API-token profiles,
+  where `base_url() == instance_url()`.
+
 ## [0.7.0-dev.7] - 2026-09-16
 
 ### Changed

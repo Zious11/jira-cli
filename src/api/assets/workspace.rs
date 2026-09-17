@@ -23,7 +23,7 @@ pub async fn get_or_fetch_workspace_id(client: &JiraClient) -> Result<String> {
     }
 
     let page: ServiceDeskPage<WorkspaceEntry> = client
-        .get_from_instance("/rest/servicedeskapi/assets/workspace")
+        .get("/rest/servicedeskapi/assets/workspace")
         .await
         .map_err(|e| {
             if let Some(JrError::ApiError { status, .. }) = e.downcast_ref::<JrError>()
