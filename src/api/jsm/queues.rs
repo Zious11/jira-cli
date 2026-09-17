@@ -21,7 +21,7 @@ impl JiraClient {
                 "{}?includeCount=true&start={}&limit={}",
                 base, start, page_size
             );
-            let page: ServiceDeskPage<Queue> = self.get_from_instance(&path).await?;
+            let page: ServiceDeskPage<Queue> = self.get(&path).await?;
             let has_more = page.has_more();
             let next = page.next_start();
             all.extend(page.values);
