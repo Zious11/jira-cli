@@ -76,6 +76,10 @@ All notable changes to jr will be documented here.
   the prior grant's scopes with the full requested union. This unblocks `jr board`,
   `jr sprint`, and `jr component create/edit/delete/rename` under OAuth (pending the
   routing/error-mapping fixes in this cycle's sibling stories where applicable).
+  **Re-consent behavior:** existing access tokens keep working with their
+  previously-granted scopes until expiry — the re-consent prompt above fires on the next
+  `jr auth login` or token refresh on an OAuth profile, not immediately on upgrade.
+  API-token profiles are unaffected.
   **RELEASE GATE:** the Atlassian Developer Console registration for the embedded `jr` OAuth
   app MUST be updated to include all 8 new scopes before this change ships in a tagged
   release — shipping without the Console update hard-fails `invalid_scope` for every OAuth
