@@ -370,7 +370,9 @@ async fn test_bc_x_15_001_sprint_resolve_board_id_401_scope_mismatch_rewrite() {
 /// AC-012(a) (BC-X.15.001 Behavior clause 1, widened): `sprint.rs::resolve_scrum_board`'s
 /// `get_board_config` call — shared by `sprint list`/`current`/`add`/`remove`
 /// — must get the SAME hint as `board.rs::handle_view`'s unconditional
-/// `get_board_config` call (AC-010): `read:board-scope.admin:jira-software`.
+/// `get_board_config` call (AC-010): the combined
+/// `read:board-scope.admin:jira-software and read:project:jira` scope hint
+/// (F-WAVE-4, per oauth-scope-matrix.md #53), not the admin scope alone.
 /// `--board 42` bypasses `resolve_board_id`'s own `list_boards` call so the
 /// mocked 401 is deterministically hit on `resolve_scrum_board`'s
 /// `get_board_config` call instead. Exercised via all three call paths that

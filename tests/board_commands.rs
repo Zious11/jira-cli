@@ -94,10 +94,12 @@ async fn test_bc_x_15_001_board_list_401_scope_mismatch_names_missing_scopes() {
 }
 
 /// AC-001 (BC-X.15.001 Behavior clause 1): `jr board view`'s config-fetch
-/// (`GET /rest/agile/1.0/board/{id}/configuration`, which requires
-/// `read:board-scope.admin:jira-software`) must get the same disambiguated
-/// rewrite. `--board <ID>` is used to bypass board auto-discovery so the
-/// mocked 401 is deterministically hit on the configuration call.
+/// (`GET /rest/agile/1.0/board/{id}/configuration`, which requires BOTH
+/// `read:board-scope.admin:jira-software` AND `read:project:jira` per
+/// oauth-scope-matrix.md #53) must get the same disambiguated rewrite,
+/// naming both scopes combined. `--board <ID>` is used to bypass board
+/// auto-discovery so the mocked 401 is deterministically hit on the
+/// configuration call.
 ///
 /// Note: the story text labels this command-family case "`jr board view
 /// --config`", but `BoardCommand::View` has no `--config` flag in the
