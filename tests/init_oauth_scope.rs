@@ -95,10 +95,7 @@ fn unique_test_service_name() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    format!(
-        "jr-test-init-scope-{pid}-{nanos}",
-        pid = std::process::id(),
-    )
+    format!("jr-test-init-scope-{pid}-{nanos}", pid = std::process::id(),)
 }
 
 /// Build a `jr init` command with full XDG/keychain isolation. Mirrors
@@ -155,11 +152,13 @@ async fn test_init_list_boards_401_scope_mismatch_names_missing_scopes() {
     Mock::given(method("GET"))
         .and(path("/oauth/token/accessible-resources"))
         .and(header("Authorization", "Bearer test-init-access-token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
-            "id": "cloud-init-scope-test",
-            "name": "Init Scope Test Co",
-            "url": "https://init-scope-test.atlassian.net",
-        }])))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "id": "cloud-init-scope-test",
+                "name": "Init Scope Test Co",
+                "url": "https://init-scope-test.atlassian.net",
+            }])),
+        )
         .mount(&server)
         .await;
 
@@ -194,7 +193,10 @@ async fn test_init_list_boards_401_scope_mismatch_names_missing_scopes() {
         .args(["init"])
         .env("JR_BASE_URL", server.uri())
         .env("JR_OAUTH_CODE", "test-init-scope-auth-code")
-        .env("JR_OAUTH_TOKEN_URL", format!("{}/oauth/token", server.uri()))
+        .env(
+            "JR_OAUTH_TOKEN_URL",
+            format!("{}/oauth/token", server.uri()),
+        )
         .env(
             "JR_ACCESSIBLE_RESOURCES_URL",
             format!("{}/oauth/token/accessible-resources", server.uri()),

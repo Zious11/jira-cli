@@ -177,7 +177,16 @@ pub async fn handle() -> Result<()> {
         .context("failed to prompt for project setup")?;
 
     if setup_project {
-        let boards = client.list_boards(None, None).await?;
+        // F-WG-1 (S-cycle8-agile-scope-mismatch-error-mapping, AC-015): mirrors
+        // `board.rs::handle_list`'s `list_boards` wrap mechanically — same
+        // endpoint, same required scopes, regardless of which command reaches it.
+        let boards = client.list_boards(None, None).await.map_err(|e| {
+            crate::cli::board::rewrite_agile_scope_error(
+                e,
+                &client,
+                "read:board-scope:jira-software and read:project:jira",
+            )
+        })?;
         if boards.is_empty() {
             eprintln!("No boards found. You can configure .jr.toml manually.");
         } else {

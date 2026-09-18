@@ -49,6 +49,18 @@ All notable changes to jr will be documented here.
   auto-refresh fall-through, or to any other command family's 401 handling —
   `src/error.rs`'s shared `InsufficientScope` template and
   `src/cli/issue/jsm_create.rs`'s existing OAuth rewrite (BC-3.8.015) are unchanged.
+  **Coverage widened a second time (wave-level finding F-WG-1, human-approved scope
+  amendment, same day, 2026-09-17, AC-013..015):** the same shared rewrite now also
+  covers two command families entirely outside the `jr board`/`jr sprint` boundary that
+  make the identical Agile HTTP calls — `jr issue list`'s board-resolution/board-based-JQL
+  path (`src/cli/issue/list.rs::handle_list`'s `get_board_config` and `list_sprints`
+  calls, reached when `--jql` is absent and `board_id` is configured) and `jr init`'s
+  per-project setup prompt (`src/cli/init.rs::handle`'s `list_boards` call for the board
+  selection list). Each site surfaces the same granular hint as its `board.rs`/`sprint.rs`
+  sibling calling the identical endpoint — no new scope strings, no new detection rule.
+  Non-scope-mismatch failures at these two `issue list` call sites keep their pre-existing
+  "Failed to fetch config for board..."/"Failed to list sprints..." context messages
+  unchanged; `jr init`'s `list_boards` call had no prior error mapping to preserve.
 
 ### Changed
 
