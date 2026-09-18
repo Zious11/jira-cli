@@ -83,7 +83,7 @@ sha1 = { version = "^0.11" }
 # now that the floor has moved. It IS enforced by the msrv CI job: as a [dev-dependencies]
 # entry it now genuinely compiles and is checked under the job's widened
 # `--all-targets` `cargo check` scope.) See CLAUDE.md ci-gate bullet / AC-006.
-saphyr-parser = "=0.0.11"
+saphyr-parser = "=0.0.12"
 # libc: already a resolved transitive dependency (pulled in by tokio/reqwest on
 # Unix; 0.2.183 in Cargo.lock) but Rust requires an explicit Cargo.toml edge
 # before `use libc::...` compiles from test code. Adds ZERO new crates to the
