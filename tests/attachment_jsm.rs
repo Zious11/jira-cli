@@ -5026,3 +5026,212 @@ async fn test_ec_3_9_006_7_step2_429_no_retry_exactly_one_post() {
          to prove the two-step flow reached step-2; got {step1_count} call(s)"
     );
 }
+
+// ─── S-cycle8-jsm-attachments-oauth-verification (BC-4.2.001, transitive) ──
+//
+// Verification-only story (tdd_mode: facade, ZERO src/ changes). Proves the
+// full JSM attachment two-step upload flow succeeds end-to-end under an
+// OAuth-constructed client (base_url != instance_url) now that
+// S-cycle8-jsm-servicedeskapi-oauth-routing (issue #831, PR #833, merged to
+// develop as 4afc5aa5) has fixed `list_service_desks` to target `base_url`
+// (the OAuth API gateway) instead of `instance_url` (the site host).
+//
+// Unlike the CLI-subprocess tests above (which use JR_BASE_URL and therefore
+// cannot express base_url != instance_url — from_config() routes that single
+// override to BOTH fields), this test calls the underlying orchestration
+// functions directly against a client built with
+// `JiraClient::new_for_test_with_instance_url`, mirroring the pattern
+// established by `tests/jsm_request_api.rs`'s own S-cycle8 AC-001..006 tests.
+//
+// Chain exercised: resolve_service_desk_id -> get_or_fetch_project_meta
+// (GET .../project/{key} -> list_service_desks) -> attach_temporary_file
+// (step 1) -> post_request_attachment (step 2). Identical success mocks are
+// mounted on BOTH base_url and instance_url servers (same technique as
+// jsm_request_api.rs) so the flow succeeds regardless of which host is
+// actually targeted; the assertions on received-request counts are what
+// prove the routing is correct.
+//
+// `get_or_fetch_project_meta` reads/writes the per-profile project-meta
+// cache (`cache::read_project_meta`/`write_project_meta`), so this test
+// isolates `JR_CACHE_DIR` to a fresh `TempDir` via the same
+// mutex-guarded-`unsafe` pattern used by `tests/project_meta.rs`, to
+// guarantee a cache miss (forcing the real HTTP chain, including
+// `list_service_desks`) and to avoid racing other tests in this binary.
+
+/// Serializes access to process-global cache-dir env vars for the one
+/// in-process (non-subprocess) test below. All other tests in this file use
+/// `assert_cmd::Command::env(...)`, which scopes env vars to the child
+/// process only, so this mutex only needs to guard this test against itself
+/// (kept for consistency with `tests/project_meta.rs`'s established pattern,
+/// and to fail loudly rather than racily if a future test in this file also
+/// needs process-global env isolation).
+static ATTACHMENT_JSM_OAUTH_ENV_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Counts requests captured by a `MockServer` matching an exact method + path.
+async fn count_requests_to_oauth(server: &wiremock::MockServer, method: &str, path: &str) -> usize {
+    server
+        .received_requests()
+        .await
+        .expect("wiremock must record requests")
+        .iter()
+        .filter(|r| r.method.as_str().eq_ignore_ascii_case(method) && r.url.path() == path)
+        .count()
+}
+
+/// AC-001 — `jr issue attachment upload --public` on a JSM issue completes
+/// both steps of the servicedeskapi two-step flow end-to-end under OAuth
+/// (base_url != instance_url): `list_service_desks` (fixed by the depended-on
+/// story) -> `get_or_fetch_project_meta` -> `resolve_service_desk_id` ->
+/// `attach_temporary_file` -> `post_request_attachment`. Every request in the
+/// chain must land on `base_url`; `instance_url` must receive zero requests.
+///
+/// Traces: BC-4.2.001 (transitive), ADR-0026 Decision 1.
+#[tokio::test(flavor = "current_thread")]
+async fn test_bc_4_2_001_jsm_attachment_upload_succeeds_end_to_end_under_oauth() {
+    let _env_guard = ATTACHMENT_JSM_OAUTH_ENV_MUTEX.lock().await;
+    let cache_dir = TempDir::new().unwrap();
+    // SAFETY: `_env_guard` (held for the whole test body, past every `.await`)
+    // serializes this env mutation against any other in-process test in this
+    // binary that might touch JR_CACHE_DIR; no other test in this file does.
+    unsafe {
+        std::env::set_var("JR_CACHE_DIR", cache_dir.path().join("jr"));
+    }
+
+    let base_server = MockServer::start().await;
+    let instance_server = MockServer::start().await;
+
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("upload.txt");
+    std::fs::write(&file, b"data").unwrap();
+
+    const PROJECT_KEY: &str = "EJOAUTH";
+    const ISSUE_KEY: &str = "EJOAUTH-1";
+    const SD_ID: &str = "77";
+    const PROJECT_ID: &str = "10077";
+
+    for server in [&base_server, &instance_server] {
+        // get_or_fetch_project_meta: GET /rest/api/3/project/{key}
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/api/3/project/{PROJECT_KEY}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(jsm_project_response(PROJECT_KEY, PROJECT_ID)),
+            )
+            .mount(server)
+            .await;
+
+        // list_service_desks: GET /rest/servicedeskapi/servicedesk
+        // (this is the exact call S-cycle8-jsm-servicedeskapi-oauth-routing fixed
+        // to target base_url instead of instance_url.)
+        Mock::given(method("GET"))
+            .and(path("/rest/servicedeskapi/servicedesk"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(service_desk_list_response(SD_ID, PROJECT_ID)),
+            )
+            .mount(server)
+            .await;
+
+        // Step 1: attachTemporaryFile.
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/rest/servicedeskapi/servicedesk/{SD_ID}/attachTemporaryFile"
+            )))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "temporaryAttachments": [{"temporaryAttachmentId": "tmp-oauth-001", "fileName": "upload.txt"}]
+            })))
+            .mount(server)
+            .await;
+
+        // Step 2: request-attachment POST.
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/rest/servicedeskapi/request/{ISSUE_KEY}/attachment"
+            )))
+            .and(body_partial_json(serde_json::json!({"public": true})))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                    attachment_object("30001", "upload.txt"),
+                ])),
+            )
+            .mount(server)
+            .await;
+    }
+
+    let client = jr::api::client::JiraClient::new_for_test_with_instance_url(
+        &base_server.uri(),
+        &instance_server.uri(),
+        "Basic dGVzdDp0ZXN0",
+    );
+
+    // Full dependency chain: resolve_service_desk_id -> get_or_fetch_project_meta
+    // (GET project -> list_service_desks) -> attach_temporary_file -> post_request_attachment.
+    let sd_id = jr::api::jsm::servicedesks::resolve_service_desk_id(&client, PROJECT_KEY)
+        .await
+        .expect("resolve_service_desk_id should succeed under OAuth once S1's fix is present");
+    assert_eq!(sd_id, SD_ID);
+
+    let tmp_id = jr::api::jsm::attachments::attach_temporary_file(&client, &sd_id, &file)
+        .await
+        .expect("attach_temporary_file (step 1) should succeed");
+
+    let attachments =
+        jr::api::jsm::attachments::post_request_attachment(&client, ISSUE_KEY, &[tmp_id], true)
+            .await
+            .expect("post_request_attachment (step 2) should succeed");
+
+    assert_eq!(
+        attachments.len(),
+        1,
+        "expected exactly one uploaded attachment"
+    );
+
+    // Every base_url endpoint in the chain must have been hit exactly once.
+    for (m, p) in [
+        ("GET", format!("/rest/api/3/project/{PROJECT_KEY}")),
+        ("GET", "/rest/servicedeskapi/servicedesk".to_string()),
+        (
+            "POST",
+            format!("/rest/servicedeskapi/servicedesk/{SD_ID}/attachTemporaryFile"),
+        ),
+        (
+            "POST",
+            format!("/rest/servicedeskapi/request/{ISSUE_KEY}/attachment"),
+        ),
+    ] {
+        let base_calls = count_requests_to_oauth(&base_server, m, &p).await;
+        assert_eq!(
+            base_calls, 1,
+            "AC-001: {m} {p} must be hit exactly once against base_url (OAuth gateway); \
+             got {base_calls}"
+        );
+    }
+
+    // Negative control: instance_url must receive ZERO requests across the whole chain.
+    for (m, p) in [
+        ("GET", format!("/rest/api/3/project/{PROJECT_KEY}")),
+        ("GET", "/rest/servicedeskapi/servicedesk".to_string()),
+        (
+            "POST",
+            format!("/rest/servicedeskapi/servicedesk/{SD_ID}/attachTemporaryFile"),
+        ),
+        (
+            "POST",
+            format!("/rest/servicedeskapi/request/{ISSUE_KEY}/attachment"),
+        ),
+    ] {
+        let instance_calls = count_requests_to_oauth(&instance_server, m, &p).await;
+        assert_eq!(
+            instance_calls, 0,
+            "AC-001 negative control: instance_url must receive ZERO requests for {m} {p}; \
+             got {instance_calls}. A non-zero count here means some call in the JSM attachment \
+             chain is still routing through instance_url instead of base_url (OAuth gateway)."
+        );
+    }
+
+    // SAFETY: paired with the set_var above; runs before `_env_guard` is dropped.
+    unsafe {
+        std::env::remove_var("JR_CACHE_DIR");
+    }
+}
