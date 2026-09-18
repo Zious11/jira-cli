@@ -8,6 +8,12 @@ impl JiraClient {
     ///
     /// Optionally filter by `project_key` (`projectKeyOrId` query param) and/or
     /// `board_type` (`type` query param, e.g. `"scrum"` or `"kanban"`).
+    ///
+    /// BC-X.15.001 (FIX-F5-001 F3): the CLI scope-hint rewrite
+    /// (`cli::board::rewrite_agile_scope_error`) now scans the whole anyhow
+    /// error chain, not only the top-level error — adding `.context()` here
+    /// is safe, but keep `JrError::InsufficientScope` reachable somewhere in
+    /// the returned chain.
     pub async fn list_boards(
         &self,
         project_key: Option<&str>,
@@ -43,6 +49,12 @@ impl JiraClient {
     }
 
     /// Get the configuration for a specific board.
+    ///
+    /// BC-X.15.001 (FIX-F5-001 F3): the CLI scope-hint rewrite
+    /// (`cli::board::rewrite_agile_scope_error`) now scans the whole anyhow
+    /// error chain, not only the top-level error — adding `.context()` here
+    /// is safe, but keep `JrError::InsufficientScope` reachable somewhere in
+    /// the returned chain.
     pub async fn get_board_config(&self, board_id: u64) -> Result<BoardConfig> {
         let path = format!("/rest/agile/1.0/board/{}/configuration", board_id);
         self.get(&path).await

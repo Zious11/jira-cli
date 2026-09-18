@@ -122,6 +122,18 @@ pub async fn resolve_board_id(
 /// `missing_scopes` should read naturally in the sentence "...missing the
 /// required scope(s): {missing_scopes}." (e.g. a single scope, or an
 /// `", "`/`"and"`-joined list of scopes).
+///
+/// **Chain-aware (FIX-F5-001 F3, cycle-008 F5 Pass 1):** matches
+/// `JrError::InsufficientScope` ANYWHERE in `err`'s anyhow chain, not only at
+/// the top. Today every Agile API function (`list_boards`, `get_board_config`,
+/// `list_sprints`, `get_sprint_issues`, `add_issues_to_sprint`,
+/// `move_issues_to_backlog`) returns the error raw via `?` with no
+/// `.context()`, so `InsufficientScope` already sits at chain-top and this is
+/// behaviorally byte-identical to a top-level-only downcast. The chain scan
+/// exists so that if a future maintainer adds `.context(...)` to any of those
+/// six functions, the hint keeps firing instead of silently reverting to the
+/// generic template with no test failure. See
+/// `is_insufficient_scope_error` below.
 pub(crate) fn rewrite_agile_scope_error(
     err: anyhow::Error,
     client: &JiraClient,
@@ -130,18 +142,29 @@ pub(crate) fn rewrite_agile_scope_error(
     if !client.is_oauth_auth() {
         return err;
     }
-    match err.downcast::<JrError>() {
-        Ok(JrError::InsufficientScope { .. }) => anyhow::anyhow!(JrError::NotAuthenticated {
+    if is_insufficient_scope_error(&err) {
+        return anyhow::anyhow!(JrError::NotAuthenticated {
             hint: format!(
                 "Your OAuth token is missing the required scope(s): {missing_scopes}. \
                  Run `jr auth login` to re-consent with the required scopes — \
                  `jr auth refresh` alone cannot add missing scopes (it re-mints with \
                  the same granted scope set)."
             ),
-        }),
-        Ok(other) => anyhow::anyhow!(other),
-        Err(other) => other,
+        });
     }
+    err
+}
+
+/// True if `err`'s anyhow chain contains a `JrError::InsufficientScope`
+/// anywhere — not only as the top-level error (FIX-F5-001 F3, cycle-008 F5
+/// Pass 1). Shared by `rewrite_agile_scope_error` above and by the two
+/// `issue/list.rs` scope-hint call sites (`handle_list`'s board-config and
+/// sprint-list scope checks) so both stay chain-aware without duplicating the
+/// traversal logic.
+pub(crate) fn is_insufficient_scope_error(err: &anyhow::Error) -> bool {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<JrError>())
+        .is_some_and(|jr_err| matches!(jr_err, JrError::InsufficientScope { .. }))
 }
 
 /// Handle all board subcommands.
@@ -465,5 +488,110 @@ mod tests {
         let result = rewrite_agile_scope_error(err, &client, "read:board-scope:jira-software");
 
         assert_eq!(result.to_string(), "some generic non-JrError failure");
+    }
+
+    // -----------------------------------------------------------------
+    // FIX-F5-001 (cycle-008 F5 Pass 1)
+    // -----------------------------------------------------------------
+
+    /// F3: `rewrite_agile_scope_error` must fire the granular scope hint
+    /// even when `JrError::InsufficientScope` is wrapped with `.context(...)`
+    /// rather than sitting at the top of the anyhow chain. This would FAIL
+    /// against the old `err.downcast::<JrError>()` (top-level-only) — that
+    /// downcast fails whenever the top of the chain is the `Context` wrapper
+    /// anyhow's `.context()` produces, not the original `JrError` value, so
+    /// the hint would silently revert to a plain pass-through. Guards
+    /// against a future maintainer adding `.context()` to any of the six
+    /// Agile API functions and silently defeating the hint with no test
+    /// failure.
+    #[test]
+    fn test_rewrite_agile_scope_error_fires_through_context_wrapped_chain() {
+        let client =
+            JiraClient::new_for_test("http://example.invalid".into(), "Bearer test-token".into());
+        assert!(
+            client.is_oauth_auth(),
+            "test client must be OAuth-shaped (Bearer) for this chain-traversal guard to be meaningful"
+        );
+
+        let raw_err = anyhow::anyhow!(JrError::InsufficientScope {
+            message: "Unauthorized; scope does not match".to_string(),
+            required_scope: None,
+        });
+        // Simulate a future maintainer adding `.context(...)` to one of the
+        // six Agile API functions — this wraps the `JrError` so it is no
+        // longer the top-level error in the chain.
+        let wrapped_err =
+            raw_err.context("Failed to list sprints for board 42. Use --jql to query directly.");
+
+        let result = rewrite_agile_scope_error(wrapped_err, &client, "read:sprint:jira-software");
+
+        match result.downcast::<JrError>() {
+            Ok(JrError::NotAuthenticated { hint }) => {
+                assert!(
+                    hint.contains("read:sprint:jira-software"),
+                    "expected granular scope hint to survive context-wrapping, got: {hint}"
+                );
+                assert!(
+                    hint.contains("jr auth login"),
+                    "expected re-consent guidance in hint, got: {hint}"
+                );
+            }
+            other => panic!(
+                "expected the granular hint to fire even through a context-wrapped chain, got: {other:?}"
+            ),
+        }
+    }
+
+    /// F1 (cycle-008 F5 Pass 1): pins the exact scope-hint string used at
+    /// `src/cli/init.rs`'s `list_boards` call site
+    /// (`"read:board-scope:jira-software and read:project:jira"`, byte-for-
+    /// byte identical to `handle_list`'s call). `jr init`'s own call site is
+    /// covered end-to-end only by the keyring-gated, `#[ignore]`d
+    /// `tests/init_oauth_scope.rs::
+    /// test_init_list_boards_401_scope_mismatch_names_missing_scopes` (never
+    /// run in CI) — this CI-running unit test exercises the shared rewrite
+    /// helper directly with the init-relevant scope string so the mapping
+    /// logic itself has always-on coverage. It does NOT close the residual
+    /// gap where a mutant deleting init.rs's `.map_err(...)` call would
+    /// still survive `cargo test`/PR-diff mutation runs — that gap is
+    /// tracked as a justified, documented deferral (see the guard comment at
+    /// the `list_boards` call site in `src/cli/init.rs`).
+    #[test]
+    fn test_rewrite_agile_scope_error_fires_for_init_list_boards_scope_string() {
+        let client =
+            JiraClient::new_for_test("http://example.invalid".into(), "Bearer test-token".into());
+        assert!(
+            client.is_oauth_auth(),
+            "test client must be OAuth-shaped (Bearer) for this guard to be meaningful"
+        );
+
+        let err = anyhow::anyhow!(JrError::InsufficientScope {
+            message: "Unauthorized; scope does not match".to_string(),
+            required_scope: None,
+        });
+
+        let result = rewrite_agile_scope_error(
+            err,
+            &client,
+            "read:board-scope:jira-software and read:project:jira",
+        );
+
+        match result.downcast::<JrError>() {
+            Ok(JrError::NotAuthenticated { hint }) => {
+                assert!(
+                    hint.contains("read:board-scope:jira-software"),
+                    "expected 'read:board-scope:jira-software' in hint, got: {hint}"
+                );
+                assert!(
+                    hint.contains("read:project:jira"),
+                    "expected 'read:project:jira' in hint, got: {hint}"
+                );
+                assert!(
+                    hint.contains("jr auth login"),
+                    "expected 'jr auth login' re-consent guidance in hint, got: {hint}"
+                );
+            }
+            other => panic!("expected the granular hint to fire, got: {other:?}"),
+        }
     }
 }

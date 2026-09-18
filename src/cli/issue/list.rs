@@ -479,11 +479,13 @@ pub(super) async fn handle_list(
                                 // anyhow chain) shows the hint. A non-scope-mismatch
                                 // failure is untouched and keeps its existing
                                 // "Failed to list sprints..." context (AC-002).
+                                // FIX-F5-001 F3 (cycle-008 F5 Pass 1): scans
+                                // the whole anyhow chain, not only the
+                                // top-level error, so a future `.context()`
+                                // added to `list_sprints` doesn't silently
+                                // defeat this check.
                                 let is_scope_mismatch = client.is_oauth_auth()
-                                    && matches!(
-                                        e.downcast_ref::<JrError>(),
-                                        Some(JrError::InsufficientScope { .. })
-                                    );
+                                    && crate::cli::board::is_insufficient_scope_error(&e);
                                 if is_scope_mismatch {
                                     return Err(crate::cli::board::rewrite_agile_scope_error(
                                         e,
@@ -520,11 +522,12 @@ pub(super) async fn handle_list(
                     // is never misread as a not-found board. Non-scope-mismatch
                     // failures (404, 500, Basic-auth, etc.) are untouched (AC-002,
                     // AC-004).
+                    // FIX-F5-001 F3 (cycle-008 F5 Pass 1): scans the whole
+                    // anyhow chain, not only the top-level error, so a future
+                    // `.context()` added to `get_board_config` doesn't
+                    // silently defeat this check.
                     let is_scope_mismatch = client.is_oauth_auth()
-                        && matches!(
-                            e.downcast_ref::<JrError>(),
-                            Some(JrError::InsufficientScope { .. })
-                        );
+                        && crate::cli::board::is_insufficient_scope_error(&e);
                     if is_scope_mismatch {
                         return Err(crate::cli::board::rewrite_agile_scope_error(
                             e,
