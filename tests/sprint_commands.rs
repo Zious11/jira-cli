@@ -413,10 +413,15 @@ async fn test_bc_x_15_001_resolve_scrum_board_get_board_config_401_scope_mismatc
              should exit 2 for args {args:?}, got: {:?}; stderr: {stderr}",
             output.status.code()
         );
+        // F-WAVE-4: `get_board_config` requires BOTH
+        // `read:board-scope.admin:jira-software` AND `read:project:jira`
+        // (per oauth-scope-matrix.md #53) — the hint must name both, not
+        // just the admin scope. RED until sprint.rs::resolve_scrum_board's
+        // hint is widened.
         assert!(
-            stderr.contains("read:board-scope.admin:jira-software"),
-            "Expected 'read:board-scope.admin:jira-software' scope hint in stderr \
-             for args {args:?}, got: {stderr}"
+            stderr.contains("read:board-scope.admin:jira-software and read:project:jira"),
+            "Expected combined 'read:board-scope.admin:jira-software and read:project:jira' \
+             scope hint in stderr (F-WAVE-4) for args {args:?}, got: {stderr}"
         );
         assert!(
             stderr.contains("jr auth login"),

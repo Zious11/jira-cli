@@ -582,6 +582,153 @@ async fn test_send_caps_refresh_at_one_attempt_when_retry_also_401() {
     // MockServer drop: if 2 refresh calls were made (loop), expect(1) fails.
 }
 
+/// F-WAVE-1 (cycle-008 wave-gate fix) — the "double fault" scenario: an OAuth
+/// token that is BOTH expired AND under-scoped.
+///
+/// Sequence:
+/// 1. First `GET /rest/api/3/myself` returns 401 with an EXPIRED-TOKEN body
+///    (no "scope does not match" substring) — `send_inner`'s pre-refresh scope
+///    check does NOT fire, so auto-refresh proceeds.
+/// 2. Refresh succeeds (mocked 200, new access token).
+/// 3. The retry with the refreshed-but-still-under-scoped token returns 401
+///    whose body DOES contain "scope does not match" — the confirmed live
+///    wire shape for an Agile under-scope rejection (live-verified this
+///    session): `{"code":401,"message":"Unauthorized; scope does not match"}`.
+///
+/// DESIRED (post-fix) behavior: `send_inner`'s post-refresh 401 handler must
+/// re-run the same case-insensitive "scope does not match" body check the
+/// pre-refresh path already runs (client.rs ~L767-778) and return
+/// `JrError::InsufficientScope` in that case — NOT `JrError::NotAuthenticated`
+/// with the "run 'jr auth refresh'" hint (refresh cannot fix a scope
+/// problem, and re-running `jr auth refresh` would just repeat this exact
+/// double fault). This also lets `board.rs::rewrite_agile_scope_error`
+/// (which matches only on `JrError::InsufficientScope`) fire its granular
+/// scope hint for Agile call sites — today it never fires for this sequence
+/// because the post-refresh path bypasses classification entirely.
+///
+/// RED GATE (fails against current code, `src/api/client.rs` ~L848-856):
+/// the post-refresh `retry_response.status() == StatusCode::UNAUTHORIZED`
+/// arm unconditionally returns `JrError::NotAuthenticated { hint: "run 'jr
+/// auth refresh' to re-authenticate" }` without reading `retry_response`'s
+/// body at all — so this test's `err_str` will contain "not authenticated"
+/// and the refresh hint, and will NOT contain "insufficient token scope",
+/// making both assertions below fail.
+///
+/// NOTE ON UNIT-LEVEL COVERAGE: this is necessarily a keyring-gated
+/// integration test, not a pure unit test, because the ONLY way to reach
+/// the buggy branch is through the full `send_inner` auto-refresh path,
+/// which unconditionally touches the OS keychain twice: (1)
+/// `resolve_refresh_app_credentials` reads it to look for BYO OAuth app
+/// credentials before falling back to embedded/empty, and (2)
+/// `refresh_oauth_token_with_url` calls `store_oauth_tokens` to persist the
+/// (mock-)rotated tokens after a successful refresh. There is currently no
+/// pure, non-async, non-I/O seam that isolates "given this 401 response
+/// body, classify it as InsufficientScope or NotAuthenticated" — the
+/// nearest existing candidate, `JiraClient::parse_error`, already implements
+/// this classification correctly (see its 401 branch, `src/api/client.rs`
+/// ~L1040-1055) but is a private async fn taking an owned `reqwest::Response`
+/// (not constructible outside a real HTTP round-trip), AND it is not even
+/// the buggy code path — the post-refresh handler bypasses `parse_error`
+/// entirely for its 401 branch. Recommended fix shape for the implementer
+/// (test-writer must not implement this — no src/ changes here): extract a
+/// pure, sync helper such as
+/// `fn classify_401_body(message: &str, not_authenticated_hint: &str) -> JrError`
+/// that both the pre-refresh check (~L767-778), `parse_error`'s 401 branch
+/// (~L1040-1055), AND the post-refresh handler (~L848-856) call — the
+/// `not_authenticated_hint` parameter lets each call site keep its own
+/// existing NotAuthenticated hint text ("Run \"jr auth login\" to connect."
+/// pre-refresh/parse_error vs "run 'jr auth refresh' to re-authenticate"
+/// post-refresh) while sharing the "scope does not match" classification
+/// logic. Once that helper exists, add a companion pure `#[test]` (no
+/// `#[ignore]`, no keyring, no async) directly asserting
+/// `classify_401_body("...scope does not match...", "x")` matches
+/// `JrError::InsufficientScope { .. }` — that pure test would then be the
+/// CI-running, mutation-covered test this docblock currently cannot provide.
+#[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+async fn test_bc_wave1_expired_and_under_scoped_token_classifies_as_insufficient_scope_not_not_authenticated()
+ {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
+    let _env_guard = harness::env_lock().lock().await;
+
+    use jr::api::client::JiraClient;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    set_env(
+        "JR_OAUTH_TOKEN_URL",
+        &format!("{}/oauth/token/fwave1", server.uri()),
+    );
+
+    // Step 1: first call returns an EXPIRED-TOKEN 401 (no scope-mismatch
+    // substring) — the pre-refresh scope check must NOT fire here, so
+    // auto-refresh proceeds. `up_to_n_times(1)` ensures the retry (step 3)
+    // hits the second mock below, not this one.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_string(harness::ATLASSIAN_401_BODY)
+                .insert_header("content-type", "application/json"),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Step 2: refresh succeeds exactly once (no second refresh attempt —
+    // one-attempt cap).
+    Mock::given(method("POST"))
+        .and(path("/oauth/token/fwave1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(harness::refresh_ok_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Step 3: the retry with the refreshed-but-still-under-scoped token
+    // gets the confirmed live Agile-under-scope wire shape.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_string(r#"{"code":401,"message":"Unauthorized; scope does not match"}"#)
+                .insert_header("content-type", "application/json"),
+        )
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), harness::INITIAL_BEARER.to_string());
+
+    let result = client.get::<serde_json::Value>("/rest/api/3/myself").await;
+
+    assert!(
+        result.is_err(),
+        "F-WAVE-1 FAIL: double-fault (expired + under-scoped) request must fail"
+    );
+
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.to_lowercase().contains("insufficient token scope")
+            || err_str.to_lowercase().contains("scope does not match"),
+        "F-WAVE-1 FAIL: post-refresh 401 whose body contains \"scope does not \
+         match\" must classify as InsufficientScope (a scope problem that \
+         `jr auth refresh` cannot fix), not NotAuthenticated. Got: {err_str}"
+    );
+    assert!(
+        !err_str.to_lowercase().contains("not authenticated"),
+        "F-WAVE-1 FAIL: must NOT surface the generic NotAuthenticated/\"run \
+         'jr auth refresh'\" message for a scope-mismatch body — that hint is \
+         actively misleading here (refresh already ran and cannot add scopes). \
+         Got: {err_str}"
+    );
+    // MockServer drop: verifies exactly 1 refresh call (no thundering-herd /
+    // second-refresh recursion) via the `.expect(1)` on the token mock.
+}
+
 /// AC-004 variant 2 — traces to BC-1.1.002 (one-attempt cap: refresh fails, no retry).
 ///
 /// Refresh fails (invalid_grant). No retry. `send()` surfaces `NotAuthenticated`.
