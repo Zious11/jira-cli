@@ -87,7 +87,7 @@ async fn resolve_scrum_board(
         crate::cli::board::rewrite_agile_scope_error(
             e,
             client,
-            "read:board-scope.admin:jira-software",
+            "read:board-scope.admin:jira-software and read:project:jira",
         )
     })?;
     let board_type = board_config.board_type.to_lowercase();

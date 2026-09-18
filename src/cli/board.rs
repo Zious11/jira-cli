@@ -247,7 +247,11 @@ async fn handle_view(
         resolve_board_id(config, client, board_override, project_override, false).await?;
 
     let board_config = client.get_board_config(board_id).await.map_err(|e| {
-        rewrite_agile_scope_error(e, client, "read:board-scope.admin:jira-software")
+        rewrite_agile_scope_error(
+            e,
+            client,
+            "read:board-scope.admin:jira-software and read:project:jira",
+        )
     })?;
     let board_type = board_config.board_type.to_lowercase();
 
