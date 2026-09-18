@@ -6,6 +6,26 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **OAuth "double-fault" (expired token AND under-scoped) no longer surfaces a misleading
+  `jr auth refresh` hint (BC-X.15.001 EC-X.15.001-2, ADR-0026, S-cycle8-wave-gate-double-fault-fix):**
+  when a request's *first* 401 triggered an auto-refresh, and the *retry* after that refresh
+  also came back 401 because the underlying OAuth grant is missing a required scope (not just
+  because the token had expired), `jr` previously always reported the retry's 401 as
+  `NotAuthenticated` with a "run `jr auth refresh`" hint — masking the real problem, since
+  refreshing a correctly-scoped-but-expired token would never fix a scope gap. The post-refresh
+  401 body is now re-classified through the same pure `classify_401_body` helper used
+  pre-refresh: a body containing `"scope does not match"` (case-insensitive) now surfaces
+  `InsufficientScope` with its granular per-command scope hint, exactly as an initial-request
+  scope-mismatch 401 already did. Refresh semantics (single-flight coordination, single-use
+  refresh tokens, one-attempt cap, `invalid_grant` handling) are unchanged; `src/error.rs` is
+  untouched. Covered by 7 new pure unit tests on `classify_401_body` plus an updated
+  keyring-gated integration test.
+- **`jr sprint`'s `get_board_config` scope hint widened to match `jr board`'s
+  (BC-X.15.001, ADR-0026, oauth-scope-matrix #53, S-cycle8-wave-gate-double-fault-fix):**
+  `src/cli/board.rs::handle_view` and `src/cli/sprint.rs::resolve_scrum_board` now both hint
+  `read:board-scope.admin:jira-software and read:project:jira` on a `get_board_config`
+  scope-mismatch 401 — previously only one of the two call sites named the full pair of
+  scopes actually required by that endpoint.
 - **`jr board`/`jr sprint` surface an actionable scope hint on an OAuth granular-scope
   401, instead of the generic POST-framed `InsufficientScope` message
   (BC-X.15.001, ADR-0026 Decision 3, S-cycle8-agile-scope-mismatch-error-mapping):** when a
