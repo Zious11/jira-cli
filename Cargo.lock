@@ -1236,7 +1236,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "urlencoding",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "wiremock",
 ]
 
@@ -1690,7 +1690,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
