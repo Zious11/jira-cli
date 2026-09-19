@@ -62,7 +62,7 @@
 # SELF-TEST: pass --self-test to run the built-in fixture suite (proves the
 # decision logic is not a no-op; modeled on
 # scripts/check-signing-workflow-injection.sh's --self-test convention,
-# DEC-148/DEC-150 pattern). Wired into `spec-guard` (NOT `ci-gate` — a gate
+# D-148/D-150 pattern). Wired into `spec-guard` (NOT `ci-gate` — a gate
 # cannot depend on a job that depends on it).
 #
 # --print-allowed-skips: emits one job name per line from the ALLOWED_SKIPS

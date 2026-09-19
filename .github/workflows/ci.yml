@@ -328,7 +328,7 @@ jobs:
         run: bash scripts/check-bc-cumulative-counts.sh
       - name: check-cargo-mutants-policy-citations self-test (Guard 2)
         run: bash scripts/check-cargo-mutants-policy-citations.sh --self-test
-      - name: check-cargo-mutants-policy-citations (Guard 2, DEC-150)
+      - name: check-cargo-mutants-policy-citations (Guard 2, D-150)
         run: bash scripts/check-cargo-mutants-policy-citations.sh
 
       - name: check-bc-citation-symbols self-test (BC-CITE-001)
