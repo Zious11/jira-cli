@@ -192,6 +192,8 @@ messages, the MSRV-bump entry already covers their content in full).
 
 ### Added
 
+- **CI: build provenance attestations for release artifacts (opt-in):** `release.yml` gains an `attest` job that produces a GitHub Artifact Attestation with SLSA build provenance for the `.tar.gz`/`.zip` release archives, verifiable with `gh attestation verify` and natively by mise's `github:` backend. Attestation is created from the built artifacts (parallel to `release`, fanning in from the same `build` job outputs), so it covers the exact bytes users download without a publish-then-attest window. Gated on `vars.ATTESTATIONS_ENABLED` so forks carry it as a no-op. See `docs/specs/fork-friendly-release-ops.md`.
+
 - **`jr auth status --output json` (S-cycle7-auth-status-json, BC-1.6.050, retires
   NFR-O-N):** `auth status` now supports `--output json`, emitting a 6-key object
   `{profile, url, env, auth_method, status, oauth_app}` to stdout (pretty-printed,
