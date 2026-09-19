@@ -50,7 +50,7 @@ fn chosen_flow_uses_oauth_when_config_says_so() {
 }
 
 // `chosen_flow_oauth_override_wins_over_config` (pre-S-cycle3-chosen-flow-
-// reconcile) asserted the EXACT behavior DEC-321/BC-1.2.051 postcondition 3
+// reconcile) asserted the EXACT behavior D-321/BC-1.2.051 postcondition 3
 // removes: an `--oauth` override forcing `AuthFlow::OAuth` on an api_token
 // profile. `chosen_flow_for_profile` no longer takes an override parameter
 // at all (compile-time enforced — there is no argument left to pass "true"

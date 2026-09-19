@@ -3,7 +3,7 @@
 ## Status
 Accepted
 
-> **DEC-310 amendment (2026-08-26, S-578-4, issue #578):** every "DEC-188
+> **D-310 amendment (2026-08-26, S-578-4, issue #578):** every "D-188
 > amendment" callout below describes a pre-flight exit-64 guard that
 > originally covered BOTH `--field` and `--on-behalf-of` without
 > `--request-type`. S-578-4 REVERSES that guard's `--field` half: `--field`
@@ -14,8 +14,8 @@ Accepted
 > — it still exits 64 pre-flight without `--request-type`, unconditionally,
 > even when `--field` is also present (the combined-check that used to
 > pre-empt it is gone, so it now fires standalone in that case too). Read
-> every "DEC-188 amendment" note below as scoped to `--on-behalf-of` only;
-> `docs/specs/issue-create-preflight-guards.md` and the DEC-188-era
+> every "D-188 amendment" note below as scoped to `--on-behalf-of` only;
+> `docs/specs/issue-create-preflight-guards.md` and the D-188-era
 > combined-error text it describes are historical for `--field`. See
 > `.factory/specs/prd/bc-3-issue-write.md` BC-3.3.010/011/BC-3.8.012/013 for
 > the current, authoritative contract.
@@ -78,7 +78,7 @@ The platform path has no changes — it is byte-for-byte the same code path
 that existed before S-288. The fork is gated solely on whether `--request-type`
 was supplied. No project-type pre-check occurs before this fork.
 
-> **DEC-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
+> **D-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
 > being absent; when either flag is present without `--request-type`, the platform
 > path exits 64 pre-flight (BC-3.8.012/013). See `docs/specs/issue-create-preflight-guards.md`.
 
@@ -96,7 +96,7 @@ is an early return. All code below it in `handle_create` is the pre-existing
 platform path. No platform-path behavior, output shape, or error message is
 altered by this ADR.
 
-> **DEC-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
+> **D-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
 > being absent; when either flag is present without `--request-type`, the platform
 > path exits 64 pre-flight (BC-3.8.012/013). See `docs/specs/issue-create-preflight-guards.md`.
 
@@ -183,13 +183,13 @@ C.1–C.4 in `api/jsm/requests.rs`).
 
 - `jr issue create --request-type <NAME>` routes to `POST /rest/servicedeskapi/request`
   instead of `POST /rest/api/3/issue`. No other `jr issue create` invocation is affected.
-  > **DEC-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
+  > **D-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
   > being absent; when either flag is present without `--request-type`, the platform
-  > path exits 64 pre-flight (BC-3.8.012/013) instead of the pre-DEC-188 warn-and-proceed
+  > path exits 64 pre-flight (BC-3.8.012/013) instead of the pre-D-188 warn-and-proceed
   > behavior. See `docs/specs/issue-create-preflight-guards.md`.
 - The platform path is byte-for-byte unchanged: the dispatch gate is an early return at
   the top of `handle_create`, so all downstream platform logic is untouched.
-  > **DEC-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
+  > **D-188 amendment:** this claim is now conditional on `--field`/`--on-behalf-of`
   > being absent; when either flag is present without `--request-type`, the platform
   > path exits 64 pre-flight (BC-3.8.012/013). See `docs/specs/issue-create-preflight-guards.md`.
 - `--type` (and five other platform-only flags) are silently warned on the JSM path rather
@@ -209,12 +209,12 @@ C.1–C.4 in `api/jsm/requests.rs`).
 - `src/api/jsm/requests.rs` — `JsmRequestBuilder` pure body helper and proptest suite
 - `src/api/jsm/servicedesks.rs::require_service_desk` — JSM project gate (step 4)
 - ADR-0015 — Proactive resolution enforcement on done-category transitions (parallel JSM context)
-- `docs/specs/issue-create-preflight-guards.md` — DEC-188 pre-flight exit-64 guards for
+- `docs/specs/issue-create-preflight-guards.md` — D-188 pre-flight exit-64 guards for
   `--field`/`--on-behalf-of` without `--request-type` (S-639-1; amends the "byte-for-byte
   unchanged" claims in this ADR, does not supersede the dispatch architecture itself);
-  historical for `--field` as of S-578-4 (DEC-310) — see the amendment note at the top of
+  historical for `--field` as of S-578-4 (D-310) — see the amendment note at the top of
   this ADR
-- S-578-4 (issue #578, DEC-310) — reverses DEC-188's `--field`-alone and combined pre-flight
+- S-578-4 (issue #578, D-310) — reverses D-188's `--field`-alone and combined pre-flight
   guards; `--field` on the platform path now resolves via `createmeta`
   (BC-3.3.010/BC-3.3.011) instead of exiting 64. `--on-behalf-of`'s guard (BC-3.8.013) is
   unchanged in mechanism

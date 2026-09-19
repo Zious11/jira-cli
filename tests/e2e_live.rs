@@ -9413,7 +9413,7 @@ fn test_e2e_issue_edit_issuetype_multikey_bulk_roundtrip() {
 /// remove:<X>` bulk round-trip using the `multiselectComponents` wire shape
 /// (BC-3.4.023, S-605-2).
 ///
-/// **DEC-280 LIVE-JIRA RELEASE GATE (BC-3.4.023 Delivery note):** this test
+/// **D-280 LIVE-JIRA RELEASE GATE (BC-3.4.023 Delivery note):** this test
 /// is the mandated live smoke test — one ADD POST and one REMOVE POST,
 /// against >= 2 real issues in one project — that MUST pass before the bulk
 /// `--component` path ships to release. The `multiselectComponents` wire
@@ -9444,7 +9444,7 @@ fn test_e2e_issue_edit_issuetype_multikey_bulk_roundtrip() {
 /// clean-skip on 403/404 = "Make bulk changes" permission/plan gate) but
 /// against `fields.components[].name` instead of `fields.labels[]`.
 ///
-/// Traces to: AC-010, VP-COMPONENT-012, DEC-280.
+/// Traces to: AC-010, VP-COMPONENT-012, D-280.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_issue_edit_component_multikey_bulk_roundtrip() {
@@ -9457,7 +9457,7 @@ fn test_e2e_issue_edit_component_multikey_bulk_roundtrip() {
     let h = e2e_harness();
 
     // Precondition: the project must have >= 1 component already defined.
-    // Clean-skip (not a failure) if it has none -- see the DEC-280
+    // Clean-skip (not a failure) if it has none -- see the D-280
     // precondition note in this test's doc comment above.
     let list_out = h
         .cmd()
@@ -9574,7 +9574,7 @@ fn test_e2e_issue_edit_component_multikey_bulk_roundtrip() {
     if !add_out.status.success() {
         let stderr = String::from_utf8_lossy(&add_out.stderr);
         // Skip only on 403 (permission denied) or 404 (endpoint unavailable) --
-        // any OTHER failure (e.g. a 400) is exactly the DEC-280 release-gate
+        // any OTHER failure (e.g. a 400) is exactly the D-280 release-gate
         // signal that the documented wire shape is wrong and must NOT be
         // silently skipped.
         if add_out.status.code() == Some(1) && (stderr.contains("403") || stderr.contains("404")) {
@@ -9587,7 +9587,7 @@ fn test_e2e_issue_edit_component_multikey_bulk_roundtrip() {
             return;
         }
         panic!(
-            "DEC-280 RELEASE GATE FAILURE: multi-key issue edit --component add \
+            "D-280 RELEASE GATE FAILURE: multi-key issue edit --component add \
              failed (non-403/404 -- not a permission skip). This is evidence the \
              multiselectComponents wire shape documented in BC-3.4.023 does NOT \
              match live Jira -- correct the BC to the observed true shape before \
@@ -9640,7 +9640,7 @@ fn test_e2e_issue_edit_component_multikey_bulk_roundtrip() {
             return;
         }
         panic!(
-            "DEC-280 RELEASE GATE FAILURE: multi-key issue edit --component \
+            "D-280 RELEASE GATE FAILURE: multi-key issue edit --component \
              remove failed (non-403/404 -- not a permission skip). This is \
              evidence the multiselectComponents REMOVE wire shape documented in \
              BC-3.4.023 does NOT match live Jira -- correct the BC before \
@@ -11777,7 +11777,7 @@ fn poll_comment_until(
 /// Calls `jr api GET /rest/api/3/project/{project_key}/role`, which returns a JSON
 /// object mapping role names to their URL. Prefers `"Service Desk Team"` (the
 /// canonical, stable agent role on JSM company-managed projects; Atlassian explicitly
-/// refused to rename it — JSDCLOUD-1376 Won't Fix; DEC-175 Q3). Falls back to the
+/// refused to rename it — JSDCLOUD-1376 Won't Fix; D-175 Q3). Falls back to the
 /// first key in the response object. Returns `None` when the API call fails, the
 /// response is not a JSON object, or the object has no keys.
 fn discover_project_role(h: &E2eHarness, project_key: &str) -> Option<String> {
@@ -11850,10 +11850,10 @@ fn post_probe_comment(h: &E2eHarness, key: &str, body: &str, scenario: &str) -> 
 ///   `sd.public.comment={internal:true}` via `jr api POST`, edits it twice with
 ///   `--internal`, and asserts the property is preserved after each edit.
 /// - **Scenario 2 (PRESERVED-visibility baseline):** Discovers a JSM project role via
-///   `GET /rest/api/3/project/{proj}/role` (prefers "Service Desk Team"; DEC-175 Q3).
+///   `GET /rest/api/3/project/{proj}/role` (prefers "Service Desk Team"; D-175 Q3).
 ///   Creates a comment with a Jira `visibility` restriction
 ///   (`{"type":"role","value":"<role>"}`), asserts the restriction is present on
-///   GET read-back immediately after create (anti-vacuous-pass guard per DEC-175 Q2:
+///   GET read-back immediately after create (anti-vacuous-pass guard per D-175 Q2:
 ///   an invalid role name may be silently dropped by the API, so assert on round-trip
 ///   not on 2xx alone), performs a body-only edit (no flag), and asserts the
 ///   `visibility` restriction is still present unchanged (PRESERVED: a body-only PUT
@@ -11864,7 +11864,7 @@ fn post_probe_comment(h: &E2eHarness, key: &str, body: &str, scenario: &str) -> 
 ///   both present on read-back, edits with `--public --yes`, and asserts (a)
 ///   `sd.public.comment` is updated to `internal=false` (MERGE) and (b) the
 ///   `visibility` restriction is still present (PRESERVED — properties-MERGE PUT
-///   does not include a `"visibility"` key; two axes are orthogonal per DEC-175 Q5).
+///   does not include a `"visibility"` key; two axes are orthogonal per D-175 Q5).
 ///
 /// Each scenario deletes its own probe comment immediately after assertions.
 /// The parent EJ issue is NOT closed.
@@ -11900,7 +11900,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
 
     // Discover a project role for PRESERVED-visibility probes (Scenarios 2/3).
     // Prefers "Service Desk Team" (canonical JSM company-managed agent role;
-    // Atlassian Won't-Fix JSDCLOUD-1376; DEC-175 Q3). Scenarios 2/3 are
+    // Atlassian Won't-Fix JSDCLOUD-1376; D-175 Q3). Scenarios 2/3 are
     // individually clean-skipped when discovery fails — see labeled blocks below.
     let vis_role_opt = discover_project_role(&h, &jsm_project);
 
@@ -12044,14 +12044,14 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
         delete_comment_probe(&h, &key, &cid);
     }
 
-    // ── Scenario 2 (PRESERVED-visibility baseline — 5-step, DEC-175) ───────────
+    // ── Scenario 2 (PRESERVED-visibility baseline — 5-step, D-175) ───────────
     // Verifies that a body-only PUT leaves an existing Jira `visibility` restriction
     // UNCHANGED (PRESERVED). Uses the platform `visibility` field, NOT
-    // `sd.public.comment` properties — these are orthogonal dimensions (DEC-175 Q5).
+    // `sd.public.comment` properties — these are orthogonal dimensions (D-175 Q5).
     //
     // (1) Clean-skip if role discovery yielded nothing.
     // (2) Create probe comment WITH visibility={"type":"role","value":"<role>"}.
-    // (3) GET; assert visibility.value == <role> (anti-vacuous-pass per DEC-175 Q2:
+    // (3) GET; assert visibility.value == <role> (anti-vacuous-pass per D-175 Q2:
     //     an invalid role name may be silently dropped; assert round-trip, not 2xx).
     // (4) Body-only edit (no --internal/--public flag).
     // (5) GET; assert visibility still present with same type/value (PRESERVED:
@@ -12063,7 +12063,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
             None => {
                 eprintln!(
                     "[SKIP] S2: no usable project role discovered for {jsm_project} \
-                     — skipping PRESERVED-visibility baseline (DEC-175)"
+                     — skipping PRESERVED-visibility baseline (D-175)"
                 );
                 break 'scenario2;
             }
@@ -12080,7 +12080,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
             None => break 'scenario2,
         };
 
-        // (3) Anti-vacuous-pass guard (DEC-175 Q2): assert visibility is present on
+        // (3) Anti-vacuous-pass guard (D-175 Q2): assert visibility is present on
         // GET read-back immediately after create. An invalid role name may be silently
         // dropped by Jira (unconfirmed behavior), making assertions vacuous. Asserting
         // on the round-trip ensures we test a real restriction, not a ghost.
@@ -12098,7 +12098,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
                 eprintln!(
                     "[WARN] S2: visibility.value != '{role_name}' after create \
                      — role may be invalid on {jsm_project} or API lag; \
-                     skipping Scenario 2 to avoid vacuous assertion (DEC-175 Q2)"
+                     skipping Scenario 2 to avoid vacuous assertion (D-175 Q2)"
                 );
                 delete_comment_probe(&h, &key, &cid);
                 break 'scenario2;
@@ -12133,7 +12133,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
 
         // (5) Assert visibility restriction is PRESERVED after body-only edit.
         // A body-only PUT sends only {"body":<adf>} — no "visibility" key — so the
-        // existing restriction must be untouched (BC-3.5.006, DEC-175 Q6).
+        // existing restriction must be untouched (BC-3.5.006, D-175 Q6).
         {
             let role = role_name.as_str();
             match poll_comment_until(
@@ -12156,7 +12156,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
                         comment_visibility_value(&c) == Some(role),
                         "S2: Jira visibility restriction must be PRESERVED after a body-only \
                          edit — body-only PUT sends no 'visibility' key and must not clear \
-                         the existing restriction (BC-3.5.006, DEC-175 Q6); got: {c}"
+                         the existing restriction (BC-3.5.006, D-175 Q6); got: {c}"
                     );
                 }
             }
@@ -12165,9 +12165,9 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
         delete_comment_probe(&h, &key, &cid);
     }
 
-    // ── Scenario 3 (compound cell — orthogonal axes, DEC-175) ───────────────
+    // ── Scenario 3 (compound cell — orthogonal axes, D-175) ───────────────
     // Verifies that visibility (Jira platform restriction) and sd.public.comment
-    // (JSM portal visibility property) are orthogonal (DEC-175 Q5): a
+    // (JSM portal visibility property) are orthogonal (D-175 Q5): a
     // properties-MERGE edit (--public --yes) updates sd.public.comment but does NOT
     // disturb a pre-existing Jira visibility restriction (PRESERVED because the PUT
     // body does not include a "visibility" key).
@@ -12182,7 +12182,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
     // (5) GET; assert BOTH:
     //     (a) sd.public.comment is now internal=false (MERGE: property updated), AND
     //     (b) visibility restriction still present with same value (PRESERVED:
-    //         orthogonal axis untouched — DEC-175 Q5, BC-3.5.006).
+    //         orthogonal axis untouched — D-175 Q5, BC-3.5.006).
     // Teardown: jr issue comment delete KEY --id CID --yes
     'scenario3: {
         let role_name = match vis_role_opt.as_deref() {
@@ -12190,7 +12190,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
             None => {
                 eprintln!(
                     "[SKIP] S3: no usable project role discovered for {jsm_project} \
-                     — skipping compound-cell orthogonal-axes probe (DEC-175)"
+                     — skipping compound-cell orthogonal-axes probe (D-175)"
                 );
                 break 'scenario3;
             }
@@ -12209,7 +12209,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
         };
 
         // (3) Assert BOTH visibility and sd.public.comment present on read-back.
-        // Anti-vacuous-pass guard for both dimensions (DEC-175 Q2 for visibility).
+        // Anti-vacuous-pass guard for both dimensions (D-175 Q2 for visibility).
         {
             let role = role_name.as_str();
             let both_present = |c: &Value| {
@@ -12282,7 +12282,7 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
                         "S3: Jira visibility restriction must be PRESERVED after --public \
                          --yes edit — properties-MERGE PUT does not include a 'visibility' \
                          key and must not disturb the existing restriction \
-                         (orthogonal axes — DEC-175 Q5, BC-3.5.006); got: {c}"
+                         (orthogonal axes — D-175 Q5, BC-3.5.006); got: {c}"
                     );
                 }
             }

@@ -107,7 +107,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     // issue edit  (--priority added: used in e2e_live.rs priority round-trip test;
     //              --description-stdin/--markdown/--points/--no-points/--parent/--no-parent/--field
     //              added in E2E-HV-2; --component added in S-605-2 AC-010 bulk
-    //              multiselectComponents live smoke test, DEC-280;
+    //              multiselectComponents live smoke test, D-280;
     //              --no-mentions added in S-cycle5-mention-resolution-wiring AC-014/AC-017,
     //              issue #674 — see the issue-create row's note above)
     (

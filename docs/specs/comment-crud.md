@@ -90,7 +90,7 @@ supplied), the existing JSM comment visibility must be preserved — not reset. 
 The Jira Cloud API treats a `PUT` that omits `"properties"` as a MERGE/PRESERVED verdict
 for each entity property: the server keeps all prior property values, including
 `sd.public.comment`. The dangerous path is explicitly sending a `properties` array the
-caller does not fully control. Body-only PUT is therefore the safe default (DEC-168
+caller does not fully control. Body-only PUT is therefore the safe default (D-168
 ruling 1; research Claim 1 REFUTED-footgun).
 
 `jr` NEVER sends a `"visibility"` key on any `comment edit` path this cycle. The role/group

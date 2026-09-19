@@ -127,7 +127,7 @@ Error message: `invalid profile name "<name>"; allowed: A-Z a-z 0-9 _ - up to 64
 
 ## Keyring Layout
 
-**Shipped model (ADR-0020; DEC-315/325/326; BC-1.4.031/BC-1.4.027) — supersedes the flat/shared layout originally proposed below in this section's initial draft.** Single service name (`jr-jira-cli`, honoring `JR_SERVICE_NAME` for tests). Credentials are namespaced **per profile** except the OAuth app registration itself:
+**Shipped model (ADR-0020; D-315/325/326; BC-1.4.031/BC-1.4.027) — supersedes the flat/shared layout originally proposed below in this section's initial draft.** Single service name (`jr-jira-cli`, honoring `JR_SERVICE_NAME` for tests). Credentials are namespaced **per profile** except the OAuth app registration itself:
 
 | Key | Scope | Notes |
 |---|---|---|
@@ -220,7 +220,7 @@ Old `~/.cache/jr/*.json` files are never read by the new code (they live above `
 
 ### `jr auth` subcommands
 
-**Shipped behavior (DEC-313/321/322/323/324/325/326/327; S-663-1) — this subsection reflects the current CLI, not the original proposal below it in this doc's earlier draft.**
+**Shipped behavior (D-313/321/322/323/324/325/326/327; S-663-1) — this subsection reflects the current CLI, not the original proposal below it in this doc's earlier draft.**
 
 ```
 jr auth login [--profile NAME] [--url URL] [--oauth] [--api-token] [--no-input]
@@ -233,12 +233,12 @@ jr auth login [--profile NAME] [--url URL] [--oauth] [--api-token] [--no-input]
         of intent — no separate prompt — so agents and scripts that pass
         --url get a deterministic write without an interactive gate.
     Defaults to OAuth at profile creation in INTERACTIVE mode only
-        (DEC-313/327) — the auth-method picker (a TTY-only prompt) defaults
+        (D-313/327) — the auth-method picker (a TTY-only prompt) defaults
         its selection to OAuth, but the user can still choose API Token.
         Under --no-input or a non-TTY stdin, a brand-new profile with
         neither --oauth nor --api-token passed is created as an
         api_token-method profile instead — the interactive OAuth default
-        does not extend to non-interactive creation. --api-token (DEC-323)
+        does not extend to non-interactive creation. --api-token (D-323)
         explicitly selects the classic API-token flow in either mode.
         --oauth is DEPRECATED (accepted indefinitely, no hard removal) —
         passing it still works and selects the OAuth flow, but it is
@@ -246,7 +246,7 @@ jr auth login [--profile NAME] [--url URL] [--oauth] [--api-token] [--no-input]
         --api-token when you want the non-default flow.
     --oauth (or --api-token) on an existing profile whose auth_method
         differs switches that profile's mechanism transparently (relogin-
-        then-replace — DEC-321/BC-1.2.051 — the new credential is obtained
+        then-replace — D-321/BC-1.2.051 — the new credential is obtained
         and confirmed usable FIRST, and only then does it replace the
         stored one; a failed switch leaves the existing credential intact).
     Each profile stores its own `<profile>:email`/`<profile>:api-token`
@@ -260,7 +260,7 @@ jr auth switch <NAME>
 
 jr auth list
     Show all configured profiles. Mark active with `*`.
-    Table columns: NAME | URL | ENV | AUTH | STATUS    (DEC-324 — ENV
+    Table columns: NAME | URL | ENV | AUTH | STATUS    (D-324 — ENV
         inserted between URL and AUTH; ENV is a free-form label such as
         prod/sandbox/uat, or `-` when unset)
     STATUS ∈ {configured, no-credentials, unset}
@@ -276,7 +276,7 @@ jr auth status [--profile NAME]
         {profile, url, env, auth_method, status, oauth_app}.
 
 jr auth logout [--profile NAME]
-    Session-clear only, non-destructive (DEC-322, BC-1.2.013/BC-1.2.014):
+    Session-clear only, non-destructive (D-322, BC-1.2.013/BC-1.2.014):
       • oauth-method profile: clears only that profile's OAuth session
         tokens (<profile>:oauth-access-token / <profile>:oauth-refresh-
         token). Profile entry and identity in config.toml stay in place.
@@ -303,7 +303,7 @@ jr auth remove <NAME>
 
 jr auth refresh [--profile NAME] [--oauth] [--api-token] [--email/--token/--client-id/--client-secret]
     Refresh (re-obtain) credentials for the named profile (defaults to
-        active). DEC-321: the flow is ALWAYS selected from the target
+        active). D-321: the flow is ALWAYS selected from the target
         profile's own stored auth_method — `--oauth`/`--api-token` on
         `refresh` are INERT with respect to flow selection; they do NOT
         force or override the path (unlike `jr auth login`, where they do
@@ -312,7 +312,7 @@ jr auth refresh [--profile NAME] [--oauth] [--api-token] [--email/--token/--clie
         --oauth; inert-on-refresh notice for --api-token) — changing a
         profile's auth mechanism is done via an explicit `jr auth login
         <profile> [--oauth|--api-token]` re-declaration, not via refresh.
-    Ordering is relogin-then-replace (DEC-321, BC-1.2.051 Invariant 2):
+    Ordering is relogin-then-replace (D-321, BC-1.2.051 Invariant 2):
         the new credential value is obtained and confirmed usable FIRST;
         only then is the existing stored value overwritten. A refresh that
         fails to obtain a usable replacement (network error, cancelled
@@ -397,7 +397,7 @@ opportunistic copy-then-delete migration for any profile, including
 `"default"` (S-cycle3-percred-storage, BC-1.4.031 Invariant 2). This was
 revisited once — an initial design considered mirroring the OAuth
 copy-then-delete shape for the API-token pair too — and rejected by a human
-decision (**DEC-326, no-copy detect-and-instruct**): the legacy flat
+decision (**D-326, no-copy detect-and-instruct**): the legacy flat
 `email`/`api-token` pair is a shared, environment-unbound Basic-auth
 credential, and silently handing it to a freshly-tagged profile (which may
 point at a different Jira site) was judged unsafe. Instead,

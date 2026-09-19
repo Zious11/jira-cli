@@ -3612,7 +3612,7 @@ async fn test_batch_download_traversal_filename_lands_inside_out_dir() {
 /// "Attachment {id} not found or not accessible." string and MUST NOT contain
 /// the Jira API error body text.
 ///
-/// The delete single-AID path (`delete_attachment_targeted` / `DEC-168`) surfaces
+/// The delete single-AID path (`delete_attachment_targeted` / `D-168`) surfaces
 /// the body intentionally — that is a different operation.  The download path must
 /// not propagate the raw server error body to the user.
 ///

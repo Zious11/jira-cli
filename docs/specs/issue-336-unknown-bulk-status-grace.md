@@ -3,7 +3,7 @@
 **Issue:** #336 (audit-followup, enhancement)
 **Source:** Cross-PR audit of #325
 **Status:** Implementing (post-VSDD spec)
-**Author:** Zious (via assistant under DEC-018)
+**Author:** Zious (via assistant under D-018)
 **Date:** 2026-05-12
 
 ## Problem

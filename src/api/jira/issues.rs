@@ -333,7 +333,7 @@ impl JiraClient {
 
     /// Search issues using JQL with an explicit, caller-supplied field list —
     /// REPLACES [`BASE_ISSUE_FIELDS`] entirely rather than unioning with it
-    /// (BC-2.2.033, BC-2.6.052, human-locked DEC-298). Additive sibling to
+    /// (BC-2.2.033, BC-2.6.052, human-locked D-298). Additive sibling to
     /// [`Self::search_issues`] — that method's signature and behavior are
     /// unchanged.
     ///
@@ -582,7 +582,7 @@ impl JiraClient {
 
     /// Get a single issue by key with an explicit, caller-supplied field
     /// list — REPLACES [`BASE_ISSUE_FIELDS`] entirely rather than unioning
-    /// with it (BC-2.3.041, BC-2.6.052, human-locked DEC-298). Additive
+    /// with it (BC-2.3.041, BC-2.6.052, human-locked D-298). Additive
     /// sibling to [`Self::get_issue`] — that method's signature and
     /// behavior are unchanged.
     ///

@@ -277,7 +277,7 @@ messages, the MSRV-bump entry already covers their content in full).
   `cargo-mutants` pin tightened from major-only `@27` to the exact release
   `@27.1.0`. `scripts/check-ci-gate.sh` and the new `scripts/mutants-aggregate.sh`
   now share a common `scripts/lib/trusted-jq.sh` jq-trust resolver. Governed
-  policy-doc-only (DEC-348/DEC-349), no new PRD BC — see
+  policy-doc-only (D-348/D-349), no new PRD BC — see
   `docs/specs/cargo-mutants-policy.md` §"Sharded Mutation Gate (cycle-006)".
 
 - **README: add per-profile-credential migration note** (S-cycle7-readme-migration-note,
@@ -539,7 +539,7 @@ messages, the MSRV-bump entry already covers their content in full).
   `https://id.atlassian.com/manage-profile/apps` as an OPTIONAL extra step
   carrying an explicit warning that it is ACCOUNT-WIDE — jr uses one shared
   embedded OAuth app, so revoking the grant signs out every `jr` profile on
-  that Atlassian account, not just this one (DEC-334; corrected 2026-09-05
+  that Atlassian account, not just this one (D-334; corrected 2026-09-05
   after Perplexity-validated research showed the original "safe cleanup, no
   other consumer" framing was false and harmful — see
   `.factory/research/atlassian-3lo-revoke-granularity-2026-09-05.md`). This
@@ -589,7 +589,7 @@ messages, the MSRV-bump entry already covers their content in full).
   profile, a same-kind re-declaration, and a FAILED login all remain
   no-ops/unaffected — the reconcile step runs only after both the login and
   the pre-existing switch-clear have succeeded (relogin-then-replace,
-  unchanged). (2) LOW-2: `src/api/auth.rs`'s DEC-334 source-scan guard
+  unchanged). (2) LOW-2: `src/api/auth.rs`'s D-334 source-scan guard
   (`normalize_for_phrase_scan`, `test_no_account_wide_harmful_revoke_framing_in_auth_source`)
   stripped a leading `///` doc-comment prefix but not `//!` (inner-doc) or
   a plain `//` line comment, so a forbidden revoke-framing phrase wrapped
@@ -674,7 +674,7 @@ messages, the MSRV-bump entry already covers their content in full).
 ### Added
 
 - **`jr auth login` defaults to an OAuth-first interactive picker, mirroring
-  `jr init`** (S-cycle3-oauth-default-creation, BC-1.1.013, DEC-313). Bare
+  `jr init`** (S-cycle3-oauth-default-creation, BC-1.1.013, D-313). Bare
   `jr auth login` on an interactive TTY now presents `["OAuth 2.0
   (recommended)", "API Token"]` with OAuth as the default selection —
   identical items and default index to `jr init`'s existing picker.
@@ -685,7 +685,7 @@ messages, the MSRV-bump entry already covers their content in full).
   (picker or non-interactive) clears the outgoing mechanism's stored
   credentials before/alongside writing the new ones.
 - **New, symmetric `--api-token` flag on `jr auth login`/`jr auth refresh`**
-  (S-cycle3-oauth-default-creation, BC-1.2.050, DEC-323), mutually exclusive
+  (S-cycle3-oauth-default-creation, BC-1.2.050, D-323), mutually exclusive
   with `--oauth`. On `login`, `--api-token` selects the `api_token`
   mechanism directly, skipping the interactive picker. On `refresh` it is
   accepted for symmetry but has no effect on mechanism selection
@@ -707,7 +707,7 @@ messages, the MSRV-bump entry already covers their content in full).
 - **`--oauth` on `jr auth login`/`jr auth refresh` is deprecated** in favor
   of letting the interactive picker default to OAuth, or passing the new
   `--api-token` flag explicitly (S-cycle3-oauth-default-creation,
-  BC-1.2.049, DEC-323). `--oauth` continues to work exactly as before and
+  BC-1.2.049, D-323). `--oauth` continues to work exactly as before and
   now prints a stderr-only, human-mode-only deprecation notice on every
   functional (non-guard-rejected) use; the notice never appears under
   `--output json`.
@@ -716,7 +716,7 @@ messages, the MSRV-bump entry already covers their content in full).
 
 - **Breaking:** `jr auth refresh --oauth`/`--api-token` no longer override
   the target profile's stored mechanism (S-cycle3-chosen-flow-reconcile,
-  BC-1.2.048, BC-1.2.051, DEC-321). Previously, `jr auth refresh --oauth
+  BC-1.2.048, BC-1.2.051, D-321). Previously, `jr auth refresh --oauth
   <profile>` on a profile whose stored `auth_method` was `api_token` forced
   an OAuth relogin regardless of the profile's actual mechanism — this was
   the sole remaining exception to "`auth_method` is intrinsic." As of this
@@ -777,7 +777,7 @@ messages, the MSRV-bump entry already covers their content in full).
   credentials had already been deleted and were never replaced, leaving the
   profile credential-less — strictly worse than its state before the
   command ran. This mirrors the exact "clear-then-login" antipattern the
-  accompanying I-6 fix (DEC-321, above) had just removed from `auth
+  accompanying I-6 fix (D-321, above) had just removed from `auth
   refresh`, but it had not yet been applied to this `auth login`
   mechanism-switch path. Fixed via the same relogin-then-replace ordering:
   `login_oauth`/`login_token` now run FIRST, and the outgoing mechanism's
@@ -794,7 +794,7 @@ messages, the MSRV-bump entry already covers their content in full).
 
 ### Internal
 
-- **Un-deferred ADR-0011 (Status: Deferred → Accepted, DEC-317) and completed the
+- **Un-deferred ADR-0011 (Status: Deferred → Accepted, D-317) and completed the
   compile-time type-level `Profile` fence** (`src/profile.rs`, `S-cycle3-adr0011-newtype`,
   BC-6.2.015). No user-visible behavior change — this is a pure, compile-time-only refactor:
   `Profile(String)` (`From<String>`, `From<&str>`, `AsRef<str>`, `Display`, and equality/debug
@@ -823,7 +823,7 @@ messages, the MSRV-bump entry already covers their content in full).
 - **`jr auth remove <name>` now deletes BOTH credential kinds — the OAuth
   pair AND the per-profile API-token pair — and reorders its steps to
   credentials-before-config-entry** (S-cycle3-remove-logout-semantics,
-  BC-1.2.014, DEC-322). New order: (1) OAuth-pair delete, (2) API-token-pair
+  BC-1.2.014, D-322). New order: (1) OAuth-pair delete, (2) API-token-pair
   delete (NEW — targets the namespaced `<profile>:email`/`<profile>:api-token`
   keys introduced by S-cycle3-percred-storage), (3) cache clear, (4)
   config-entry removal LAST. This is a deliberate reversal of the prior
@@ -832,7 +832,7 @@ messages, the MSRV-bump entry already covers their content in full).
 
 - **`jr auth logout` on an API-token profile now prints an informational
   notice instead of silently no-op-ing** (S-cycle3-remove-logout-semantics,
-  BC-1.2.013, DEC-322). Running `jr auth logout` against a profile whose
+  BC-1.2.013, D-322). Running `jr auth logout` against a profile whose
   `auth_method` is `api_token` previously succeeded silently with no visible
   effect. It now prints, to stderr, and exits 0 (this is an expected,
   successful outcome, not an error):
@@ -847,7 +847,7 @@ messages, the MSRV-bump entry already covers their content in full).
 - **API-token credential absence now produces an actionable, exit-64
   "detect-and-instruct" error instead of a generic auth failure**
   (S-cycle3-credential-absence-guard, BC-1.4.032/BC-1.4.033/BC-1.4.034,
-  DEC-326). When a profile has no per-profile `<profile>:email` /
+  D-326). When a profile has no per-profile `<profile>:email` /
   `<profile>:api-token` keychain entries — the state every pre-cycle-003
   API-token profile is in after the S-cycle3-percred-storage breaking
   change above — `jr` now exits 64 with:
@@ -859,7 +859,7 @@ messages, the MSRV-bump entry already covers their content in full).
   `Incomplete credentials stored for profile '<profile>' — run
   \`jr auth login <profile>\` to fix this.` Neither message ever suggests
   `jr auth logout` (a no-op for API-token profiles). **No-copy guarantee
-  (DEC-326):** `jr` detects whether the old shared flat `email`/`api-token`
+  (D-326):** `jr` detects whether the old shared flat `email`/`api-token`
   keychain pair still exists purely to keep this code path symmetric with
   OAuth's migration-detection step — it never reads, copies, or deletes
   that legacy pair, and the error text is byte-identical whether or not the
@@ -886,7 +886,7 @@ messages, the MSRV-bump entry already covers their content in full).
 
 - **`jr auth list` (table mode) now renders a 5-column table — `NAME`, `URL`,
   `ENV`, `AUTH`, `STATUS` — adding a new `ENV` column between `URL` and
-  `AUTH`** (S-cycle3-env-tag, BC-1.6.046, BC-1.6.047, BC-6.1.015, DEC-324).
+  `AUTH`** (S-cycle3-env-tag, BC-1.6.046, BC-1.6.047, BC-6.1.015, D-324).
   Every profile now carries an optional free-form `env` tag
   (`ProfileConfig.env`, e.g. `"prod"`/`"sandbox"`); the table cell shows the
   tag when set (routed through a shared control-char/ANSI-escape-stripping,
@@ -960,8 +960,8 @@ messages, the MSRV-bump entry already covers their content in full).
   the dispatch gap S-578-1's interim guard left on this command.
 - **`jr issue create --field NAME=VALUE` (platform, non-JSM path) no longer
   exits 64 pre-flight — it now resolves via the project's Create screen
-  (`createmeta`)** (S-578-4, BC-3.3.010/BC-3.3.011, DEC-310 — registered
-  2026-08-26, reverses DEC-188 from S-639-1). Previously, supplying `--field`
+  (`createmeta`)** (S-578-4, BC-3.3.010/BC-3.3.011, D-310 — registered
+  2026-08-26, reverses D-188 from S-639-1). Previously, supplying `--field`
   without `--request-type` exited 64 with "`--field` is only valid with
   `--request-type`". That guard is removed: `--field` now resolves each pair
   against the target project/issue-type's Create screen using the SAME
@@ -1007,7 +1007,7 @@ messages, the MSRV-bump entry already covers their content in full).
   view` instead of flattening it (S-584-1, #732).
 - **`jr issue list --updated-recent` supplied alone now proceeds like
   `--recent`** rather than requiring a companion filter (F5 reconciliation,
-  DEC-306, #733).
+  D-306, #733).
 
 ### Fixed
 
@@ -1042,7 +1042,7 @@ messages, the MSRV-bump entry already covers their content in full).
   `login`, `status`, `refresh`, `logout`) continue to honor `--profile`
   unchanged. (#663)
 - **`jr issue edit --dry-run` now reads stdin and renders an ADF preview
-  (S-692-1, DEC-274).** Previously `--dry-run --description-stdin` never read
+  (S-692-1, D-274).** Previously `--dry-run --description-stdin` never read
   stdin and emitted a fixed placeholder string
   (`"<from stdin — not yet read in dry-run>"`) for
   `plannedChanges.description`, and bare `--description` had no ADF preview at
@@ -1150,7 +1150,7 @@ sections for full detail.
 ### Breaking Changes
 
 - **`jr issue create --field`/`--on-behalf-of` without `--request-type` now exit 64
-  pre-flight instead of warning and proceeding** (S-639-1, DEC-188, BC-3.8.012/013
+  pre-flight instead of warning and proceeding** (S-639-1, D-188, BC-3.8.012/013
   [AMENDED]). These flags are JSM-only; supplying them on the platform create path
   now fails fast, before any HTTP call, project-key resolution, interactive prompt,
   or `--description-stdin` read. Migration: add `--request-type <NAME>` or drop the
@@ -1204,7 +1204,7 @@ sections for full detail.
   live Jira responses, RFC 3339 fractional-second parsing, Content-Disposition
   CRLF/quote/backslash injection guards (CWE-93), disk-write error
   classification with remediation hints, and 404 body-surfacing asymmetries
-  between targeted and bulk paths (DEC-168). (#576, #644, #646, #647, #649)
+  between targeted and bulk paths (D-168). (#576, #644, #646, #647, #649)
 - ADF code-mark exclusivity (inline code inside bold/superscript no longer
   emits HTTP-400-rejected ADF), listItem/footnote/panel content-model
   conformance, and multi-line inline/block HTML no longer emitting raw `\n`
@@ -1235,12 +1235,12 @@ sections for full detail.
 ### Breaking Changes
 
 - **`jr issue create --field`/`--on-behalf-of` without `--request-type` now exit 64
-  pre-flight instead of warning and proceeding (S-639-1, closes #639, DEC-188,
+  pre-flight instead of warning and proceeding (S-639-1, closes #639, D-188,
   BC-3.8.012/013 [AMENDED]):** Previously (S-383), supplying `--field NAME=VALUE` or
   `--on-behalf-of <accountId>` on the platform create path (i.e. without
   `--request-type`) emitted a `warning: … is ignored on the platform create path`
   line to stderr and the platform issue was still created (exit 0). These flags are
-  self-declared JSM-only flags, and DEC-188 promotes this to a categorical user
+  self-declared JSM-only flags, and D-188 promotes this to a categorical user
   error: `jr issue create` now exits 64 BEFORE any HTTP call, project-key resolution,
   interactive prompt, or `--description-stdin` read. If both flags are supplied
   together, ONE combined error fires (not two). **Migration:** add `--request-type
@@ -1306,7 +1306,7 @@ sections for full detail.
 
 - **`jr issue attachment delete` — interactive single-AID 404 surfaces Jira error body (FIX-F5-006, #644):**
   The interactive confirmation gate (`handle_attachment_delete`) now appends the raw Jira error
-  body to the canonical `"Attachment <AID> not found or not accessible."` prefix (DEC-168
+  body to the canonical `"Attachment <AID> not found or not accessible."` prefix (D-168
   body-surfacing contract). The download path (`handle_single_download`) retains
   canonical-only output per BC-2.7.012.
 
@@ -1334,7 +1334,7 @@ sections for full detail.
   itself, causing the download path to include the raw Jira body in its 404 message. The
   BC-2.7.012 asymmetry is restored: `handle_single_download` emits the canonical-only prefix
   `"Attachment <id> not found or not accessible."`; the delete interactive gate continues to
-  append `\n{body}` per DEC-168. Also fixed: `batch_path_is_within_dir` now canonicalizes
+  append `\n{body}` per D-168. Also fixed: `batch_path_is_within_dir` now canonicalizes
   the resolved directory before the containment check, preventing false rejections on paths
   containing `..` components.
 
@@ -1419,7 +1419,7 @@ sections for full detail.
   `jr issue attachment delete AID [--yes]` deletes a single attachment by numeric ID.
   Without `--yes`, an interactive gate prompts `"Delete attachment <name> (AID)? [y/N]"`
   (metadata GET fetches the filename; CWE-116 `display_sanitize_filename` applied to prompt).
-  DEC-168: targeted single-AID 404 → exit 64 + canonical prefix
+  D-168: targeted single-AID 404 → exit 64 + canonical prefix
   `"Attachment <AID> not found or not accessible."` + Jira error body (surfaced, not silent).
   Non-interactive mode (`--no-input` or non-TTY stdin) without `--yes` → exit 64
   `"Use --yes to confirm deletion without a prompt."`. EOF on gate stdin → exit 130.
@@ -1462,7 +1462,7 @@ sections for full detail.
   fires to stderr on either flag (best-effort on JSM; no-op on non-JSM). JSON
   response includes `changed_fields.jsm_internal: true/false` only when a visibility
   flag was passed; absent in the default body-only path.
-  `--yes` without `--public` is accepted as a silent no-op (DEC-169 leniency convention — no clap `requires` pairing).
+  `--yes` without `--public` is accepted as a silent no-op (D-169 leniency convention — no clap `requires` pairing).
   This is the last story of bundle SOH-COMMENT-CRUD-1 (wave D).
 
 - **`jr issue comment edit` — body sources + body-only PUT (S-577-4, issue #577):**
@@ -1496,13 +1496,13 @@ sections for full detail.
   exits 64 with Jira's error body surfaced. (Over-deep comment bodies are
   rejected at the JSON parse layer, exit 1.)
 
-- **CI: BC-body Trace/Source citation guard (Guard 1) (DEC-148):** adds
+- **CI: BC-body Trace/Source citation guard (Guard 1) (D-148):** adds
   `scripts/check-bc-citation-symbols.sh` (BC-CITE-001; validates `src/` file and symbol
   citations in `**Trace**:`/`**Source**:` fields of all `bc-*.md` bodies; definition-anchored
   symbol grep; self-test fixtures; coverage-floor guard) as a step in the `spec-guard` CI job.
-  Prevents the Seam-extraction citation-drift class (DEC-147/148/149).
+  Prevents the Seam-extraction citation-drift class (D-147/148/149).
   Calibration: measured N=309 citations (304 `.rs` + 5 `.snap`) on factory-artifacts @ 2b09313; FLOOR=231 = floor(0.75 × 309); non-.rs `src/` citations receive file-existence-only validation (tier ii).
-- **CI: mutants-policy citation guard (Guard 2) + examine_globs existence guard (Guard 3) (DEC-150):** adds `scripts/check-cargo-mutants-policy-citations.sh` (validates §Scope function-location bulleted list; CI-MUTANTS-CITE-001; self-test fixtures; SCOPE-EMPTY guard) and `tests/mutants_glob_existence.rs` (validates examine_globs entries resolve to real files; coverage floor; MUTANTS-GLOBS-KEY-MISSING guard).
+- **CI: mutants-policy citation guard (Guard 2) + examine_globs existence guard (Guard 3) (D-150):** adds `scripts/check-cargo-mutants-policy-citations.sh` (validates §Scope function-location bulleted list; CI-MUTANTS-CITE-001; self-test fixtures; SCOPE-EMPTY guard) and `tests/mutants_glob_existence.rs` (validates examine_globs entries resolve to real files; coverage floor; MUTANTS-GLOBS-KEY-MISSING guard).
 
 ### Security
 
@@ -1534,7 +1534,7 @@ sections for full detail.
 ### Changed
 
 - **CI: mutation-test scope restored for `edit.rs` + `jsm_create.rs` after ADR-0012
-  Seam A/B split (DEC-149):** `src/cli/issue/edit.rs` (~99 mutants) and
+  Seam A/B split (D-149):** `src/cli/issue/edit.rs` (~99 mutants) and
   `src/cli/issue/jsm_create.rs` (~9 mutants) are now in `examine_globs`. These
   behavior-dense surfaces — bulk routing forks, C-1 guard, label endpoint fork, JSM
   dispatch — were outside mutation coverage since the ADR-0012 Seam A (PR #556) and

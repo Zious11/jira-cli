@@ -1698,7 +1698,7 @@ async fn test_bc_3_5_008_ec4_yes_without_public_is_silent_noop() {
         Some(0),
         "S-577-5 AC-010(v1) VP-577-028: must exit 0 — --yes without --public is a silent \
          no-op; clap MUST NOT have requires(\"public\") on --yes \
-         (EC-3.5.008-4, DEC-169); got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+         (EC-3.5.008-4, D-169); got {:?}\nstderr: {stderr}\nstdout: {stdout}",
         output.status.code()
     );
 }

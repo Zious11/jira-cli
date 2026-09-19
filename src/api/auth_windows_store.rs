@@ -24,13 +24,13 @@
 //! recognizer, and the `CRYPTPROTECT_UI_FORBIDDEN`/USER-scope-only DPAPI flag
 //! decision).
 //!
-//! # Windows-only verification (S-cycle4-dpapi-storage-fix, DEC-335)
+//! # Windows-only verification (S-cycle4-dpapi-storage-fix, D-335)
 //!
 //! Every function body is implemented per ADR-0021. The
 //! `#[cfg(windows)] mod dpapi` FFI wrapper (`CryptProtectData`/
 //! `CryptUnprotectData` via `windows-sys`) and the `#[cfg(windows)]` arms of
 //! `store_pair`/`load_pair`/`remove_if_present` cannot be compiled or
-//! exercised on THIS (non-Windows) development host. Per the DEC-335-approved
+//! exercised on THIS (non-Windows) development host. Per the D-335-approved
 //! validation plan, this is not an open/unowned unverified risk, but it is
 //! also not yet confirmed end-to-end: the real DPAPI FFI round-trip
 //! (`windows_only_tests::test_dpapi_protect_unprotect_real_round_trip`) and
@@ -400,7 +400,7 @@ fn fsync_parent_dir_best_effort(dir: &std::path::Path) {
 /// function's own doc comment for exactly why), and even on a POSIX
 /// filesystem where it does run, "durable rename" carries
 /// platform/filesystem-specific caveats this crate does not attempt to
-/// fully enumerate or independently verify (see DEC-335's note elsewhere in
+/// fully enumerate or independently verify (see D-335's note elsewhere in
 /// this module on why the real `CryptProtectData` round-trip similarly
 /// cannot be exercised on a non-Windows host). If a crash still leaves this
 /// file corrupted or missing despite these best-effort steps, the fallback
@@ -1786,7 +1786,7 @@ mod tests {
     // ------------------------------------------------------------------
     // Windows-only — VP-AUTHDX-010. #[cfg(windows)]: compiles out entirely
     // on this (non-Windows) development host, so these tests are not
-    // compile- or run-verified HERE. Per the DEC-335-approved Windows
+    // compile- or run-verified HERE. Per the D-335-approved Windows
     // validation plan, this is not an open/unowned unverified risk:
     // neither test carries `#[ignore]`, so both compile AND execute
     // automatically on the `test (windows-latest)` CI leg — a required

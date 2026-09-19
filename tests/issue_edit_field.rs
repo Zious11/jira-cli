@@ -4082,7 +4082,7 @@ async fn test_edit_field_bare_pair_unaffected_by_kind_hint_guard_s578_1() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 50 — OBS-1 / BC-3.4.035 AC-011 scope correction (cycle-012 F5, DEC-357)
+// Test 50 — OBS-1 / BC-3.4.035 AC-011 scope correction (cycle-012 F5, D-357)
 //
 // AC-011 / BC-3.4.035 only requires the `changed_fields` key-lowering-to-
 // `field_id` remap for the two ADF-backed system fields this cycle converts

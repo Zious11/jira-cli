@@ -109,7 +109,7 @@ pub(super) async fn handle_edit(
     // Match the RAW token (substring before the first '='), CASE-SENSITIVE,
     // equal to exactly "description" — mirrors the JSM guard in jsm_create.rs
     // for uniform behavior across all three write paths (ADR-0024 §uniform-exit-64,
-    // DEC-359). "Description" (capital D) does NOT fire this guard.
+    // D-359). "Description" (capital D) does NOT fire this guard.
     if markdown
         && field_raw.iter().any(|pair| {
             pair.find('=')
@@ -603,7 +603,7 @@ pub(super) async fn handle_edit(
             .await?;
         }
 
-        // BC-3.4.021 (DEC-274, scope extended by adversary pass-3 MEDIUM-1):
+        // BC-3.4.021 (D-274, scope extended by adversary pass-3 MEDIUM-1):
         // resolve the description input — for `--description-stdin`, read
         // stdin via the same `spawn_blocking` + `read_to_string` idiom the
         // live path uses (see `desc_text` below, ~line 642); for bare
@@ -789,7 +789,7 @@ pub(super) async fn handle_edit(
                 if let Some(ref t) = team {
                     planned.insert("team".into(), json!(t));
                 }
-                // BC-3.4.021 (DEC-274): `description` carries the RAW input string
+                // BC-3.4.021 (D-274): `description` carries the RAW input string
                 // verbatim (BC-3.4.013/#398 unaffected) for EITHER description-input
                 // flag; the additive `descriptionAdf` key (nested inside
                 // `plannedChanges`, never top-level) carries the real rendered ADF
@@ -887,7 +887,7 @@ pub(super) async fn handle_edit(
                 if markdown {
                     println!("  markdown rendering: enabled");
                 }
-                // BC-3.4.021 (DEC-274): unconditional render-OK indicator — emitted
+                // BC-3.4.021 (D-274): unconditional render-OK indicator — emitted
                 // whenever a description input was supplied, regardless of whether
                 // truncation fired (Postconditions-table item 2, adversary pass-5
                 // LOW-1). Table mode never dumps the raw ADF JSON (poor UX); this
@@ -1878,7 +1878,7 @@ fn project_key_from_issue_key(key: &str) -> &str {
 /// POST sequence has no way to also carry those fields, so silently
 /// proceeding would drop them.
 ///
-/// **Release gate (DEC-280, BC-3.4.023 Delivery note):** this path MUST NOT
+/// **Release gate (D-280, BC-3.4.023 Delivery note):** this path MUST NOT
 /// ship to release until a live smoke test (one ADD, one REMOVE, >= 2 issues,
 /// one project with >= 1 component already defined) confirms the
 /// `multiselectComponents` wire shape documented above (AC-010).

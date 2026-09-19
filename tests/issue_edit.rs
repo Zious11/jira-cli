@@ -1,7 +1,7 @@
 //! Integration tests for `issue edit --dry-run` stdin-read + ADF-preview
-//! rendering (S-692-1, issue #692, DEC-274).
+//! rendering (S-692-1, issue #692, D-274).
 //!
-//! BC-3.4.021 (STATUS: UPDATED, DEC-274): `--dry-run` now reads stdin for
+//! BC-3.4.021 (STATUS: UPDATED, D-274): `--dry-run` now reads stdin for
 //! `--description-stdin` and renders an ADF preview for ANY supplied
 //! description input (`--description` or `--description-stdin`), using the
 //! identical `markdown_to_adf`/`text_to_adf` selection the live path uses.

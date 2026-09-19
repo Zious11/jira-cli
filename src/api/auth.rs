@@ -767,7 +767,7 @@ fn legacy_flat_pair_exists() -> Result<bool> {
 /// shared/flat fallback for a profile whose namespaced keys already exist.
 ///
 /// **No-copy detect-and-instruct (S-cycle3-credential-absence-guard,
-/// BC-1.4.032, REDESIGNED — HUMAN DECISION, DEC-326).** When BOTH
+/// BC-1.4.032, REDESIGNED — HUMAN DECISION, D-326).** When BOTH
 /// namespaced keys are absent, this function NEVER reads, copies, or
 /// deletes the legacy shared flat `email`/`api-token` pair as a
 /// credential — for `"default"` or any other profile; there is no
@@ -1070,7 +1070,7 @@ pub fn try_load_oauth_app_credentials() -> Result<Option<(String, String)>> {
 ///
 /// This is [`clear_profile_creds`]'s pre-S-cycle3-remove-logout-semantics
 /// behavior, kept as its own function so [`crate::cli::auth::logout::handle_logout`]
-/// can remain OAuth-specific by design (BC-1.2.013, DEC-322): `logout` must
+/// can remain OAuth-specific by design (BC-1.2.013, D-322): `logout` must
 /// NEVER clear a profile's API-token pair — not even when the target
 /// profile's own `auth_method` happens to be `"oauth"` and it also carries
 /// a leftover API-token pair from a prior mechanism switch. Clearing BOTH
@@ -1198,7 +1198,7 @@ fn clear_api_token_pair_attempt_all(
 /// config entry. `auth logout` uses [`clear_profile_oauth_pair`] instead —
 /// see that function's doc comment for why the two must not be conflated.
 ///
-/// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.014, DEC-322).**
+/// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.014, D-322).**
 /// Previously this function cleared ONLY the OAuth pair
 /// (`<profile>:oauth-access-token` / `<profile>:oauth-refresh-token`, plus
 /// the legacy flat OAuth pair for `"default"`) and aggregated every
@@ -1313,7 +1313,7 @@ fn delete_credential_tolerating_no_entry(key: &str) -> Result<()> {
 /// only for the profiles in `profiles` — callers know their own profile
 /// list (from config) and pass it in.
 ///
-/// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.014, DEC-322).**
+/// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.014, D-322).**
 /// The per-profile API-token-pair deletion branch already existed
 /// (S-cycle3-percred-storage) — this story does NOT add a new deletion
 /// target here. What changes is error-handling strictness, mirroring
@@ -1565,7 +1565,7 @@ impl RedirectUriStrategy {
 /// marker matches, the legacy "Unlock your keychain" message with its final
 /// sentence CORRECTED the same way (AC-004, EC-1.4.039-1).
 ///
-/// **DEC-334 (corrected 2026-09-05, F1 adversarial finding):** the original
+/// **D-334 (corrected 2026-09-05, F1 adversarial finding):** the original
 /// wording instructed the Atlassian grant revoke as a REQUIRED step, framed
 /// as safe on the theory that the OAuth grant this one failed login
 /// attempt just created wasn't shared with anything else.
@@ -3993,7 +3993,7 @@ mod tests {
 
     // -------------------------------------------------------------------------
     // S-cycle3-credential-absence-guard (BC-1.4.032/BC-1.4.033/BC-1.4.034,
-    // DEC-326 no-copy detect-and-instruct redesign). These tests target
+    // D-326 no-copy detect-and-instruct redesign). These tests target
     // `load_api_token`'s both-absent and namespaced-partial branches (see
     // `legacy_flat_pair_exists` and `load_api_token` above), plus the
     // `legacy_flat_pair_exists` existence-only helper itself.
@@ -4069,7 +4069,7 @@ mod tests {
 
     /// Asserts `entry(key).get_password()` is exactly `Err(NoEntry)` — i.e.
     /// the key was never written. Used throughout this section to prove the
-    /// DEC-326 no-copy invariant: a failed `load_api_token` call must never
+    /// D-326 no-copy invariant: a failed `load_api_token` call must never
     /// leave a `<profile>:email`/`<profile>:api-token` entry behind.
     fn assert_keychain_entry_absent(key: &str) {
         assert!(
@@ -4077,7 +4077,7 @@ mod tests {
                 entry(key).unwrap().get_password(),
                 Err(keyring::Error::NoEntry)
             ),
-            "expected keychain entry {key:?} to be absent (never written) — no-copy invariant (DEC-326)"
+            "expected keychain entry {key:?} to be absent (never written) — no-copy invariant (D-326)"
         );
     }
 
@@ -4277,14 +4277,14 @@ mod tests {
         });
     }
 
-    /// **CRITICAL — DEC-326 no-copy invariant (AC-003, VP-AUTHDX-005(a)/(b)).**
+    /// **CRITICAL — D-326 no-copy invariant (AC-003, VP-AUTHDX-005(a)/(b)).**
     /// Seeds ONLY the legacy flat `email`/`api-token` pair (no per-profile
     /// pair at all). After the resulting exit-2 `Err`:
     /// (a) the legacy flat pair STILL EXISTS, byte-for-byte unchanged — it
     ///     was never deleted;
     /// (b) NO `default:email`/`default:api-token` entry was ever created —
     ///     it was never copied.
-    /// This is the core guarantee the F2-gate human decision (DEC-326)
+    /// This is the core guarantee the F2-gate human decision (D-326)
     /// exists to enforce: a shared, environment-unbound Basic-auth pair must
     /// never be silently handed to a freshly-tagged profile.
     #[test]
@@ -5582,7 +5582,7 @@ mod tests {
             );
         }
 
-        // --- AC-002 (corrected 2026-09-05, DEC-334, F1 adversarial finding):
+        // --- AC-002 (corrected 2026-09-05, D-334, F1 adversarial finding):
         // Site 1 (login) honest-fail message recommends jr's own SCOPED
         // cleanup (`jr auth logout` / `jr auth remove`) as the DEFAULT, and
         // presents the Atlassian-side grant-revoke as OPTIONAL, carrying an
@@ -5739,7 +5739,7 @@ mod tests {
             );
         }
 
-        // --- AC-004 (corrected 2026-09-05, DEC-334, F1 adversarial finding):
+        // --- AC-004 (corrected 2026-09-05, D-334, F1 adversarial finding):
         // neither marker matched -> Site 3's legacy "Unlock your keychain"
         // message is BYTE-FOR-BYTE UNCHANGED; Site 1's legacy message is
         // CORRECTED -- only its final grant-revoke sentence is replaced with
@@ -5836,8 +5836,8 @@ mod tests {
                 "AC-007 VIOLATION: a plain (unwrapped) TooLong error — never routed through \
                  auth_windows_store::store_pair — must fall through to Site 1's legacy \
                  (non-DpapiFallbackFailed) branch, not the honest-fail branch. (Site 1's \
-                 legacy branch text was itself CORRECTED by DEC-334 — this assertion checks \
-                 branch selection, not byte-identity with the pre-DEC-334 text.) Got: {msg}"
+                 legacy branch text was itself CORRECTED by D-334 — this assertion checks \
+                 branch selection, not byte-identity with the pre-D-334 text.) Got: {msg}"
             );
             assert!(
                 !msg.contains("2560-byte"),
@@ -5852,9 +5852,9 @@ mod tests {
         }
     }
 
-    /// Source-scan guard (DEC-334, adversarial-review finding, closes the
+    /// Source-scan guard (D-334, adversarial-review finding, closes the
     /// [process-gap] partial-fix-regression class): asserts the
-    /// CONFIRMED-harmful account-wide-revoke framing superseded by DEC-334
+    /// CONFIRMED-harmful account-wide-revoke framing superseded by D-334
     /// never reappears anywhere in this file's PRODUCTION code — message
     /// strings AND rustdoc alike — not just in the two `store_oauth_tokens`
     /// failure-message call sites the original fix touched. Mirrors the
@@ -5869,13 +5869,13 @@ mod tests {
     /// other consumer' framing") in order to check for the phrases'
     /// ABSENCE in the messages under test — scanning those panic-message
     /// strings verbatim would make this guard fail on the very tests that
-    /// enforce DEC-334. Splitting at `mod tests {` excludes them precisely
+    /// enforce D-334. Splitting at `mod tests {` excludes them precisely
     /// because Rust's own module structure places all test code inside that
     /// block; production message-construction functions and their rustdoc
     /// (e.g. [`site1_login_store_failure_message`],
     /// [`site3_refresh_store_failure_message`]) live entirely before it.
     ///
-    /// **Not covered by this guard:** `CHANGELOG.md`'s DEC-334 entry
+    /// **Not covered by this guard:** `CHANGELOG.md`'s D-334 entry
     /// legitimately quotes the retired phrases in scare-quotes to describe
     /// what was wrong and corrected — CHANGELOG.md prose is human
     /// review-guarded (PR review), not machine-guarded here.
@@ -5896,7 +5896,7 @@ mod tests {
     /// `test_no_account_wide_harmful_revoke_framing_in_auth_source` even
     /// though a reader (or the rendered rustdoc / formatted string) sees
     /// one continuous run of text. Demonstrated case: this very file's own
-    /// DEC-334 rustdoc paragraph above
+    /// D-334 rustdoc paragraph above
     /// [`site1_login_store_failure_message`] originally wrapped "...has no"
     /// / "other consumer..." across two `///` lines — invisible to a raw
     /// scan, caught once normalized.
@@ -5963,7 +5963,7 @@ mod tests {
 
     /// FIX-F5-CYCLE4-1 LOW-2 (F5-scoped adversarial review, cycle-004):
     /// `normalize_for_phrase_scan` stripped a leading `///` doc-comment
-    /// prefix but not `//!` (inner-doc) — a forbidden DEC-334 phrase wrapped
+    /// prefix but not `//!` (inner-doc) — a forbidden D-334 phrase wrapped
     /// across two `//!` lines left the un-stripped `//!` marker sitting
     /// between the two halves of the phrase after line-joining (e.g. "...has
     /// no //! other consumer...") so the substring check never matched, even
@@ -6023,7 +6023,7 @@ mod tests {
         for phrase in FORBIDDEN_PHRASES {
             assert!(
                 !production_code_lower.contains(phrase),
-                "DEC-334 VIOLATION: the CONFIRMED-harmful phrase '{phrase}' has reappeared in \
+                "D-334 VIOLATION: the CONFIRMED-harmful phrase '{phrase}' has reappeared in \
                  src/api/auth.rs's production code (a message string or rustdoc comment before \
                  the `mod tests {{` boundary, after whitespace/continuation normalization). \
                  This framing was Perplexity-validated as false \

@@ -12,7 +12,7 @@
 //! `src/cli/mod.rs`, NOT here (per P24-001 / P30-001 corrections).
 //!
 //! `display_sanitize_filename` is the earliest consumer of the CWE-116
-//! display-sanitization helper (SEC-576-011, DEC-184 R3.13). Stories S3 and S4
+//! display-sanitization helper (SEC-576-011, D-184 R3.13). Stories S3 and S4
 //! import it from here — do NOT duplicate.
 
 use anyhow::Result;
@@ -1392,7 +1392,7 @@ async fn replace_existing_attachments(
     // EC-3.9.017-4: a 404 on DELETE = attachment already deleted by a concurrent actor →
     // benign silent skip; continue to the next DELETE and then to the POST.
     // `delete_attachment` maps HTTP-404 → JrError::UserError("…not found or already deleted.").
-    // We detect via downcast_ref rather than modifying delete_attachment (DEC-168: its
+    // We detect via downcast_ref rather than modifying delete_attachment (D-168: its
     // 404→UserError mapping is correct for the standalone delete command).
     for att in &would_delete {
         match client.delete_attachment(&att.id).await {
@@ -1923,7 +1923,7 @@ async fn handle_attachment_upload_jsm(
 ///   (2) Multi-AID bulk: AID validation → `--yes` required (BC-3.9.016) → sequential DELETEs.
 ///   (3) Issue+age: fetch list → `parse_age_duration` → filter → `--yes` required → DELETEs.
 ///
-/// **DEC-168 (targeted single-AID 404):** exit 64; stderr MUST BEGIN with the canonical
+/// **D-168 (targeted single-AID 404):** exit 64; stderr MUST BEGIN with the canonical
 /// prefix `"Attachment <AID> not found or not accessible."` then the Jira error body.
 /// **BC-3.9.010 (bulk 404):** BENIGN SKIP — asymmetry from targeted single-AID 404.
 /// **EC-3.9.020-3:** single-AID `--dry-run` — guards active, gate suppressed, no DELETE.
@@ -1987,10 +1987,10 @@ pub async fn handle_attachment_delete(
                 .into());
             }
 
-            // Confirmation gate (BC-3.9.015; VP-576-002; DEC-174)
+            // Confirmation gate (BC-3.9.015; VP-576-002; D-174)
             if !yes {
                 // Fetch metadata to get the filename for the gate prompt.
-                // DEC-168 / BC-2.7.012 body-surfacing asymmetry (F5-R3-001): on 404
+                // D-168 / BC-2.7.012 body-surfacing asymmetry (F5-R3-001): on 404
                 // the interactive delete path shows canonical prefix + Jira error body
                 // (actionable detail). get_attachment_metadata returns ApiError { 404 }
                 // with body intact; we format it here as canonical + "\n{body}".
@@ -2023,7 +2023,7 @@ pub async fn handle_attachment_delete(
                 }
             }
 
-            // Issue the targeted DELETE (DEC-168 on 404)
+            // Issue the targeted DELETE (D-168 on 404)
             client.delete_attachment_targeted(aid).await?;
 
             if is_json {
@@ -2290,7 +2290,7 @@ pub async fn handle_attachment_delete(
     Ok(())
 }
 
-/// Single-AID confirmation gate (BC-3.9.015 step 2; VP-576-002; DEC-174).
+/// Single-AID confirmation gate (BC-3.9.015 step 2; VP-576-002; D-174).
 ///
 /// Uses `eprint!` (NOT `eprintln!`, NOT `dialoguer`) + `io::stdin().read_line`.
 ///
