@@ -86,7 +86,10 @@ async fn handle_list(
             Some(cached) => cached,
             None => {
                 let fetched = client.list_request_types(service_desk_id, None).await?;
-                cache::write_request_type_cache(profile, service_desk_id, &fetched)?;
+                // `write_request_type_cache` is a best-effort writer per CLAUDE.md gotcha —
+                // it swallows IO errors via eprintln and returns Ok(()). Use `let _` to make
+                // the no-propagation intent explicit (the `?` would be dead code).
+                let _ = cache::write_request_type_cache(profile, service_desk_id, &fetched);
                 fetched
             }
         }
@@ -127,12 +130,16 @@ async fn handle_fields(
                 let fetched = client
                     .get_request_type_fields(service_desk_id, &request_type_id)
                     .await?;
-                cache::write_request_type_fields_cache(
+                // `write_request_type_fields_cache` is a best-effort writer per CLAUDE.md
+                // gotcha — it swallows IO errors via eprintln and returns Ok(()). Use
+                // `let _` to make the no-propagation intent explicit (the `?` would be
+                // dead code).
+                let _ = cache::write_request_type_fields_cache(
                     profile,
                     service_desk_id,
                     &request_type_id,
                     &fetched,
-                )?;
+                );
                 fetched
             }
         };
@@ -198,7 +205,10 @@ async fn resolve_request_type_id(
         Some(cached) => cached,
         None => {
             let fetched = client.list_request_types(service_desk_id, None).await?;
-            cache::write_request_type_cache(profile, service_desk_id, &fetched)?;
+            // `write_request_type_cache` is a best-effort writer per CLAUDE.md gotcha —
+            // it swallows IO errors via eprintln and returns Ok(()). Use `let _` to make
+            // the no-propagation intent explicit (the `?` would be dead code).
+            let _ = cache::write_request_type_cache(profile, service_desk_id, &fetched);
             fetched
         }
     };
