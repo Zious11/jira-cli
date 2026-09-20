@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.7.0-dev.8] - 2026-09-20
+
 ### Fixed
 
 - **OAuth "double-fault" (expired token AND under-scoped) no longer surfaces a misleading
