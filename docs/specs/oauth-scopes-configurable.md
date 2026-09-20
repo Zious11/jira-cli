@@ -2,6 +2,8 @@
 
 **Issue:** [#184](https://github.com/Zious11/jira-cli/issues/184)
 
+> **Historical — the 4-scope literal pinned below is superseded.** `DEFAULT_OAUTH_SCOPES` has grown twice since this spec was written (4→8 scopes adding JSM/CMDB scopes, then 8→16 in cycle-008 adding granular Jira-Software/Agile parity scopes). This spec correctly describes the point-in-time design of the configurability *mechanism*, which is unchanged; for the current scope set, see `src/api/auth.rs::DEFAULT_OAUTH_SCOPES` (live source of truth) and `.factory/specs/architecture/decisions/ADR-0026-oauth-3lo-gateway-routing-invariant-and-granular-jira-software-scopes.md` (scope-expansion history).
+
 ## Problem
 
 `jr`'s OAuth 2.0 (3LO) flow previously hardcoded a classic scope string in `src/api/auth.rs`:
