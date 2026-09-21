@@ -50,10 +50,28 @@ distribution that publishes its own signed releases.
 mise's `github:` backend auto-selects the release asset matching your OS
 and architecture and extracts the `jr` binary (assuming
 [`mise activate`](https://mise.jdx.dev/getting-started.html) is set up in
-your shell profile, this puts `jr` on your `PATH`). Once releases ship
-GitHub Artifact Attestations (planned — see
-[#574](https://github.com/Zious11/jira-cli/pull/574)), mise verifies them
-natively without invoking `gh` or `slsa-verifier`.
+your shell profile, this puts `jr` on your `PATH`). Where releases ship
+GitHub Artifact Attestations (see below), mise verifies them natively
+without invoking `gh` or `slsa-verifier`.
+
+### Verifying a download
+
+Releases can carry a GitHub Artifact Attestation with SLSA build provenance
+for the `.tar.gz` and `.zip` archives, when the publishing repository has
+`ATTESTATIONS_ENABLED` set (see `docs/specs/fork-friendly-release-ops.md`).
+To check that an archive was built by this repository's release workflow
+from the tagged source:
+
+```bash
+gh attestation verify jr-v0.7.0-dev.6-aarch64-apple-darwin.tar.gz --repo Zious11/jira-cli
+```
+
+Replace the repository with the fork you downloaded from. The attestation
+covers the archives only. The signed macOS `.pkg` and `.dmg` installers that
+a fork's opt-in `sign-and-publish` workflow produces are not attested; their
+authenticity comes from Apple code signing and notarization instead
+(`pkgutil --check-signature jr-a-arm64.pkg`, `spctl -a -t open --context
+context:primary-signature jr-a-arm64.dmg`).
 
 To track prerelease builds cut from `develop` (currently `v*-dev.*`), opt
 in per-tool in your `mise.toml`:
