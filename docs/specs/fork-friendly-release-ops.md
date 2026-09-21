@@ -43,6 +43,7 @@ in both repos, so syncs are conflict-free.
 | `HOMEBREW_TAP_REPO` | `owner/homebrew-name` tap repo to publish formulas to; also enables the homebrew jobs | unset |
 | `RELEASE_GAP_FILL_ENABLED` | `'true'` enables the daily gap-fill schedule | unset |
 | `SYNC_UPSTREAM_REPO` | `owner/repo` to merge from on a schedule (forks only) | unset |
+| `ATTESTATIONS_ENABLED` | `'true'` enables the `attest` job in `release.yml` (GitHub Artifact Attestation / SLSA build provenance for the release archives; publishes the workflow's commit SHA to the public Rekor transparency log). Requires `id-token: write`; unavailable on GHES and on private forks without GitHub Enterprise Cloud | unset |
 | `GITLEAKS_DISABLED` | `'true'` disables the gitleaks secret-scan job in `ci.yml`; for forks that cannot obtain a gitleaks org/commercial license or prefer an alternative scanner | unset |
 | `MUTANTS_NIGHTLY_ENABLED` | `'true'` runs the advisory `mutants-nightly.yml` full mutation nightly; unset skips it cleanly | `'true'` (the canonical repo sets it to keep the nightly it has always run; forks leave it unset) |
 | `SCORECARD_ENABLED` | `'true'` enables the OpenSSF Scorecard analysis job in `scorecards.yml` (weekly schedule, push to `develop`, branch-protection changes); unset skips it, so forks do not publish scorecard results for a copy of the repo | `'true'` (the job is skipped otherwise, so the canonical repo sets it) |
