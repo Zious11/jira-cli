@@ -2520,7 +2520,7 @@ async fn test_jsm_create_markdown_without_description_exits_64_with_platform_mes
 }
 
 // ─── S-639-1: Platform-path pre-flight exit-64 guards (BC-3.8.012 / BC-3.8.013,
-//     DEC-188) ─────────────────────────────────────────────────────────────────
+//     D-188) ─────────────────────────────────────────────────────────────────
 //
 // These tests live in `issue_create_jsm.rs` by the explicit decision in the
 // S-383 story file (`.factory/stories/S-383-platform-inverse-warnings.md`
@@ -2529,7 +2529,7 @@ async fn test_jsm_create_markdown_without_description_exits_64_with_platform_mes
 // `--request-type` flag — co-located here because they cover the inverse
 // symmetry of the BC-3.8.011 forward-direction warnings already in this file.
 //
-// **IMPLEMENTING SUCCESSOR to S-383 (DEC-188, 2026-07-25):** the S-383
+// **IMPLEMENTING SUCCESSOR to S-383 (D-188, 2026-07-25):** the S-383
 // warn-and-proceed contract (exit 0 + issue created despite the stray flag)
 // is SUPERSEDED by a pre-flight `JrError::UserError` exit-64 guard that fires
 // BEFORE any HTTP call. AC-1/AC-2/AC-3/AC-5/AC-7 below are INVERTED from
@@ -2568,12 +2568,12 @@ async fn mount_platform_create_stubs(server: &wiremock::MockServer) {
 
 /// AC-1 (S-578-4 INVERSION, BC-3.3.010/011, VP-578-017, [mode: human]):
 /// `jr issue create --field NAME=VALUE` WITHOUT `--request-type` no longer
-/// exits 64 pre-flight (DEC-188 reversed by DEC-310) — it resolves via
+/// exits 64 pre-flight (D-188 reversed by D-310) — it resolves via
 /// createmeta instead. This fixture's `GET /rest/api/3/field` mock returns
 /// an EMPTY field list, so field "a" fails Phase-1 name resolution with the
 /// NEW BC-3.3.011 taxonomy-row-2 "zero matches" error — exit 64 STILL, but
 /// for a completely different reason and with a different message; the old
-/// DEC-188 verbatim string is DEAD. SUPERSEDES the DEC-188-era test
+/// D-188 verbatim string is DEAD. SUPERSEDES the D-188-era test
 /// `test_platform_create_field_flag_emits_warning_without_request_type`
 /// (originally inverted to `..._exits_64_without_request_type` under
 /// S-639-1; this S-578-4 pass inverts it a second time, per BC-3.8.012's own
@@ -2644,7 +2644,7 @@ async fn test_platform_create_field_flag_exits_64_without_request_type() {
     );
     assert!(
         !stderr.contains("--field is only valid with"),
-        "S-578-4 / AC-1: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
+        "S-578-4 / AC-1: the DEAD D-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty(),
@@ -2665,7 +2665,7 @@ async fn test_platform_create_field_flag_exits_64_without_request_type() {
 /// AC-2 (BC-3.8.013, [mode: --output json]): `jr issue create --on-behalf-of
 /// <ID>` WITHOUT `--request-type` exits 64 with a JSON error envelope on
 /// stderr. INVERTED from the S-383 exit-0 warn-and-proceed contract
-/// (DEC-188). Renamed from
+/// (D-188). Renamed from
 /// `test_platform_create_on_behalf_of_flag_emits_warning_without_request_type`.
 #[tokio::test]
 async fn test_platform_create_on_behalf_of_flag_exits_64_without_request_type() {
@@ -2738,8 +2738,8 @@ async fn test_platform_create_on_behalf_of_flag_exits_64_without_request_type() 
 /// AC-3 (BC-3.8.013 standalone postcondition, [mode: human]): When both
 /// `--field NAME=VALUE` and `--on-behalf-of <ID>` are supplied WITHOUT
 /// `--request-type`, BC-3.8.013's STANDALONE `--on-behalf-of` guard fires
-/// alone (exit 64) — the combined-error contract from S-639-1/DEC-188
-/// (BC-3.8.012) is REMOVED by S-578-4/DEC-310; `--field` no longer
+/// alone (exit 64) — the combined-error contract from S-639-1/D-188
+/// (BC-3.8.012) is REMOVED by S-578-4/D-310; `--field` no longer
 /// contributes to any pre-flight error on the platform path. Renamed from
 /// `test_platform_create_both_inverse_flags_exit_64_combined_error`
 /// (originally `..._emit_independent_warnings` under the dead S-383
@@ -2842,9 +2842,9 @@ async fn test_platform_create_both_inverse_flags_exit_64_standalone_on_behalf_gu
 /// must NOT trip any of the three new pre-flight guard error strings. Exit
 /// code stays 0 (BREAKING-CHANGE REGRESSION PIN, H-NEW-PREFLIGHT-004).
 ///
-/// **AC-4 VACUITY→NON-VACUITY TRANSITION (DEC-188):** the old assertions
+/// **AC-4 VACUITY→NON-VACUITY TRANSITION (D-188):** the old assertions
 /// (`!stderr.contains("--field is ignored")` / the `--on-behalf-of` twin) are
-/// vacuously true post-DEC-188 — those substrings no longer exist ANYWHERE in
+/// vacuously true post-D-188 — those substrings no longer exist ANYWHERE in
 /// the codebase, so they would pass even if the guard fired unconditionally.
 /// Replaced with FALSIFIABLE-COARSE negatives on the three NEW error
 /// substrings, which DO catch an unconditionally-firing guard.
@@ -2909,12 +2909,12 @@ async fn test_platform_create_without_inverse_flags_emits_no_errors() {
 /// `--field a=b` (ONE occurrence) and `--field a=b --field a=c` (TWO
 /// occurrences of the SAME name) WITHOUT `--request-type` both exit 64 with
 /// the SAME BC-3.3.011 taxonomy-row-2 "zero matches for 'a'" resolution
-/// error. The DEC-188 presence-only `!field_pairs.is_empty()` guard this AC
+/// error. The D-188 presence-only `!field_pairs.is_empty()` guard this AC
 /// originally exercised is REMOVED; the byte-identical result across both
 /// invocations now falls out of `parse_field_kv`'s pre-existing last-wins
 /// semantics (BC-3.4.026, unchanged), which collapse repeated occurrences of
 /// one name into a single map entry before resolution ever runs — not from a
-/// dedicated idempotency guard. The old DEC-188 verbatim string is DEAD.
+/// dedicated idempotency guard. The old D-188 verbatim string is DEAD.
 /// Renamed from `test_platform_create_field_idempotent_one_warning_per_logical_flag`
 /// (originally re-inverted to the current name under S-639-1).
 ///
@@ -2990,7 +2990,7 @@ async fn test_platform_create_field_idempotent_one_error_per_logical_flag() {
     let stderr_i = String::from_utf8_lossy(&output_i.stderr).to_string();
     let stderr_ii = String::from_utf8_lossy(&output_ii.stderr).to_string();
 
-    // S-578-4 INVERSION (BC-3.3.010/011, VP-578-017): the DEC-188 presence-only
+    // S-578-4 INVERSION (BC-3.3.010/011, VP-578-017): the D-188 presence-only
     // `!field_pairs.is_empty()` guard this AC originally exercised is REMOVED.
     // Both invocations here fail via the NEW BC-3.3.011 taxonomy row 2 (zero
     // matches for field 'a' against the empty mounted field list) instead.
@@ -3022,7 +3022,7 @@ async fn test_platform_create_field_idempotent_one_error_per_logical_flag() {
         );
         assert!(
             !stderr.contains("--field is only valid with"),
-            "S-578-4 / {label}: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
+            "S-578-4 / {label}: the DEAD D-188 verbatim string must NEVER appear; got: {stderr}"
         );
         assert!(
             !stderr.contains("is ignored on the platform create path"),
@@ -3054,9 +3054,9 @@ async fn test_platform_create_field_idempotent_one_error_per_logical_flag() {
 /// single-flag nor combined guard may fire. Exit code stays 0. The
 /// `expect(1)` POST stub below is KEPT (load-bearing).
 ///
-/// **AC-6 VACUITY→NON-VACUITY TRANSITION (DEC-188):** the old assertion
+/// **AC-6 VACUITY→NON-VACUITY TRANSITION (D-188):** the old assertion
 /// (`!stderr.contains("--field is ignored on the platform create path")`) is
-/// vacuously true post-DEC-188 — that substring no longer exists anywhere in
+/// vacuously true post-D-188 — that substring no longer exists anywhere in
 /// the codebase. Replaced with DISCRIMINATING + FALSIFIABLE-COARSE negatives
 /// on the new guard error substrings.
 #[tokio::test]
@@ -3127,7 +3127,7 @@ async fn test_jsm_create_with_field_and_request_type_does_not_fire_bc_3_8_012() 
 /// `--request-type` still exits 64 — but now via `parse_field_kv`'s own
 /// missing-`=` rejection (step 2a, the SAME pure parser precedent this
 /// story's SSOT "Platform-Path Guard Ordering" block documents), NOT the
-/// removed DEC-188 presence-only guard. The message shape is entirely
+/// removed D-188 presence-only guard. The message shape is entirely
 /// different: `parse_field_kv` fails BEFORE the D2 collision guard (step 2b)
 /// and BEFORE any resolution or project/type lookup ever runs.
 #[tokio::test]
@@ -3182,14 +3182,14 @@ async fn test_platform_create_malformed_field_without_request_type_exits_64() {
             .as_str()
             .is_some_and(|s| s.contains("not a valid NAME=VALUE pair") && s.contains("missing '='")),
         "S-578-4 / AC-7: error field must contain parse_field_kv's missing-'=' \
-         message (step 2a), NOT the removed DEC-188 guard string; got: {parsed}"
+         message (step 2a), NOT the removed D-188 guard string; got: {parsed}"
     );
     assert!(
         !parsed["error"]
             .as_str()
             .unwrap_or_default()
             .contains("--field is only valid with"),
-        "S-578-4 / AC-7: the DEAD DEC-188 verbatim string must NEVER appear; got: {parsed}"
+        "S-578-4 / AC-7: the DEAD D-188 verbatim string must NEVER appear; got: {parsed}"
     );
     assert!(
         stdout.trim().is_empty(),
@@ -3207,13 +3207,13 @@ async fn test_platform_create_malformed_field_without_request_type_exits_64() {
 /// UNAFFECTED — BC-3.8.013's guard is unchanged, [mode: human]):
 ///
 /// Invocation (i) originally proved `--field` alone suppressed ALL helper
-/// HTTP (team/assignee resolution) via the now-removed DEC-188 zero-HTTP
+/// HTTP (team/assignee resolution) via the now-removed D-188 zero-HTTP
 /// pre-flight guard. Post-reversal, a well-formed, non-colliding `--field`
 /// no longer blocks ANYTHING pre-flight — `--team`/`--to` helper resolution
 /// now proceeds normally and DOES reach the network. This sub-invocation is
 /// INVERTED to prove exactly that: the previously-forbidden endpoints are
 /// no longer zero-HTTP (`received_requests()` must be NON-empty), and the
-/// dead DEC-188 string never appears. Invocation (ii) (`--on-behalf-of` +
+/// dead D-188 string never appears. Invocation (ii) (`--on-behalf-of` +
 /// helpers) is UNTOUCHED below — BC-3.8.013's guard still suppresses all
 /// HTTP unconditionally, exiting 64. The function name reflects only
 /// invocation (ii)'s outcome (exit 64, zero HTTP) — invocation (i) exits 0
@@ -3290,7 +3290,7 @@ async fn test_platform_create_field_allows_network_on_behalf_of_stays_exit_64_ze
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             !stderr.contains("--field is only valid with"),
-            "S-578-4 / AC-8(i) inverted: the DEAD DEC-188 verbatim string must \
+            "S-578-4 / AC-8(i) inverted: the DEAD D-188 verbatim string must \
              NEVER appear; got: {stderr}"
         );
         assert!(
@@ -3401,7 +3401,7 @@ async fn test_platform_create_field_allows_network_on_behalf_of_stays_exit_64_ze
 /// AC-9 (S-578-4 INVERSION, BC-3.3.010 EC-3.3.010-3, [mode: human]):
 /// `--field a=b` WITHOUT `--project` and WITHOUT `--request-type` now exits
 /// 64 with the PRE-EXISTING "Project key is required" error — the removed
-/// DEC-188 guard no longer intercepts first. `--field` resolution never
+/// D-188 guard no longer intercepts first. `--field` resolution never
 /// runs without a resolved project+type (BC-3.3.010 EC-3.3.010-3): the D2
 /// collision guard (step 2b, no dedicated flags here, so no collision) runs
 /// and passes, then project-key resolution (step 3) fails BEFORE step 4b's
@@ -3445,7 +3445,7 @@ async fn test_platform_create_field_without_project_exits_64_not_project_error()
     );
     assert!(
         !stderr.contains("--field is only valid with"),
-        "S-578-4 / AC-9: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
+        "S-578-4 / AC-9: the DEAD D-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty(),
@@ -3519,14 +3519,14 @@ async fn test_platform_create_field_without_request_type_json_error_shape() {
             .as_str()
             .is_some_and(|s| s.contains("not found") && s.contains("Zero matches for 'a'")),
         "S-578-4 / AC-10: error field must contain the BC-3.3.011 zero-matches \
-         message, NOT the removed DEC-188 guard string; got: {parsed}"
+         message, NOT the removed D-188 guard string; got: {parsed}"
     );
     assert!(
         !parsed["error"]
             .as_str()
             .unwrap_or_default()
             .contains("--field is only valid with"),
-        "S-578-4 / AC-10: the DEAD DEC-188 verbatim string must NEVER appear; got: {parsed}"
+        "S-578-4 / AC-10: the DEAD D-188 verbatim string must NEVER appear; got: {parsed}"
     );
     assert!(
         stdout.trim().is_empty(),
@@ -3543,7 +3543,7 @@ async fn test_platform_create_field_without_request_type_json_error_shape() {
 /// AC-11 (S-578-4 INVERSION, BC-3.3.010 mode-agnosticism, [mode: human/TTY]):
 /// `--field a=b` WITHOUT `--project`, WITHOUT `--request-type`, and WITHOUT
 /// `--no-input` now exits 64 via the PRE-EXISTING "Project key is required"
-/// error — the removed DEC-188 guard no longer intercepts first. The D2
+/// error — the removed D-188 guard no longer intercepts first. The D2
 /// collision guard (no dedicated flags here, so no collision) passes, and
 /// project-key resolution attempts an interactive prompt (still with
 /// `JR_STDIN_IS_TTY=1`, the debug seam suppressing the auto-`--no-input`
@@ -3589,7 +3589,7 @@ async fn test_platform_create_field_interactive_tty_exits_64_before_prompt() {
     );
     assert!(
         !stderr.contains("--field is only valid with"),
-        "S-578-4 / AC-11: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
+        "S-578-4 / AC-11: the DEAD D-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         !stderr.contains("Created issue"),
@@ -3615,7 +3615,7 @@ async fn test_platform_create_field_interactive_tty_exits_64_before_prompt() {
 // ─── AC-12 (NEW): --help pins "requires --request-type" on BOTH flags ───────
 
 /// AC-12 (S-578-4 INVERSION, BC-3.8.012 F3/F4 removal obligations —
-/// "AC-12 obligation", [mode: human help]): post-DEC-310-reversal, `--field`'s
+/// "AC-12 obligation", [mode: human help]): post-D-310-reversal, `--field`'s
 /// help line NO LONGER carries "requires --request-type" at all (the clause's
 /// removal IS the reversal itself) — only `--on-behalf-of`'s help line keeps
 /// it. The count assertion changes from `== 2` to `== 1`, scoped to the
@@ -3891,7 +3891,7 @@ async fn test_platform_create_on_behalf_empty_string_exits_64_013_error() {
 /// AC-018's regression-check counterpart in `tests/issue_create_field.rs`
 /// covers the WOULD-otherwise-succeed variant of this invocation; [mode:
 /// human]): `--markdown --field description=x` WITHOUT `--request-type` no
-/// longer fires the removed DEC-188 guard. This fixture has no `--project`,
+/// longer fires the removed D-188 guard. This fixture has no `--project`,
 /// so the PRE-EXISTING "Project key is required" error fires instead
 /// (`description` collides with NO dedicated flag here — `--description`/
 /// `--description-stdin` are absent — so the D2 collision guard passes
@@ -3942,7 +3942,7 @@ async fn test_platform_create_markdown_with_field_exits_64_bc_3_8_012_not_markdo
     );
     assert!(
         !stderr.contains("--field is only valid with"),
-        "S-578-4 / AC-17: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
+        "S-578-4 / AC-17: the DEAD D-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         !stderr.contains("cannot be combined with `--markdown`"),
@@ -3960,7 +3960,7 @@ async fn test_platform_create_markdown_with_field_exits_64_bc_3_8_012_not_markdo
 /// AC-18 (S-578-4 INVERSION, EC-3.8.012-7 now stale post-reversal,
 /// BC-3.3.011 taxonomy row 2, [mode: human]): `--field a=b
 /// --description-stdin` WITHOUT `--request-type` no longer exits 64 via any
-/// pre-flight guard — the removed DEC-188 guard no longer intercepts.
+/// pre-flight guard — the removed D-188 guard no longer intercepts.
 /// `description_stdin` is a governed D2 key, but the `--field` here targets
 /// wire key "a" (not "description"), so the D2 collision guard passes
 /// cleanly; the blocking stdin read at step 4a now DOES run (unlike the
@@ -4025,7 +4025,7 @@ async fn test_platform_create_description_stdin_with_field_exits_64_stdin_consum
     );
     assert!(
         !stderr.contains("--field is only valid with"),
-        "S-578-4 / AC-18: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
+        "S-578-4 / AC-18: the DEAD D-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty(),
@@ -4046,7 +4046,7 @@ async fn test_platform_create_description_stdin_with_field_exits_64_stdin_consum
 /// AC-19 (S-578-4 INVERSION, EC-3.8.012-9 fully superseded, BC-3.3.011
 /// taxonomy row 2, [mode: human]): `--field a=` (key present, empty value
 /// after `=`) WITHOUT `--request-type` still exits 64 — but the removed
-/// DEC-188 presence-only guard is GONE; `parse_field_kv` accepts an empty
+/// D-188 presence-only guard is GONE; `parse_field_kv` accepts an empty
 /// VALUE (BC-3.8.008's pre-existing "empty value allowed" contract,
 /// unaffected by this story), so resolution proceeds to the SAME
 /// zero-matches failure as AC-1/AC-10/AC-18 (field "a" absent from the
@@ -4103,7 +4103,7 @@ async fn test_platform_create_field_empty_value_exits_64_bc_3_8_012() {
     );
     assert!(
         !stderr.contains("--field is only valid with"),
-        "S-578-4 / AC-19: the DEAD DEC-188 verbatim string must NEVER appear; got: {stderr}"
+        "S-578-4 / AC-19: the DEAD D-188 verbatim string must NEVER appear; got: {stderr}"
     );
     assert!(
         stdout.trim().is_empty(),

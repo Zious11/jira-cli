@@ -577,7 +577,7 @@ async fn test_ac_004_auth_remove_retry_after_resolved_backend_error_succeeds() {
 /// `clear_profile_creds` under the OLD "clear only OAuth pair" contract,
 /// so `jr auth refresh` on an oauth-method profile that ALSO carried a
 /// leftover api-token pair (e.g. from a prior mechanism switch) would
-/// silently, irrecoverably delete it — a DEC-322 data-loss regression.
+/// silently, irrecoverably delete it — a D-322 data-loss regression.
 ///
 /// This cannot be driven fully end-to-end through `refresh_credentials`
 /// without a live OAuth server (the flow, after the clear step, opens a
@@ -634,7 +634,7 @@ async fn test_sec_1_auth_refresh_oauth_branch_preserves_api_token_pair() {
     );
     let (email, token) = api_token_after.expect(
         "SEC-1: auth refresh's OAuth branch must NEVER delete the api-token \
-         pair — this is the DEC-322 data-loss regression this fix closes",
+         pair — this is the D-322 data-loss regression this fix closes",
     );
     assert_eq!(email, "refresh@example.com");
     assert_eq!(token, "refresh-token");

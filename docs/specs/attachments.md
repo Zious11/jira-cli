@@ -96,13 +96,13 @@ Deletes attachments by AID or by age filter.
 - `jr issue attachment delete AID1 AID2 … --yes` — multi-AID bulk (always requires `--yes`).
 - `jr issue attachment delete --issue KEY --older-than DURATION --yes` — age-based bulk.
 
-**Single-AID gate (BC-3.9.015; DEC-174):** Without `--yes`, fetches attachment metadata (GET
+**Single-AID gate (BC-3.9.015; D-174):** Without `--yes`, fetches attachment metadata (GET
 `/rest/api/3/attachment/{id}`) to get filename, then prompts `"Delete attachment <name> (AID)? [y/N]"`
 via `eprint!` + flush + `stdin().lock().read_line()`. `"y"/"yes"` → proceed; other input → cancelled
 (exit 0); EOF → `JrError::Interrupted` (exit 130). Non-interactive (`--no-input` / non-TTY stdin)
 without `--yes` exits 64 `"Use --yes to confirm deletion without a prompt."`.
 
-**DEC-168 targeted 404:** Single-AID DELETE that returns 404 exits 64 with canonical prefix
+**D-168 targeted 404:** Single-AID DELETE that returns 404 exits 64 with canonical prefix
 `"Attachment <AID> not found or not accessible."` followed by the raw Jira error body.
 Uses `delete_attachment_targeted` (separate from the benign-skip `delete_attachment` used by S-576-3).
 
@@ -123,12 +123,12 @@ JSON dry-run shape: `{"attachments":[{id[,filename]}],"dryRun":true,"ids":[…]}
 - Bulk: `{"count":N,"deleted":bool,"ids":[…]}`.
 
 Implemented: `src/cli/issue/attachments.rs::handle_attachment_delete`. API:
-`src/api/jira/attachments.rs::delete_attachment_targeted` (single-AID DEC-168),
+`src/api/jira/attachments.rs::delete_attachment_targeted` (single-AID D-168),
 `src/api/jira/attachments.rs::delete_attachment` (bulk benign-skip).
 
 ## See Also
 
 - `docs/specs/json-output-shapes.md` — canonical JSON shapes for all four subcommands
-- `CLAUDE.md` — Gotchas: `sanitize_attachment_filename`, redirect behavior, upload multipart retry, SEC-576-004, JRACLOUD-96384, `allow_hyphen_values` variadic caveat, DEC-168 targeted-vs-bulk 404 asymmetry, JSM two-step upload (SEC-576-006, BC-3.9.006)
+- `CLAUDE.md` — Gotchas: `sanitize_attachment_filename`, redirect behavior, upload multipart retry, SEC-576-004, JRACLOUD-96384, `allow_hyphen_values` variadic caveat, D-168 targeted-vs-bulk 404 asymmetry, JSM two-step upload (SEC-576-006, BC-3.9.006)
 - `.factory/specs/prd/bc-2-issue-read.md` — list/download behavioral contracts
 - `.factory/specs/prd/bc-3-issue-write.md` — upload/delete behavioral contracts

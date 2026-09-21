@@ -33,7 +33,7 @@
 //!     or any result value the script has never seen before, fails the gate
 //!     by default (see the S-CIGATE-2 section below for the full history).
 //!   - `spec-guard` has no `if:` guard and must be promoted to a blocking
-//!     check (DEC-101).
+//!     check (D-101).
 //!
 //! Test coverage map (→ S-CIGATE-1 AC — this story's ACs are zero-padded,
 //! e.g. `AC-001`/`AC-002`/`AC-003`; see the SEPARATE S-626-1 table below,
@@ -89,7 +89,7 @@
 //! 30465686049 (`gh run view 30465686049 --json jobs`: `Mutation testing`
 //! concluded `skipped`, `CI Gate` concluded `success`). An earlier revision
 //! of this file's doc comment described that behavior as "the correct
-//! behavior per DEC-096/097 and delta-analysis §5" — it was not; that
+//! behavior per D-096/097 and delta-analysis §5" — it was not; that
 //! framing described the defect this story fixes, and has been corrected
 //! above rather than left standing beside this note.
 //!
@@ -637,7 +637,7 @@ fn test_ci_gate_job_exists_with_required_metadata() {
 /// `mutants-aggregate` is the new `ci-gate.needs` member (`mutants` and
 /// `mutants-plan` are admitted into `ci.yml`'s job universe only via
 /// `PINNED_GATE_EXCLUDED_JOBS`, never wired directly into branch
-/// protection — DEC-096/DEC-097). Unlike the old `mutants` job,
+/// protection — D-096/D-097). Unlike the old `mutants` job,
 /// `mutants-aggregate` NEVER reports `skipped` to GitHub Actions — its
 /// job-level `if: always()` makes it run unconditionally and
 /// `scripts/mutants-aggregate.sh`'s Step 0 resolves a non-PR event to an
@@ -863,7 +863,7 @@ fn test_ci_gate_excludes_advisory_and_secret_scan_jobs() {
 ///     `mutants-aggregate`'s pass/fail decision, which IS required via
 ///     `ci-gate.needs`). It is excluded from `ci-gate.needs` DIRECTLY
 ///     because `mutants-aggregate` is the required proxy for it, per
-///     CLAUDE.md's DEC-096/DEC-097 convention ("New CI jobs that must be
+///     CLAUDE.md's D-096/D-097 convention ("New CI jobs that must be
 ///     required must be added to `ci-gate.needs`, never wired directly
 ///     into branch protection") — a matrix job with per-shard
 ///     `continue-on-error: true` and a variable skip condition
@@ -1044,7 +1044,7 @@ fn test_ci_gate_needs_partitions_all_ci_yml_jobs() {
 /// is the new `ci-gate.needs` member enforcing the 90% pooled kill-rate
 /// gate on every PR (`mutants`/`mutants-plan` are admitted into `ci.yml`'s
 /// job universe only via `PINNED_GATE_EXCLUDED_JOBS`, never wired
-/// directly into branch protection — DEC-096/DEC-097).
+/// directly into branch protection — D-096/D-097).
 ///
 /// Unlike the old `mutants` job, `mutants-aggregate` carries
 /// `if: always()` and NEVER reports `skipped` to GitHub Actions —
@@ -1205,7 +1205,7 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 ///
 /// `mutants`/`mutants-plan` are not `ci-gate.needs` members at all (they
 /// are admitted into `ci.yml`'s job universe only via
-/// `PINNED_GATE_EXCLUDED_JOBS` — DEC-096/DEC-097), so `always_run_needs_
+/// `PINNED_GATE_EXCLUDED_JOBS` — D-096/D-097), so `always_run_needs_
 /// members` never iterates them; this docstring's `mutants`-specific
 /// carve-out is HISTORICAL (pre-cycle-006). **cycle-006 (mutants-ci-
 /// sharding) EXTENSION:** `mutants-aggregate` IS a `ci-gate.needs` member
@@ -1698,7 +1698,7 @@ const PINNED_ALWAYS_RUN_STEP_KEY_SETS: &[(&str, &[&[&str]])] = &[
             &["name", "run"],          // check-bc-cumulative-counts self-test (fixture suite)
             &["name", "run"],          // check-bc-cumulative-counts (DRIFT-002)
             &["name", "run"],          // check-cargo-mutants-policy-citations self-test (Guard 2)
-            &["name", "run"],          // check-cargo-mutants-policy-citations (Guard 2, DEC-150)
+            &["name", "run"],          // check-cargo-mutants-policy-citations (Guard 2, D-150)
             &["name", "run"],          // check-bc-citation-symbols self-test (BC-CITE-001)
             &["name", "run"],          // check-bc-citation-symbols (BC-CITE-001)
             &["name", "run"],          // check-ci-gate self-test (fixture suite, S-CIGATE-2)
@@ -6750,7 +6750,7 @@ fn find_sole_step_by_name<'a>(steps: &'a [Step], step_name: &str) -> Result<&'a 
 /// {RUSTUP_TOOLCHAIN: "1.85.0"}`, while the REAL step's `env:` block is
 /// deleted entirely. Point-fixing a fourth time would leave the same shape
 /// reachable at the next construction (this project's precedent for a
-/// recurring defect class — DEC-243, DEC-244, DEC-255 — is a class sweep,
+/// recurring defect class — D-243, D-244, D-255 — is a class sweep,
 /// not a point fix): every step-selection predicate in this file now
 /// routes through this one ambiguity-checked accessor instead of a raw
 /// `.find()`.
@@ -9062,7 +9062,7 @@ fn test_allowed_skips_has_exactly_four_code_level_references() {
 }
 
 // ---------------------------------------------------------------------------
-// S-626-1 — DEC-246 follow-on hardening: sibling-workflow exposure (Guard A)
+// S-626-1 — D-246 follow-on hardening: sibling-workflow exposure (Guard A)
 // and matrix staticity (Guard B)
 // ---------------------------------------------------------------------------
 //
@@ -9303,7 +9303,7 @@ fn extract_job_display_name(job: &Job) -> Option<String> {
     }
 }
 
-/// S-626-1 Guard A (DEC-246 §"Sibling-workflow frontier"): branch
+/// S-626-1 Guard A (D-246 §"Sibling-workflow frontier"): branch
 /// protection matches a required status check by the job's `name:` STRING
 /// ALONE — the workflow FILE that declares the job is not part of the
 /// check's identity. GitHub's own docs state plainly that "[u]sing the
@@ -9311,11 +9311,11 @@ fn extract_job_display_name(job: &Job) -> Option<String> {
 /// check results" and instruct keeping job names unique across all
 /// workflows
 /// (<https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches>,
-/// verified 2026-08-09 — see DEC-246 Q5).
+/// verified 2026-08-09 — see D-246 Q5).
 ///
 /// **PREMISE LABEL CORRECTED (S-626-1 research pass, 2026-08-10, Q-D):** the
 /// specific claim that a duplicate `CI Gate` check NAME yields a false
-/// green has been carried since DEC-246 as though established; it must be
+/// green has been carried since D-246 as though established; it must be
 /// labelled **INFERRED — neither verified nor refuted**, not established
 /// fact. What IS confirmed (CONFIRM, primary, per the docs quoted above):
 /// the check name alone is the identity, and the declaring workflow file is
@@ -9416,7 +9416,7 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
             };
             if extract_job_display_name(job).as_deref() == Some("CI Gate") {
                 panic!(
-                    "FAIL (S-626-1 Guard A, DEC-246 Sibling-workflow frontier): \
+                    "FAIL (S-626-1 Guard A, D-246 Sibling-workflow frontier): \
                      {} declares job `{job_id}` with `name: CI Gate` — the SAME \
                      required-check name as `.github/workflows/ci.yml`'s \
                      `ci-gate` job.\n\
@@ -9471,7 +9471,7 @@ fn test_no_sibling_workflow_declares_a_job_named_ci_gate() {
 /// green with zero edits to either test.
 const PINNED_MATRIX_NEEDS_MEMBER_COUNT: usize = 2;
 
-/// S-626-1 Guard B (DEC-246 §Q4 + "New material this reconstruction
+/// S-626-1 Guard B (D-246 §Q4 + "New material this reconstruction
 /// contributes" item 1): `ci-gate.needs` includes two matrix jobs, `clippy`
 /// and `test`. What `needs.<job>.result` reports when a matrix job expands
 /// to ZERO legs is UNDOCUMENTED by GitHub — tracked as the open drift item
@@ -9506,7 +9506,7 @@ const PINNED_MATRIX_NEEDS_MEMBER_COUNT: usize = 2;
 /// repeat this cluster's founding mistake in the opposite direction.
 /// See `.factory/research/gh-actions-open-semantics-2026-08-10.md` §Q-A.
 ///
-/// DEC-246 established that the reachability question is currently
+/// D-246 established that the reachability question is currently
 /// UNREACHABLE in this file: both matrix jobs use STATIC LITERAL `os:` lists
 /// (`[ubuntu-latest, windows-latest]` and `[ubuntu-latest, macos-latest,
 /// windows-latest]`). The zero-leg case becomes reachable if a future edit
@@ -9643,7 +9643,7 @@ fn test_matrix_os_lists_remain_static_literals() {
 
         assert!(
             !value.contains("${{") && !value.contains("fromJSON"),
-            "FAIL (S-626-1 Guard B, DEC-246 §Q4): `{job_id}.strategy.matrix.os` \
+            "FAIL (S-626-1 Guard B, D-246 §Q4): `{job_id}.strategy.matrix.os` \
              is no longer a static literal list (found: `{value}`).\n\
              \n\
              GitHub does not document what `needs.{job_id}.result` reports \

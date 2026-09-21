@@ -202,7 +202,7 @@ impl JiraClient {
     ///   **Callers** convert to `JrError::UserError` (exit 64) with call-site-specific
     ///   formatting per BC-2.7.012 body-surfacing asymmetry (F5-R3-001):
     ///   - `handle_single_download` (download path): canonical-only, no body.
-    ///   - `handle_attachment_delete` interactive gate (DEC-168): canonical + `\n{body}`.
+    ///   - `handle_attachment_delete` interactive gate (D-168): canonical + `\n{body}`.
     ///   - bulk dry-run `Err(_)` fallback: body irrelevant (id-only row).
     /// - 401 → `JrError::NotAuthenticated` (exit 2): handled by client.
     /// - 403 → `JrError::ApiError { status: 403 }` (exit 1):
@@ -220,7 +220,7 @@ impl JiraClient {
                 }
                 .into()),
                 // 404: pass through ApiError with raw Jira body intact so call sites
-                // can choose whether to surface the body (DEC-168 delete path) or emit
+                // can choose whether to surface the body (D-168 delete path) or emit
                 // canonical-only text (download path, BC-2.7.012).
                 Ok(jr_err) => Err(jr_err.into()),
                 Err(other) => Err(other),
@@ -420,11 +420,11 @@ impl JiraClient {
         }
     }
 
-    /// Delete a single attachment by ID — targeted path (S-576-4; BC-3.9.008; DEC-168).
+    /// Delete a single attachment by ID — targeted path (S-576-4; BC-3.9.008; D-168).
     ///
     /// Issues `DELETE /rest/api/3/attachment/{id}`.
     ///
-    /// **DEC-168 asymmetry from `delete_attachment` (S3 replace path):**
+    /// **D-168 asymmetry from `delete_attachment` (S3 replace path):**
     /// On 404 this function returns `JrError::UserError` with the canonical prefix
     /// `"Attachment <id> not found or not accessible."` followed by the raw Jira error
     /// body on the next line — exit 64 + body surfaced. This differs from

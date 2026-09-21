@@ -307,7 +307,7 @@ async fn test_bc_3_5_003_interactive_cancel_json_key_set() {
 ///     (spec BC-3.5.004 mandates the `KEY#ID` identifier suffix)
 /// (b) Jira error body text "Comment with id '10001' does not exist."
 ///
-/// 404 is NOT idempotent (DEC-168 ruling 3 override). Must exit 64, not 0.
+/// 404 is NOT idempotent (D-168 ruling 3 override). Must exit 64, not 0.
 ///
 /// Red Gate: fails because `handle_comment_delete` is `todo!()` → exit 101.
 #[tokio::test]
@@ -336,7 +336,7 @@ async fn test_bc_3_5_004_delete_404_exits_64_with_body() {
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.5.004: must exit 64 on 404; 404 is NOT idempotent (DEC-168 ruling 3); \
+        "BC-3.5.004: must exit 64 on 404; 404 is NOT idempotent (D-168 ruling 3); \
          got {:?}\nstderr: {stderr}",
         output.status.code()
     );

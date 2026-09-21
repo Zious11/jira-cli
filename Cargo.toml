@@ -1,6 +1,6 @@
 [package]
 name = "jr"
-version = "0.7.0-dev.7"
+version = "0.7.0-dev.8"
 edition = "2024"
 description = "A fast CLI for Jira Cloud"
 repository = "https://github.com/Zious11/jira-cli"
@@ -18,7 +18,7 @@ path = "src/main.rs"
 # nodes (ADR-0021 §5, AC-020, S-cycle4-dpapi-storage-fix). Used by
 # `src/api/auth_windows_store.rs`'s `#[cfg(windows)] mod dpapi` for the
 # CryptProtectData/CryptUnprotectData FFI wrapper.
-windows-sys = { version = "0.60", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 
 [dependencies]
 anyhow = "1"
@@ -71,7 +71,7 @@ tokio = { version = "1", features = ["test-util"] }
 temp-env = "0.3"
 # scopeguard: defer! for cleanup-on-panic in integration tests (L-7 / S-396)
 scopeguard = "1"
-# glob: expand examine_globs patterns for Guard 3 existence check (S-MUTANTS-SCOPE-GUARDS-1 / DEC-150)
+# glob: expand examine_globs patterns for Guard 3 existence check (S-MUTANTS-SCOPE-GUARDS-1 / D-150)
 glob = "0.3"
 # sha1: compute batch-path prefixes in mutation-kill tests (PG-F4-10)
 sha1 = { version = "^0.11" }
@@ -83,7 +83,7 @@ sha1 = { version = "^0.11" }
 # now that the floor has moved. It IS enforced by the msrv CI job: as a [dev-dependencies]
 # entry it now genuinely compiles and is checked under the job's widened
 # `--all-targets` `cargo check` scope.) See CLAUDE.md ci-gate bullet / AC-006.
-saphyr-parser = "=0.0.11"
+saphyr-parser = "=0.0.12"
 # libc: already a resolved transitive dependency (pulled in by tokio/reqwest on
 # Unix; 0.2.183 in Cargo.lock) but Rust requires an explicit Cargo.toml edge
 # before `use libc::...` compiles from test code. Adds ZERO new crates to the

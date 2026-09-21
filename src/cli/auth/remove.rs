@@ -55,7 +55,7 @@ pub(crate) fn handle_remove_in_memory(
 
 /// `jr auth remove <name>` — permanently delete a profile.
 ///
-/// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.014, DEC-322) —
+/// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.014, D-322) —
 /// REORDERED, and a genuine (non-`NoEntry`) keychain error now ABORTS the
 /// command instead of degrading to a warning.**
 ///

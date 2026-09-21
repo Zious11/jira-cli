@@ -1,5 +1,5 @@
 //! S-cycle3-chosen-flow-reconcile — Two-Step Red Gate TESTS (step 2 of 2,
-//! BC-5.38.001) for DEC-321's `chosen_flow_for_profile` override removal
+//! BC-5.38.001) for D-321's `chosen_flow_for_profile` override removal
 //! and BC-1.2.051 Invariant 2 (I-6)'s "relogin-then-replace" ordering fix.
 //!
 //! Stubs (`todo!()`) were committed at `b2a0e1a4`:
@@ -145,7 +145,7 @@ fn test_ac_002_refresh_oauth_flag_on_api_token_profile_uses_token_flow_not_oauth
     );
     assert!(
         !stderr.contains(NONINTERACTIVE_OAUTH_GUARD_MESSAGE),
-        "DEC-321: --oauth must NOT force AuthFlow::OAuth on an api_token \
+        "D-321: --oauth must NOT force AuthFlow::OAuth on an api_token \
          profile — the guard message must never appear here. stderr: {stderr}"
     );
     assert!(
@@ -172,7 +172,7 @@ fn test_ac_003_refresh_api_token_flag_on_oauth_profile_uses_oauth_flow_not_token
     );
     assert!(
         stderr.contains(NONINTERACTIVE_OAUTH_GUARD_MESSAGE),
-        "DEC-321: --api-token must NOT force AuthFlow::Token on an oauth \
+        "D-321: --api-token must NOT force AuthFlow::Token on an oauth \
          profile — the flow must still resolve to OAuth and hit the \
          non-interactive guard. stderr: {stderr}"
     );

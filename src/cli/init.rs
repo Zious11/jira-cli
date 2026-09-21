@@ -180,6 +180,22 @@ pub async fn handle() -> Result<()> {
         // F-WG-1 (S-cycle8-agile-scope-mismatch-error-mapping, AC-015): mirrors
         // `board.rs::handle_list`'s `list_boards` wrap mechanically — same
         // endpoint, same required scopes, regardless of which command reaches it.
+        //
+        // FIX-F5-001 F1 (cycle-008 F5 Pass 1) test-coverage residual: this
+        // exact `.map_err` wiring is exercised end-to-end only by the
+        // keyring-gated, `#[ignore]`d `tests/init_oauth_scope.rs::
+        // test_init_list_boards_401_scope_mismatch_names_missing_scopes`
+        // (never run in CI/PR-diff mutation runs — see that file's module
+        // doc for why `jr init`'s interactive+OAuth+keychain flow is hard to
+        // reach non-interactively). CI-running coverage is limited to the
+        // shared `rewrite_agile_scope_error`/`is_insufficient_scope_error`
+        // helpers themselves, unit-tested with this exact scope string in
+        // `src/cli/board.rs::tests::
+        // test_rewrite_agile_scope_error_fires_for_init_list_boards_scope_string`.
+        // A mutant deleting this `.map_err(...)` call would therefore still
+        // survive `cargo test` — a known, justified deferral, not a gap this
+        // fix closes. Do not remove this `.map_err` without re-checking that
+        // residual.
         let boards = client.list_boards(None, None).await.map_err(|e| {
             crate::cli::board::rewrite_agile_scope_error(
                 e,

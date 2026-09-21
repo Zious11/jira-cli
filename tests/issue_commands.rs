@@ -8122,7 +8122,7 @@ async fn test_bc_3_4_022_issue_edit_component_native_cross_identifier_add_remove
 // (src/cli/issue/edit.rs) and `build_component_edited_fields`
 // (src/api/jira/bulk.rs), both fully implemented.
 //
-// AC-010 (the live-Jira smoke-test release gate, DEC-280) is NOT here — it
+// AC-010 (the live-Jira smoke-test release gate, D-280) is NOT here — it
 // lives in tests/e2e_live.rs, gated behind JR_RUN_E2E=1 + #[ignore], per that
 // file's existing conventions.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -11832,7 +11832,7 @@ async fn test_issue_list_fields_and_sort_compose_end_to_end() {
 // todo!("S-579-1: --updated-recent") }`), so every test below failed
 // (panic/exit 101, or an assertion mismatch against the pre-amendment
 // 14-source stderr enumeration) until the real clause-composition logic
-// landed. The stub has since been implemented, and, per DEC-306/FIX-F5-LRE-1,
+// landed. The stub has since been implemented, and, per D-306/FIX-F5-LRE-1,
 // the alone-case now proceeds rather than exiting 64 (see AC-007 below) --
 // every test in this block passes today. Reuses the S-606-1 harness helpers (`s606_1_cmd`,
 // `s606_1_mock_project_exists`, `s606_1_mock_search_empty`,
@@ -11938,7 +11938,7 @@ async fn test_bc_2_1_023_issue_list_updated_recent_rejects_combined_units_pre_ht
     );
 }
 
-/// AC-003 / BC-2.1.023 Edge Case EC-2.1.023-2 (human-locked DEC-298):
+/// AC-003 / BC-2.1.023 Edge Case EC-2.1.023-2 (human-locked D-298):
 /// `--updated-recent` + `--updated-after` is a clap `conflicts_with`
 /// rejection (exit 2). `--updated-recent` + `--updated-before` does NOT
 /// conflict — deliberate asymmetry mirroring the pre-existing
@@ -12013,7 +12013,7 @@ async fn test_bc_2_1_023_issue_list_updated_recent_conflicts_with_updated_after_
     assert!(
         output_no_conflict.status.success(),
         "AC-003b: --updated-recent + --updated-before must NOT conflict \
-         (asymmetric per DEC-298), expected exit 0, got: {:?} (stderr: {})",
+         (asymmetric per D-298), expected exit 0, got: {:?} (stderr: {})",
         output_no_conflict.status.code(),
         String::from_utf8_lossy(&output_no_conflict.stderr)
     );
@@ -12961,7 +12961,7 @@ async fn test_bc_2_1_025_issue_list_sort_overrides_kanban_board_rank_default() {
 
 /// BC-2.1.025 Postcondition 4 (scrum leg): `--sort` overrides the
 /// scrum-active-sprint branch's board-driven `"rank ASC"` default too --
-/// applied UNIFORMLY across both board branches (DEC-298 "always wins"), not
+/// applied UNIFORMLY across both board branches (D-298 "always wins"), not
 /// merely the kanban leg covered by AC-006.
 #[tokio::test]
 async fn test_bc_2_1_025_issue_list_sort_overrides_scrum_active_sprint_rank_default() {

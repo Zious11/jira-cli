@@ -1,4 +1,4 @@
-//! Type-level profile fence (ADR-0011, un-deferred by DEC-317).
+//! Type-level profile fence (ADR-0011, un-deferred by D-317).
 //!
 //! `Profile` is a minimal, dependency-free newtype wrapper around a profile name. Its
 //! purpose is to make a profile-unaware call site (a bare `&str`, or a hardcoded string

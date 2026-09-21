@@ -50,7 +50,7 @@ pub(super) async fn handle_create(
         unreachable!()
     };
 
-    // Pre-flight guard (BC-3.4.024 Postcondition 3, DEC-188 precedent —
+    // Pre-flight guard (BC-3.4.024 Postcondition 3, D-188 precedent —
     // mirrors the --field/--on-behalf-of guard below): --component is a
     // platform-path-only flag. It MUST be checked BEFORE the JSM
     // dispatch-fork immediately below, because that fork returns
@@ -102,7 +102,7 @@ pub(super) async fn handle_create(
         .await;
     }
 
-    // Pre-flight guard (BC-3.8.013, UNCHANGED mechanism — DEC-310 reversal,
+    // Pre-flight guard (BC-3.8.013, UNCHANGED mechanism — D-310 reversal,
     // S-578-4): --on-behalf-of remains a self-declared JSM-only flag; on the
     // platform path (--request-type absent — this arm only runs when the
     // JSM dispatch fork above was NOT taken), supplying it alone is still a
@@ -110,8 +110,8 @@ pub(super) async fn handle_create(
     // any interactive prompt, BEFORE the blocking --description-stdin read,
     // and BEFORE any HTTP call.
     //
-    // DEC-188's combined check (`--field` + `--on-behalf-of` → ONE error)
-    // and its `--field`-alone check are REMOVED (DEC-310, BC-3.8.012
+    // D-188's combined check (`--field` + `--on-behalf-of` → ONE error)
+    // and its `--field`-alone check are REMOVED (D-310, BC-3.8.012
     // reversal, F3/F4 removal obligations) — `--field` no longer exits 64
     // pre-flight; it now resolves via createmeta (step 4b below). Per AC-003,
     // this standalone guard now fires even when `--field` is ALSO present,
@@ -237,7 +237,7 @@ pub(super) async fn handle_create(
     // Match the RAW token (substring before the first '='), CASE-SENSITIVE,
     // equal to exactly "description" — mirrors the JSM guard in jsm_create.rs
     // for uniform behavior across all three write paths (ADR-0024 §uniform-exit-64,
-    // DEC-359). "Description" (capital D) does NOT fire this guard.
+    // D-359). "Description" (capital D) does NOT fire this guard.
     if markdown
         && field_pairs.iter().any(|pair| {
             pair.find('=')

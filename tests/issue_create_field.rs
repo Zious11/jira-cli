@@ -1,6 +1,6 @@
 //! Integration tests for `jr issue create --field` on the PLATFORM
 //! (non-JSM) path — createmeta-driven resolution (BC-3.3.010/011), the
-//! DEC-188 guard reversal (BC-3.8.012/013, DEC-310), and the create-path
+//! D-188 guard reversal (BC-3.8.012/013, D-310), and the create-path
 //! ten-member D2 collision guard (ADR-0019 §"D2 correction").
 //!
 //! Story: S-578-4. Red Gate suite (strict TDD): `handle_create`'s step 2b
@@ -15,7 +15,7 @@
 //! notes for which specific tests fall into that category).
 //!
 //! Traces: BC-3.3.010, BC-3.3.011, BC-3.4.014 (amended), BC-3.8.012/013
-//! (amended/reversed, DEC-310), ADR-0019, VP-578-001..004/017..022.
+//! (amended/reversed, D-310), ADR-0019, VP-578-001..004/017..022.
 
 #[allow(dead_code)]
 mod common;
@@ -380,14 +380,14 @@ async fn test_ssot_guard_ordering_step2a_wins_over_step2b_when_step2_absent() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AC-002: `--field` no longer exits 64 pre-flight — DEC-188 guard removed
+// AC-002: `--field` no longer exits 64 pre-flight — D-188 guard removed
 // (VP-578-017). Supersedes S-639-1 AC-1's exit-64 assertion.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// AC-002 (BC-3.8.012 `[CURRENT BEHAVIOR]`, VP-578-017): `jr issue create
 /// --field a=b` (no `--request-type`, well-formed field) resolves via
 /// createmeta and the platform POST fires — exit 0. Stderr does NOT contain
-/// the old DEC-188 verbatim string `"--field is only valid with"`.
+/// the old D-188 verbatim string `"--field is only valid with"`.
 ///
 /// RED today: `field_resolve::detect_flag_field_overlap` (step 2b) is a
 /// blanket `todo!()` that panics for ANY non-empty `--field`, regardless of
@@ -442,7 +442,7 @@ async fn test_bc_3_8_012_field_alone_no_longer_exits_64() {
     );
     assert!(
         !stderr.contains("--field is only valid with"),
-        "AC-002: the old DEC-188 verbatim string is DEAD; stderr={stderr}"
+        "AC-002: the old D-188 verbatim string is DEAD; stderr={stderr}"
     );
 }
 
@@ -514,7 +514,7 @@ async fn test_bc_3_8_013_combined_invocation_fires_standalone_guard_only() {
 
 /// AC-004 (VP-578-019 regression pin): `jr issue create --on-behalf-of X`
 /// alone (no `--field`, no `--request-type`) exits 64 via BC-3.8.013,
-/// UNCHANGED wire-for-wire from DEC-188-era behavior — proves this
+/// UNCHANGED wire-for-wire from D-188-era behavior — proves this
 /// reversal did not accidentally weaken BC-3.8.013's own guard.
 ///
 /// This tests PRE-EXISTING, unmodified behavior and is expected to already
@@ -2817,7 +2817,7 @@ async fn test_bc_3_3_010_field_resolution_ordering_after_project_type_before_pos
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AC-018: `--markdown --field description=x` intersection with the
-// (now-removed) DEC-188 guard — regression check only.
+// (now-removed) D-188 guard — regression check only.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// AC-018 / EC-3.8.012-5 (now stale post-reversal): `--markdown --field
@@ -2833,7 +2833,7 @@ async fn test_bc_3_3_010_field_resolution_ordering_after_project_type_before_pos
 /// `unsupported_field_type_error` branch (exit 64, "which is not supported by
 /// `--field`") rather than succeeding. This test's PRIMARY, load-bearing
 /// assertion is unchanged from the original intent: stderr does NOT contain
-/// the removed DEC-188 guard string (`"--field is only valid with"`) — proof
+/// the removed D-188 guard string (`"--field is only valid with"`) — proof
 /// that resolution genuinely ran (createmeta was fetched, the field was
 /// located, dispatch was attempted) rather than the invocation being rejected
 /// pre-flight by the old, now-reversed guard. The exit code and error message
@@ -2899,17 +2899,17 @@ async fn test_ec_3_8_012_5_markdown_field_description_now_guarded_by_step2c() {
         "AC-006: must fail via the BC-3.3.014 --markdown+--field description \
          guard; stderr={stderr}"
     );
-    // The OLD DEC-188 guard ("--field is only valid with --request-type")
-    // must still NOT fire — DEC-310 reversal remains in effect.
+    // The OLD D-188 guard ("--field is only valid with --request-type")
+    // must still NOT fire — D-310 reversal remains in effect.
     assert!(
         !stderr.contains("--field is only valid with"),
-        "DEC-310 reversal: the removed DEC-188 guard must not fire; \
+        "D-310 reversal: the removed D-188 guard must not fire; \
          stderr={stderr}"
     );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AC-016: `--help` text — DEC-310 reversal is complete. `--field`'s help
+// AC-016: `--help` text — D-310 reversal is complete. `--field`'s help
 // line no longer carries "requires --request-type"; the clause survives
 // exactly once, scoped to `--on-behalf-of`'s line. (Adversarial review
 // Pass 1 LOW finding — these two exact-named tests were mandated by AC-016
@@ -2955,7 +2955,7 @@ async fn test_bc_3_8_012_field_help_text_no_longer_requires_request_type() {
 
     assert!(
         !field_block.contains("requires --request-type"),
-        "AC-016 / BC-3.8.012 (DEC-310 reversal): the --field help line must \
+        "AC-016 / BC-3.8.012 (D-310 reversal): the --field help line must \
          no longer carry the 'requires --request-type' clause; \
          field_block={field_block}"
     );
@@ -2965,7 +2965,7 @@ async fn test_bc_3_8_012_field_help_text_no_longer_requires_request_type() {
 /// `test_platform_create_help_flags_requires_request_type_in_help`, added
 /// here IN THIS FILE per the story's explicit test-name mandate): the full
 /// `jr issue create --help` output contains "requires --request-type"
-/// EXACTLY ONCE post-DEC-310-reversal, and that single occurrence lies
+/// EXACTLY ONCE post-D-310-reversal, and that single occurrence lies
 /// within the `--on-behalf-of` help block (i.e. AFTER `--on-behalf-of`'s own
 /// flag marker) — not on `--field`'s line.
 #[tokio::test]
@@ -2983,7 +2983,7 @@ async fn test_ac12_help_text_substring_count_is_1_on_behalf_of_only() {
         normalized.matches("requires --request-type").count(),
         1,
         "AC-016: 'requires --request-type' must appear EXACTLY ONCE in the \
-         full --help output post-DEC-310-reversal; normalized={normalized}"
+         full --help output post-D-310-reversal; normalized={normalized}"
     );
 
     let on_behalf_start = normalized

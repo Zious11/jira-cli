@@ -397,7 +397,7 @@ pub enum IssueCommand {
         /// Comma-separated list of fields to request from Jira (e.g.
         /// "summary,status,comment"), REPLACING the default field set
         /// (BASE_ISSUE_FIELDS plus any --points/--assets/--duedate extras)
-        /// rather than unioning with it (DEC-298). Requires --output json;
+        /// rather than unioning with it (D-298). Requires --output json;
         /// combined with table mode (default or --output table) exits 64
         /// pre-HTTP. See BC-2.2.033.
         #[arg(long)]
@@ -496,7 +496,7 @@ pub enum IssueCommand {
         key: String,
         /// Comma-separated list of fields to request from Jira (e.g.
         /// "summary,comment"), REPLACING the default field set rather than
-        /// unioning with it (DEC-298). Requires --output json; combined with
+        /// unioning with it (D-298). Requires --output json; combined with
         /// table mode (default or --output table) exits 64 pre-HTTP. See
         /// BC-2.3.041.
         #[arg(long)]
@@ -1385,7 +1385,7 @@ pub enum ComponentSubcommand {
     /// `partial_match` substring semantics used elsewhere in this command
     /// family (BC-8.3.002). Exactly one of `--project`/`--all-projects` is
     /// required — neither supplied is an application-level exit-64 guard
-    /// (BC-8.3.005, DEC-188, mechanically identical to `delete`'s
+    /// (BC-8.3.005, D-188, mechanically identical to `delete`'s
     /// `--move-to`/`--orphan` split); both supplied is a clap
     /// `conflicts_with` exit 2. `--dry-run` is valid with either scope and
     /// performs the identical read-only discovery with zero mutating HTTP

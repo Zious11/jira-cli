@@ -150,7 +150,7 @@ impl AuthFlow {
     }
 }
 
-/// Decide which login flow to use for a given profile — DEC-321,
+/// Decide which login flow to use for a given profile — D-321,
 /// BC-1.2.048/BC-1.2.051.
 ///
 /// **AMENDED by S-cycle3-chosen-flow-reconcile (BC-1.2.051 Postcondition 3).**
@@ -172,7 +172,7 @@ impl AuthFlow {
 /// Resolution is purely a two-way match on the profile's stored
 /// `auth_method`: `Some("oauth")` → [`AuthFlow::OAuth`], anything else
 /// (including `None`, matching the login-time default) → [`AuthFlow::Token`].
-/// There is no override input of any kind — see the DEC-321 amendment note
+/// There is no override input of any kind — see the D-321 amendment note
 /// above for what was removed and why.
 fn chosen_flow_for_profile(profile: &crate::config::ProfileConfig) -> AuthFlow {
     match profile.auth_method.as_deref() {

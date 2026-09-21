@@ -3659,7 +3659,7 @@ async fn test_bc_8_1_007_component_edit_name_collision_400_surfaced() {
 
 // =============================================================================
 // S-604-3: `jr component delete` — disposition-required, snapshot-before-delete
-// safety (DEC-279). SAFETY-CRITICAL — tdd_mode: strict.
+// safety (D-279). SAFETY-CRITICAL — tdd_mode: strict.
 //
 // BC anchors: BC-8.2.001–BC-8.2.008. `handle_delete` (`src/cli/component.rs`)
 // is fully implemented; all tests below are green against the shipped
@@ -3764,12 +3764,12 @@ async fn test_bc_8_2_001_component_delete_neither_flag_exits_64_zero_http() {
     );
 }
 
-// ── AC-002 (BC-8.2.001 postcondition 2/3, DEC-188 mechanism) ─────────────────
+// ── AC-002 (BC-8.2.001 postcondition 2/3, D-188 mechanism) ─────────────────
 
 /// AC-002 / EC-8.2.001-2: `--move-to X --orphan` together → clap exit 2
 /// (mutual exclusion), before any resolution or HTTP call whatsoever.
 ///
-/// Also asserts the DEC-188 mechanism split: this exit-2 case is a clap
+/// Also asserts the D-188 mechanism split: this exit-2 case is a clap
 /// `conflicts_with` violation, structurally distinct from AC-001's
 /// application-level exit-64 guard.
 ///

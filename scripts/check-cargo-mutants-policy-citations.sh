@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-cargo-mutants-policy-citations.sh — CI-MUTANTS-CITE-001
 #
-# Guard 2 (DEC-150): validates docs/specs/cargo-mutants-policy.md §Scope
+# Guard 2 (D-150): validates docs/specs/cargo-mutants-policy.md §Scope
 # function-location bulleted list against src/ definitions via
 # definition-anchored grep. Exits 1 if any (file, fn) pair is dead.
 #
@@ -10,7 +10,7 @@
 #   scripts/check-cargo-mutants-policy-citations.sh --self-test    # offline fixture run
 #   scripts/check-cargo-mutants-policy-citations.sh --policy-doc <path>  # alternate doc
 #
-# Fully implemented (S-MUTANTS-SCOPE-GUARDS-1 / DEC-150). All 12 self-test fixtures pass.
+# Fully implemented (S-MUTANTS-SCOPE-GUARDS-1 / D-150). All 12 self-test fixtures pass.
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 bash -n "${BASH_SOURCE[0]}"
 
 # ---------------------------------------------------------------------------
-# run_check — Guard 2 implementation (DEC-150 / S-MUTANTS-SCOPE-GUARDS-1)
+# run_check — Guard 2 implementation (D-150 / S-MUTANTS-SCOPE-GUARDS-1)
 #
 # Parses §Scope bulleted list from POLICY_DOC, verifies each (file, fn) pair
 # against source definitions via definition-anchored grep, and enforces

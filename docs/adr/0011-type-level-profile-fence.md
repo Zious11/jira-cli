@@ -1,7 +1,7 @@
 # ADR-0011: Type-Level Profile Fence (Newtype)
 
 ## Status
-**Accepted** (amended 2026-09-01, cycle-003 `auth-profile-dx`, DEC-317 — un-defers this ADR
+**Accepted** (amended 2026-09-01, cycle-003 `auth-profile-dx`, D-317 — un-defers this ADR
 in place; this is a status amendment, not a supersession, since the underlying decision does
 not reverse, it confirms a documented revisit trigger was met). Originally **Deferred**
 (promoted to `docs/adr/` 2026-06-24, PR #549/SC-03; the deferral itself predates the VSDD-factory
@@ -9,14 +9,14 @@ migration — see git history for the pre-promotion origin).
 
 **Trigger met:** Condition for Revisiting #3 below — "a related refactor (e.g., a major config
 overhaul) creates a natural migration window." Cycle-003's per-profile credential restructuring
-(DEC-315: shared flat `email`/`api-token` keychain keys become `<profile>:email`/
+(D-315: shared flat `email`/`api-token` keychain keys become `<profile>:email`/
 `<profile>:api-token`, symmetric with the existing per-profile OAuth token pair) is exactly that
 window: it is itself a `ProfileConfig`/keychain-scoping change that touches nearly every
 call site this newtype would guard, so implementing the hard fence in the SAME cycle (sequenced
 AFTER the credential restructuring lands — see the new combined ADR, `.factory/specs/architecture/decisions/ADR-0020-per-profile-credential-ownership-env-tagging-and-oauth-default-at-creation.md`,
 § Sequencing) means the call-site sweep covers the enlarged, post-restructuring surface exactly
 once rather than twice. Condition #1 (a leakage bug in production) and Condition #2 (>5
-committers) remain NOT met — DEC-317 explicitly cites #3 alone as sufficient.
+committers) remain NOT met — D-317 explicitly cites #3 alone as sufficient.
 
 > **F2-gate revision (same day, 2026-09-01):** this staged amendment was revised in place to
 > resolve F2-gate adversarial findings SR-006 (newtype scope contradiction with
@@ -94,7 +94,7 @@ convention only:
      already showed `auth.rs`'s credential functions inside the fence diagram). Every one of
      `store_api_token(profile, …)`, `load_api_token(profile)`, `store_oauth_tokens(profile,
      …)`, and `load_oauth_tokens(profile)` (all four, `src/api/auth.rs`, this cycle's own
-     DEC-315 work per ADR-0020 § Decision 1) changes `profile: &str` → `profile: &Profile`.
+     D-315 work per ADR-0020 § Decision 1) changes `profile: &str` → `profile: &Profile`.
      These are not an afterthought inclusion: they take a `profile` parameter and ARE the
      exact credential-isolation seam this hard fence is built to protect — a wrong-profile
      `&str` silently passed to `store_api_token`/`load_oauth_tokens` is precisely a
@@ -106,8 +106,8 @@ convention only:
 3. `Config::active_profile_name: String` → `Profile`.
 4. `JiraClient::profile_name: String` → `Profile`.
 5. Fix all call sites — ADR-0011's original estimate was "~50-70 changes," scoped to a
-   `cache.rs`-only sweep at pre-cycle-003 file size. DEC-317's own rationale for
-   un-deferring THIS cycle is that DEC-315's credential normalization "multiplies
+   `cache.rs`-only sweep at pre-cycle-003 file size. D-317's own rationale for
+   un-deferring THIS cycle is that D-315's credential normalization "multiplies
    cross-profile scoping call-sites," and item 2's `src/api/auth.rs` addition above is
    exactly that multiplication made concrete: adding `src/api/auth.rs`'s four per-profile
    credential functions plus their
@@ -145,7 +145,7 @@ This decision was to be revisited in v0.6.0 or later if any of the following occ
 2. The contributor count grows beyond ~5 active committers (convention enforcement weakens
    with team size) — **NOT met.**
 3. A related refactor (e.g., a major config overhaul) creates a natural migration window —
-   **MET.** Cycle-003 (`auth-profile-dx`, DEC-312..319) is that refactor; see Status above.
+   **MET.** Cycle-003 (`auth-profile-dx`, D-312..319) is that refactor; see Status above.
 
 ## Consequences
 
@@ -251,7 +251,7 @@ historical record of the pre-implementation estimate, not corrected retroactivel
 - ADR-0007 — Multi-profile fields fix (parallel profile-correctness decision; the concrete
   bug class this hard fence is designed to make uncompilable)
 - `.factory/specs/architecture/decisions/ADR-0020-per-profile-credential-ownership-env-tagging-and-oauth-default-at-creation.md`
-  — the DEC-315 credential-restructuring ADR whose call-site growth is this amendment's
+  — the D-315 credential-restructuring ADR whose call-site growth is this amendment's
   stated trigger, and which this ADR's implementation is sequenced after
 - `.factory/cycles/cycle-003/phase-f1-delta-analysis/delta-analysis.md` §1.1, §1.3, §1.5,
   §3, §4.5 — the impact analysis this amendment is grounded in

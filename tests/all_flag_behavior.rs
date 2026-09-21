@@ -719,7 +719,7 @@ story_points_field_id = "customfield_10031"
     // would still satisfy a `body_partial_json` match against
     // `["summary","status"]`. So the mock below matches on method+path only
     // (any body succeeds); the EXACT full-array assertion — the one that
-    // actually guards BC-2.2.033 Postcondition 4 / DEC-298's REPLACE-not-UNION
+    // actually guards BC-2.2.033 Postcondition 4 / D-298's REPLACE-not-UNION
     // invariant — happens below via `server.received_requests()` +
     // `assert_eq!` on the parsed `fields` array (F2, adversary review S-575-1).
     Mock::given(method("POST"))
@@ -771,7 +771,7 @@ story_points_field_id = "customfield_10031"
     // EXACTLY ["summary", "status"] — not merely a superset containing those
     // two elements. `body_partial_json` above cannot detect a trailing
     // append (e.g. --points's customfield_10031 re-injected at the end), so
-    // this is the sole guard of BC-2.2.033 Postcondition 4 / DEC-298's
+    // this is the sole guard of BC-2.2.033 Postcondition 4 / D-298's
     // human-locked REPLACE-not-UNION invariant: a future regression that
     // unions rather than replaces would leave the request-succeeds and
     // no-warning assertions above untouched, but must fail here.

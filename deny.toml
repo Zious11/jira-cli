@@ -5,14 +5,11 @@ ignore = []
 allow = [
     "MIT",
     "Apache-2.0",
-    "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
     "MPL-2.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "CDLA-Permissive-2.0",
-    "OpenSSL",
     "Zlib",
 ]
 confidence-threshold = 0.8
@@ -292,16 +289,6 @@ reason = "transitive arch crate for windows-targets 0.42.2 (via windows-sys 0.45
 name = "windows_x86_64_msvc"
 version = "0.53"
 reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
-
-[[bans.skip]]
-name = "windows_i686_gnullvm"
-version = "0.53"
-reason = "transitive arch crate for windows-targets 0.53.5, now reachable via TWO independent paths as of the clap 4.6.6 bump (PR #727): (1) windows-sys 0.60 via keyring v3.6.3's windows-native feature (pre-existing, S-WIN-3), and (2) windows-sys 0.60 via clap_builder 4.6.6 -> anstream 1.0.0 -> anstyle-query 1.1.5, whose windows-sys resolution shifted from 0.61 (clap 4.6.1, an already-exempt canonical duplicate that did not reach this arch crate as a second path) to 0.60 as of this bump. windows-targets 0.52.6 (via windows-sys 0.52) remains canonical/un-skipped. Unlike its six sibling arch crates (windows_aarch64_gnullvm, windows_aarch64_msvc, windows_i686_gnu, windows_i686_msvc, windows_x86_64_gnu, windows_x86_64_msvc), windows_i686_gnullvm has no 0.42 lineage (the i686-gnullvm stub did not exist in the windows 0.42 generation jni's windows-sys 0.45 pulls), so only this ONE skip is needed to leave a single canonical un-skipped version, versus the paired 0.42/0.53 skips those siblings carry. Unavoidable until jni and keyring converge on the same windows-sys version (see the S-WIN-3 block above), or a future anstream/anstyle-query release reverts to windows-sys ^0.61. Removal trigger: re-run `cargo tree --target=all -i windows_i686_gnullvm@0.53.1` after any keyring/jni/anstream/clap bump -- if it no longer shows a concurrently-reachable second path alongside windows-targets 0.52.6, remove this skip (an unremoved skip with only one remaining version produces an `unnecessary-skip` warning, per cargo-deny 0.19.6)."
-
-[[bans.skip]]
-name = "cpufeatures"
-version = "0.2"
-reason = "sha1 v0.10.7 (ADR-0017 S-576-2 dependency for BC-2.7.010 batch-download SHA-1 path prefix) requires cpufeatures 0.2.17; chacha20 v0.10.0 (via rand v0.10.1) requires cpufeatures 0.3.0. Unavoidable until sha1 0.11 or rand's chacha20 unify on the same cpufeatures major. Authorized DEC-185."
 
 [[bans.skip]]
 name = "winnow"

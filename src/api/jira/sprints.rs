@@ -5,6 +5,12 @@ use anyhow::Result;
 
 impl JiraClient {
     /// List sprints for a board, optionally filtering by state (active, closed, future).
+    ///
+    /// BC-X.15.001 (FIX-F5-001 F3): the CLI scope-hint rewrite
+    /// (`cli::board::rewrite_agile_scope_error`) now scans the whole anyhow
+    /// error chain, not only the top-level error — adding `.context()` here
+    /// is safe, but keep `JrError::InsufficientScope` reachable somewhere in
+    /// the returned chain.
     pub async fn list_sprints(&self, board_id: u64, state: Option<&str>) -> Result<Vec<Sprint>> {
         let mut all_sprints: Vec<Sprint> = Vec::new();
         let mut start_at: u32 = 0;
@@ -33,6 +39,12 @@ impl JiraClient {
     }
 
     /// Get issues in a specific sprint, with optional JQL filter and optional limit.
+    ///
+    /// BC-X.15.001 (FIX-F5-001 F3): the CLI scope-hint rewrite
+    /// (`cli::board::rewrite_agile_scope_error`) now scans the whole anyhow
+    /// error chain, not only the top-level error — adding `.context()` here
+    /// is safe, but keep `JrError::InsufficientScope` reachable somewhere in
+    /// the returned chain.
     pub async fn get_sprint_issues(
         &self,
         sprint_id: u64,
@@ -87,6 +99,12 @@ impl JiraClient {
 
     /// Add issues to a sprint. Max 50 issues per call.
     /// POST /rest/agile/1.0/sprint/{sprintId}/issue → 204 No Content
+    ///
+    /// BC-X.15.001 (FIX-F5-001 F3): the CLI scope-hint rewrite
+    /// (`cli::board::rewrite_agile_scope_error`) now scans the whole anyhow
+    /// error chain, not only the top-level error — adding `.context()` here
+    /// is safe, but keep `JrError::InsufficientScope` reachable somewhere in
+    /// the returned chain.
     pub async fn add_issues_to_sprint(&self, sprint_id: u64, issues: &[String]) -> Result<()> {
         let path = format!("/rest/agile/1.0/sprint/{}/issue", sprint_id);
         let body = serde_json::json!({ "issues": issues });
@@ -95,6 +113,12 @@ impl JiraClient {
 
     /// Move issues to the backlog (removes from all sprints). Max 50 issues per call.
     /// POST /rest/agile/1.0/backlog/issue → 204 No Content
+    ///
+    /// BC-X.15.001 (FIX-F5-001 F3): the CLI scope-hint rewrite
+    /// (`cli::board::rewrite_agile_scope_error`) now scans the whole anyhow
+    /// error chain, not only the top-level error — adding `.context()` here
+    /// is safe, but keep `JrError::InsufficientScope` reachable somewhere in
+    /// the returned chain.
     pub async fn move_issues_to_backlog(&self, issues: &[String]) -> Result<()> {
         let path = "/rest/agile/1.0/backlog/issue";
         let body = serde_json::json!({ "issues": issues });

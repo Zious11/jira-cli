@@ -14,10 +14,10 @@ examine_globs = [
     "src/cli/issue/create.rs",
     # HIGH-value: handle_edit, handle_edit_bulk_labels, handle_edit_bulk_fields —
     # bulk routing forks, C-1 guard, label endpoint fork, type-change path.
-    # Relocated from create.rs by ADR-0012 Seam B (PR #558). ~99 mutants (DEC-149).
+    # Relocated from create.rs by ADR-0012 Seam B (PR #558). ~99 mutants (D-149).
     "src/cli/issue/edit.rs",
     # HIGH-value: handle_jsm_create — JSM dispatch, RT-id resolution, scope-hint.
-    # Relocated from create.rs by ADR-0012 Seam A (PR #556). ~9 mutants (DEC-149).
+    # Relocated from create.rs by ADR-0012 Seam A (PR #556). ~9 mutants (D-149).
     "src/cli/issue/jsm_create.rs",
     # HIGH-value: handle_comment_add — ADF conversion fork (markdown vs plain text),
     # internal flag, stdin/file/positional source resolution.
@@ -68,7 +68,7 @@ examine_globs = [
     # (S-578-2/S-578-4); `detect_flag_field_overlap` (D2 collision guard);
     # `resolve_against_createmeta`/`resolve_against_editmeta`; the
     # `compose_{option,id,name,asset}_hint` wire-value composers. Previously absent from
-    # examine_globs despite backing two command families — P22-001/DEC-149/S-MUTANTS-SCOPE-1
+    # examine_globs despite backing two command families — P22-001/D-149/S-MUTANTS-SCOPE-1
     # drift class ("new CLI handler file → add to mutants.toml at creation") that slipped
     # through across all field-dx PRs. ~45 mutants. (added FIX-F6-MUTANTS-SCOPE)
     "src/cli/issue/field_resolve.rs",
@@ -82,14 +82,14 @@ examine_globs = [
     # `is_plausible_cloud_id`, the response-body size-cap guards). Fully default-CI-
     # testable — no keyring/Windows-cfg boundary — 21 mutants, 100% kill after the
     # FIX-F6-1 body-cap boundary tests. Was omitted at file-creation time
-    # (S-cycle4-cloud-id-correctness); same P22-001/DEC-149 drift class as every prior
+    # (S-cycle4-cloud-id-correctness); same P22-001/D-149 drift class as every prior
     # "new security-relevant file → add to mutants.toml at creation" gap.
     "src/api/jira/tenant.rs",
     # S-cycle5-mention-resolution-wiring (AC-016, verification-delta-674.md §9):
     # new effectful mention-resolution module (`resolve_mentions`,
     # `filter_by_name_match`) reachable from every write-command surface
     # (create/edit/comment add/edit/JSM create). Added at file-creation time
-    # per the P22-001/DEC-149/S-MUTANTS-SCOPE-1 "new CLI handler file → add to
+    # per the P22-001/D-149/S-MUTANTS-SCOPE-1 "new CLI handler file → add to
     # mutants.toml at creation" convention, in the SAME commit that creates
     # the file (satisfies `tests/mutants_glob_existence.rs`).
     "src/cli/issue/mentions.rs",
@@ -106,7 +106,80 @@ examine_globs = [
     # consolidated (CR-002/F-C007-M1, cycle-007 F5) into `api/auth.rs` and is
     # no longer defined in this file.
     "src/cli/auth/status.rs",
+    # FIX-F7-001 (closes CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP): cycle-008's
+    # F-WAVE-1 double-fault fix. `classify_401_body` (pure 401-body
+    # scope-classification, BC-X.15.001) is fully default-CI-testable — 7
+    # operator-targeted unit tests in this file's own `classify_401_body_tests`
+    # module. The `send_inner` WIRING sites that call it from the post-refresh
+    # and reconcile retry paths are keychain-gated (see exclude_re below);
+    # `send_inner`'s other, pre-existing branches (rate-limit retry, the
+    # pre-refresh scope check, the Bearer-vs-Basic guard) remain in scope and
+    # are exercised by non-ignored tests in tests/oauth_flow_holdouts.rs,
+    # tests/api_client.rs, and tests/rate_limit_cap_tests.rs.
+    "src/api/client.rs",
+    # FIX-F7-001: `is_insufficient_scope_error` (pure anyhow-chain scanner)
+    # + `rewrite_agile_scope_error` (BC-X.15.001) — the shared Agile
+    # scope-mismatch classification/rewrite pair added by
+    # S-cycle8-agile-scope-mismatch-error-mapping and widened by
+    # FIX-F5-001 (cycle-008 F5) to scan the whole anyhow chain. Fully
+    # default-CI-testable via tests/board_commands.rs's non-ignored
+    # wiremock-driven 401-body-injection tests (only the
+    # "falls_through_to_refresh" edge case per test file is `#[ignore]`d,
+    # for the same keychain reason as client.rs above — it does not touch
+    # these two functions' own mutants).
+    "src/cli/board.rs",
+    # FIX-F7-001: the `rewrite_agile_scope_error`/`is_insufficient_scope_error`
+    # call sites in `handle`, `resolve_scrum_board`, `handle_add`,
+    # `handle_remove`, `handle_list`, and `handle_current` (BC-X.15.001,
+    # F-WG-1). Fully default-CI-testable via tests/sprint_commands.rs's
+    # non-ignored wiremock-driven 401-body-injection tests (same
+    # "falls_through_to_refresh" `#[ignore]` exception as board.rs above).
+    "src/cli/sprint.rs",
+    # FIX-F7-001: the two `InsufficientScope` scope-hint call sites in
+    # `handle_list` (BC-X.15.001, FIX-F5-001 chain-aware downcast) — the
+    # `get_board_config`/list-sprints Agile-scope-mismatch mapping for
+    # `jr issue list --sprint`/`--board`. Fully default-CI-testable via
+    # tests/issue_list_oauth_scope.rs's non-ignored tests. Whole-file
+    # scope brings in `handle_list`'s other, pre-existing ~2,000-LOC-file
+    # branches too — accepted, tracked, same tradeoff as main.rs/queue.rs/
+    # output.rs (no sub-file targeting available); `--in-diff` means only
+    # lines a future PR actually touches are mutated.
+    "src/cli/issue/list.rs",
+    # FIX-F7-001: `list_queues`/`get_queue_issue_keys` — the S-cycle8-jsm-
+    # servicedeskapi-oauth-routing (#833, BC-4.2.001) gateway-host routing
+    # fix (`get_from_instance` -> `get`, so JSM queue calls go through the
+    # OAuth-proxy base URL instead of bypassing it). No mutant is generated
+    # for that call-target swap itself (cargo-mutants does not mutate
+    # arbitrary method-call targets); the functions' existing pagination/
+    # loop-termination mutants are fully default-CI-testable via
+    # tests/queue.rs and tests/jsm_request_api.rs (no `#[ignore]` in either).
+    "src/api/jsm/queues.rs",
+    # FIX-F7-001: `get_or_fetch_workspace_id` — the S-cycle8-assets-workspace-
+    # oauth-routing (#832, BC-4.2.001) gateway-host routing fix for Assets
+    # workspace-ID discovery. Same "no mutant for the call-target swap
+    # itself" reasoning as queues.rs above; the function's cache-hit/404-403
+    # error-mapping mutants are fully default-CI-testable via tests/assets.rs
+    # and tests/asset_holdouts.rs (no `#[ignore]` in either).
+    "src/api/assets/workspace.rs",
 ]
+
+# FIX-F7-001 deferred, not added: `src/cli/init.rs` is NOT added to
+# examine_globs by this change, despite backing the cycle-008 F-WG-1
+# `list_boards` scope-hint call site (BC-X.15.001) alongside board.rs/
+# sprint.rs/list.rs above. Investigation found no mutant is generated at
+# that specific `.map_err(...)` call site at all (cargo-mutants does not
+# mutate a bare method-call wrapper with no operator/comparison inside),
+# but `jr init`'s entire `handle()` function has ZERO default-CI test
+# coverage: `jr init` is invoked exactly once across the whole test suite
+# (tests/init_oauth_scope.rs), and that one test is `#[ignore]`d +
+# `JR_RUN_KEYRING_TESTS=1`-gated (the interactive-prompt + real-OAuth flow
+# has no non-interactive/non-keychain seam). Every one of `handle()`'s 8
+# generated mutants would therefore survive as an un-actionable default-CI
+# MISSED — the same flooding class the "FIX-F6-1 deferred, not added" note
+# above documents for `src/api/auth.rs`/`src/cli/auth/login.rs`, not a
+# single narrowly-anchored exclude_re candidate. Adding this file needs
+# either an in-CI keychain-injection seam or a non-interactive test path
+# for `jr init`, both out of scope for FIX-F7-001; tracked as a follow-up.
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI
 # invocation (CI and local). There is no .cargo/mutants.toml key for it in
@@ -181,4 +254,49 @@ exclude_re = [
     '^src/cli/auth/status\.rs:\d+:\d+: .+ in peek_oauth_app_source$',
     # Regex B — whole-function-body replacement mutants:
     '^src/cli/auth/status\.rs:\d+:\d+: replace peek_oauth_app_source .*$',
+    # FIX-F7-001 (closes CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP): the
+    # F-WAVE-1 double-fault fix's `classify_401_body` WIRING sites inside
+    # `JiraClient::send_inner`'s post-refresh and reconcile retry paths.
+    # `classify_401_body` itself is excluded from nothing (see above) — it
+    # is default-CI-testable in isolation. These 5 mutants sit on the
+    # *conditions that gate reaching* the two `classify_401_body(...)` call
+    # sites (lines ~858 and ~920), which are reachable ONLY through a
+    # successful (or reconciled) OAuth token refresh — a path that
+    # unconditionally touches the OS keychain twice per
+    # tests/oauth_refresh_integration.rs's own module doc (BYO-app-credential
+    # lookup before refresh, `store_oauth_tokens` after). Every test that
+    # exercises this region — including the one that pins the exact
+    # double-fault fix, `test_bc_wave1_expired_and_under_scoped_token_
+    # classifies_as_insufficient_scope_not_not_authenticated` — is
+    # `#[ignore]`d behind `JR_RUN_KEYRING_TESTS=1`, which default CI never
+    # sets. Correctness is positively verified by that keyring-gated test
+    # plus the AC-001/AC-004/AC-010 keyring-gated tests in the same file
+    # (`test_send_retries_once_after_refresh_on_401`,
+    # `test_send_caps_refresh_at_one_attempt_when_retry_also_401`,
+    # `test_inter_process_reconcile_after_invalid_grant`), none of which run
+    # under default `cargo test`.
+    #
+    # Anchored to exact file:line:col + `JiraClient::send_inner` so this
+    # does NOT widen to the function's other, genuinely default-CI-testable
+    # mutants (e.g. the rate-limit retry loop, the pre-refresh
+    # `first_401_classified` check, or the Bearer-vs-Basic guard at line
+    # ~786), which are exercised by tests/oauth_flow_holdouts.rs,
+    # tests/api_client.rs, and tests/rate_limit_cap_tests.rs.
+    #
+    # 844:21 / 913:25 — the `is_client_error() || is_server_error()` guard
+    # entering the primary post-refresh retry's / the reconcile retry's
+    # error-handling arm (each gates its sibling classify_401_body call):
+    '^src/api/client\.rs:844:21: replace \|\| with && in JiraClient::send_inner$',
+    '^src/api/client\.rs:913:25: replace \|\| with && in JiraClient::send_inner$',
+    # 846:48 / 915:52 — the `retry_response.status() == StatusCode::
+    # UNAUTHORIZED` branch selecting the classify_401_body call itself, in
+    # the primary post-refresh retry and the reconcile retry respectively:
+    '^src/api/client\.rs:846:48: replace == with != in JiraClient::send_inner$',
+    '^src/api/client\.rs:915:52: replace == with != in JiraClient::send_inner$',
+    # 883:43 — the AC-010 reconcile-detection comparison
+    # (`initial_bearer != self.auth_header`) that decides whether the
+    # reconcile retry (and its own classify_401_body call at line ~920) is
+    # attempted at all; reading the keychain via `load_oauth_tokens` to
+    # perform this comparison is itself keychain-gated:
+    '^src/api/client\.rs:883:43: replace != with == in JiraClient::send_inner$',
 ]

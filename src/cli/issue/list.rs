@@ -479,11 +479,13 @@ pub(super) async fn handle_list(
                                 // anyhow chain) shows the hint. A non-scope-mismatch
                                 // failure is untouched and keeps its existing
                                 // "Failed to list sprints..." context (AC-002).
+                                // FIX-F5-001 F3 (cycle-008 F5 Pass 1): scans
+                                // the whole anyhow chain, not only the
+                                // top-level error, so a future `.context()`
+                                // added to `list_sprints` doesn't silently
+                                // defeat this check.
                                 let is_scope_mismatch = client.is_oauth_auth()
-                                    && matches!(
-                                        e.downcast_ref::<JrError>(),
-                                        Some(JrError::InsufficientScope { .. })
-                                    );
+                                    && crate::cli::board::is_insufficient_scope_error(&e);
                                 if is_scope_mismatch {
                                     return Err(crate::cli::board::rewrite_agile_scope_error(
                                         e,
@@ -520,11 +522,12 @@ pub(super) async fn handle_list(
                     // is never misread as a not-found board. Non-scope-mismatch
                     // failures (404, 500, Basic-auth, etc.) are untouched (AC-002,
                     // AC-004).
+                    // FIX-F5-001 F3 (cycle-008 F5 Pass 1): scans the whole
+                    // anyhow chain, not only the top-level error, so a future
+                    // `.context()` added to `get_board_config` doesn't
+                    // silently defeat this check.
                     let is_scope_mismatch = client.is_oauth_auth()
-                        && matches!(
-                            e.downcast_ref::<JrError>(),
-                            Some(JrError::InsufficientScope { .. })
-                        );
+                        && crate::cli::board::is_insufficient_scope_error(&e);
                     if is_scope_mismatch {
                         return Err(crate::cli::board::rewrite_agile_scope_error(
                             e,
@@ -562,7 +565,7 @@ pub(super) async fn handle_list(
     // S-588-1 (BC-2.1.025): `--sort`, when present, OVERRIDES the `order_by`
     // value computed by every branch above -- `--jql`, scrum-active-sprint,
     // kanban, and default-project alike -- uniformly, including the
-    // board-driven `rank ASC` defaults (DEC-298 "always wins"). Absent
+    // board-driven `rank ASC` defaults (D-298 "always wins"). Absent
     // `--sort`, `order_by` is byte-for-byte unchanged from the branches
     // above (BC-2.1.002/003/004/005's pinned default literals).
     let order_by: String = match sort_spec {
@@ -591,7 +594,7 @@ pub(super) async fn handle_list(
     let where_clause = all_parts.join(" AND ");
     let effective_jql = format!("{where_clause} ORDER BY {order_by}");
 
-    // S-575-1 (BC-2.2.033 Postcondition 1/4, human-locked DEC-298): when
+    // S-575-1 (BC-2.2.033 Postcondition 1/4, human-locked D-298): when
     // `--fields` is present it REPLACES BASE_ISSUE_FIELDS entirely — no
     // union with `extra` (story points / team field ids), and `--points` /
     // `--assets` / `--duedate` become silent no-ops by never reaching any of

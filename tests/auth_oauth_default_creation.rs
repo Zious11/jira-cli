@@ -1,7 +1,7 @@
 //! S-cycle3-oauth-default-creation — Two-Step Red Gate TESTS (step 2 of 2,
 //! BC-5.38.001) for the OAuth-default-at-creation picker, the airtight
 //! non-interactive OAuth guard, and the `--oauth`/`--api-token` flag
-//! symmetry (BC-1.1.013/014/015/016, BC-1.2.049/050, DEC-313/323).
+//! symmetry (BC-1.1.013/014/015/016, BC-1.2.049/050, D-313/323).
 //!
 //! Stubs (`todo!()`) were committed at `5490780b`:
 //! - `cli::auth::check_noninteractive_oauth_guard`      (BC-1.1.016)

@@ -562,7 +562,7 @@ pub(crate) async fn resolve_edit_fields(
             // so the changed_fields JSON key matches the convention used by the
             // dedicated `--description` flag (which inserts "description", not
             // "Description"). BC-3.4.035 AC-011 requires this for `description`;
-            // this cycle's approved scope (DEC-357, human ruling OBS-1) extends
+            // this cycle's approved scope (D-357, human ruling OBS-1) extends
             // it only to `environment` — the other ADF-converted field — and
             // explicitly NOT to arbitrary system fields like `duedate`/`priority`,
             // which must keep their resolved display name as the JSON key.

@@ -938,7 +938,7 @@ mod tests {
     /// BC-6.1.015 AC-001 / EC-3: a pre-existing `config.toml` written before
     /// the `env` field existed (no `env` key under `[profiles.x]`) must
     /// deserialize with `env: None` — no error, no warning. This is the
-    /// tolerant-reader contract (DEC-314): `env` is purely additive.
+    /// tolerant-reader contract (D-314): `env` is purely additive.
     #[test]
     fn test_profile_config_env_absent_key_deserializes_to_none() {
         let toml = r#"

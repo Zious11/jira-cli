@@ -47,7 +47,7 @@ pub(crate) fn auth_method_is_api_token(auth_method: Option<&str>) -> bool {
 /// shared/host-keyed; see BC-1.4.031), and clearing it is `jr auth remove`'s
 /// job, not `logout`'s.
 ///
-/// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.013, DEC-322).**
+/// **AMENDED by S-cycle3-remove-logout-semantics (BC-1.2.013, D-322).**
 /// `logout` remains OAuth-specific by design — this story does NOT extend
 /// it to clear the target profile's API-token credentials (that is
 /// `jr auth remove`'s job; see [`super::remove::handle_remove`]). What
@@ -109,7 +109,7 @@ pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> 
         .is_some_and(|p| auth_method_is_api_token(p.auth_method.as_deref()));
 
     if is_api_token_profile {
-        // BC-1.2.013 amended (DEC-322): api-token profiles have no OAuth
+        // BC-1.2.013 amended (D-322): api-token profiles have no OAuth
         // session to clear. Informational, non-error notice — exit 0.
         // Stderr-only; never appears on stdout in any output mode
         // (AC-006/AC-007). Do NOT call clear_profile_creds here — that

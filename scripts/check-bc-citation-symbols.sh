@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-bc-citation-symbols.sh — BC-CITE-001
 #
-# Guard 1 (DEC-148): validates src/ file and symbol citations in **Trace**: /
+# Guard 1 (D-148): validates src/ file and symbol citations in **Trace**: /
 # **Source**: fields of bc-*.md bodies against the develop src/ tree via
 # definition-anchored grep. Exits 1 if any citation is stale.
 #
@@ -31,7 +31,7 @@ bash -n "${BASH_SOURCE[0]}"
 # ---------------------------------------------------------------------------
 FLOOR=231       # floor(0.75 × N); N=309 (304 .rs + 5 .snap, measured on factory-artifacts 2b09313).
                 # Previous: N=304, FLOOR=228 (non-.rs tokens were silently skipped, so 5 .snap not counted).
-                # Pre-hygiene DEC-154 census: N=326, FLOOR=244.
+                # Pre-hygiene D-154 census: N=326, FLOOR=244.
                 # Script-scope (NOT local) — single recalibration touchpoint.
 CANONICAL_MODE=0
 
@@ -505,7 +505,7 @@ if [ "$self_test" = "1" ]; then
     fixtures_run=$((fixtures_run + 1))
 
     # -------------------------------------------------------------------
-    # Fixture I — ::tests module-path ALIVE (EC-CITE-052, DEC-154 branch (b))
+    # Fixture I — ::tests module-path ALIVE (EC-CITE-052, D-154 branch (b))
     # -------------------------------------------------------------------
     tmp_I=$(mktemp -d)
     mkdir -p "$tmp_I/src"
@@ -535,7 +535,7 @@ if [ "$self_test" = "1" ]; then
     fixtures_run=$((fixtures_run + 1))
 
     # -------------------------------------------------------------------
-    # Fixture K — standalone CamelCase type ALIVE (EC-CITE-054, DEC-154 branch (e))
+    # Fixture K — standalone CamelCase type ALIVE (EC-CITE-054, D-154 branch (e))
     # -------------------------------------------------------------------
     tmp_K=$(mktemp -d)
     mkdir -p "$tmp_K/src"

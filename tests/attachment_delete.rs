@@ -11,7 +11,7 @@
 //!             BC-3.9.019, BC-3.9.020
 //! VPs: VP-576-002 (delete confirmation gate confirm/cancel)
 //! Security: SEC-576-011 (CWE-116 display_sanitize_filename in gate prompt)
-//! DEC: DEC-168 (404 on targeted delete exits 64 + surfaces body)
+//! DEC: D-168 (404 on targeted delete exits 64 + surfaces body)
 //! Story: S-576-4, GitHub issue #576
 
 use assert_cmd::Command;
@@ -2619,7 +2619,7 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-010: non-interactive without --yes exits 64 (BC-3.9.015; DEC-174)
+// AC-010: non-interactive without --yes exits 64 (BC-3.9.015; D-174)
 // ---------------------------------------------------------------------------
 
 /// BC-3.9.015 EC-3.9.015-3: `--no-input` or non-TTY stdin without `--yes` → exit 64.
@@ -2749,10 +2749,10 @@ async fn test_bc_3_9_016_issue_older_than_yes_combined() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-013: VP-576-002 wiremock anchor + DEC-168 body surfacing (BC-3.9.008)
+// AC-013: VP-576-002 wiremock anchor + D-168 body surfacing (BC-3.9.008)
 // ---------------------------------------------------------------------------
 
-/// DEC-168 body surfacing (EC-3.9.008-2): stderr MUST BEGIN with canonical prefix
+/// D-168 body surfacing (EC-3.9.008-2): stderr MUST BEGIN with canonical prefix
 /// `"Attachment <AID> not found or not accessible."` THEN the Jira error body.
 /// NOT body-only; NOT silent exit 0. Exit 64.
 ///
@@ -2783,19 +2783,19 @@ async fn test_bc_3_9_008_404_body_surfaced_to_stderr() {
     assert_eq!(
         output.status.code(),
         Some(64),
-        "BC-3.9.008 EC-3.9.008-2 DEC-168: must exit 64 on 404; got {:?}\nstderr: {stderr}",
+        "BC-3.9.008 EC-3.9.008-2 D-168: must exit 64 on 404; got {:?}\nstderr: {stderr}",
         output.status.code()
     );
-    // Canonical prefix must appear in stderr (DEC-168: prepend canonical string, append body)
+    // Canonical prefix must appear in stderr (D-168: prepend canonical string, append body)
     assert!(
         stderr.contains("Attachment 12345 not found or not accessible."),
-        "BC-3.9.008 EC-3.9.008-2 DEC-168: stderr must contain canonical prefix; \
+        "BC-3.9.008 EC-3.9.008-2 D-168: stderr must contain canonical prefix; \
          got stderr: {stderr}"
     );
-    // Jira error body must also appear (NOT silent — DEC-168 requires body surface)
+    // Jira error body must also appear (NOT silent — D-168 requires body surface)
     assert!(
         stderr.contains("Attachment does not exist."),
-        "BC-3.9.008 EC-3.9.008-2 DEC-168: stderr must also contain Jira error body; \
+        "BC-3.9.008 EC-3.9.008-2 D-168: stderr must also contain Jira error body; \
          got stderr: {stderr}"
     );
 }
@@ -3102,7 +3102,7 @@ async fn test_bc_3_9_013_delete_network_error_exit_1() {
 /// line 211-212): the `..` wildcard discarding `message` must be replaced with
 /// `message` to include the error body in the formatted string.
 ///
-/// IMPORTANT: `delete_attachment` (bulk benign-skip, DEC-168) must NOT be changed —
+/// IMPORTANT: `delete_attachment` (bulk benign-skip, D-168) must NOT be changed —
 /// its 404→`"not found or already deleted"` benign semantics are load-bearing.
 ///
 /// Sub-case A (interactive, metadata GET 404): RED — body absent from stderr now.
@@ -3183,7 +3183,7 @@ async fn test_f5_r1_004_single_aid_404_message_includes_jira_error_body() {
     // -----------------------------------------------------------------------
     // Sub-case B: --yes path (targeted DELETE 404).
     //   `delete_attachment_targeted` on 404 already includes the error body.
-    //   This sub-case is a GREEN regression guard (DEC-168).
+    //   This sub-case is a GREEN regression guard (D-168).
     // -----------------------------------------------------------------------
     {
         let server = MockServer::start().await;
@@ -3218,11 +3218,11 @@ async fn test_f5_r1_004_single_aid_404_message_includes_jira_error_body() {
             "F5-R1-004(B) --yes 404: canonical prefix must be present; got stderr: {stderr}"
         );
 
-        // Jira error body (DEC-168: already implemented in delete_attachment_targeted).
+        // Jira error body (D-168: already implemented in delete_attachment_targeted).
         // This assertion is GREEN now — regression guard for the --yes path.
         assert!(
             stderr.contains(&jira_404_text) || stderr.contains("does not exist"),
-            "F5-R1-004(B) --yes 404: Jira error body must appear in stderr (DEC-168); \
+            "F5-R1-004(B) --yes 404: Jira error body must appear in stderr (D-168); \
              got stderr: {stderr}"
         );
     }

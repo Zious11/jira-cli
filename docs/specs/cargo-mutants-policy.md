@@ -17,8 +17,8 @@ high line coverage but untested assertion strength at the time of the F6 review.
   behavior-dense module with high weak-assertion surface across node normalization, pruning,
   mark deduplication, and the Algorithm B HTML block path (added F6 hardening)
 - `src/cli/issue/create.rs` — `handle_create` (platform-path `issue create` logic) and `parse_field_kv`
-- `src/cli/issue/edit.rs` — `handle_edit`, `handle_edit_bulk_labels`, `handle_edit_bulk_fields` (extracted from `create.rs` by ADR-0012 Seam B, PR #558); bulk routing forks, C-1 guard, label endpoint fork, type-change path; ~99 mutants (added DEC-149)
-- `src/cli/issue/jsm_create.rs` — `handle_jsm_create` (extracted from `create.rs` by ADR-0012 Seam A, PR #556); JSM POST body dispatch, RT-id resolution, scope-hint; ~9 mutants (added DEC-149)
+- `src/cli/issue/edit.rs` — `handle_edit`, `handle_edit_bulk_labels`, `handle_edit_bulk_fields` (extracted from `create.rs` by ADR-0012 Seam B, PR #558); bulk routing forks, C-1 guard, label endpoint fork, type-change path; ~99 mutants (added D-149)
+- `src/cli/issue/jsm_create.rs` — `handle_jsm_create` (extracted from `create.rs` by ADR-0012 Seam A, PR #556); JSM POST body dispatch, RT-id resolution, scope-hint; ~9 mutants (added D-149)
 - `src/api/jira/bulk.rs` — `await_bulk_task`, polling loop, deadline propagation
 - `src/types/jira/bulk.rs` — serde structs for bulk API responses
 - `src/api/jsm/requests.rs` — `JsmRequestBuilder::build` (JSM POST body construction) (added S-288-pr4)
@@ -37,9 +37,62 @@ high line coverage but untested assertion strength at the time of the F6 review.
 - `src/cli/queue.rs` — `handle`, `handle_list`, `handle_view`, `resolve_queue_by_name`, `extra_fields_allow_list`, `is_customfield_token`, `reorder_by_queue_position`, `collapse_and_truncate` (F6-hardened 200-char truncation boundary, PR #700; partial-match queue-name resolution) (added S-MUTANTS-SCOPE-1)
 - `src/main.rs` — `init_tracing`, `run`, `run_until_shutdown` (previously-zero-coverage `tokio::select!` ctrl_c/SIGINT fork, now covered by VP-MUTANTS-SCOPE-1-001/002; `InvalidSubcommand` intercept) (added S-MUTANTS-SCOPE-1)
 - `src/cli/field.rs` — `handle` (`jr field options <field>` entry point, S-580-1), `resolve_field_context`/`resolve_m2_project` (M1/M2/M3 field-context-mechanism resolution), `normalize_from_allowed_values`/`normalize_from_valid_values` (the normalized `FieldOption` model), `filter_options` (`--value` filter), `render_option_rows`, `resolve_field_id`; ~91 mutants — previously omitted from the examine_globs scope (added FIX-F6-MUTANTS-SCOPE)
-- `src/cli/issue/field_resolve.rs` — `resolve_edit_fields`/`dispatch_field_value` (shared `--field` resolution/dispatch hub for both `issue edit --field` and `issue create --field`, S-578-2/S-578-4), `detect_flag_field_overlap` (D2 collision guard), `resolve_against_createmeta`/`resolve_against_editmeta`, `compose_option_hint`/`compose_id_hint`/`compose_name_hint`/`compose_asset_hint` (wire-value composers); ~45 mutants — previously omitted from the examine_globs scope despite backing two command families (P22-001/DEC-149/S-MUTANTS-SCOPE-1 drift class) (added FIX-F6-MUTANTS-SCOPE)
+- `src/cli/issue/field_resolve.rs` — `resolve_edit_fields`/`dispatch_field_value` (shared `--field` resolution/dispatch hub for both `issue edit --field` and `issue create --field`, S-578-2/S-578-4), `detect_flag_field_overlap` (D2 collision guard), `resolve_against_createmeta`/`resolve_against_editmeta`, `compose_option_hint`/`compose_id_hint`/`compose_name_hint`/`compose_asset_hint` (wire-value composers); ~45 mutants — previously omitted from the examine_globs scope despite backing two command families (P22-001/D-149/S-MUTANTS-SCOPE-1 drift class) (added FIX-F6-MUTANTS-SCOPE)
 - `src/output.rs` — `sanitize_env_display`/`strip_control_and_ansi` (security-relevant display-sanitization for `ProfileConfig.env`, terminal-escape/control-char injection; same class as the CWE-116 display-safety sanitizer in `attachments.rs`), plus `render_table`/`render_json` in the same file (whole-file scope, no sub-file targeting — same tradeoff as `main.rs`/`queue.rs`) (added S-cycle3-env-tag, per pr-reviewer BLOCKING-1 on PR #752)
-- `src/api/jira/tenant.rs` — `fetch_cloud_id` (S-cycle4-cloud-id-correctness API-token cloud_id acquisition), `validate_and_trim_site_url`, `is_plausible_cloud_id`, and the `MAX_TENANT_INFO_RESPONSE_BYTES` response-body size-cap guards (both the Content-Length fast-path check and the streamed-read check). Fully default-CI-testable — no keyring or Windows-cfg boundary in this file — 21 mutants, 100% kill after the FIX-F6-1 body-cap boundary tests (see `fetch_cloud_id`'s test coverage in `tests/cloud_id_tenant_info.rs`, plus the inline constant regression pin in this file's own unit test module). Was omitted from the examine_globs scope at file-creation time (S-cycle4-cloud-id-correctness) — the same P22-001/DEC-149/S-MUTANTS-SCOPE-1 "new security-relevant file → add to mutants.toml at creation" drift class documented above, confirmed by cycle-004's F6 mutation pass (`.factory/phase-f6-hardening/cycle-004/mutation-results.md` §0) to have slipped for the ENTIRE cycle-004 auth cluster, not just this file (added FIX-F6-1)
+- `src/api/jira/tenant.rs` — `fetch_cloud_id` (S-cycle4-cloud-id-correctness API-token cloud_id acquisition), `validate_and_trim_site_url`, `is_plausible_cloud_id`, and the `MAX_TENANT_INFO_RESPONSE_BYTES` response-body size-cap guards (both the Content-Length fast-path check and the streamed-read check). Fully default-CI-testable — no keyring or Windows-cfg boundary in this file — 21 mutants, 100% kill after the FIX-F6-1 body-cap boundary tests (see `fetch_cloud_id`'s test coverage in `tests/cloud_id_tenant_info.rs`, plus the inline constant regression pin in this file's own unit test module). Was omitted from the examine_globs scope at file-creation time (S-cycle4-cloud-id-correctness) — the same P22-001/D-149/S-MUTANTS-SCOPE-1 "new security-relevant file → add to mutants.toml at creation" drift class documented above, confirmed by cycle-004's F6 mutation pass (`.factory/phase-f6-hardening/cycle-004/mutation-results.md` §0) to have slipped for the ENTIRE cycle-004 auth cluster, not just this file (added FIX-F6-1)
+- `src/api/client.rs` — `classify_401_body` (pure 401-body scope-classification, BC-X.15.001), the
+  F-WAVE-1 (cycle-008 wave-gate) double-fault fix. Fully default-CI-testable in isolation, 7
+  operator-targeted unit tests in this file's own classify_401_body_tests module. The
+  `send_inner` wiring sites that call it from the post-refresh/reconcile retry paths are
+  keychain-gated and exclude_re'd (see §Exclusions); `send_inner`'s other, pre-existing
+  branches (rate-limit retry, the pre-refresh scope check, the Bearer-vs-Basic guard) remain
+  in scope and are exercised by non-ignored tests in `tests/oauth_flow_holdouts.rs`,
+  `tests/api_client.rs`, and `tests/rate_limit_cap_tests.rs`. Previously absent from
+  examine_globs, CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP (added FIX-F7-001)
+- `src/cli/board.rs` — `is_insufficient_scope_error` (pure anyhow-chain scanner) and
+  `rewrite_agile_scope_error` (BC-X.15.001), the shared Agile scope-mismatch
+  classification/rewrite pair added by S-cycle8-agile-scope-mismatch-error-mapping and widened
+  by FIX-F5-001 (cycle-008 F5) to scan the whole anyhow chain. Fully default-CI-testable via
+  `tests/board_commands.rs`'s non-ignored wiremock-driven 401-body-injection tests. Previously
+  absent from examine_globs, CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP (added FIX-F7-001)
+- `src/cli/sprint.rs` — the board.rs-defined scope-mismatch classification/rewrite pair's call
+  sites in `handle`, `resolve_scrum_board`, `handle_add`, `handle_remove`, `handle_list`, and
+  `handle_current` (BC-X.15.001, F-WG-1). Fully default-CI-testable via
+  `tests/sprint_commands.rs`'s non-ignored wiremock-driven 401-body-injection tests. Previously
+  absent from examine_globs, CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP (added FIX-F7-001)
+- `src/cli/issue/list.rs` — the two InsufficientScope scope-hint call sites in `handle_list`
+  (BC-X.15.001, FIX-F5-001 chain-aware downcast) for the board-config/list-sprints
+  Agile-scope-mismatch mapping on `jr issue list --sprint`/`--board`. Fully default-CI-testable
+  via `tests/issue_list_oauth_scope.rs`'s non-ignored tests. Whole-file scope, no sub-file
+  targeting, same tradeoff as `main.rs`/`queue.rs`/`output.rs`. Previously absent from
+  examine_globs, CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP (added FIX-F7-001)
+- `src/api/jsm/queues.rs` — `list_queues`/`get_queue_issue_keys`, the
+  S-cycle8-jsm-servicedeskapi-oauth-routing (#833, BC-4.2.001) gateway-host routing fix (the
+  instance-URL-bypassing call swapped for the OAuth-proxy-aware one). No mutant is generated
+  for the call-target swap itself; the functions' pagination/loop-termination mutants are
+  fully default-CI-testable via `tests/queue.rs` and `tests/jsm_request_api.rs`. Previously
+  absent from examine_globs, CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP (added FIX-F7-001)
+- `src/api/assets/workspace.rs` — `get_or_fetch_workspace_id`, the
+  S-cycle8-assets-workspace-oauth-routing (#832, BC-4.2.001) gateway-host routing fix for
+  Assets workspace-ID discovery. Same "no mutant for the call-target swap itself" reasoning as
+  the queues.rs entry above; the function's cache-hit/404-403 error-mapping mutants are fully
+  default-CI-testable via `tests/assets.rs` and `tests/asset_holdouts.rs`. Previously absent
+  from examine_globs, CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP (added FIX-F7-001)
+
+**FIX-F7-001 deferred, not added:** `src/cli/init.rs` is NOT added to `examine_globs` despite
+backing the cycle-008 F-WG-1 `list_boards` scope-hint call site (BC-X.15.001) alongside
+`board.rs`/`sprint.rs`/`list.rs` above. Investigation found no mutant is generated at that
+specific `.map_err(...)` call site at all (cargo-mutants does not mutate a bare method-call
+wrapper with no operator/comparison inside it), but `jr init`'s entire `handle()` function has
+ZERO default-CI test coverage: `jr init` is invoked exactly once across the whole test suite
+(`tests/init_oauth_scope.rs`), and that one test is `#[ignore]`d and gated behind
+`JR_RUN_KEYRING_TESTS=1` (the interactive-prompt + real-OAuth flow has no non-interactive/
+non-keychain seam). Every one of `handle()`'s 8 generated mutants would therefore survive as
+an un-actionable default-CI MISSED — the same flooding class the "FIX-F6-1 deferred, not added"
+note above documents for `src/api/auth.rs`/`src/cli/auth/login.rs`, not a single
+narrowly-anchored `exclude_re` candidate. Adding this file needs either an in-CI
+keychain-injection seam or a non-interactive test path for `jr init`, both out of scope for
+FIX-F7-001; tracked as a follow-up.
 
 Configured in `.cargo/mutants.toml::examine_globs`. The CI job relies on this
 configuration alone (no `--file` CLI flags) for scope enforcement; `--in-diff` further
@@ -48,7 +101,7 @@ narrows to lines changed in the PR diff.
 Note: cargo-mutants v27+ reads its config from `.cargo/mutants.toml` (not `.mutants.toml`
 at repo root). This is the canonical config location for this project.
 
-Current `examine_globs` count: 22 entries (verify against `.cargo/mutants.toml` before citing
+Current `examine_globs` count: 31 entries (verify against `.cargo/mutants.toml` before citing
 this number elsewhere — it has drifted before and will drift again as scope changes).
 
 **FIX-F6-1 deferred, not added:** `src/api/auth.rs` and `src/cli/auth/login.rs` are NOT added
@@ -398,7 +451,7 @@ member that needs an `ALLOWED_SKIPS` entry.
 
 ### Promotion to Hard-Required
 
-The `mutants` job is now **HARD-REQUIRED** via `ci-gate.needs`. Per DEC-096/097 and the
+The `mutants` job is now **HARD-REQUIRED** via `ci-gate.needs`. Per D-096/097 and the
 convention in CLAUDE.md, new required jobs are added to `ci-gate.needs` — never wired
 directly into branch protection. This prevents the matrix-rename fragility class.
 
@@ -806,6 +859,40 @@ sibling function).
 
   See `.cargo/mutants.toml`'s `exclude_re` array for the exact patterns and their comments.
 
+- **`src/api/client.rs` — `JiraClient::send_inner`'s post-refresh/reconcile `classify_401_body`
+  wiring sites (five regexes)** (FIX-F7-001, closes CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP).
+  This is the same exclusion class as the `auth/list.rs`/`auth/status.rs` entries above:
+  reachable only through a path that unconditionally touches the OS keychain, with no
+  in-memory injection seam. `classify_401_body` itself (the pure function extracted by the
+  F-WAVE-1 double-fault fix, BC-X.15.001) is NOT excluded — it has 7 operator-targeted unit
+  tests in its own `classify_401_body_tests` module and is fully default-CI-testable. What
+  IS excluded is the small set of conditions inside `send_inner` that gate *reaching* its two
+  call sites from the post-refresh retry (after a successful OAuth refresh) and the AC-010
+  reconcile retry (after a keychain re-read following a failed refresh): both paths
+  unconditionally touch the OS keychain (BYO-app-credential lookup before refresh,
+  `store_oauth_tokens` after a successful one, `load_oauth_tokens` for the reconcile check),
+  and every test exercising this region in `tests/oauth_refresh_integration.rs` — including
+  the one pinning the double-fault fix itself,
+  `test_bc_wave1_expired_and_under_scoped_token_classifies_as_insufficient_scope_not_not_authenticated`,
+  plus `test_send_retries_once_after_refresh_on_401`,
+  `test_send_caps_refresh_at_one_attempt_when_retry_also_401`, and
+  `test_inter_process_reconcile_after_invalid_grant` — is `#[ignore]`d behind
+  `JR_RUN_KEYRING_TESTS=1`, which default CI never sets. Five regexes, each anchored to an
+  exact `file:line:col` + `JiraClient::send_inner` (mirroring the S-575-1 single-mutant
+  anchoring style, since `send_inner` also contains many OTHER, genuinely default-CI-testable
+  mutants — the rate-limit retry loop, the pre-refresh `first_401_classified` check, the
+  Bearer-vs-Basic guard — that a bare function-name pattern would incorrectly sweep in):
+  - `844:21` / `913:25` — the `is_client_error() || is_server_error()` guard entering the
+    primary post-refresh retry's / the reconcile retry's error-handling arm.
+  - `846:48` / `915:52` — the `retry_response.status() == StatusCode::UNAUTHORIZED` branch
+    selecting the `classify_401_body` call itself, in the primary post-refresh retry and the
+    reconcile retry respectively.
+  - `883:43` — the AC-010 reconcile-detection comparison (`initial_bearer != self.auth_header`)
+    deciding whether the reconcile retry (and its own `classify_401_body` call) is attempted
+    at all; computing it requires a keychain read via `load_oauth_tokens`.
+
+  See `.cargo/mutants.toml`'s `exclude_re` array for the exact patterns and their comments.
+
 ## Deferral Policy
 
 The initial baseline PR (S-346) MUST NOT block on achieving 90% kill-rate on first run.
@@ -1175,8 +1262,8 @@ not a PRD BC.
 
 **cycle-006 (S-cycle6-mutants-ci-sharding) continues this precedent.** The sharded
 gate's governing invariants — INV-AGG, INV-COMPLETE, INV-ESCALATE (see **Sharded
-Mutation Gate (cycle-006)** above) — are also policy-doc-only, per DEC-348 (F1 approval) and
-DEC-349 (F2 gate approval). No PRD BC exists for the sharded gate either; this file,
+Mutation Gate (cycle-006)** above) — are also policy-doc-only, per D-348 (F1 approval) and
+D-349 (F2 gate approval). No PRD BC exists for the sharded gate either; this file,
 plus `.factory/phase-f2-spec-evolution/cycle-006/mutants-sharding-invariants.md` (the
 invariant statements and their adversarial-review history) and
 `.factory/cycles/cycle-006/phase-f3-stories/S-cycle6-mutants-ci-sharding.md` (the
@@ -1184,7 +1271,7 @@ delivering story), are the governing artifacts.
 
 ## Guards
 
-Two static-analysis guards protect §Scope integrity (DEC-150):
+Two static-analysis guards protect §Scope integrity (D-150):
 
 - **Guard 2 — `scripts/check-cargo-mutants-policy-citations.sh` (CI-MUTANTS-CITE-001):**
   Parses the §Scope bulleted list, extracts every (file, fn) pair, and verifies each
@@ -1401,7 +1488,7 @@ neither — it is a plaintext, semantically-legal edit to a config file plus its
 doc bullet, and every downstream check (`mutants-plan`, the shard matrix, `mutants-aggregate`)
 computes its numbers *honestly* against the narrowed scope it was handed.
 
-**`tests/mutants_glob_existence.rs` (DEC-150 Guard 3) narrows this residual but does not
+**`tests/mutants_glob_existence.rs` (D-150 Guard 3) narrows this residual but does not
 close it.** Its `test_resolve_all_examine_globs_entries_to_real_files` asserts every EXISTING
 `examine_globs` entry resolves to ≥1 real file (no opinion on an entry that SHOULD be present
 but is missing), and its `assert_examine_globs_coverage_floor` helper additionally enforces a
@@ -1435,7 +1522,7 @@ dated entry), so either strengthening would need a matching update in the SAME c
 future legitimate addition, adding review friction without closing the actual gap: neither
 form catches a file that should have been added at creation time but never was (the exact
 "new CLI handler file → add to mutants.toml at creation" drift class already named at
-P22-001/DEC-149/S-MUTANTS-SCOPE-1, which is a recurring, independently-tracked process gap,
+P22-001/D-149/S-MUTANTS-SCOPE-1, which is a recurring, independently-tracked process gap,
 not something a static floor or named-membership list can enforce), and neither can
 distinguish a legitimate removal (the file was deleted, or its mutation-relevant logic was
 fully relocated elsewhere and the new location is already listed) from a malicious one — both
@@ -1471,7 +1558,7 @@ landed:
    document's own **`--baseline=skip` and Path B** section above.
 3. **Landed as proposed, by name.** `mutants-aggregate` (`needs: [mutants-plan,
    mutants]`) is the single shard-aggregator job wired into `ci-gate.needs` per
-   DEC-096/097 — not any individual shard matrix job.
+   D-096/097 — not any individual shard matrix job.
 4. **Landed as proposed.** `mutants-plan` computes `DIFF_FILE` exactly once and
    uploads it as the `mutants-diff-file` artifact; every one of the 8 shards
    downloads and uses the SAME artifact bytes.
@@ -1489,11 +1576,11 @@ landed:
 | Date | Cycle | Change |
 |------|-------|--------|
 | 2026-09-10 | ci/mutants-nightly-rebalance | **Nightly full-scope workflow rebalanced for reliability + honest reporting.** Investigated run 34478602590 `cancelled`: only 4/16 shards finished inside the old `timeout-minutes: 240` cap before the other 12 were killed mid-run, and `mutants-nightly-report` pooled the partial outcomes into an ordinary below-90% warning indistinguishable from a full run. Fix: `.github/workflows/mutants-nightly.yml`'s matrix widened N=16 → N=24 (`--shard <k>/24`), shard `timeout-minutes` raised 240 → 300 (under GitHub's 360-minute job max), and a completeness guard added — each shard now writes a `mutants-nightly-shard-status-<k>` completion sentinel only on a genuine `cargo mutants` exit 0 (a cancelled or failed shard produces none), and `mutants-nightly-report` counts sentinels, reports "N/24 shards completed," and — when N < 24 — annotates the summary PARTIAL and suppresses the below-90% `::warning::` in favor of an explicit advisory-incomplete note. The report job remains advisory-only and still never exits non-zero. Internal CI/CD only — no `src/` change, no new PRD BC. |
-| 2026-09-07 | S-cycle6-mutants-ci-sharding | **Sharded mutation gate:** replaced the single `mutants` job with a three-job pipeline (`mutants-plan` → 8-shard `mutants` matrix → `mutants-aggregate`) plus an advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=16). `mutants-aggregate` (extracted to `scripts/mutants-aggregate.sh`) replaces `mutants` as the `ci-gate.needs` member and computes a POOLED sum-not-average kill rate across all 8 shards (INV-AGG), with exact-equality `MUTANT_COUNT` reconciliation as a hard fail (both over- and under-count directions). Fail-closed, sentinel-based shard-completeness accounting (INV-COMPLETE) replaces the old artifact-count proxy, closing an all-shards-crash false-green and an empty-shard false-red the single-job design was never exposed to. A `>120`-in-diff-mutant escape hatch (`ESCALATION_THRESHOLD=120`, INV-ESCALATE) routes oversized PRs to an ordinary, actionable CI failure — never a silent skip or pass — resolved by splitting the diff or an admin branch-protection bypass. `cargo-mutants` pin tightened from major-only `@27` to the exact release `@27.1.0`. Both `scripts/check-ci-gate.sh` and the new `scripts/mutants-aggregate.sh` now source a shared `scripts/lib/trusted-jq.sh`. See **Sharded Mutation Gate (cycle-006)** above for the full account; governed by this policy doc per DEC-348/DEC-349 (policy-doc-only, no new PRD BC), mirroring the MUTATION-CI-TIMEOUT precedent below. No `src/` (product-code) changes — CI/CD infrastructure only. |
-| 2026-08-31 | FIX-F6-MUTANTS-SCOPE | Scope-gap fix: added `src/cli/field.rs` (~91 mutants, S-580-1's `jr field options <field>` M1/M2/M3 resolution) and `src/cli/issue/field_resolve.rs` (~45 mutants, shared `--field` resolution/dispatch hub for `issue edit --field` and `issue create --field`) to `examine_globs` (18 → 20 entries). Both files had been omitted since creation across all field-dx PRs (S-580-1, #578 parts 1-5) — same P22-001/DEC-149/S-MUTANTS-SCOPE-1 drift class ("new CLI handler file → add to mutants.toml at creation"), meaning the required CI `mutants` gate generated zero mutants for either file across every field-dx PR to date. |
+| 2026-09-07 | S-cycle6-mutants-ci-sharding | **Sharded mutation gate:** replaced the single `mutants` job with a three-job pipeline (`mutants-plan` → 8-shard `mutants` matrix → `mutants-aggregate`) plus an advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=16). `mutants-aggregate` (extracted to `scripts/mutants-aggregate.sh`) replaces `mutants` as the `ci-gate.needs` member and computes a POOLED sum-not-average kill rate across all 8 shards (INV-AGG), with exact-equality `MUTANT_COUNT` reconciliation as a hard fail (both over- and under-count directions). Fail-closed, sentinel-based shard-completeness accounting (INV-COMPLETE) replaces the old artifact-count proxy, closing an all-shards-crash false-green and an empty-shard false-red the single-job design was never exposed to. A `>120`-in-diff-mutant escape hatch (`ESCALATION_THRESHOLD=120`, INV-ESCALATE) routes oversized PRs to an ordinary, actionable CI failure — never a silent skip or pass — resolved by splitting the diff or an admin branch-protection bypass. `cargo-mutants` pin tightened from major-only `@27` to the exact release `@27.1.0`. Both `scripts/check-ci-gate.sh` and the new `scripts/mutants-aggregate.sh` now source a shared `scripts/lib/trusted-jq.sh`. See **Sharded Mutation Gate (cycle-006)** above for the full account; governed by this policy doc per D-348/D-349 (policy-doc-only, no new PRD BC), mirroring the MUTATION-CI-TIMEOUT precedent below. No `src/` (product-code) changes — CI/CD infrastructure only. |
+| 2026-08-31 | FIX-F6-MUTANTS-SCOPE | Scope-gap fix: added `src/cli/field.rs` (~91 mutants, S-580-1's `jr field options <field>` M1/M2/M3 resolution) and `src/cli/issue/field_resolve.rs` (~45 mutants, shared `--field` resolution/dispatch hub for `issue edit --field` and `issue create --field`) to `examine_globs` (18 → 20 entries). Both files had been omitted since creation across all field-dx PRs (S-580-1, #578 parts 1-5) — same P22-001/D-149/S-MUTANTS-SCOPE-1 drift class ("new CLI handler file → add to mutants.toml at creation"), meaning the required CI `mutants` gate generated zero mutants for either file across every field-dx PR to date. |
 | 2026-08-21 | S-575-1 | Added new "Exclusions" section (distinct from `#[mutants::skip]` Whitelist Convention) and a single `exclude_re` entry in `.cargo/mutants.toml` for `src/api/jira/issues.rs:374:16: delete ! in JiraClient::search_issues_with_fields` — an infinite-loop mutant uncatchable-as-anything-but-TIMEOUT under the whole-binary test-harness execution model. Termination correctness remains verified by existing multi-page pagination tests. |
 | 2026-08-14 | S-MUTANTS-SCOPE-1 | Scope widening + drift backfill: added `src/cli/queue.rs` and `src/main.rs` to `examine_globs` (16 → 18 entries). Backfilled §Scope bullets for 5 previously-undocumented `examine_globs` members: `src/cli/issue/interactions.rs`, `src/cli/issue/attachments.rs`, `src/api/jira/attachments.rs`, `src/api/jsm/attachments.rs`, `src/api/jsm/servicedesks.rs`. Closes drift item MUTANTS-SCOPE-GAP-QUEUE-MAIN. |
-| 2026-07-02 | DEC-149 / S-MUTANTS-EXAMINE-GLOBS-1 | Scope widening: added `src/cli/issue/edit.rs` (~99 mutants) and `src/cli/issue/jsm_create.rs` (~9 mutants) to `examine_globs`. Root cause: ADR-0012 Seam A (PR #556) and Seam B (PR #558) relocated `handle_edit`, `handle_edit_bulk_labels`, `handle_edit_bulk_fields` → `edit.rs` and `handle_jsm_create` → `jsm_create.rs` from `create.rs`, but `examine_globs` was not updated. Total scope: 594 → ~702 mutants (+18%). Corrected `create.rs` entry to reflect remaining functions (`parse_field_kv`, thin dispatcher) only. |
+| 2026-07-02 | D-149 / S-MUTANTS-EXAMINE-GLOBS-1 | Scope widening: added `src/cli/issue/edit.rs` (~99 mutants) and `src/cli/issue/jsm_create.rs` (~9 mutants) to `examine_globs`. Root cause: ADR-0012 Seam A (PR #556) and Seam B (PR #558) relocated `handle_edit`, `handle_edit_bulk_labels`, `handle_edit_bulk_fields` → `edit.rs` and `handle_jsm_create` → `jsm_create.rs` from `create.rs`, but `examine_globs` was not updated. Total scope: 594 → ~702 mutants (+18%). Corrected `create.rs` entry to reflect remaining functions (`parse_field_kv`, thin dispatcher) only. |
 | 2026-06-28 | MUTATION-CI-TIMEOUT (F5 doc-completeness, pass 3) | Added "Schema-Drift and False-Green Guards" section documenting @27 pin rationale + evidence basis, malformed-JSON guard, integer-validation guard, H-1 runtime schema-drift guard, and M-2 total_mutants reconciliation warning-only design decision. Disambiguated timeout_multiplier history (3.0 in S-346 original; 2.0 in pass-1; removed in pass-2). Softened .factory/cicd-setup.md reference from "canonical" to "historical/pending refresh." F5 final blocker F1 (HIGH) + O1 + O3. |
 | 2026-06-28 | MUTATION-CI-TIMEOUT (F5 adversarial correction, pass 2) | HIGH false-RED fix: replaced SCOPED_DIFF_LINES-based drift guard with OVERALL_DIFF_LINES check. Old guard incorrectly failed comment-only/whitespace/reformat edits to scoped files. New guard: FAIL only when overall diff is EMPTY (genuine base-ref drift); PASS for any non-empty diff that yields 0 mutants. Grounded --timeout in measured baseline (133–145s on ubuntu-latest, 5 green develop runs 2026-06-28). Bumped --timeout 180 → 240 (old 180s gave only 3–6% headroom over worst-case 174s; 240s gives 38% headroom). Updated all --timeout references in policy doc, CLAUDE.md, and CI YAML. |
 | 2026-06-28 | MUTATION-CI-TIMEOUT (F5 adversarial correction, pass 1) | CRITICAL: corrected inverted timeout-mechanism documentation. `minimum_test_timeout` is a FLOOR not a ceiling; it and `timeout_multiplier` are REMOVED from `.cargo/mutants.toml` (dead config once `--timeout` is set). Moved the absolute per-mutant ceiling to `--timeout 180` on the CLI invocation. Derived 180s value with explicit reasoning (baseline ~90s assumed + runner variance headroom). Documented F-2 (cancelled = blocking, intentional). Added F-3 positive-coverage assertion (in-scope: gate is now required; base-ref drift false-green is a correctness hole). Corrected budget model to use `--timeout 180` / `~90s avg`. Corrected Path B sharding guidance to remove `minimum_test_timeout` references. Updated Local Invocation commands to add `--timeout 180`. |

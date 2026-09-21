@@ -112,7 +112,7 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
     // `flow` — before the URL-completeness check below, any credential
     // clear, and any login dispatch. `chosen_flow_for_profile` resolves
     // solely from `target_profile.auth_method` (BC-1.2.051 AC-001..AC-004,
-    // DEC-321) — the explicit `--oauth` flag is deliberately NOT folded
+    // D-321) — the explicit `--oauth` flag is deliberately NOT folded
     // into this resolution on `refresh` (unlike `login`); `--oauth` never
     // reaches `chosen_flow_for_profile` at all, so it cannot override an
     // api_token-method profile's resolved flow here. This single check

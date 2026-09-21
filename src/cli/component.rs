@@ -143,7 +143,7 @@ pub async fn handle(
             // The rejection is an application-level `JrError::UserError`
             // (exit 64, not clap's exit 2 — this codebase's established
             // convention for an app-level guard covering a combination clap
-            // itself cannot express directly, per DEC-188 and
+            // itself cannot express directly, per D-188 and
             // `handle_delete`'s neither-flag guard) so it fails the same way
             // — before any HTTP call — as the local-both form, just via a
             // different mechanism.
@@ -773,7 +773,7 @@ fn is_404_error(e: &anyhow::Error) -> bool {
         .unwrap_or(false)
 }
 
-/// BC-8.2.001 Postcondition 3 / DEC-188: the neither-`--move-to`-nor-`--orphan`
+/// BC-8.2.001 Postcondition 3 / D-188: the neither-`--move-to`-nor-`--orphan`
 /// exit-64 guard. Application-level check (never a clap `ArgGroup::required`,
 /// which would wrongly produce exit 2) — names BOTH flags, no affected-issue
 /// count (the snapshot never fires in this path per BC-8.2.007 Postcondition 1).
@@ -815,7 +815,7 @@ fn move_to_not_found_in_project(target_input: &str, project_key: &str) -> anyhow
 ///
 /// `clap`'s `conflicts_with` on `ComponentSubcommand::Delete` already
 /// enforces the both-flags-supplied case (exit 2) before this handler ever
-/// runs; the neither-flag case (BC-8.2.001 Postcondition 3, DEC-188) is this
+/// runs; the neither-flag case (BC-8.2.001 Postcondition 3, D-188) is this
 /// handler's own application-level `JrError::UserError` guard (exit 64).
 async fn handle_delete(
     args: DeleteComponentArgs,
@@ -1092,7 +1092,7 @@ async fn handle_delete(
         }
 
         // Direct stdin read (not `dialoguer::Confirm::interact_on`) — mirrors
-        // `handle_comment_delete`'s DEC-174 rationale: console's `is_term()`
+        // `handle_comment_delete`'s D-174 rationale: console's `is_term()`
         // gate returns `NotConnected` on piped stderr, as in every subprocess
         // test here. Prompt → stderr; y/N response from stdin; EOF → Interrupted.
         use std::io::BufRead;
@@ -1223,7 +1223,7 @@ async fn handle_rename(
 
     // BC-8.3.005 Postcondition: both-supplied is already a clap
     // `conflicts_with` exit-2 rejection (never reaches here). Neither
-    // supplied is this application-level exit-64 guard — DEC-188, NOT a
+    // supplied is this application-level exit-64 guard — D-188, NOT a
     // clap `ArgGroup::required(true)` (which would wrongly exit 2).
     if project.is_none() && !all_projects {
         return Err(JrError::UserError(
