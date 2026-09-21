@@ -10,13 +10,12 @@ pub fn escape_value(s: &str) -> String {
 /// Validate a JQL relative date duration string.
 ///
 /// JQL relative dates use the format `<digits><unit>` where unit is one of:
-/// `y` (years), `M` (months), `w` (weeks), `d` (days), `h` (hours), `m` (minutes).
-/// Units are case-sensitive — `M` is months, `m` is minutes.
+/// `w` (weeks), `d` (days), `h` (hours), or `m` (minutes).
 /// Combined units like `4w2d` are not supported by Jira.
 pub fn validate_duration(s: &str) -> Result<(), String> {
     if s.len() < 2 {
         return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h)."
         ));
     }
     // `s.len()` is a BYTE count, so the unit must be extracted char-safely rather
@@ -26,18 +25,18 @@ pub fn validate_duration(s: &str) -> Result<(), String> {
     // lands on a valid char boundary.
     let Some(unit) = s.chars().next_back() else {
         return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h)."
         ));
     };
     let digits = &s[..s.len() - unit.len_utf8()];
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h)."
         ));
     }
-    if !matches!(unit, 'y' | 'M' | 'w' | 'd' | 'h' | 'm') {
+    if !matches!(unit, 'w' | 'd' | 'h' | 'm') {
         return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h)."
         ));
     }
     Ok(())
@@ -199,13 +198,13 @@ mod tests {
     }
 
     #[test]
-    fn validate_duration_valid_months_uppercase() {
-        assert!(validate_duration("2M").is_ok());
+    fn validate_duration_rejects_months() {
+        assert!(validate_duration("2M").is_err());
     }
 
     #[test]
-    fn validate_duration_valid_years() {
-        assert!(validate_duration("1y").is_ok());
+    fn validate_duration_rejects_years() {
+        assert!(validate_duration("1y").is_err());
     }
 
     #[test]
@@ -261,7 +260,7 @@ mod tests {
             );
             let err = result.unwrap_err();
             assert!(
-                err.contains("Invalid duration") && err.contains("y, M, w, d, h, or m"),
+                err.contains("Invalid duration") && err.contains("w, d, h, or m"),
                 "unexpected error message for {input:?}: {err}"
             );
         }
