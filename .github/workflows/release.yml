@@ -222,10 +222,18 @@ jobs:
     # attest]` would cascade-skip `release` whenever `attest` is skipped,
     # since the implicit "all needs succeeded" gate treats `skipped` as a
     # failure. The explicit `if:` below replaces that implicit gate, so it
-    # must re-assert build success itself: it blocks release ONLY when
-    # `attest` actually FAILED — a skipped or successful `attest` lets
-    # `release` proceed once `build` has also succeeded.
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.attest.result != 'failure' }}
+    # must re-assert build success itself. This is an ALLOW-LIST on
+    # `attest`'s result (`success` or `skipped`), not a deny-list on
+    # `failure` alone: GitHub Actions job results have exactly four
+    # possible values (success/failure/cancelled/skipped), and a deny-list
+    # form (`!= 'failure'`) would let a `cancelled` `attest` (e.g. its
+    # `timeout-minutes: 15` firing on a Sigstore Fulcio/Rekor hang) through
+    # silently — the top-level `!cancelled()` guard reflects only the
+    # overall workflow run's cancellation, not one dependency job's own
+    # timeout-driven cancellation (SEC-002). The allow-list blocks both
+    # `failure` and `cancelled` while still letting `success` and the
+    # fork-safe/attestations-disabled `skipped` default through.
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.attest.result == 'success' || needs.attest.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
