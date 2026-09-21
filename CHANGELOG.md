@@ -4,6 +4,26 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **CI: `release` now waits for and is gated on the `attest` job, fail-closed when
+  attestations are enabled; `actions/attest-build-provenance` bumped to v4.2.2
+  (ci-attest-provenance-v4.2.2-linearize):** `.github/workflows/release.yml`'s `release`
+  job now declares `needs: [build, attest]` with an explicit
+  `if: ${{ !cancelled() && needs.build.result == 'success' && needs.attest.result != 'failure' }}`,
+  replacing the prior parallel `needs: build`-only design where `attest` ran alongside
+  `release` with no ordering relationship between them. This closes the gap where a
+  release could publish even if provenance attestation failed while
+  `ATTESTATIONS_ENABLED` is set. The custom `if:` is fail-closed but fork-safe: a
+  `skipped` `attest` (the default — `ATTESTATIONS_ENABLED` unset on every fork and on
+  the canonical repo today) still lets `release` proceed, so forks and the current
+  canonical config are unaffected; only an actual `attest` FAILURE now blocks
+  publication. Internal release-infra only — no user-facing `jr` binary behavior
+  changed. Also bumps `actions/attest-build-provenance` from `v4.1.1`
+  (`0f67c3f4856b2e3261c31976d6725780e5e4c373`) to `v4.2.2`
+  (`4d101475d8b20a2381f78447822ac1eab6504dd8`) — an embedded `actions/attest`
+  4.2.0→4.2.1 tar/OCI update, irrelevant to this non-container Rust release.
+
 ## [0.7.0-dev.8] - 2026-09-20
 
 ### Fixed

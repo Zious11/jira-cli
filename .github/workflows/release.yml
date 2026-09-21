@@ -214,7 +214,18 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs: [build, attest]
+    # Fail-closed gate on `attest` without breaking disabled-attestation
+    # releases: `attest` is skipped whenever ATTESTATIONS_ENABLED is unset
+    # (the default on every fork and on the canonical repo today) — a
+    # skipped `attest` must NOT block the release. A bare `needs: [build,
+    # attest]` would cascade-skip `release` whenever `attest` is skipped,
+    # since the implicit "all needs succeeded" gate treats `skipped` as a
+    # failure. The explicit `if:` below replaces that implicit gate, so it
+    # must re-assert build success itself: it blocks release ONLY when
+    # `attest` actually FAILED — a skipped or successful `attest` lets
+    # `release` proceed once `build` has also succeeded.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.attest.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -250,14 +261,18 @@ jobs:
     # Cloud. Gating keeps the file byte-identical downstream while never
     # hard-failing a fork's release.
     if: vars.ATTESTATIONS_ENABLED == 'true'
-    # Runs in PARALLEL with `release` (both `needs: build`), not upstream
-    # of it. Both fan in from the same immutable `build` artifacts, so the
-    # attested bytes are identical to what `release` uploads verbatim
-    # (softprops copies them unchanged) — the attestation is created from
-    # the built bytes, not re-downloaded from the release page, so there is
-    # no publish-then-attest window (TOCTOU / CWE-362). It is deliberately
-    # NOT a `needs:` of `release`: with the fork gate above, a skipped
-    # `attest` would otherwise cascade and skip the fork's entire release.
+    # Both this job and `release` fan in from the same immutable `build`
+    # artifacts, so the attested bytes are identical to what `release`
+    # uploads verbatim (softprops copies them unchanged) — the attestation
+    # is created from the built bytes, not re-downloaded from the release
+    # page, so there is no publish-then-attest window (TOCTOU / CWE-362).
+    # `release` now declares `needs: [build, attest]` with a fail-closed
+    # `if:` (see that job): it waits for this job to complete, proceeds
+    # once this job succeeds OR is skipped (attestations disabled), and is
+    # blocked only when this job actually FAILS. This preserves the fork
+    # opt-in gate above — a skipped `attest` never blocks a fork's release
+    # — while ensuring an enabled-but-failing attestation blocks
+    # publication instead of racing ahead of it.
     permissions:
       # attest-build-provenance needs exactly these two; neither is
       # inherited. contents: read is NOT needed — the artifact download
@@ -289,7 +304,7 @@ jobs:
       # step in that workflow (after codesign/notarize, before upload),
       # gated on the same variable. Out of scope for this PR.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             release-assets/*.tar.gz
