@@ -55,14 +55,18 @@ JQL relative dates use the format `(+/-)nn(unit)` where units are case-sensitive
 
 | Unit | Meaning |
 |------|---------|
-| `y` | years |
-| `M` | months (uppercase) |
+| ~~`y`~~ | ~~years~~ — superseded, see §4 |
+| ~~`M`~~ | ~~months (uppercase)~~ — superseded, see §4 |
 | `w` | weeks |
 | `d` | days |
 | `h` | hours |
 | `m` | minutes (lowercase) |
 
-Combined units like `4w2d` are not supported by Jira. Client-side validation regex: `^\d+[yMwdhm]$`.
+> **Superseded 2026-09-22 — see §4 / BC-2.1.008 (cycle-009):** `y` and `M` above are
+> historical; they are REJECTED at runtime today. See the §4 banner for the full
+> explanation and the current accepted unit set (`{w,d,h,m}`).
+
+Combined units like `4w2d` are not supported by Jira. Client-side validation regex: `^\d+[yMwdhm]$` (historical; see §4 for the current regex).
 
 ---
 
@@ -151,7 +155,7 @@ Client-side validation gives better errors than Jira's generic 400:
 ```rust
 pub fn validate_duration(s: &str) -> Result<(), String> {
     let re = regex or manual check: digits followed by one of [yMwdhm]
-    // Valid: "7d", "30d", "4w", "2M", "1y", "5h", "10m"
+    // Valid (historical design; "2M" and "1y" superseded, see §4): "7d", "30d", "4w", "2M", "1y", "5h", "10m"
     // Invalid: "7x", "d7", "", "4w2d"
 }
 ```
@@ -233,7 +237,7 @@ Current error message (cycle-009): `"Invalid duration '7x'. Use a number followe
 | `gh issue list` composes `--search` with shorthand flags additively | Perplexity (GitHub CLI docs) |
 | `assignee = currentUser()` and `reporter = currentUser()` are valid JQL | Perplexity (JQL reference) |
 | `created >= -7d` is valid JQL for relative dates | Perplexity (Atlassian JQL docs) |
-| Duration units: `y`, `M` (months), `w`, `d`, `h`, `m` (minutes) — case-sensitive | Perplexity (Atlassian JQL functions reference) |
+| Duration units: ~~`y`~~, ~~`M`~~ (months) superseded — see §4 / BC-2.1.008 (cycle-009); `w`, `d`, `h`, `m` (minutes) remain accepted — case-sensitive | Perplexity (Atlassian JQL functions reference) |
 | Combined units like `4w2d` are not supported | Perplexity |
 | Display names don't work directly in JQL assignee/reporter fields | Perplexity (Atlassian community) |
 | `~` (CONTAINS) operator doesn't work on assignee/reporter fields | Perplexity (Atlassian JQL operators) |
