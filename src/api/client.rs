@@ -2799,7 +2799,7 @@ mod sanitize_tests {
         // gap found by running cargo-mutants against an earlier 1-byte-entry
         // version of this test.
         let entry_count = 2000;
-        let entries: Vec<&str> = std::iter::repeat("\"abc\"").take(entry_count).collect();
+        let entries: Vec<&str> = std::iter::repeat_n("\"abc\"", entry_count).collect();
         let body = format!("{{\"errorMessages\":[{}]}}", entries.join(","));
         assert!(
             body.len() <= MAX_PARSE_BODY_LEN,
@@ -2851,7 +2851,7 @@ mod sanitize_tests {
         // simulating both the correct and mutated greedy accounting) to
         // reliably shift the boundary.
         let entry_count = 1000;
-        let entries: Vec<&str> = std::iter::repeat("\"abcde\"").take(entry_count).collect();
+        let entries: Vec<&str> = std::iter::repeat_n("\"abcde\"", entry_count).collect();
         let body = format!("{{\"errorMessages\":[{}]}}", entries.join(","));
         assert!(
             body.len() <= MAX_PARSE_BODY_LEN,
@@ -2912,12 +2912,12 @@ mod sanitize_tests {
         let join_marker_len = " [...truncated]".len();
         let content_budget_join = MAX_SANITIZED_OUTPUT_LEN - join_marker_len;
 
-        let mut entries: Vec<String> = std::iter::repeat("\"x\"".to_string()).take(1359).collect();
+        let mut entries: Vec<String> = std::iter::repeat_n("\"x\"".to_string(), 1359).collect();
         entries.push("\"wxyz\"".to_string());
         // Filler so truncation is guaranteed to fire under the CORRECT code
         // too (otherwise "no marker" would trivially differ from the mutant
         // for the wrong reason).
-        entries.extend(std::iter::repeat("\"x\"".to_string()).take(50));
+        entries.extend(std::iter::repeat_n("\"x\"".to_string(), 50));
         let body = format!("{{\"errorMessages\":[{}]}}", entries.join(","));
         assert!(
             body.len() <= MAX_PARSE_BODY_LEN,
