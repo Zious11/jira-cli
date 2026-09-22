@@ -11,7 +11,7 @@ pub fn escape_value(s: &str) -> String {
 ///
 /// JQL relative dates use the format `<digits><unit>` where unit is one of:
 /// `w` (weeks), `d` (days), `h` (hours), `m` (minutes).
-/// Units are case-sensitive.
+/// Units are case-sensitive -- only lowercase w/d/h/m are accepted.
 /// Combined units like `4w2d` are not supported by Jira.
 pub fn validate_duration(s: &str) -> Result<(), String> {
     if s.len() < 2 {

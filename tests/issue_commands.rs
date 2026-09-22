@@ -12779,6 +12779,59 @@ async fn test_issue_list_recent_month_unit_rejects_pre_http() {
     );
 }
 
+/// BC-2.1.008 / EC-2.1.023-5, JSON-invariant coverage: `--recent 2M --output
+/// json` (month unit) is rejected pre-HTTP with zero HTTP calls, exits 64,
+/// and emits a structured `{"error":..,"code":64}` JSON error envelope on
+/// stderr (per CLAUDE.md's #526 JSON render invariant / main.rs's unified
+/// error-reporting block) containing the canonical "Invalid duration"
+/// message.
+#[tokio::test]
+async fn test_issue_list_recent_month_unit_rejection_json_envelope() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--recent",
+            "2M",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--recent 2M --output json (month unit) must exit 64 (UserError), got: {:?} (stderr: {})",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|e| {
+        panic!("stderr must be valid JSON when --output json set: {e}\nstderr: {stderr}")
+    });
+
+    assert!(
+        parsed["error"]
+            .as_str()
+            .is_some_and(|s| s.contains("Invalid duration")),
+        "JSON error 'error' field must contain 'Invalid duration'; got: {parsed}"
+    );
+    assert_eq!(
+        parsed["code"].as_i64(),
+        Some(64),
+        "JSON error 'code' field must be 64; got: {parsed}"
+    );
+}
+
 /// BC-2.1.008 / EC-2.1.023-5: `--recent 1y` (year unit) is rejected
 /// pre-HTTP with the canonical F2-approved error string, zero HTTP calls.
 #[tokio::test]
