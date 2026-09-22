@@ -2483,6 +2483,547 @@ mod sanitize_tests {
         // No "non-UTF8 body" string (custom marker not used).
         assert!(!out.contains("non-UTF8 body"));
     }
+
+    // -----------------------------------------------------------------------
+    // Mutation-coverage additions (nightly run 35512012884) — targeted kills
+    // for mutants that survived the tests above. Each test's doc comment
+    // names the specific mutant(s) it kills.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cap_entry_truncated_output_is_exactly_max_len_for_ascii_input() {
+        // Kills `MAX_ERROR_ENTRY_LEN - marker.len()` -> `MAX_ERROR_ENTRY_LEN
+        // / marker.len()` (target_prefix_len computation). For pure-ASCII
+        // oversized input (no char-boundary adjustment needed), the
+        // truncated output must be EXACTLY MAX_ERROR_ENTRY_LEN bytes -- a
+        // `/` mutant would produce a far shorter, wrong-sized output
+        // (MAX_ERROR_ENTRY_LEN / marker.len() is a small number, e.g. ~30).
+        let s = "a".repeat(MAX_ERROR_ENTRY_LEN + 500);
+        let capped = cap_entry(&s);
+        assert_eq!(
+            capped.len(),
+            MAX_ERROR_ENTRY_LEN,
+            "ASCII truncation must fill the cap exactly (prefix + marker == cap)"
+        );
+    }
+
+    #[test]
+    fn test_cap_entry_boundary_loop_walks_back_across_multibyte_char() {
+        // Kills the reachable `while !s.is_char_boundary(end) { end -= 1; }`
+        // loop's `delete !` and `-=`->`+=`/`/=` mutants. Unlike
+        // `test_cap_entry_respects_utf8_char_boundary` above -- where the
+        // initial truncation candidate happens to land on an ASCII byte and
+        // the loop body never executes, giving zero mutation coverage for
+        // the decrement itself -- this test carefully places a multi-byte
+        // character so the initial candidate (`target_prefix_len`) lands on
+        // one of its continuation bytes, forcing a real decrement.
+        let ch = "日"; // 3-byte UTF-8 character
+        let marker_fixed_len = " [...truncated, ".len() + " bytes total]".len();
+        // Assume a 4-digit s.len() (any length in 1000..=9999 keeps the
+        // marker length stable at marker_fixed_len + 4); verified below.
+        let assumed_marker_len = marker_fixed_len + 4;
+        let target_prefix_len = MAX_ERROR_ENTRY_LEN - assumed_marker_len;
+        // Place `ch` so its SECOND byte sits at target_prefix_len: head
+        // occupies [0, head_len), ch occupies [head_len, head_len+3).
+        let head_len = target_prefix_len - 1;
+        let head = "a".repeat(head_len);
+        let tail = "a".repeat(64); // pad well past the cap so truncation triggers
+        let s = format!("{head}{ch}{tail}");
+
+        // Self-consistency guards: fail loudly (rather than silently not
+        // exercising the loop) if the digit-count assumption drifts.
+        let marker = format!(" [...truncated, {} bytes total]", s.len());
+        assert_eq!(
+            marker.len(),
+            assumed_marker_len,
+            "test setup assumption about marker length drifted; recompute head_len"
+        );
+        assert!(
+            !s.is_char_boundary(target_prefix_len),
+            "test setup must land target_prefix_len on a continuation byte"
+        );
+
+        let capped = cap_entry(&s);
+        // Correct behavior walks backward to `head_len`, the true boundary.
+        let expected = format!("{head}{marker}");
+        assert_eq!(capped.as_ref(), expected);
+        assert!(capped.len() <= MAX_ERROR_ENTRY_LEN);
+    }
+
+    #[test]
+    fn test_serialize_value_bounded_retroactive_trim_removes_only_a_few_bytes() {
+        // Kills `end > 0 && !s.is_char_boundary(end)` -> `end > 0 ||
+        // !s.is_char_boundary(end)` in the retroactive-trim loop. The
+        // existing `test_serialize_value_bounded_produces_valid_utf8` above
+        // only asserts the loop doesn't panic and the output is bounded --
+        // it says nothing about HOW MUCH gets trimmed. A `&&`->`||` mutant
+        // makes the loop condition true for every `end > 0` regardless of
+        // boundary status, so it walks all the way back to index 0,
+        // discarding almost the entire string instead of trimming a
+        // handful of trailing bytes.
+        let big_utf8 = "日本語のエラー".repeat(500);
+        let v = serde_json::json!({"k": big_utf8});
+        let out = serialize_value_bounded(&v, MAX_ERROR_ENTRY_LEN);
+        assert!(out.len() <= MAX_ERROR_ENTRY_LEN);
+        assert!(
+            out.len() > MAX_ERROR_ENTRY_LEN / 2,
+            "retroactive UTF-8 boundary trim discarded far more than \
+             expected: output length {} is less than half of the {} byte \
+             limit -- looks like the trim loop walked back to index 0 \
+             instead of trimming a handful of trailing bytes",
+            out.len(),
+            MAX_ERROR_ENTRY_LEN
+        );
+        assert!(out.starts_with("{\"k\":\"日本語のエラー"));
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_boundary_exact_fit_no_truncation() {
+        // Kills `out.len() + needed > MAX_SANITIZED_OUTPUT_LEN` ->
+        // `== `/`>=`. An input whose sanitized size lands EXACTLY at the
+        // cap must NOT be truncated -- the check is "would this char push
+        // us OVER the cap", not "would this char reach or exceed the cap".
+        // An `==`/`>=` mutant would drop the final character and append a
+        // spurious marker even though everything fit exactly.
+        let input = format!("\t{}", "a".repeat(MAX_SANITIZED_OUTPUT_LEN - 4));
+        assert_eq!(4 + (MAX_SANITIZED_OUTPUT_LEN - 4), MAX_SANITIZED_OUTPUT_LEN);
+
+        let result = sanitize_for_stderr(input);
+        assert_eq!(result.len(), MAX_SANITIZED_OUTPUT_LEN);
+        assert!(
+            !result.contains("[...truncated"),
+            "input that fits exactly at the cap must not be marked truncated: {result:?}"
+        );
+        assert!(result.starts_with("\\x09"));
+        assert!(result.ends_with('a'));
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_control_char_budget_check_uses_addition_not_multiplication() {
+        // Kills `out.len() + needed > MAX_SANITIZED_OUTPUT_LEN` -> `out.len()
+        // * needed > MAX_SANITIZED_OUTPUT_LEN`. Each escaped '\n' costs 4
+        // bytes; a `*` mutant would make the product exceed the cap once
+        // out.len() > cap/4, truncating after roughly a quarter of the
+        // buffer instead of filling it.
+        let input = "\n".repeat(2000);
+        let result = sanitize_for_stderr(input);
+        assert!(result.len() <= MAX_SANITIZED_OUTPUT_LEN);
+        assert!(
+            result.len() > MAX_SANITIZED_OUTPUT_LEN / 2,
+            "control-char budget check appears to be using multiplication, \
+             not addition: output length {} is far short of the {} byte cap",
+            result.len(),
+            MAX_SANITIZED_OUTPUT_LEN
+        );
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_retroactive_trim_walks_back_across_multibyte_char() {
+        // Kills `MAX_SANITIZED_OUTPUT_LEN - marker.len()` -> `... / ...`
+        // (target computation) and the retroactive-trim loop's `-=`->`+=`/
+        // `/=` mutants. 2000 repetitions of the 3-byte "日" character
+        // overflow the 4 KiB cap and, per this input's marker length, the
+        // initial `target` position lands one byte INTO a "日" character --
+        // forcing exactly one real decrement to walk back to the true
+        // character boundary.
+        let input = "日".repeat(2000);
+        let original_len = input.len();
+        let result = sanitize_for_stderr(input);
+
+        assert!(result.len() <= MAX_SANITIZED_OUTPUT_LEN);
+        assert!(result.contains("[...truncated"));
+        let marker = format!(" [...truncated; original {} bytes]", original_len);
+        assert!(
+            result.ends_with(&marker),
+            "expected marker suffix, got: {result:?}"
+        );
+        let content = &result[..result.len() - marker.len()];
+        assert!(
+            content.chars().all(|c| c == '日'),
+            "retained content must consist only of whole '日' characters (no \
+             partial multi-byte fragment survived the boundary walk): {content:?}"
+        );
+        // Pin the exact expected content length derived from the boundary
+        // math above -- a `-=`->`+=`/`/=` mutant on the loop's decrement,
+        // or a swapped subtraction on `target`, produces a different length.
+        assert_eq!(content.len(), 4059);
+    }
+
+    #[test]
+    fn test_extract_error_message_non_utf8_pre_cap_division_shrinks_visible_content() {
+        // Kills `MAX_ERROR_ENTRY_LEN * 4` -> `MAX_ERROR_ENTRY_LEN / 4` in
+        // `PRE_CAP_BYTES`. The body's first 256 bytes are 'a' and the rest
+        // are 'b'; with the correct PRE_CAP_BYTES (4096), the pre-capped
+        // window comfortably includes some 'b's. A `/` mutant shrinks
+        // PRE_CAP_BYTES to 256, so the pre-capped window contains ONLY the
+        // leading 'a's -- the visible output would then contain no 'b' at
+        // all.
+        let mut body = vec![b'a'; 256];
+        body.extend(vec![b'b'; 4743]);
+        body.push(0xffu8); // forces the non-UTF8 fallback branch
+        assert_eq!(body.len(), 5000);
+
+        let out = extract_error_message(&body);
+        assert!(
+            out.contains('b'),
+            "expected the pre-cap window to extend well past the first 256 \
+             leading 'a' bytes and include some 'b' content: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_non_utf8_short_body_with_heavy_expansion_still_truncates() {
+        // Kills `lossy.len() <= MAX_ERROR_ENTRY_LEN && original_len <=
+        // MAX_ERROR_ENTRY_LEN` -> `... || ...` (the non-UTF8 fast-path
+        // gate). A short (500-byte) body consisting entirely of invalid
+        // bytes lossy-decodes to 1500 bytes (each invalid byte -> one
+        // 3-byte U+FFFD) -- so `original_len <= cap` is true but `lossy.len()
+        // <= cap` is false. Correctly, `&&` means the fast path does NOT
+        // fire (output must stay bounded). An `||` mutant would take the
+        // fast path anyway (since original_len <= cap alone satisfies OR),
+        // returning the full, uncapped 1500-byte lossy string.
+        let body = vec![0xffu8; 500];
+        let out = extract_error_message(&body);
+        assert!(
+            out.len() <= MAX_ERROR_ENTRY_LEN,
+            "short-but-heavily-expanding non-UTF8 body must still be bounded \
+             to MAX_ERROR_ENTRY_LEN, got {} bytes",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_non_utf8_boundary_loop_walks_back_across_replacement_char() {
+        // Kills the reachable (non-degenerate) `while end > 0 &&
+        // !lossy.is_char_boundary(end) { end -= 1; }` loop's `==`/`<`
+        // comparison mutants and the `-=`->`+=` decrement mutant. 2000
+        // invalid bytes lossy-decode to 2000 repeated 3-byte U+FFFD
+        // characters; per this input's marker length, `target_prefix_len`
+        // lands one byte into a U+FFFD character, forcing a real decrement.
+        let body = vec![0xffu8; 2000];
+        let out = extract_error_message(&body);
+        let marker = " [...truncated, 2000 bytes total, non-UTF8 body]";
+        assert!(
+            out.ends_with(marker),
+            "expected non-UTF8 marker suffix, got: {out:?}"
+        );
+        let content = &out[..out.len() - marker.len()];
+        assert!(
+            content.chars().all(|c| c == '\u{FFFD}'),
+            "retained content must consist only of whole U+FFFD characters: {content:?}"
+        );
+        assert_eq!(content.len(), 975);
+    }
+
+    #[test]
+    fn test_extract_error_message_size_gate_boundary_exact_length_still_parses() {
+        // Kills `body_str.len() > MAX_PARSE_BODY_LEN` -> `>=`. A body of
+        // EXACTLY MAX_PARSE_BODY_LEN bytes must still go through the
+        // JSON-parse path -- the gate exists to skip bodies STRICTLY LARGER
+        // than the threshold, not bodies exactly at it.
+        let prefix = "{\"errorMessages\":[\"";
+        let suffix = "\"]}";
+        let padding_len = MAX_PARSE_BODY_LEN - prefix.len() - suffix.len();
+        let body = format!("{prefix}{}{suffix}", "x".repeat(padding_len));
+        assert_eq!(
+            body.len(),
+            MAX_PARSE_BODY_LEN,
+            "test setup arithmetic drifted"
+        );
+
+        let out = extract_error_message(body.as_bytes());
+        assert!(
+            !out.starts_with('{'),
+            "a body of exactly MAX_PARSE_BODY_LEN bytes must still be \
+             JSON-parsed (extracting the errorMessages content), not \
+             treated as oversized raw fallback: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_error_messages_array_joins_with_semicolon_separator_exact() {
+        // Kills the `if !first { joined.push_str("; "); }` `delete !`
+        // mutant in the errorMessages streaming join: with the `!`
+        // deleted, the separator would be pushed BEFORE the first entry
+        // and OMITTED between the rest, garbling the output.
+        let body = r#"{"errorMessages":["first","second","third"]}"#;
+        let out = extract_error_message(body.as_bytes());
+        assert_eq!(out, "first; second; third");
+    }
+
+    #[test]
+    fn test_extract_error_message_error_messages_array_streams_join_with_exact_budget() {
+        // Kills the errorMessages streaming join's byte-budget check
+        // (`joined.len() + separator_len + capped.len() > content_budget_join`)
+        // arithmetic/comparison mutants (`+`->`-`/`*`, `>`->`==`/`<`/`>=`).
+        // 2000 three-character entries force the streaming join to hit its
+        // budget and truncate partway; the exact retained length is
+        // reproduced independently below via the same greedy formula the
+        // implementation uses, so any operator swap shifts the boundary and
+        // fails the length pin. Entry length is deliberately 3 (not 1): with
+        // a 1-byte entry, `(joined.len() + separator_len) * capped.len()`
+        // degenerates to `joined.len() + separator_len` (multiplying by 1 is
+        // a no-op), making the second `+`->`*` mutant unobservable -- a real
+        // gap found by running cargo-mutants against an earlier 1-byte-entry
+        // version of this test.
+        let entry_count = 2000;
+        let entries: Vec<&str> = std::iter::repeat("\"abc\"").take(entry_count).collect();
+        let body = format!("{{\"errorMessages\":[{}]}}", entries.join(","));
+        assert!(
+            body.len() <= MAX_PARSE_BODY_LEN,
+            "test setup must stay under the parse-size gate"
+        );
+
+        let out = extract_error_message(body.as_bytes());
+        let marker = " [...truncated]";
+        assert!(
+            out.ends_with(marker),
+            "expected join truncation marker: {out:?}"
+        );
+
+        let join_marker_len = " [...truncated]".len();
+        let content_budget_join = MAX_SANITIZED_OUTPUT_LEN - join_marker_len;
+        // Greedy reproduction of the implementation's own accounting: first
+        // entry costs 3 bytes (no separator), every subsequent entry costs
+        // "; " (2 bytes) + 3 bytes.
+        const ENTRY_LEN: usize = 3;
+        let mut acc = 0usize;
+        let mut first = true;
+        for _ in 0..entry_count {
+            let separator_len = if first { 0 } else { 2 };
+            if acc + separator_len + ENTRY_LEN > content_budget_join {
+                break;
+            }
+            acc += separator_len + ENTRY_LEN;
+            first = false;
+        }
+
+        let content_len = out.len() - marker.len();
+        assert_eq!(
+            content_len, acc,
+            "errorMessages streaming join budget arithmetic drifted from \
+             the expected +/- accounting"
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_error_messages_array_join_budget_second_addend_not_multiplied() {
+        // Kills `joined.len() + separator_len + capped.len()` -> `joined.len()
+        // + separator_len * capped.len()` (mutating the SECOND `+`). Due to
+        // operator precedence this mutant is `joined.len() + (separator_len *
+        // capped.len())`, NOT `(joined.len() + separator_len) *
+        // capped.len()` -- a distinction that matters: with entry_len=3 (the
+        // test above), the resulting per-check drift happened to never shift
+        // which entry trips the truncation boundary, so that mutant survived
+        // despite the exact-length pin. entry_len=5 was verified (by
+        // simulating both the correct and mutated greedy accounting) to
+        // reliably shift the boundary.
+        let entry_count = 1000;
+        let entries: Vec<&str> = std::iter::repeat("\"abcde\"").take(entry_count).collect();
+        let body = format!("{{\"errorMessages\":[{}]}}", entries.join(","));
+        assert!(
+            body.len() <= MAX_PARSE_BODY_LEN,
+            "test setup must stay under the parse-size gate"
+        );
+
+        let out = extract_error_message(body.as_bytes());
+        let marker = " [...truncated]";
+        assert!(
+            out.ends_with(marker),
+            "expected join truncation marker: {out:?}"
+        );
+
+        let join_marker_len = " [...truncated]".len();
+        let content_budget_join = MAX_SANITIZED_OUTPUT_LEN - join_marker_len;
+        const ENTRY_LEN: usize = 5;
+        let mut acc = 0usize;
+        let mut first = true;
+        for _ in 0..entry_count {
+            let separator_len = if first { 0 } else { 2 };
+            if acc + separator_len + ENTRY_LEN > content_budget_join {
+                break;
+            }
+            acc += separator_len + ENTRY_LEN;
+            first = false;
+        }
+
+        let content_len = out.len() - marker.len();
+        assert_eq!(
+            content_len, acc,
+            "errorMessages streaming join budget arithmetic drifted from \
+             the expected +/- accounting (second-addend multiplication check)"
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_errors_object_joins_multiple_pairs_with_semicolon_exact() {
+        // Kills the errors-object join's `if !first { joined.push_str("; ");
+        // }` `delete !` mutant (mirrors the errorMessages array test above,
+        // for the sibling code path).
+        let body = r#"{"errors":{"a":"1","b":"2","c":"3"}}"#;
+        let out = extract_error_message(body.as_bytes());
+        assert_eq!(out, "a: 1; b: 2; c: 3");
+    }
+
+    #[test]
+    fn test_extract_error_message_errors_object_pairs_truncated_boundary() {
+        // Kills `total_keys > MAX_ERROR_PAIRS` -> `==`/`>=`. Two cases:
+        // exactly MAX_ERROR_PAIRS (256) keys must NOT be marked truncated
+        // (`==`/`>=` would incorrectly trigger at the exact boundary), and
+        // MAX_ERROR_PAIRS + 1 keys MUST be marked truncated (`==` would
+        // miss every count strictly greater than 256).
+        const MAX_ERROR_PAIRS: usize = 256;
+
+        let make_body = |n: usize| {
+            let pairs: Vec<String> = (0..n).map(|i| format!("\"k{i:04}\":\"v\"")).collect();
+            format!("{{\"errors\":{{{}}}}}", pairs.join(","))
+        };
+
+        let body_exact = make_body(MAX_ERROR_PAIRS);
+        let out_exact = extract_error_message(body_exact.as_bytes());
+        assert!(
+            !out_exact.contains("[...truncated]"),
+            "exactly MAX_ERROR_PAIRS keys must not be marked truncated: {out_exact:?}"
+        );
+
+        let body_over = make_body(MAX_ERROR_PAIRS + 1);
+        let out_over = extract_error_message(body_over.as_bytes());
+        assert!(
+            out_over.contains("[...truncated]"),
+            "MAX_ERROR_PAIRS + 1 keys must be marked truncated: {out_over:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_errors_object_marker_fires_from_count_alone() {
+        // Kills `join_truncated || pairs_truncated` -> `&&`. 300 small
+        // pairs exceed MAX_ERROR_PAIRS (256) by count, but their total
+        // joined size stays comfortably under the join byte budget, so
+        // `join_truncated` is false while `pairs_truncated` is true. The
+        // marker must still appear (`||`); an `&&` mutant would suppress it
+        // since one operand is false.
+        let pairs: Vec<String> = (0..300).map(|i| format!("\"k{i:04}\":\"v\"")).collect();
+        let body = format!("{{\"errors\":{{{}}}}}", pairs.join(","));
+        let out = extract_error_message(body.as_bytes());
+        assert!(
+            out.contains("[...truncated]"),
+            "count-only truncation (pairs_truncated) must still produce a \
+             marker even when the join itself never overflowed: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_errors_object_streams_join_with_exact_budget() {
+        // Kills the errors-object streaming join's byte-budget check
+        // (`joined.len() + separator_len + p.len() > content_budget_join`)
+        // arithmetic/comparison mutants -- the sibling of the errorMessages
+        // array join-budget test above, for the errors-object code path.
+        //
+        // n is capped at exactly MAX_ERROR_PAIRS (256, mirrored as a local
+        // const below since the real constant is private to the enclosing
+        // function) so `pairs_truncated` stays false and this test isolates
+        // the join-budget arithmetic from the pairs-COUNT guard tested
+        // separately above -- an earlier version of this test used n=600,
+        // but `.take(MAX_ERROR_PAIRS)` silently discards everything past
+        // the 256th pair before the join loop ever runs, so the join itself
+        // never actually overflowed and every operator mutant went
+        // unnoticed.
+        //
+        // pair_len is 17 (not e.g. 196): large enough that 256 pairs
+        // comfortably overflow the ~4 KiB budget, but small enough that a
+        // `+`->`-` mutant on the first `+` (swinging the per-entry cost by
+        // 2*separator_len == 4 bytes) is a large enough fraction of the
+        // per-entry cost to visibly shift the truncation boundary -- a real
+        // gap found by running cargo-mutants against an earlier
+        // long-value (196-byte) version of this test, where a 4-byte swing
+        // was lost in the noise of a ~202-byte per-entry cost.
+        const MAX_ERROR_PAIRS: usize = 256;
+        let value = "xxxxxxxxxxx"; // 11 chars: "k000: xxxxxxxxxxx" == 17 bytes
+        let n = MAX_ERROR_PAIRS;
+        let pairs: Vec<String> = (0..n).map(|i| format!("\"k{i:03}\":\"{value}\"")).collect();
+        let body = format!("{{\"errors\":{{{}}}}}", pairs.join(","));
+        assert!(
+            body.len() <= MAX_PARSE_BODY_LEN,
+            "test setup must stay under the parse-size gate"
+        );
+
+        let out = extract_error_message(body.as_bytes());
+        let marker = " [...truncated]";
+        assert!(
+            out.ends_with(marker),
+            "expected join truncation marker: {out:?}"
+        );
+
+        let pair_len = format!("k000: {value}").len();
+        let join_marker_len = " [...truncated]".len();
+        let content_budget_join = MAX_SANITIZED_OUTPUT_LEN - join_marker_len;
+        let mut acc = 0usize;
+        let mut first = true;
+        for _ in 0..n {
+            let separator_len = if first { 0 } else { 2 };
+            if acc + separator_len + pair_len > content_budget_join {
+                break;
+            }
+            acc += separator_len + pair_len;
+            first = false;
+        }
+
+        let content_len = out.len() - marker.len();
+        assert_eq!(
+            content_len, acc,
+            "errors-object streaming join budget arithmetic drifted from \
+             the expected +/- accounting"
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_errors_object_join_budget_second_addend_not_multiplied() {
+        // Kills `joined.len() + separator_len + p.len()` -> `joined.len() +
+        // separator_len * p.len()` (mutating the SECOND `+`, the sibling of
+        // the errorMessages array test above for the errors-object code
+        // path). Due to operator precedence this mutant is `joined.len() +
+        // (separator_len * p.len())`; pair_len=17 (the test above) never
+        // shifted the truncation boundary for this specific mutant, so a
+        // second pair_len (14, verified by simulating both the correct and
+        // mutated greedy accounting) is used here to reliably catch it.
+        const MAX_ERROR_PAIRS: usize = 256;
+        let value = "xxxxxxxx"; // 8 chars: "k000: xxxxxxxx" == 14 bytes
+        let n = MAX_ERROR_PAIRS;
+        let pairs: Vec<String> = (0..n).map(|i| format!("\"k{i:03}\":\"{value}\"")).collect();
+        let body = format!("{{\"errors\":{{{}}}}}", pairs.join(","));
+        assert!(
+            body.len() <= MAX_PARSE_BODY_LEN,
+            "test setup must stay under the parse-size gate"
+        );
+
+        let out = extract_error_message(body.as_bytes());
+        let marker = " [...truncated]";
+        assert!(
+            out.ends_with(marker),
+            "expected join truncation marker: {out:?}"
+        );
+
+        let pair_len = format!("k000: {value}").len();
+        let join_marker_len = " [...truncated]".len();
+        let content_budget_join = MAX_SANITIZED_OUTPUT_LEN - join_marker_len;
+        let mut acc = 0usize;
+        let mut first = true;
+        for _ in 0..n {
+            let separator_len = if first { 0 } else { 2 };
+            if acc + separator_len + pair_len > content_budget_join {
+                break;
+            }
+            acc += separator_len + pair_len;
+            first = false;
+        }
+
+        let content_len = out.len() - marker.len();
+        assert_eq!(
+            content_len, acc,
+            "errors-object streaming join budget arithmetic drifted from \
+             the expected +/- accounting (second-addend multiplication check)"
+        );
+    }
 }
 
 /// Unit tests for the deadline-clamp helper (S-333 / BC-bulk.poll.deadline-bounded).
@@ -2727,6 +3268,47 @@ mod clamp_tests {
                 );
             }
         }
+    }
+}
+
+/// Unit tests for the multipart-upload accessors (ADR-0017): mutation
+/// coverage for `authorization_header` and `reqwest_client`, neither of
+/// which had a dedicated test (nightly run 35512012884).
+#[cfg(test)]
+mod client_accessor_tests {
+    use super::JiraClient;
+
+    /// Kills `authorization_header -> &str` mutants that replace the body
+    /// with `""` or `"xyzzy"`: the accessor must return the EXACT configured
+    /// auth header value, verbatim.
+    #[test]
+    fn test_authorization_header_returns_exact_configured_value() {
+        let client = JiraClient::new_for_test(
+            "http://localhost:1234".to_string(),
+            "Basic dGVzdDp0b2tlbg==".to_string(),
+        );
+        assert_eq!(client.authorization_header(), "Basic dGVzdDp0b2tlbg==");
+    }
+
+    /// Kills `reqwest_client -> &reqwest::Client` -> `Box::leak(Box::new(
+    /// Default::default()))`: the accessor must return a reference to the
+    /// SAME client instance (`&self.client`) on every call. A `Box::leak`
+    /// mutant would instead freshly construct-and-leak a new `Client` on
+    /// each call, producing a different address every time.
+    #[test]
+    fn test_reqwest_client_returns_stable_reference_across_calls() {
+        let client = JiraClient::new_for_test(
+            "http://localhost:1234".to_string(),
+            "Bearer token".to_string(),
+        );
+        let ptr1 = client.reqwest_client() as *const reqwest::Client;
+        let ptr2 = client.reqwest_client() as *const reqwest::Client;
+        assert_eq!(
+            ptr1, ptr2,
+            "reqwest_client() must return a reference to the SAME client \
+             instance on every call (&self.client), not freshly construct \
+             one each time"
+        );
     }
 }
 
