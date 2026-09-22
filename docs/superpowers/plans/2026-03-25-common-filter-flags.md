@@ -30,6 +30,12 @@
 
 ### Task 1: Add `validate_duration()` to `src/jql.rs`
 
+> **Superseded 2026-09-22 — see BC-2.1.008 / spec-changelog 2.3.2 (cycle-009):** the
+> `y` (year) and `M` (month) units shown as accepted below are now REJECTED by
+> `validate_duration` (exit 64) — Jira mis-parsed/errored on them at the API level.
+> Only `{w,d,h,m}` are accepted today. This section is left as historical record of
+> the original implementation; do not use it as current behavior.
+
 **Files:**
 - Modify: `src/jql.rs`
 
@@ -49,13 +55,17 @@ Add inside the first `mod tests` block in `src/jql.rs`, after the `strip_order_b
     }
 
     #[test]
-    fn validate_duration_valid_months_uppercase() {
-        assert!(validate_duration("2M").is_ok());
+    fn validate_duration_rejects_month_uppercase() {
+        // superseded 2026-09-22 (cycle-009): was validate_duration_valid_months_uppercase,
+        // asserting .is_ok(); M is now rejected.
+        assert!(validate_duration("2M").is_err());
     }
 
     #[test]
-    fn validate_duration_valid_years() {
-        assert!(validate_duration("1y").is_ok());
+    fn validate_duration_rejects_year() {
+        // superseded 2026-09-22 (cycle-009): was validate_duration_valid_years,
+        // asserting .is_ok(); y is now rejected.
+        assert!(validate_duration("1y").is_err());
     }
 
     #[test]
@@ -112,24 +122,33 @@ Add to `src/jql.rs` after the `strip_order_by` function, before the first `#[cfg
 /// Validate a JQL relative date duration string.
 ///
 /// JQL relative dates use the format `<digits><unit>` where unit is one of:
-/// `y` (years), `M` (months), `w` (weeks), `d` (days), `h` (hours), `m` (minutes).
-/// Units are case-sensitive — `M` is months, `m` is minutes.
+/// `w` (weeks), `d` (days), `h` (hours), `m` (minutes).
+/// Units are case-sensitive.
 /// Combined units like `4w2d` are not supported by Jira.
+///
+/// (superseded 2026-09-22, cycle-009: `y`/`M` were accepted in the original
+/// implementation below; they are now rejected. See BC-2.1.008.)
 pub fn validate_duration(s: &str) -> Result<(), String> {
     if s.len() < 2 {
         return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
         ));
     }
     let (digits, unit) = s.split_at(s.len() - 1);
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
         ));
     }
-    if !matches!(unit, "y" | "M" | "w" | "d" | "h" | "m") {
+    if !matches!(unit, "w" | "d" | "h" | "m") {
         return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
         ));
     }
     Ok(())
@@ -357,7 +376,8 @@ In `src/cli/mod.rs`, inside the `List` variant (after the `all` field at line 16
         /// Filter by reporter ("me" for current user, or a name to search)
         #[arg(long)]
         reporter: Option<String>,
-        /// Show issues created within duration (e.g., 7d, 4w, 2M)
+        /// Show issues created within duration (e.g., 7d, 4w, 12h) (superseded
+        /// 2026-09-22, cycle-009: 2M example replaced -- M/y units are now rejected)
         #[arg(long)]
         recent: Option<String>,
 ```
