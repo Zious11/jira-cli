@@ -4,6 +4,23 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`jr issue list --recent`/`--updated-recent` now reject month (`M`) and year (`y`)
+  relative-date units instead of silently mis-sending them to Jira (breaking change,
+  issue #859):** `jql::validate_duration` previously accepted `y`/`M` as valid duration
+  units, but Jira's JQL relative-date syntax does not treat `M`/`y` the way `jr` assumed
+  -- `-2M` was silently mis-parsed by Jira as 2 *minutes* rather than 2 months, and `-1y`
+  errored outright. Both failure modes reached the Jira API before surfacing (or silently
+  producing wrong results), instead of being caught client-side. `validate_duration` now
+  accepts only lowercase `w`/`d`/`h`/`m` (weeks/days/hours/minutes); any `M` or `y` unit
+  exits 64 with `Invalid duration '<value>'. Use a number followed by w, d, h, or m (e.g.,
+  7d, 4w, 12h). For month or year ranges, use --created-after/--created-before or
+  --updated-after/--updated-before.` **Migration:** replace `--recent 2M` / `--recent 1y`
+  (and the `--updated-recent` equivalents) with `--created-after`/`--created-before` (or
+  `--updated-after`/`--updated-before`) date-range flags. Adopts and extends external PR
+  #863's approach (credit: Deepanshu Pal) with the additional migration hint.
+
 ### Changed
 
 - **CI: `release` now waits for and is gated on the `attest` job, fail-closed when
