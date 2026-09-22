@@ -2599,6 +2599,38 @@ mod sanitize_tests {
     }
 
     #[test]
+    fn test_sanitize_for_stderr_clean_input_at_exact_cap_reuses_same_allocation() {
+        // Kills `input.len() > MAX_SANITIZED_OUTPUT_LEN` -> `>=` at the
+        // `needs_truncation` gate itself (distinct from the per-char budget
+        // check at line 1468 killed by the test above). At len==CAP exactly
+        // with NO control chars, the correct (`>`) and mutant (`>=`) code
+        // paths produce the SAME final STRING VALUE -- the slow path's char
+        // loop processes every character without ever breaking, so a naive
+        // value-equality assertion can't distinguish them (this was
+        // originally miscategorized as an equivalent mutant for exactly
+        // that reason). But `!needs_sanitization && !needs_truncation`
+        // gates a documented, pinned performance optimization
+        // (`test_sanitize_for_stderr_clean_input_returns_same_string`
+        // above): the fast path returns the ORIGINAL `String` allocation
+        // unchanged, while the slow path always builds a FRESH `String` via
+        // `String::with_capacity` + `push`. A `>=` mutant forces the slow
+        // path at this exact boundary, so the returned buffer's pointer
+        // differs from the input's -- an observable, real difference.
+        let input = "a".repeat(MAX_SANITIZED_OUTPUT_LEN);
+        let original_ptr = input.as_ptr();
+        let result = sanitize_for_stderr(input);
+        assert_eq!(result.len(), MAX_SANITIZED_OUTPUT_LEN);
+        assert_eq!(
+            result.as_ptr(),
+            original_ptr,
+            "a clean (no control chars) input of exactly MAX_SANITIZED_OUTPUT_LEN \
+             bytes must take the fast path and reuse the same allocation -- \
+             got a different pointer, meaning the slow path was taken \
+             unnecessarily at the exact boundary"
+        );
+    }
+
+    #[test]
     fn test_sanitize_for_stderr_control_char_budget_check_uses_addition_not_multiplication() {
         // Kills `out.len() + needed > MAX_SANITIZED_OUTPUT_LEN` -> `out.len()
         // * needed > MAX_SANITIZED_OUTPUT_LEN`. Each escaped '\n' costs 4
@@ -2856,6 +2888,95 @@ mod sanitize_tests {
     }
 
     #[test]
+    fn test_extract_error_message_error_messages_array_join_exact_boundary_accepts_entry() {
+        // Kills `joined.len() + separator_len + capped.len() > content_budget_join`
+        // -> `>=` at the TOP-LEVEL comparison (distinct from the two
+        // arithmetic-operand tests above, which target the `+`s). This is
+        // NOT the same equivalence class as the retroactive-trim `>`->`>=`
+        // mutants elsewhere in this file (e.g. line 1359/1427/1757/1896),
+        // where landing exactly on the boundary makes the guarded action a
+        // provable no-op (`str::is_char_boundary(len())` is always true, so
+        // truncating to the current length changes nothing). HERE, landing
+        // exactly on `content_budget_join` decides whether one MORE entry is
+        // accepted into the join -- under `>`, an exact fit is accepted
+        // (correct: filling the budget exactly is not an overflow); under
+        // `>=`, an exact fit is rejected and truncation fires one entry
+        // early. That is a real, observable content difference.
+        //
+        // Construction: 1359 single-byte "x" entries land the running sum at
+        // 4075 (content_budget_join - 6), then one more crafted 4-byte entry
+        // ("wxyz") brings the sum to EXACTLY content_budget_join (4081).
+        // Filler entries afterward guarantee truncation fires under BOTH the
+        // correct code and the mutant, so the marker is present either way
+        // -- only the exact retained-content length differs.
+        let join_marker_len = " [...truncated]".len();
+        let content_budget_join = MAX_SANITIZED_OUTPUT_LEN - join_marker_len;
+
+        let mut entries: Vec<String> = std::iter::repeat("\"x\"".to_string()).take(1359).collect();
+        entries.push("\"wxyz\"".to_string());
+        // Filler so truncation is guaranteed to fire under the CORRECT code
+        // too (otherwise "no marker" would trivially differ from the mutant
+        // for the wrong reason).
+        entries.extend(std::iter::repeat("\"x\"".to_string()).take(50));
+        let body = format!("{{\"errorMessages\":[{}]}}", entries.join(","));
+        assert!(
+            body.len() <= MAX_PARSE_BODY_LEN,
+            "test setup must stay under the parse-size gate"
+        );
+
+        // Self-consistency: verify the hand-picked entry lengths actually
+        // land the running sum exactly on content_budget_join right after
+        // the "wxyz" entry, using the same greedy accounting the
+        // implementation uses.
+        let mut acc = 0usize;
+        let mut first = true;
+        let mut landed_exactly = false;
+        for (i, e) in entries.iter().enumerate() {
+            let content_len = e.len() - 2; // strip the JSON quotes
+            let separator_len = if first { 0 } else { 2 };
+            acc += separator_len + content_len;
+            first = false;
+            if i == 1359 {
+                assert_eq!(
+                    acc, content_budget_join,
+                    "test setup arithmetic drifted: expected the 1360th \
+                     entry to land exactly on content_budget_join"
+                );
+                landed_exactly = true;
+                break;
+            }
+        }
+        assert!(landed_exactly);
+
+        let out = extract_error_message(body.as_bytes());
+        let marker = " [...truncated]";
+        assert!(
+            out.ends_with(marker),
+            "expected join truncation marker (filler entries must still \
+             overflow the budget under correct code): {out:?}"
+        );
+        let content_len = out.len() - marker.len();
+
+        // Correct (`>`): the exact-fit "wxyz" entry IS accepted, so content
+        // reaches exactly content_budget_join (4081) before the next entry
+        // overflows and truncation fires.
+        assert_eq!(
+            content_len, content_budget_join,
+            "an entry that lands EXACTLY on content_budget_join must be \
+             accepted (`>`, not `>=`) -- got content_len={content_len}, \
+             expected the full budget {content_budget_join} to be used. \
+             A `>`->`>=` mutant on the join's top-level comparison rejects \
+             the exact-fit entry and truncates one entry early."
+        );
+        // And the accepted content must literally include the "wxyz" entry
+        // -- under the `>=` mutant it would be excluded.
+        assert!(
+            out.contains("wxyz"),
+            "the exact-fit entry must be present in the output: {out:?}"
+        );
+    }
+
+    #[test]
     fn test_extract_error_message_errors_object_joins_multiple_pairs_with_semicolon_exact() {
         // Kills the errors-object join's `if !first { joined.push_str("; ");
         // }` `delete !` mutant (mirrors the errorMessages array test above,
@@ -3022,6 +3143,84 @@ mod sanitize_tests {
             content_len, acc,
             "errors-object streaming join budget arithmetic drifted from \
              the expected +/- accounting (second-addend multiplication check)"
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_errors_object_join_exact_boundary_accepts_entry() {
+        // Kills `joined.len() + separator_len + p.len() > content_budget_join`
+        // -> `>=` at the TOP-LEVEL comparison in the errors-object join --
+        // the sibling of the errorMessages array exact-boundary test above.
+        // See that test's doc comment for why this is a REAL gap and not
+        // the same equivalence class as the retroactive-trim `>`->`>=`
+        // mutants elsewhere in this file.
+        //
+        // Construction: 226 uniform 16-byte pairs ("kNNN: vvvvvvvvvv") land
+        // the running sum at 4066 (content_budget_join - 15), then one more
+        // crafted 13-byte pair brings the sum to EXACTLY content_budget_join
+        // (4081). 20 filler pairs afterward guarantee truncation fires under
+        // BOTH the correct code and the mutant (total 247 pairs, safely
+        // under MAX_ERROR_PAIRS=256 so `pairs_truncated` never confounds
+        // this test) -- only the exact retained-content length differs.
+        const MAX_ERROR_PAIRS: usize = 256;
+        let join_marker_len = " [...truncated]".len();
+        let content_budget_join = MAX_SANITIZED_OUTPUT_LEN - join_marker_len;
+
+        let mut pairs: Vec<String> = (0..226)
+            .map(|i| format!("\"k{i:03}\":\"vvvvvvvvvv\"")) // pair_len 16: "kNNN: vvvvvvvvvv"
+            .collect();
+        pairs.push("\"k226\":\"vvvvvvv\"".to_string()); // pair_len 13: "k226: vvvvvvv"
+        pairs.extend((227..247).map(|i| format!("\"k{i:03}\":\"v\""))); // filler
+        assert!(pairs.len() <= MAX_ERROR_PAIRS);
+        let body = format!("{{\"errors\":{{{}}}}}", pairs.join(","));
+        assert!(
+            body.len() <= MAX_PARSE_BODY_LEN,
+            "test setup must stay under the parse-size gate"
+        );
+
+        // Self-consistency: verify the hand-picked pair lengths actually
+        // land the running sum exactly on content_budget_join right after
+        // the 227th (crafted) pair. `errors` values sort by the formatted
+        // "key: value" string, which for zero-padded keys matches insertion
+        // order for the first 227 entries.
+        let mut acc = 0usize;
+        let mut first = true;
+        for i in 0..227 {
+            let pair_len = if i < 226 { 16 } else { 13 };
+            let separator_len = if first { 0 } else { 2 };
+            acc += separator_len + pair_len;
+            first = false;
+        }
+        assert_eq!(
+            acc, content_budget_join,
+            "test setup arithmetic drifted: expected the 227th pair to land \
+             exactly on content_budget_join"
+        );
+
+        let out = extract_error_message(body.as_bytes());
+        let marker = " [...truncated]";
+        assert!(
+            out.ends_with(marker),
+            "expected join truncation marker (filler pairs must still \
+             overflow the budget under correct code): {out:?}"
+        );
+        let content_len = out.len() - marker.len();
+
+        // Correct (`>`): the exact-fit pair IS accepted, so content reaches
+        // exactly content_budget_join (4081) before the next pair overflows
+        // and truncation fires.
+        assert_eq!(
+            content_len, content_budget_join,
+            "a pair that lands EXACTLY on content_budget_join must be \
+             accepted (`>`, not `>=`) -- got content_len={content_len}, \
+             expected the full budget {content_budget_join} to be used. \
+             A `>`->`>=` mutant on the join's top-level comparison rejects \
+             the exact-fit pair and truncates one pair early."
+        );
+        // And the accepted content must literally include the crafted pair.
+        assert!(
+            out.contains("k226: vvvvvvv"),
+            "the exact-fit pair must be present in the output: {out:?}"
         );
     }
 }
