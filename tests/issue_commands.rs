@@ -12735,6 +12735,215 @@ async fn test_bc_2_1_023_issue_list_updated_recent_composes_with_jql() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// cycle-009 (jql-relative-date-units): `M` (month) and `y` (year) relative
+// duration units must be REJECTED by `jql::validate_duration`, which backs
+// both `--recent` (BC-2.1.008) and `--updated-recent` (BC-2.1.023, EC-2.1.023-5).
+// Only lowercase `{w,d,h,m}` remain accepted. Red Gate for the F4 fix --
+// `validate_duration` currently ACCEPTS `M`/`y` and emits the pre-fix error
+// string (no "For month or year ranges..." hint), so every rejection
+// assertion below MUST fail against the current implementation.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// BC-2.1.008 / EC-2.1.023-5: `--recent 2M` (month unit) is rejected
+/// pre-HTTP with the canonical F2-approved error string, zero HTTP calls.
+#[tokio::test]
+async fn test_issue_list_recent_month_unit_rejects_pre_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "list", "--recent", "2M"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--recent 2M (month unit) must exit 64 (UserError), got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "Invalid duration '2M'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
+        ),
+        "expected the canonical F2 error string (with 'For month or year ranges...' hint) \
+         in stderr, got: {stderr}"
+    );
+}
+
+/// BC-2.1.008 / EC-2.1.023-5: `--recent 1y` (year unit) is rejected
+/// pre-HTTP with the canonical F2-approved error string, zero HTTP calls.
+#[tokio::test]
+async fn test_issue_list_recent_year_unit_rejects_pre_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "list", "--recent", "1y"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--recent 1y (year unit) must exit 64 (UserError), got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "Invalid duration '1y'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
+        ),
+        "expected the canonical F2 error string (with 'For month or year ranges...' hint) \
+         in stderr, got: {stderr}"
+    );
+}
+
+/// BC-2.1.023 / EC-2.1.023-5: `--updated-recent 2M` (month unit) is rejected
+/// pre-HTTP via the SAME shared `jql::validate_duration`, zero HTTP calls.
+#[tokio::test]
+async fn test_issue_list_updated_recent_month_unit_rejects_pre_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "list", "--updated-recent", "2M"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--updated-recent 2M (month unit) must exit 64 (UserError), got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "Invalid duration '2M'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
+        ),
+        "expected the canonical F2 error string (with 'For month or year ranges...' hint) \
+         in stderr, got: {stderr}"
+    );
+}
+
+/// BC-2.1.023 / EC-2.1.023-5: `--updated-recent 1y` (year unit) is rejected
+/// pre-HTTP via the SAME shared `jql::validate_duration`, zero HTTP calls.
+#[tokio::test]
+async fn test_issue_list_updated_recent_year_unit_rejects_pre_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "list", "--updated-recent", "1y"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--updated-recent 1y (year unit) must exit 64 (UserError), got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "Invalid duration '1y'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
+        ),
+        "expected the canonical F2 error string (with 'For month or year ranges...' hint) \
+         in stderr, got: {stderr}"
+    );
+}
+
+/// BC-2.1.008 / EC-2.1.023-5 case boundary: `--recent 1M` (uppercase M,
+/// single digit) is still rejected pre-HTTP -- the uppercase/lowercase
+/// distinction is case-sensitive, not a "well-formed digit+letter" leniency.
+#[tokio::test]
+async fn test_issue_list_recent_uppercase_month_single_digit_rejects_pre_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_expect_zero_http(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "list", "--recent", "1M"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--recent 1M (uppercase month unit) must exit 64 (UserError), got: {:?} (stderr: {})",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// BC-2.1.008 / EC-2.1.023-5 case boundary: `--recent 30m` (lowercase m =
+/// minutes) is NOT rejected by the M/y guard -- it is an accepted-shape
+/// duration that proceeds past validation into the normal HTTP-issuing
+/// query path, exactly like any other pre-fix accepted value (mirrors the
+/// AC-001-style accepted-value harness above: `--project` + `project_exists`
+/// + `search_empty` mocks, exit 0).
+#[tokio::test]
+async fn test_issue_list_recent_lowercase_minutes_does_not_reject() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    s606_1_mock_project_exists(&server, "FOO").await;
+    s606_1_mock_search_empty(&server).await;
+
+    let output = s606_1_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "list",
+            "--project",
+            "FOO",
+            "--recent",
+            "30m",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Invalid duration"),
+        "--recent 30m (lowercase minutes) must NOT trip the Invalid-duration \
+         rejection, got stderr: {stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "--recent 30m (lowercase minutes) is an accepted-shape duration and \
+         should proceed to the HTTP layer with exit 0, got: {:?} (stderr: {stderr})",
+        output.status.code()
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // S-588-1: `jr issue list --sort <field>:asc|desc` (BC-2.1.024/BC-2.1.025)
 // ═══════════════════════════════════════════════════════════════════════
 //

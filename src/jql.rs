@@ -198,14 +198,61 @@ mod tests {
         assert!(validate_duration("4w").is_ok());
     }
 
+    // cycle-009 (jql-relative-date-units), F2-approved spec: `M` (month) and
+    // `y` (year) relative-date units must be REJECTED -- only lowercase
+    // `{w,d,h,m}` are accepted. `validate_duration_valid_months_uppercase`
+    // and `validate_duration_valid_years` are ADJUSTED (per CLAUDE.md's
+    // "requirements have changed" carve-out) from `.is_ok()` to `.is_err()`
+    // to reflect the new contract; they must FAIL against the current
+    // (pre-fix) implementation, which still accepts `2M`/`1y`.
+
     #[test]
-    fn validate_duration_valid_months_uppercase() {
-        assert!(validate_duration("2M").is_ok());
+    fn validate_duration_rejects_month_uppercase() {
+        assert!(validate_duration("2M").is_err());
     }
 
     #[test]
-    fn validate_duration_valid_years() {
-        assert!(validate_duration("1y").is_ok());
+    fn validate_duration_rejects_year() {
+        assert!(validate_duration("1y").is_err());
+    }
+
+    /// F4 must implement the canonical F2-approved error string verbatim
+    /// (differs from external PR #863's diff by the trailing
+    /// "For month or year ranges..." hint -- a deliberate F2 decision).
+    #[test]
+    fn validate_duration_month_rejection_uses_canonical_error_string() {
+        let err = validate_duration("2M").unwrap_err();
+        assert_eq!(
+            err,
+            "Invalid duration '2M'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
+        );
+    }
+
+    /// Companion to the month case above, pinning the same canonical string
+    /// for the year unit with '{s}' substituted for '1y'.
+    #[test]
+    fn validate_duration_year_rejection_uses_canonical_error_string() {
+        let err = validate_duration("1y").unwrap_err();
+        assert_eq!(
+            err,
+            "Invalid duration '1y'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
+        );
+    }
+
+    /// Lowercase `{w,d,h,m}` must continue to be accepted -- only the
+    /// uppercase `M` (month) and `y` (year) units are newly rejected.
+    #[test]
+    fn validate_duration_accepts_lowercase_minutes() {
+        assert!(validate_duration("30m").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_accepts_lowercase_weeks() {
+        assert!(validate_duration("4w").is_ok());
     }
 
     #[test]
