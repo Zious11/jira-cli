@@ -11932,7 +11932,9 @@ async fn test_bc_2_1_023_issue_list_updated_recent_rejects_combined_units_pre_ht
     );
     assert!(
         stderr.contains(
-            "Invalid duration '4w2d'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+            "Invalid duration '4w2d'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+             For month or year ranges, use --created-after/--created-before or \
+             --updated-after/--updated-before."
         ),
         "AC-002: expected the shared jql::validate_duration error shape in stderr, got: {stderr}"
     );

@@ -354,10 +354,10 @@ pub enum IssueCommand {
         /// Filter by reporter ("me" for current user, or a name to search)
         #[arg(long)]
         reporter: Option<String>,
-        /// Show issues created within duration (e.g., 7d, 4w, 2M)
+        /// Show issues created within duration (e.g., 7d, 4w, 12h)
         #[arg(long)]
         recent: Option<String>,
-        /// Show issues updated within duration (e.g., 7d, 4w, 2M)
+        /// Show issues updated within duration (e.g., 7d, 4w, 12h)
         #[arg(long)]
         updated_recent: Option<String>,
         /// Show only open issues (excludes Done status category)
