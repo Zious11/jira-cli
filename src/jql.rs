@@ -303,6 +303,21 @@ mod tests {
         );
     }
 
+    /// EC-2.1.023-5: uppercase `W`/`D`/`H` and uppercase `Y` units must all
+    /// be rejected -- the unit match is case-sensitive lowercase-only.
+    /// These pass against the current implementation already; this is
+    /// coverage-strengthening for a documented boundary, not TDD for new
+    /// behavior.
+    #[test]
+    fn validate_duration_rejects_uppercase_units() {
+        for input in ["4W", "7D", "5H", "1Y"] {
+            assert!(
+                validate_duration(input).is_err(),
+                "expected Err for uppercase-unit input {input:?}"
+            );
+        }
+    }
+
     #[test]
     fn validate_duration_combined_units() {
         assert!(validate_duration("4w2d").is_err());
