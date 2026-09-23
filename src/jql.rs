@@ -7,6 +7,18 @@ pub fn escape_value(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Build the canonical "invalid duration" error message.
+///
+/// Single source of truth for `validate_duration`'s error string -- hoisted
+/// so the 4 rejection branches below can never drift apart from one another.
+fn invalid_duration_error(s: &str) -> String {
+    format!(
+        "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
+         For month or year ranges, use --created-after/--created-before or \
+         --updated-after/--updated-before."
+    )
+}
+
 /// Validate a JQL relative date duration string.
 ///
 /// JQL relative dates use the format `<digits><unit>` where unit is one of:
@@ -15,11 +27,7 @@ pub fn escape_value(s: &str) -> String {
 /// Combined units like `4w2d` are not supported by Jira.
 pub fn validate_duration(s: &str) -> Result<(), String> {
     if s.len() < 2 {
-        return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
-             For month or year ranges, use --created-after/--created-before or \
-             --updated-after/--updated-before."
-        ));
+        return Err(invalid_duration_error(s));
     }
     // `s.len()` is a BYTE count, so the unit must be extracted char-safely rather
     // than via a byte-offset `split_at` — a multibyte final character (e.g. "7é")
@@ -27,26 +35,14 @@ pub fn validate_duration(s: &str) -> Result<(), String> {
     // gets the last character, and slicing off exactly its UTF-8 byte length always
     // lands on a valid char boundary.
     let Some(unit) = s.chars().next_back() else {
-        return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
-             For month or year ranges, use --created-after/--created-before or \
-             --updated-after/--updated-before."
-        ));
+        return Err(invalid_duration_error(s));
     };
     let digits = &s[..s.len() - unit.len_utf8()];
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
-        return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
-             For month or year ranges, use --created-after/--created-before or \
-             --updated-after/--updated-before."
-        ));
+        return Err(invalid_duration_error(s));
     }
     if !matches!(unit, 'w' | 'd' | 'h' | 'm') {
-        return Err(format!(
-            "Invalid duration '{s}'. Use a number followed by w, d, h, or m (e.g., 7d, 4w, 12h). \
-             For month or year ranges, use --created-after/--created-before or \
-             --updated-after/--updated-before."
-        ));
+        return Err(invalid_duration_error(s));
     }
     Ok(())
 }
@@ -292,6 +288,19 @@ mod tests {
     #[test]
     fn validate_duration_empty() {
         assert!(validate_duration("").is_err());
+    }
+
+    /// Pins a non-M/y rejection branch (the `s.len() < 2` guard, via the
+    /// empty-string case) to the SAME error-string source as the M/y
+    /// branches above, proving `invalid_duration_error` is a genuine single
+    /// source of truth rather than one string among several that happen to
+    /// match today.
+    #[test]
+    fn validate_duration_empty_uses_canonical_error_string() {
+        assert_eq!(
+            validate_duration("").unwrap_err(),
+            invalid_duration_error("")
+        );
     }
 
     #[test]
