@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.7.0-dev.9] - 2026-09-23
+
 ### Fixed
 
 - **`jr issue list --recent`/`--updated-recent` now reject month (`M`) and year (`y`)
