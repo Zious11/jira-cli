@@ -208,11 +208,12 @@ mod tests {
 
     // cycle-009 (jql-relative-date-units), F2-approved spec: `M` (month) and
     // `y` (year) relative-date units must be REJECTED -- only lowercase
-    // `{w,d,h,m}` are accepted. `validate_duration_valid_months_uppercase`
-    // and `validate_duration_valid_years` are ADJUSTED (per CLAUDE.md's
-    // "requirements have changed" carve-out) from `.is_ok()` to `.is_err()`
-    // to reflect the new contract; they must FAIL against the current
-    // (pre-fix) implementation, which still accepts `2M`/`1y`.
+    // `{w,d,h,m}` are accepted. The tests below,
+    // `validate_duration_rejects_month_uppercase` and
+    // `validate_duration_rejects_year`, were renamed from their pre-fix
+    // names (which asserted `.is_ok()`) to reflect the new contract; they
+    // must FAIL against the pre-fix implementation, which still accepts
+    // `2M`/`1y`.
 
     #[test]
     fn validate_duration_rejects_month_uppercase() {
