@@ -78,6 +78,15 @@ high line coverage but untested assertion strength at the time of the F6 review.
   the queues.rs entry above; the function's cache-hit/404-403 error-mapping mutants are fully
   default-CI-testable via `tests/assets.rs` and `tests/asset_holdouts.rs`. Previously absent
   from examine_globs, CYCLE-008-F6-MUTANTS-EXAMINE-GLOBS-GAP (added FIX-F7-001)
+- `src/jql.rs` — `validate_duration` (JQL relative-date unit-set narrowing: the
+  `matches!(unit, 'w'|'d'|'h'|'m')` gate + digit/length prechecks) and
+  `invalid_duration_error` (the canonical rejection-error string, single source of truth for
+  the four rejection branches). Fully default-CI-testable — the value-acceptance semantics are
+  killed by the DEDICATED unit tests in this file's own test module (e.g.
+  `validate_duration_rejects_year`, `validate_duration_month_rejection_uses_canonical_error_string`,
+  `validate_duration_invalid_unit`), NOT by the `validate_duration_never_panics` proptest, which
+  only covers panic-safety. Supersedes the MAINT-MUTANTS-GLOBS-01 EXCLUDE row below (added
+  cycle-009 F7)
 
 **FIX-F7-001 deferred, not added:** `src/cli/init.rs` is NOT added to `examine_globs` despite
 backing the cycle-008 F-WG-1 `list_boards` scope-hint call site (BC-X.15.001) alongside
@@ -101,7 +110,7 @@ narrows to lines changed in the PR diff.
 Note: cargo-mutants v27+ reads its config from `.cargo/mutants.toml` (not `.mutants.toml`
 at repo root). This is the canonical config location for this project.
 
-Current `examine_globs` count: 31 entries (verify against `.cargo/mutants.toml` before citing
+Current `examine_globs` count: 32 entries (verify against `.cargo/mutants.toml` before citing
 this number elsewhere — it has drifted before and will drift again as scope changes).
 
 **FIX-F6-1 deferred, not added:** `src/api/auth.rs` and `src/cli/auth/login.rs` are NOT added
@@ -146,7 +155,7 @@ are recorded here so future reviewers know they were considered, not overlooked.
 | File | Disposition | Rationale |
 |------|-------------|-----------|
 | `src/api/pagination.rs` | EXCLUDE | Simple serde structs + `items()` field accessor. No conditional logic or error-handling branches worth mutating; survivors would be caught by the broad integration test suite. Low payoff relative to baseline cost. |
-| `src/jql.rs` | EXCLUDE | Already property-tested inline with proptest. Mutation survivors in JQL escaping/validation would almost certainly be caught by existing proptest strategies. |
+| `src/jql.rs` | ~~EXCLUDE~~ → **INCLUDED (cycle-009 F7)** | ~~Already property-tested inline with proptest. Mutation survivors in JQL escaping/validation would almost certainly be caught by existing proptest strategies.~~ **Superseded (cycle-009 F7):** the prior "caught by existing proptest" rationale does not hold for the value-acceptance surface. cycle-009 F6 empirically ran the `validate_duration` delta and found the surviving-mutant class is value-acceptance semantics — the `matches!(unit, 'w'\|'d'\|'h'\|'m')` unit-set narrowing and the `invalid_duration_error` string — which are killed by DEDICATED unit tests, NOT by the `validate_duration_never_panics` proptest (that strategy only asserts panic-safety over `.*`, never that a given unit is accepted/rejected or that the error text is exact). 9/9 mutants killed once run under the gate. `src/jql.rs` is therefore now in `.cargo/mutants.toml::examine_globs` and listed in §Scope above. |
 | `src/api/jira/users.rs` | DEFER | Contains the `USER_PAGE_SIZE`-advance pagination workaround (JRACLOUD-71293 fix). Good candidate in principle, but test coverage via `tests/user_commands.rs` is limited — adding it without targeted pagination tests risks a noisy first-run kill rate. Revisit in a dedicated "users pagination hardening" cycle. |
 
 ### Out of Scope by Design: `tests/`, `scripts/`, and CI YAML (S-626-1 pass-56, ADV-P56-LOW-004)

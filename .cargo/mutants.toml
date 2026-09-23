@@ -161,6 +161,16 @@ examine_globs = [
     # error-mapping mutants are fully default-CI-testable via tests/assets.rs
     # and tests/asset_holdouts.rs (no `#[ignore]` in either).
     "src/api/assets/workspace.rs",
+    # cycle-009 F7 — `validate_duration`/`invalid_duration_error` (JQL relative-date
+    # unit-set narrowing + canonical error string). Supersedes the prior MAINT-MUTANTS-
+    # GLOBS-01 EXCLUDE ("already property-tested inline with proptest"): cycle-009 F6
+    # empirically found 9/9 mutants killed, but the surviving-mutant class is VALUE-
+    # ACCEPTANCE semantics (the `matches!(unit, 'w'|'d'|'h'|'m')` unit set and the
+    # error-string branches), killed by DEDICATED unit tests — NOT the
+    # `validate_duration_never_panics` proptest, which only covers panic-safety. F6's
+    # finding undermines the EXCLUDE rationale, so the file now enters the standing
+    # gate. Small file, low incremental runtime. (added cycle-009 F7)
+    "src/jql.rs",
 ]
 
 # FIX-F7-001 deferred, not added: `src/cli/init.rs` is NOT added to
