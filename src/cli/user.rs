@@ -3,13 +3,31 @@ use colored::Colorize;
 
 use crate::api::client::JiraClient;
 use crate::cli::{OutputFormat, UserCommand, resolve_effective_limit};
+use crate::config::Config;
 use crate::error::JrError;
 use crate::output;
 use crate::types::jira::User;
 
+/// Resolves `jr user list`'s effective project key from the post-clap
+/// `--project` value (already local-vs-global resolved by clap's own
+/// global-value propagation) plus the configured default fallback chain.
+///
+/// STUB (Red Gate, BC-5.38.001): real body lands in a later story task; this
+/// is a `pub(crate)` pure resolver mirroring
+/// `src/cli/field.rs::resolve_m2_project`'s signature style, per BC-X.7.002
+/// Fix step 4.
+pub(crate) fn resolve_user_list_project(
+    cli_project: Option<&str>,
+    config: &Config,
+) -> Option<String> {
+    let _ = (cli_project, config);
+    todo!()
+}
+
 pub async fn handle(
     command: UserCommand,
     output_format: &OutputFormat,
+    config: &Config,
     client: &JiraClient,
 ) -> Result<()> {
     match command {
@@ -20,7 +38,17 @@ pub async fn handle(
             project,
             limit,
             all,
-        } => handle_list(&project, limit, all, output_format, client).await,
+        } => {
+            handle_list(
+                project.as_deref(),
+                limit,
+                all,
+                output_format,
+                config,
+                client,
+            )
+            .await
+        }
         UserCommand::View { account_id } => handle_view(&account_id, output_format, client).await,
     }
 }
@@ -45,20 +73,32 @@ async fn handle_search(
 }
 
 async fn handle_list(
-    project: &str,
+    project: Option<&str>,
     limit: Option<u32>,
     all: bool,
     output_format: &OutputFormat,
+    config: &Config,
     client: &JiraClient,
 ) -> Result<()> {
+    // STUB wiring (Task 1, Red Gate): a `Some(p)` post-clap value (local
+    // flag, global flag, or both — clap propagation has already resolved
+    // local-vs-global precedence) short-circuits straight into the existing
+    // HTTP path unchanged. `resolve_user_list_project` (still `todo!()`) is
+    // only reached on the `None` arm. This short-circuit is removed once the
+    // resolver's real body lands (BC-X.7.002 Fix step 4).
+    let resolved_project = match project {
+        Some(p) => p.to_string(),
+        None => resolve_user_list_project(project, config).unwrap_or_default(),
+    };
+
     let effective = resolve_effective_limit(limit, all);
     let mut users = if all {
         client
-            .search_assignable_users_by_project_all("", project)
+            .search_assignable_users_by_project_all("", &resolved_project)
             .await?
     } else {
         client
-            .search_assignable_users_by_project("", project)
+            .search_assignable_users_by_project("", &resolved_project)
             .await?
     };
     if let Some(cap) = effective {

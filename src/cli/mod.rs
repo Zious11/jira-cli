@@ -1145,7 +1145,7 @@ pub enum UserCommand {
     List {
         /// Project key (e.g., FOO)
         #[arg(long, short = 'p')]
-        project: String,
+        project: Option<String>,
         /// Cap the number of results shown (default 30). Applies to both
         /// table rows and JSON array length; does not reduce the API fetch.
         #[arg(long)]

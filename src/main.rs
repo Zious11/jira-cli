@@ -435,7 +435,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client =
                     api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
-                cli::user::handle(command, &cli.output, &client).await
+                cli::user::handle(command, &cli.output, &config, &client).await
             }
             cli::Command::Queue { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
