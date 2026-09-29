@@ -3,10 +3,33 @@ mod common;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use tempfile::TempDir;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::fixtures;
+
+/// Every ambient `JR_`-prefixed variable the hermetic tests below do NOT
+/// themselves set, pinned per `verification-delta.md` §2 step 5 (mirrors
+/// `tests/auth_profiles.rs`'s pinned scrub list) so a stray `JR_*` variable
+/// in the ambient shell (e.g. a direnv-set `JR_PROFILE`) cannot leak a
+/// configured default into these BC-X.7.002 tests.
+fn scrub_ambient_jr_env(cmd: &mut Command) -> &mut Command {
+    cmd.env_remove("JR_PROFILE")
+        .env_remove("JR_DEFAULT_PROFILE")
+        .env_remove("JR_INSTANCE_URL")
+        .env_remove("JR_INSTANCE_AUTH_METHOD")
+        .env_remove("JR_INSTANCE_CLOUD_ID")
+        .env_remove("JR_INSTANCE_ORG_ID")
+        .env_remove("JR_INSTANCE_OAUTH_SCOPES")
+        .env_remove("JR_FIELDS_TEAM_FIELD_ID")
+        .env_remove("JR_FIELDS_STORY_POINTS_FIELD_ID")
+        .env_remove("JR_DEFAULTS_OUTPUT")
+        .env_remove("JR_EMAIL")
+        .env_remove("JR_API_TOKEN")
+        .env_remove("JR_OAUTH_CLIENT_ID")
+        .env_remove("JR_OAUTH_CLIENT_SECRET")
+}
 
 fn jr_cmd(base_url: &str) -> Command {
     let mut cmd = Command::cargo_bin("jr").unwrap();
@@ -121,20 +144,97 @@ async fn user_search_limit_truncates_results() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_list_requires_project_flag() {
-    // No server needed — clap should fail before any HTTP call.
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", "http://127.0.0.1:1")
+    // Hermetic per BC-X.7.002 Preconditions / verification-delta.md §2
+    // (cycle-014 STORY-A, issue #862): once BC-X.7.002 landed, this test
+    // became CONFIG-SENSITIVE — a real developer/CI environment with a
+    // configured default project (.jr.toml or profile default) would
+    // silently resolve step 3 and this test's failure assertion would
+    // spuriously fail. JR_CONFIG_DIR/JR_CACHE_DIR point at fresh TempDirs,
+    // cwd has no ancestor .jr.toml, and every other ambient JR_* var is
+    // scrubbed. The unreachable JR_BASE_URL=http://127.0.0.1:1 is
+    // intentionally kept, with no mock server: a stray request fails with a
+    // connection error rather than a mock response, which this test's
+    // --project/required stderr assertion rejects — so it still proves zero
+    // successful HTTP calls without needing a live mock server.
+    //
+    // Once this fix lands, the failure this test pins is never clap's own
+    // "required argument" error — it is jr's own JrError::UserError exit-64
+    // message, which also contains the literal substring "--project",
+    // satisfying the same loose assertion (BC-X.7.002 Invariants: this
+    // test's assertion continues to accurately describe what it checks
+    // after the fix lands — no rename).
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("JR_CACHE_DIR", cache.path().join("jr"))
+        .env("JR_CONFIG_DIR", config.path().join("jr"))
         .args(["--no-input", "user", "list"])
-        .output()
-        .unwrap();
+        .current_dir(cwd.path());
+    scrub_ambient_jr_env(&mut cmd);
+
+    let output = cmd.output().unwrap();
 
     assert!(!output.status.success(), "missing --project should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--project") || stderr.contains("required"),
         "expected error mentions missing --project, got: {stderr}"
+    );
+}
+
+/// AC-004 / EC-X.7.002-4 (BC-X.7.002 Postcondition 4, VP-USER-LIST-PROJECT-001(c)
+/// EC-4 cell, cycle-014 STORY-A): none of {local --project, global
+/// --project, configured default} present → exit 64 JrError::UserError with
+/// the byte-identical pinned message, before any HTTP call. Hermetic per
+/// verification-delta.md §2. Unlike `user_list_requires_project_flag`
+/// above, this test needs a REAL wiremock server so it can assert
+/// `.expect(0)` on the assignable-users endpoint (proving zero HTTP calls
+/// rather than merely an unreachable URL / connection error).
+/// Classification: RED-at-stub — `project` is `None` at `handle_list`'s
+/// entry, reaching the stub's `todo!()` via the child process (exit 101),
+/// whose stderr satisfies neither half of the pinned-message assertion.
+#[tokio::test]
+async fn user_list_no_project_resolvable_exits_64_zero_http() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("JR_CACHE_DIR", cache.path().join("jr"))
+        .env("JR_CONFIG_DIR", config.path().join("jr"))
+        .args(["--no-input", "user", "list"])
+        .current_dir(cwd.path());
+    scrub_ambient_jr_env(&mut cmd);
+
+    let output = cmd.output().unwrap();
+
+    server.verify().await;
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "No project configured. Run \"jr init\" or pass --project. Run \"jr project list\" to see available projects."
+        ),
+        "expected the byte-identical pinned exit-64 message, got: {stderr}"
     );
 }
 

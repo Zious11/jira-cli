@@ -8,6 +8,7 @@ mod common;
 
 use assert_cmd::Command;
 use serde_json::Value;
+use tempfile::TempDir;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -517,4 +518,183 @@ async fn user_list_all_cli_emits_safety_cap_warning() {
         stderr.contains("hit pagination safety cap"),
         "stderr must contain the safety-cap warning so truncation is observable; got: {stderr}"
     );
+}
+
+// ── AC-007 (BC-X.7.002 Postcondition 5, cycle-014 STORY-A) ─────────────────
+//
+// `--all` pagination must carry the RESOLVED project key on every page, for
+// both the global-flag and configured-default resolution paths. Both tests
+// build their own `Command`, hermetic per
+// `.factory/cycles/cycle-014/phase-f2-spec-evolution/verification-delta.md`
+// §2 (fresh JR_CONFIG_DIR/JR_CACHE_DIR, every other ambient JR_* var
+// scrubbed) — deliberately NOT `jr_cmd_json` above, which sets only
+// JR_BASE_URL/JR_AUTH_HEADER with no config/cache isolation.
+
+/// Hermetic `jr` command builder for the AC-007 pagination cells below.
+/// `JR_CONFIG_DIR`/`JR_CACHE_DIR` use the `<home>/jr` convention
+/// `global_config_dir()`'s `JR_CONFIG_DIR` debug seam expects directly
+/// (matches `tests/multi_profile_fields.rs`/`tests/user_list_project_resolution.rs`).
+fn jr_cmd_hermetic(
+    server_uri: &str,
+    cache_home: &std::path::Path,
+    config_home: &std::path::Path,
+) -> Command {
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_BASE_URL", server_uri)
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("JR_CACHE_DIR", cache_home.join("jr"))
+        .env("JR_CONFIG_DIR", config_home.join("jr"))
+        .env_remove("JR_PROFILE")
+        .env_remove("JR_DEFAULT_PROFILE")
+        .env_remove("JR_INSTANCE_URL")
+        .env_remove("JR_INSTANCE_AUTH_METHOD")
+        .env_remove("JR_INSTANCE_CLOUD_ID")
+        .env_remove("JR_INSTANCE_ORG_ID")
+        .env_remove("JR_INSTANCE_OAUTH_SCOPES")
+        .env_remove("JR_FIELDS_TEAM_FIELD_ID")
+        .env_remove("JR_FIELDS_STORY_POINTS_FIELD_ID")
+        .env_remove("JR_DEFAULTS_OUTPUT")
+        .env_remove("JR_EMAIL")
+        .env_remove("JR_API_TOKEN")
+        .env_remove("JR_OAUTH_CLIENT_ID")
+        .env_remove("JR_OAUTH_CLIENT_SECRET")
+        .args(["--no-input", "--output", "json"]);
+    cmd
+}
+
+/// Writes a single-profile `config.toml` (`default_profile = "default"`)
+/// with an optional profile-level `project` default. Duplicated (not
+/// imported) from `tests/user_list_project_resolution.rs` because each
+/// integration-test file compiles as its own separate binary crate.
+fn write_default_profile_config(
+    config_home: &std::path::Path,
+    base_url: &str,
+    project: Option<&str>,
+) {
+    let dir = config_home.join("jr");
+    std::fs::create_dir_all(&dir).unwrap();
+    let project_line = project
+        .map(|p| format!("project = \"{p}\"\n"))
+        .unwrap_or_default();
+    std::fs::write(
+        dir.join("config.toml"),
+        format!(
+            "default_profile = \"default\"\n[profiles.default]\nurl = \"{base_url}\"\nauth_method = \"api_token\"\n{project_line}"
+        ),
+    )
+    .unwrap();
+}
+
+/// AC-007, global-flag variant: `jr --project FOO user list --all`
+/// paginates through 3 pages (100 + 35 + 0), every page carrying
+/// `projectKeys=FOO`. Classification: WIRING-EXEMPT / GREEN-at-stub —
+/// resolves via clap propagation alone and short-circuits straight to HTTP
+/// via Task 1's stub wiring.
+#[tokio::test]
+async fn user_list_all_cli_paginates_global_flag_hermetic() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p1")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(35, "p2")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "200"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_hermetic(&server.uri(), cache.path(), config.path())
+        .args(["--project", "FOO", "user", "list", "--all"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json.as_array().expect("user list --all JSON is an array");
+    assert_eq!(arr.len(), 135);
+}
+
+/// AC-007, configured-default variant: `jr user list --all` (no
+/// local/global flag) with a profile-configured project default (`FOO`)
+/// paginates the same way, proving the resolved key is applied to every
+/// page, not just the first. Classification: RED-at-stub — `project` is
+/// `None` at `handle_list`'s entry, reaching the stub's `todo!()` via the
+/// child process (exit 101).
+#[tokio::test]
+async fn user_list_all_cli_paginates_configured_default_hermetic() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_default_profile_config(config.path(), &server.uri(), Some("FOO"));
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p1")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(35, "p2")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "200"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_hermetic(&server.uri(), cache.path(), config.path())
+        .args(["user", "list", "--all"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json.as_array().expect("user list --all JSON is an array");
+    assert_eq!(arr.len(), 135);
 }

@@ -1450,4 +1450,88 @@ mod tests {
     fn effective_limit_all_returns_none() {
         assert_eq!(resolve_effective_limit(None, true), None);
     }
+
+    /// AC-001 / AC-005 / AC-006 (BC-X.7.002, VP-USER-LIST-PROJECT-001(a)):
+    /// `UserCommand::List.project` clap-propagation pin, in ONE inline test
+    /// per the story's Task 3 (multiple argv-vector cells, not one test per
+    /// cell). Extracts the parsed local `project` field after
+    /// `Cli::try_parse_from`, plus (for the "both given" cell) the shared
+    /// global-position `Cli.project` field itself, to verify clap's
+    /// `fill_in_global_values` resolves the shared arg id to the
+    /// subcommand-local match rather than leaving the parent's own matched
+    /// value in place (P31-003(1)).
+    #[test]
+    fn test_bc_x_7_002_user_list_project_clap_propagation() {
+        fn user_list_project(args: &[&str]) -> Option<String> {
+            let cli = Cli::try_parse_from(args).unwrap_or_else(|e| {
+                panic!("expected successful parse for {args:?}, got clap error: {e}")
+            });
+            let Command::User {
+                command: UserCommand::List { project, .. },
+            } = cli.command
+            else {
+                panic!("expected Command::User(List) for {args:?}");
+            };
+            project
+        }
+
+        // VP(a) four base argv cells.
+        assert_eq!(
+            user_list_project(&["jr", "user", "list"]),
+            None,
+            "no local/global --project must parse successfully to None (no clap exit 2)"
+        );
+        assert_eq!(
+            user_list_project(&["jr", "user", "list", "--project", "L"]),
+            Some("L".to_string()),
+            "local --project only"
+        );
+        assert_eq!(
+            user_list_project(&["jr", "--project", "G", "user", "list"]),
+            Some("G".to_string()),
+            "global --project only must fill the local field via clap propagation"
+        );
+        assert_eq!(
+            user_list_project(&["jr", "--project", "G", "user", "list", "--project", "L"]),
+            Some("L".to_string()),
+            "both given: local must win over global"
+        );
+
+        // `-p` short-alias cells (local `short = 'p'` retained).
+        assert_eq!(
+            user_list_project(&["jr", "user", "list", "-p", "L"]),
+            Some("L".to_string()),
+            "local -p short alias"
+        );
+        assert_eq!(
+            user_list_project(&["jr", "--project", "G", "user", "list", "-p", "L"]),
+            Some("L".to_string()),
+            "local -p short alias must still win over global long form"
+        );
+
+        // EC-X.7.002-6: empty string passes through as Some(""), not None.
+        assert_eq!(
+            user_list_project(&["jr", "user", "list", "--project", ""]),
+            Some(String::new()),
+            "local --project \"\" must pass through as Some(\"\"), not collapse to None"
+        );
+        assert_eq!(
+            user_list_project(&["jr", "--project", "", "user", "list"]),
+            Some(String::new()),
+            "global --project \"\" must pass through as Some(\"\"), not collapse to None"
+        );
+
+        // Story-added (P31-003(1)/Pass-33/D-389): on the "both given" argv
+        // vector, the shared global-position `Cli.project` field itself must
+        // also come back Some("L") — clap's global-value propagation
+        // resolves the shared arg id to the child (subcommand-local) match,
+        // not the parent's own matched value.
+        let cli = Cli::try_parse_from(["jr", "--project", "G", "user", "list", "--project", "L"])
+            .expect("expected successful parse");
+        assert_eq!(
+            cli.project,
+            Some("L".to_string()),
+            "shared global-position Cli.project must reflect the local (child) match, not the parent's own \"G\" match"
+        );
+    }
 }

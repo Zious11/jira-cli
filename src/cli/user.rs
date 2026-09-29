@@ -170,6 +170,79 @@ fn format_active(active: Option<bool>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{GlobalConfig, ProfileConfig, ProjectConfig};
+    use proptest::prelude::*;
+
+    /// Builds a `Config` with the active profile named `"default"`, an
+    /// optional `.jr.toml`-equivalent `project` value, and an optional
+    /// profile-level `project` default — the two independently-controllable
+    /// sources `Config::project_key` falls back through.
+    fn make_config(jr_toml_project: Option<String>, profile_project: Option<String>) -> Config {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                project: profile_project,
+                ..ProfileConfig::default()
+            },
+        );
+        Config {
+            global: GlobalConfig {
+                default_profile: Some("default".to_string()),
+                profiles,
+                ..GlobalConfig::default()
+            },
+            project: ProjectConfig {
+                project: jr_toml_project,
+                ..ProjectConfig::default()
+            },
+            active_profile_name: "default".into(),
+        }
+    }
+
+    proptest! {
+        /// AC-003 / AC-006 (BC-X.7.002 Fix step 4, VP-USER-LIST-PROJECT-001(b)):
+        /// `resolve_user_list_project` over the full presence space of
+        /// `cli_project` (`Some(C)`, `Some("")` — EC-X.7.002-6, `None`)
+        /// crossed with the four configured-source cells (neither,
+        /// `.jr.toml`-only, profile-only, both — `.jr.toml` wins over the
+        /// profile default, EC-X.7.002-5's caveat). RED-at-stub: every call
+        /// panics via the stub's unconditional `todo!()` (Task 7(b)).
+        #[test]
+        fn test_bc_x_7_002_resolve_user_list_project_presence_space(
+            c in "c-[a-zA-Z0-9]{1,8}",
+            j in "j-[a-zA-Z0-9]{1,8}",
+            p in "p-[a-zA-Z0-9]{1,8}",
+        ) {
+            let cells: [(Option<String>, Option<String>, Option<String>); 4] = [
+                (None, None, None),
+                (Some(j.clone()), None, Some(j.clone())),
+                (None, Some(p.clone()), Some(p.clone())),
+                (Some(j.clone()), Some(p.clone()), Some(j.clone())),
+            ];
+            for (jr_toml, profile, expected_when_cli_absent) in cells {
+                let config = make_config(jr_toml, profile);
+
+                // cli_project = Some(C) -> Some(C) in every configured cell.
+                prop_assert_eq!(
+                    resolve_user_list_project(Some(c.as_str()), &config),
+                    Some(c.clone())
+                );
+
+                // EC-X.7.002-6: cli_project = Some("") -> Some(""), configured default not consulted.
+                prop_assert_eq!(
+                    resolve_user_list_project(Some(""), &config),
+                    Some(String::new())
+                );
+
+                // cli_project = None -> configured fallback chain (.jr.toml > profile > None).
+                prop_assert_eq!(
+                    resolve_user_list_project(None, &config),
+                    expected_when_cli_absent
+                );
+            }
+        }
+    }
 
     #[test]
     fn row_shows_display_name_email_and_id() {
