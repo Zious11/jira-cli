@@ -51,14 +51,15 @@ All notable changes to jr will be documented here.
   `&`-joined onto an existing, non-empty, non-`&`-terminated query
   component (no separator is added when the existing query is empty or
   already ends in `&`). A `#fragment`, if present, is passed through
-  unchanged and always follows the assembled query. Query assembly is
-  independent of `-X`/`--method` and never interacts with `-d`/`--data`'s
-  request body. A malformed value (no `=`, or an empty NAME) exits 64 with a
-  `JrError::UserError` before any HTTP call is made, and before any other
-  `-q` value is parsed or `-d`/`-H` are processed -- an invocation with any
-  malformed `-q` value sends zero requests. An empty VALUE (`k=`) is
-  allowed. No new dependency is added (`urlencoding` was already a
-  dependency).
+  unchanged and keeps its position after the assembled query -- as with any
+  URL fragment, it is not sent to the server. Query assembly is independent
+  of `-X`/`--method` and never interacts with `-d`/`--data`'s request body.
+  The first malformed `-q` value (no `=`, or an empty NAME), in flag order,
+  is reported with exit 64 and a `JrError::UserError` before any HTTP call
+  is made; no later `-q` value is parsed and `-d`/`-H` are never processed
+  -- an invocation with any malformed `-q` value sends zero requests. An
+  empty VALUE (`k=`) is allowed. No new dependency is added (`urlencoding`
+  was already a dependency).
 
 ## [0.7.0] - 2026-09-23
 

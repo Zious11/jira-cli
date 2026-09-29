@@ -2,7 +2,8 @@
 //!
 //! Provides an escape hatch for calling the Jira REST API directly with
 //! stored credentials, modeled on `gh api`. Supports method override,
-//! request body (inline / file / stdin), and custom headers.
+//! request body (inline / file / stdin), custom headers, and query
+//! parameters (`-q`/`--query-param`).
 
 use crate::api::client::{JiraClient, extract_error_message};
 use crate::error::JrError;
@@ -215,17 +216,17 @@ pub async fn handle_api(
 ) -> Result<()> {
     let normalized_path = normalize_path(&path)?;
 
-    // `-q`/`--query-param` pre-flight (BC-X.16.001/BC-X.16.002): runs
-    // immediately after `normalize_path` and before `resolve_body`/`-H`
-    // parsing (AC-008) — this placement is also the sole enforcement
-    // mechanism for `normalize_path`'s own path errors running BEFORE `-q`
-    // validation (BC-X.16.002 Preconditions).
+    // Every `-q`/`--query-param` value is parsed and merged here, right
+    // after `normalize_path` and before `resolve_body`/`-H` parsing
+    // (BC-X.16.002): `normalize_path`'s own path errors therefore still
+    // surface before any `-q` validation, and `-q` validation in turn
+    // completes before `resolve_body`'s blocking `-d @-` stdin read.
     //
-    // Called unconditionally, including on zero `-q` flags: `parse_query_param`
-    // over an empty `Vec` collects to an empty `Vec` with no HTTP calls, and
-    // `append_query_params(p, &[]) == p` is an identity (BC-X.16.001
-    // Postcondition 1 / Behavior 5), so this is behavior-preserving for the
-    // zero-flag case (Task 13, P6-006).
+    // This call is unconditional, including on zero `-q` flags:
+    // `parse_query_param` over an empty `Vec` collects to an empty `Vec`
+    // with no HTTP calls, and `append_query_params(p, &[]) == p` is an
+    // identity (BC-X.16.001 Postcondition 1 / Behavior 5), so the zero-flag
+    // case is behavior-preserving.
     let pairs: Vec<(String, String)> = query_param
         .iter()
         .map(|raw| parse_query_param(raw))
