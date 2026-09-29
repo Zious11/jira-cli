@@ -9,7 +9,7 @@ mod common;
 use assert_cmd::Command;
 use serde_json::Value;
 use tempfile::TempDir;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use jr::api::client::JiraClient;
@@ -534,30 +534,30 @@ async fn user_list_all_cli_emits_safety_cap_warning() {
 /// `JR_CONFIG_DIR`/`JR_CACHE_DIR` use the `<home>/jr` convention
 /// `global_config_dir()`'s `JR_CONFIG_DIR` debug seam expects directly
 /// (matches `tests/multi_profile_fields.rs`/`tests/user_list_project_resolution.rs`).
+/// Every other ambient `JR_*` variable is scrubbed via
+/// `common::hermetic::scrub_ambient_jr_env` (F-002) so a stray
+/// developer/CI-set value can't leak a configured default into these
+/// tests; the scrub runs before the seams below are set, so it never
+/// removes them (see that helper's doc comment).
 fn jr_cmd_hermetic(
     server_uri: &str,
     cache_home: &std::path::Path,
     config_home: &std::path::Path,
 ) -> Command {
     let mut cmd = Command::cargo_bin("jr").unwrap();
+    common::hermetic::scrub_ambient_jr_env(
+        &mut cmd,
+        &[
+            "JR_BASE_URL",
+            "JR_AUTH_HEADER",
+            "JR_CACHE_DIR",
+            "JR_CONFIG_DIR",
+        ],
+    );
     cmd.env("JR_BASE_URL", server_uri)
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("JR_CACHE_DIR", cache_home.join("jr"))
         .env("JR_CONFIG_DIR", config_home.join("jr"))
-        .env_remove("JR_PROFILE")
-        .env_remove("JR_DEFAULT_PROFILE")
-        .env_remove("JR_INSTANCE_URL")
-        .env_remove("JR_INSTANCE_AUTH_METHOD")
-        .env_remove("JR_INSTANCE_CLOUD_ID")
-        .env_remove("JR_INSTANCE_ORG_ID")
-        .env_remove("JR_INSTANCE_OAUTH_SCOPES")
-        .env_remove("JR_FIELDS_TEAM_FIELD_ID")
-        .env_remove("JR_FIELDS_STORY_POINTS_FIELD_ID")
-        .env_remove("JR_DEFAULTS_OUTPUT")
-        .env_remove("JR_EMAIL")
-        .env_remove("JR_API_TOKEN")
-        .env_remove("JR_OAUTH_CLIENT_ID")
-        .env_remove("JR_OAUTH_CLIENT_SECRET")
         .args(["--no-input", "--output", "json"]);
     cmd
 }
@@ -586,15 +586,20 @@ fn write_default_profile_config(
 }
 
 /// AC-007, global-flag variant: `jr --project FOO user list --all`
-/// paginates through 3 pages (100 + 35 + 0), every page carrying
-/// `projectKeys=FOO`. Classification: WIRING-EXEMPT / GREEN-at-stub —
-/// resolves via clap propagation alone and short-circuits straight to HTTP
-/// via Task 1's stub wiring.
+/// paginates through 3 pages (100 + 35 + 0), every page carrying exactly
+/// one `projectKeys=FOO` pair. Resolves via clap's own global-value
+/// propagation straight through to `search_assignable_users_by_project_all`.
+/// F-001 (Step 4.5 adversarial pass 1): a `query_param_is_missing`
+/// catch-all mock pins that `projectKeys` is never omitted, and
+/// `server.received_requests()` is inspected directly to prove every
+/// request carries exactly one `projectKeys` pair whose value is `FOO` —
+/// the full VP(c) Postcondition-5 assertion, not just the total user count.
 #[tokio::test]
-async fn user_list_all_cli_paginates_global_flag_hermetic() {
+async fn test_user_list_all_sends_single_project_keys_param_per_page_via_global_flag() {
     let cache = TempDir::new().unwrap();
     let config = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
+    common::hermetic::assert_no_ancestor_jr_toml(cwd.path());
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -624,6 +629,18 @@ async fn user_list_all_cli_paginates_global_flag_hermetic() {
         .expect(1)
         .mount(&server)
         .await;
+    // F-001: catch-all tripwire — any request missing `projectKeys` entirely
+    // must never occur.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param_is_missing("projectKeys"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
 
     let output = jr_cmd_hermetic(&server.uri(), cache.path(), config.path())
         .args(["--project", "FOO", "user", "list", "--all"])
@@ -639,19 +656,52 @@ async fn user_list_all_cli_paginates_global_flag_hermetic() {
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
     let arr = json.as_array().expect("user list --all JSON is an array");
     assert_eq!(arr.len(), 135);
+
+    // F-001: every request the binary actually sent carries exactly one
+    // `projectKeys` pair, with value `FOO` — proves the resolved key is
+    // applied consistently to every page, not merely present somewhere.
+    let requests = server
+        .received_requests()
+        .await
+        .expect("received_requests must be recording");
+    assert_eq!(requests.len(), 3, "expected exactly 3 paginated requests");
+    for req in &requests {
+        let project_keys: Vec<_> = req
+            .url
+            .query_pairs()
+            .filter(|(k, _)| k == "projectKeys")
+            .collect();
+        assert_eq!(
+            project_keys.len(),
+            1,
+            "expected exactly one projectKeys pair, got {project_keys:?} for {}",
+            req.url
+        );
+        assert_eq!(
+            project_keys[0].1, "FOO",
+            "expected projectKeys=FOO, got {:?} for {}",
+            project_keys[0].1, req.url
+        );
+    }
 }
 
 /// AC-007, configured-default variant: `jr user list --all` (no
 /// local/global flag) with a profile-configured project default (`FOO`)
 /// paginates the same way, proving the resolved key is applied to every
-/// page, not just the first. Classification: RED-at-stub — `project` is
-/// `None` at `handle_list`'s entry, reaching the stub's `todo!()` via the
-/// child process (exit 101).
+/// page, not just the first. `project` is `None` at `handle_list`'s entry
+/// and is resolved via `resolve_user_list_project`'s configured-default
+/// fallback chain before pagination begins.
+/// F-001 (Step 4.5 adversarial pass 1): a `query_param_is_missing`
+/// catch-all mock pins that `projectKeys` is never omitted, and
+/// `server.received_requests()` is inspected directly to prove every
+/// request carries exactly one `projectKeys` pair whose value is `FOO` —
+/// the full VP(c) Postcondition-5 assertion, not just the total user count.
 #[tokio::test]
-async fn user_list_all_cli_paginates_configured_default_hermetic() {
+async fn test_user_list_all_sends_single_project_keys_param_per_page_via_configured_default() {
     let cache = TempDir::new().unwrap();
     let config = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
+    common::hermetic::assert_no_ancestor_jr_toml(cwd.path());
     let server = MockServer::start().await;
     write_default_profile_config(config.path(), &server.uri(), Some("FOO"));
 
@@ -682,6 +732,18 @@ async fn user_list_all_cli_paginates_configured_default_hermetic() {
         .expect(1)
         .mount(&server)
         .await;
+    // F-001: catch-all tripwire — any request missing `projectKeys` entirely
+    // must never occur.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param_is_missing("projectKeys"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
 
     let output = jr_cmd_hermetic(&server.uri(), cache.path(), config.path())
         .args(["user", "list", "--all"])
@@ -697,4 +759,31 @@ async fn user_list_all_cli_paginates_configured_default_hermetic() {
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
     let arr = json.as_array().expect("user list --all JSON is an array");
     assert_eq!(arr.len(), 135);
+
+    // F-001: every request the binary actually sent carries exactly one
+    // `projectKeys` pair, with value `FOO` — proves the resolved key is
+    // applied consistently to every page, not merely present somewhere.
+    let requests = server
+        .received_requests()
+        .await
+        .expect("received_requests must be recording");
+    assert_eq!(requests.len(), 3, "expected exactly 3 paginated requests");
+    for req in &requests {
+        let project_keys: Vec<_> = req
+            .url
+            .query_pairs()
+            .filter(|(k, _)| k == "projectKeys")
+            .collect();
+        assert_eq!(
+            project_keys.len(),
+            1,
+            "expected exactly one projectKeys pair, got {project_keys:?} for {}",
+            req.url
+        );
+        assert_eq!(
+            project_keys[0].1, "FOO",
+            "expected projectKeys=FOO, got {:?} for {}",
+            project_keys[0].1, req.url
+        );
+    }
 }

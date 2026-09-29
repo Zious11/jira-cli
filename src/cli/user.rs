@@ -206,8 +206,7 @@ mod tests {
         /// `cli_project` (`Some(C)`, `Some("")` — EC-X.7.002-6, `None`)
         /// crossed with the four configured-source cells (neither,
         /// `.jr.toml`-only, profile-only, both — `.jr.toml` wins over the
-        /// profile default, EC-X.7.002-5's caveat). RED-at-stub: every call
-        /// panics via the stub's unconditional `todo!()` (Task 7(b)).
+        /// profile default, EC-X.7.002-5's caveat).
         #[test]
         fn test_bc_x_7_002_resolve_user_list_project_presence_space(
             c in "c-[a-zA-Z0-9]{1,8}",

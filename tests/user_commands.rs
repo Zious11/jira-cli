@@ -9,28 +9,6 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::fixtures;
 
-/// Every ambient `JR_`-prefixed variable the hermetic tests below do NOT
-/// themselves set, pinned per `verification-delta.md` §2 step 5 (mirrors
-/// `tests/auth_profiles.rs`'s pinned scrub list) so a stray `JR_*` variable
-/// in the ambient shell (e.g. a direnv-set `JR_PROFILE`) cannot leak a
-/// configured default into these BC-X.7.002 tests.
-fn scrub_ambient_jr_env(cmd: &mut Command) -> &mut Command {
-    cmd.env_remove("JR_PROFILE")
-        .env_remove("JR_DEFAULT_PROFILE")
-        .env_remove("JR_INSTANCE_URL")
-        .env_remove("JR_INSTANCE_AUTH_METHOD")
-        .env_remove("JR_INSTANCE_CLOUD_ID")
-        .env_remove("JR_INSTANCE_ORG_ID")
-        .env_remove("JR_INSTANCE_OAUTH_SCOPES")
-        .env_remove("JR_FIELDS_TEAM_FIELD_ID")
-        .env_remove("JR_FIELDS_STORY_POINTS_FIELD_ID")
-        .env_remove("JR_DEFAULTS_OUTPUT")
-        .env_remove("JR_EMAIL")
-        .env_remove("JR_API_TOKEN")
-        .env_remove("JR_OAUTH_CLIENT_ID")
-        .env_remove("JR_OAUTH_CLIENT_SECRET")
-}
-
 fn jr_cmd(base_url: &str) -> Command {
     let mut cmd = Command::cargo_bin("jr").unwrap();
     cmd.env("JR_BASE_URL", base_url)
@@ -157,24 +135,32 @@ async fn user_list_requires_project_flag() {
     // --project/required stderr assertion rejects — so it still proves zero
     // successful HTTP calls without needing a live mock server.
     //
-    // Once this fix lands, the failure this test pins is never clap's own
-    // "required argument" error — it is jr's own JrError::UserError exit-64
-    // message, which also contains the literal substring "--project",
-    // satisfying the same loose assertion (BC-X.7.002 Invariants: this
-    // test's assertion continues to accurately describe what it checks
-    // after the fix lands — no rename).
+    // The failure this test pins is never clap's own "required argument"
+    // error — it is jr's own JrError::UserError exit-64 message, which
+    // also contains the literal substring "--project", satisfying the same
+    // loose assertion (BC-X.7.002 Invariants: this test's assertion
+    // continues to accurately describe what it checks — no rename).
     let cache = TempDir::new().unwrap();
     let config = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
+    common::hermetic::assert_no_ancestor_jr_toml(cwd.path());
 
     let mut cmd = Command::cargo_bin("jr").unwrap();
+    common::hermetic::scrub_ambient_jr_env(
+        &mut cmd,
+        &[
+            "JR_BASE_URL",
+            "JR_AUTH_HEADER",
+            "JR_CACHE_DIR",
+            "JR_CONFIG_DIR",
+        ],
+    );
     cmd.env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("JR_CACHE_DIR", cache.path().join("jr"))
         .env("JR_CONFIG_DIR", config.path().join("jr"))
         .args(["--no-input", "user", "list"])
         .current_dir(cwd.path());
-    scrub_ambient_jr_env(&mut cmd);
 
     let output = cmd.output().unwrap();
 
@@ -194,14 +180,12 @@ async fn user_list_requires_project_flag() {
 /// above, this test needs a REAL wiremock server so it can assert
 /// `.expect(0)` on the assignable-users endpoint (proving zero HTTP calls
 /// rather than merely an unreachable URL / connection error).
-/// Classification: RED-at-stub — `project` is `None` at `handle_list`'s
-/// entry, reaching the stub's `todo!()` via the child process (exit 101),
-/// whose stderr satisfies neither half of the pinned-message assertion.
 #[tokio::test]
-async fn user_list_no_project_resolvable_exits_64_zero_http() {
+async fn test_user_list_without_resolvable_project_exits_64_with_zero_http() {
     let cache = TempDir::new().unwrap();
     let config = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
+    common::hermetic::assert_no_ancestor_jr_toml(cwd.path());
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -212,13 +196,21 @@ async fn user_list_no_project_resolvable_exits_64_zero_http() {
         .await;
 
     let mut cmd = Command::cargo_bin("jr").unwrap();
+    common::hermetic::scrub_ambient_jr_env(
+        &mut cmd,
+        &[
+            "JR_BASE_URL",
+            "JR_AUTH_HEADER",
+            "JR_CACHE_DIR",
+            "JR_CONFIG_DIR",
+        ],
+    );
     cmd.env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("JR_CACHE_DIR", cache.path().join("jr"))
         .env("JR_CONFIG_DIR", config.path().join("jr"))
         .args(["--no-input", "user", "list"])
         .current_dir(cwd.path());
-    scrub_ambient_jr_env(&mut cmd);
 
     let output = cmd.output().unwrap();
 
@@ -344,6 +336,82 @@ async fn user_view_404_shows_friendly_error() {
     assert!(
         stderr.contains("User with accountId 'does-not-exist' not found"),
         "expected friendly not-found message, got: {stderr}"
+    );
+}
+
+/// F-006 (Step 4.5 adversarial pass 1): `handle_view`'s downcast branch
+/// treats a 400 identically to a 404 (`*status == 404 || *status == 400`,
+/// `src/cli/user.rs::handle_view`) — both rewrite into the same friendly
+/// "not found" `JrError::UserError`, exit 64. Companion to
+/// `user_view_404_shows_friendly_error` above, now that `handle_view` is in
+/// mutation scope.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_user_view_400_response_rewrites_to_not_found_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user"))
+        .and(query_param("accountId", "bad-request-user"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "errorMessages": ["Invalid accountId"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args(["user", "view", "bad-request-user"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "view on a 400 response should exit 64 via the same not-found branch as 404, got: {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("User with accountId 'bad-request-user' not found"),
+        "expected the 404-equivalent friendly not-found message for a 400, got: {stderr}"
+    );
+}
+
+/// F-006 (Step 4.5 adversarial pass 1): a 500 does NOT match `handle_view`'s
+/// `*status == 404 || *status == 400` guard, so it falls through to
+/// `return Err(e)` unrewritten — the raw `JrError::ApiError` surfaces
+/// (exit 1, "API error (500): ..."), never the "not found" message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_user_view_500_response_surfaces_raw_api_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user"))
+        .and(query_param("accountId", "server-error-user"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+            "errorMessages": ["Internal server error"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args(["user", "view", "server-error-user"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "view on a 500 response should exit 1 (unrewritten JrError::ApiError), got: {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("API error (500)"),
+        "expected the raw API error surfaced for a 500, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("not found"),
+        "a 500 must not be rewritten into the not-found message, got: {stderr}"
     );
 }
 
