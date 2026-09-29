@@ -90,21 +90,82 @@ pub fn parse_header(raw: &str) -> Result<(HeaderName, HeaderValue)> {
 /// Merge percent-encoded `-q`/`--query-param NAME=VALUE` pairs onto an
 /// already-`normalize_path`-normalized API path.
 ///
-/// BC-X.16.001. Stub stage (Task 1, `stub-architect`): `todo!()` body only —
-/// implemented by a later `implementer` task (AC-001..AC-004). Pure,
-/// side-effect-free (BC-X.16.001 Invariant 1): no I/O, no `JiraClient`.
+/// BC-X.16.001 Behavior 1-5 / Postconditions 1-5. Pure, side-effect-free
+/// (Invariant 1): no I/O, no `JiraClient`.
+///
+/// Detection/merge considers only the part of `path` BEFORE its first `#`
+/// (Behavior 1): no `?` in that pre-fragment part means a fresh leading `?`
+/// introduces the assembled query; otherwise the query component is
+/// everything after the FIRST `?`, and the new pairs are appended directly
+/// (no separator) when that component is empty or already `&`-terminated,
+/// or `&`-joined otherwise. The pre-existing query text and any `#fragment`
+/// are passed through byte-for-byte. NAME and VALUE are each
+/// `urlencoding::encode`d exactly once (Behavior 3) — never
+/// `url::form_urlencoded::byte_serialize`, whose space -> `+` mapping is
+/// the wrong semantics here (Invariant 3) — and joined by a literal `=`.
+/// An empty pair list is the identity on `path` (Behavior 5 / Postcondition
+/// 1).
 pub(crate) fn append_query_params(path: &str, pairs: &[(String, String)]) -> String {
-    todo!("BC-X.16.001 append_query_params stub: path={path:?}, pairs={pairs:?}")
+    if pairs.is_empty() {
+        return path.to_string();
+    }
+
+    let (pre, frag) = match path.find('#') {
+        Some(idx) => (&path[..idx], &path[idx..]),
+        None => (path, ""),
+    };
+
+    let sep = match pre.find('?') {
+        None => "?",
+        Some(qpos) => {
+            let query_component = &pre[qpos + 1..];
+            if query_component.is_empty() || query_component.ends_with('&') {
+                ""
+            } else {
+                "&"
+            }
+        }
+    };
+
+    let enc_pairs = pairs
+        .iter()
+        .map(|(name, value)| {
+            format!("{}={}", urlencoding::encode(name), urlencoding::encode(value))
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+
+    format!("{pre}{sep}{enc_pairs}{frag}")
 }
 
 /// Parse a single `-q`/`--query-param` raw value into a `(NAME, VALUE)` pair,
 /// splitting on the FIRST `=` only.
 ///
-/// BC-X.16.002. Stub stage (Task 1, `stub-architect`): `todo!()` body only —
-/// implemented by a later `implementer` task (AC-005..AC-007). Pure,
-/// side-effect-free: no I/O, no `JiraClient`.
+/// BC-X.16.002. Pure, side-effect-free: no I/O, no `JiraClient`. VALUE may
+/// itself contain further `=` characters, preserved verbatim in the
+/// split-off remainder (EC-X.16.001-2). Neither NAME nor VALUE is trimmed
+/// of whitespace (matches BC-X.16.001 Behavior 3's no-trim design default —
+/// this intentionally differs from `parse_header`'s trimming behavior).
+/// Two client-side, pre-HTTP failures, both `JrError::UserError`/exit 64:
+/// no `=` at all (M1) or an empty NAME (M2, literally nothing before the
+/// first `=`). An empty VALUE (`k=`) is NOT an error (EC-X.16.001-1).
 pub(crate) fn parse_query_param(raw: &str) -> Result<(String, String)> {
-    todo!("BC-X.16.002 parse_query_param stub: raw={raw:?}")
+    match raw.split_once('=') {
+        None => Err(JrError::UserError(format!(
+            "--query-param must be in NAME=VALUE format (got: {raw})"
+        ))
+        .into()),
+        Some((name, rest)) => {
+            if name.is_empty() {
+                Err(JrError::UserError(format!(
+                    "--query-param NAME cannot be empty (got: {raw}) \u{2014} use NAME=VALUE, e.g. -q maxResults=50"
+                ))
+                .into())
+            } else {
+                Ok((name.to_string(), rest.to_string()))
+            }
+        }
+    }
 }
 
 /// Resolve the `--data` argument into an actual request body.
@@ -152,26 +213,20 @@ pub async fn handle_api(
 
     // `-q`/`--query-param` pre-flight (BC-X.16.001/BC-X.16.002): runs
     // immediately after `normalize_path` and before `resolve_body`/`-H`
-    // parsing (AC-008).
+    // parsing (AC-008) — this placement is also the sole enforcement
+    // mechanism for `normalize_path`'s own path errors running BEFORE `-q`
+    // validation (BC-X.16.002 Preconditions).
     //
-    // STUB-STAGE ONLY short-circuit (Task 1, P6-006): when zero `-q` flags
-    // are supplied, the pre-existing `normalize_path` output is used
-    // unchanged so the zero-flag path never touches either `todo!()` body —
-    // this keeps the crate compiling end-to-end at the Red Gate stub. Task
-    // 13 REMOVES this short-circuit and calls `parse_query_param`/
-    // `append_query_params` unconditionally, since
+    // Called unconditionally, including on zero `-q` flags: `parse_query_param`
+    // over an empty `Vec` collects to an empty `Vec` with no HTTP calls, and
     // `append_query_params(p, &[]) == p` is an identity (BC-X.16.001
-    // Postcondition 1 / Behavior 5) that makes the two forms behaviorally
-    // indistinguishable once implemented.
-    let normalized_path = if query_param.is_empty() {
-        normalized_path
-    } else {
-        let pairs: Vec<(String, String)> = query_param
-            .iter()
-            .map(|raw| parse_query_param(raw))
-            .collect::<Result<Vec<_>>>()?;
-        append_query_params(&normalized_path, &pairs)
-    };
+    // Postcondition 1 / Behavior 5), so this is behavior-preserving for the
+    // zero-flag case (Task 13, P6-006).
+    let pairs: Vec<(String, String)> = query_param
+        .iter()
+        .map(|raw| parse_query_param(raw))
+        .collect::<Result<Vec<_>>>()?;
+    let normalized_path = append_query_params(&normalized_path, &pairs);
 
     // Reads real stdin in production; resolve_body takes impl Read for testing.
     let body = resolve_body(data.as_deref(), std::io::stdin().lock())?;

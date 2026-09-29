@@ -147,7 +147,7 @@ pub enum Command {
         #[arg(short = 'H', long = "header")]
         header: Vec<String>,
 
-        /// Query string parameter in NAME=VALUE format (repeatable)
+        /// Query string parameter in NAME=VALUE format (repeatable). Values are passed raw — do not pre-encode them; jr percent-encodes NAME and VALUE for you.
         #[arg(short = 'q', long = "query-param")]
         query_param: Vec<String>,
     },
