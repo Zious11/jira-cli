@@ -35,6 +35,31 @@ All notable changes to jr will be documented here.
   `jr --project FOO user list` (global-only) and a bare `jr user list` backed
   by a configured default -- both previously rejected by clap -- now succeed.
 
+### Added
+
+- **`jr api <PATH> --query-param`/`-q NAME=VALUE`** (repeatable; issue #583,
+  BC-X.16.001/BC-X.16.002, S-cycle14-api-query-param): `jr api` can now build
+  a query string instead of requiring it hand-encoded into `<PATH>`, matching
+  the ergonomics of `gh api -f`/HTTPie `name==value`/`curl -G
+  --data-urlencode`. Each `-q`/`--query-param` occurrence contributes one
+  `NAME=VALUE` pair; repeated names are all sent, in flag order, with no
+  deduplication. NAME and VALUE are each percent-encoded exactly once (via
+  `urlencoding::encode`) and are passed through as typed -- neither is
+  trimmed, and values must not be pre-encoded by the caller (the assembly
+  step already encodes them). The assembled query is merged onto `<PATH>`:
+  a fresh `?` is introduced when none is present; otherwise new pairs are
+  `&`-joined onto an existing, non-empty, non-`&`-terminated query
+  component (no separator is added when the existing query is empty or
+  already ends in `&`). A `#fragment`, if present, is passed through
+  unchanged and always follows the assembled query. Query assembly is
+  independent of `-X`/`--method` and never interacts with `-d`/`--data`'s
+  request body. A malformed value (no `=`, or an empty NAME) exits 64 with a
+  `JrError::UserError` before any HTTP call is made, and before any other
+  `-q` value is parsed or `-d`/`-H` are processed -- an invocation with any
+  malformed `-q` value sends zero requests. An empty VALUE (`k=`) is
+  allowed. No new dependency is added (`urlencoding` was already a
+  dependency).
+
 ## [0.7.0] - 2026-09-23
 
 First stable release of the 0.7.0 line, consolidating the `0.7.0-dev.1`
