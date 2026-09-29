@@ -88,6 +88,7 @@ high line coverage but untested assertion strength at the time of the F6 review.
   only covers panic-safety. Supersedes the MAINT-MUTANTS-GLOBS-01 EXCLUDE row below (added
   cycle-009 F7)
 - `src/cli/user.rs` — `resolve_user_list_project` (configured-default fallback for user list's post-clap project value via Config::project_key; local-vs-global precedence is clap global-value propagation) (added cycle-014)
+- `src/cli/api.rs` — `append_query_params` (pure path + query-pair assembler, encodes each NAME/VALUE exactly once), `parse_query_param` (NAME=VALUE split and validation for -q) (added cycle-014)
 
 **FIX-F7-001 deferred, not added:** `src/cli/init.rs` is NOT added to `examine_globs` despite
 backing the cycle-008 F-WG-1 `list_boards` scope-hint call site (BC-X.15.001) alongside
@@ -111,7 +112,7 @@ narrows to lines changed in the PR diff.
 Note: cargo-mutants v27+ reads its config from `.cargo/mutants.toml` (not `.mutants.toml`
 at repo root). This is the canonical config location for this project.
 
-Current `examine_globs` count: 33 entries (verify against `.cargo/mutants.toml` before citing
+Current `examine_globs` count: 34 entries (verify against `.cargo/mutants.toml` before citing
 this number elsewhere — it has drifted before and will drift again as scope changes).
 
 **FIX-F6-1 deferred, not added:** `src/api/auth.rs` and `src/cli/auth/login.rs` are NOT added
@@ -1585,6 +1586,7 @@ landed:
 
 | Date | Cycle | Change |
 |------|-------|--------|
+| 2026-09-29 | S-cycle14-api-query-param | Scope-gap fix: added `src/cli/api.rs` (`append_query_params`/`parse_query_param`, BC-X.16.001/BC-X.16.002's `jr api --query-param`/`-q` assembly and parse functions, issue #583) to `examine_globs` (33 → 34 entries). Added at file-creation-of-scope time per the P22-001/D-149/S-MUTANTS-SCOPE-1 convention. |
 | 2026-09-29 | S-cycle14-user-list-project-resolution | Scope-gap fix: added `src/cli/user.rs` (`resolve_user_list_project`, BC-X.7.002's configured-default fallback resolver for `jr user list`'s post-clap `--project` value, issue #862) to `examine_globs` (32 → 33 entries). Added at file-creation-of-scope time per the P22-001/D-149/S-MUTANTS-SCOPE-1 convention. |
 | 2026-09-10 | ci/mutants-nightly-rebalance | **Nightly full-scope workflow rebalanced for reliability + honest reporting.** Investigated run 34478602590 `cancelled`: only 4/16 shards finished inside the old `timeout-minutes: 240` cap before the other 12 were killed mid-run, and `mutants-nightly-report` pooled the partial outcomes into an ordinary below-90% warning indistinguishable from a full run. Fix: `.github/workflows/mutants-nightly.yml`'s matrix widened N=16 → N=24 (`--shard <k>/24`), shard `timeout-minutes` raised 240 → 300 (under GitHub's 360-minute job max), and a completeness guard added — each shard now writes a `mutants-nightly-shard-status-<k>` completion sentinel only on a genuine `cargo mutants` exit 0 (a cancelled or failed shard produces none), and `mutants-nightly-report` counts sentinels, reports "N/24 shards completed," and — when N < 24 — annotates the summary PARTIAL and suppresses the below-90% `::warning::` in favor of an explicit advisory-incomplete note. The report job remains advisory-only and still never exits non-zero. Internal CI/CD only — no `src/` change, no new PRD BC. |
 | 2026-09-07 | S-cycle6-mutants-ci-sharding | **Sharded mutation gate:** replaced the single `mutants` job with a three-job pipeline (`mutants-plan` → 8-shard `mutants` matrix → `mutants-aggregate`) plus an advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=16). `mutants-aggregate` (extracted to `scripts/mutants-aggregate.sh`) replaces `mutants` as the `ci-gate.needs` member and computes a POOLED sum-not-average kill rate across all 8 shards (INV-AGG), with exact-equality `MUTANT_COUNT` reconciliation as a hard fail (both over- and under-count directions). Fail-closed, sentinel-based shard-completeness accounting (INV-COMPLETE) replaces the old artifact-count proxy, closing an all-shards-crash false-green and an empty-shard false-red the single-job design was never exposed to. A `>120`-in-diff-mutant escape hatch (`ESCALATION_THRESHOLD=120`, INV-ESCALATE) routes oversized PRs to an ordinary, actionable CI failure — never a silent skip or pass — resolved by splitting the diff or an admin branch-protection bypass. `cargo-mutants` pin tightened from major-only `@27` to the exact release `@27.1.0`. Both `scripts/check-ci-gate.sh` and the new `scripts/mutants-aggregate.sh` now source a shared `scripts/lib/trusted-jq.sh`. See **Sharded Mutation Gate (cycle-006)** above for the full account; governed by this policy doc per D-348/D-349 (policy-doc-only, no new PRD BC), mirroring the MUTATION-CI-TIMEOUT precedent below. No `src/` (product-code) changes — CI/CD infrastructure only. |

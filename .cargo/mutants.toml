@@ -178,6 +178,12 @@ examine_globs = [
     # global-value propagation, not `jr` code). Added at file-creation-of-
     # scope time per the P22-001/D-149/S-MUTANTS-SCOPE-1 convention.
     "src/cli/user.rs",
+    # cycle-014 STORY-C (S-cycle14-api-query-param, issue #583, BC-X.16.001/
+    # BC-X.16.002): `append_query_params` (pure path + query-pair assembler,
+    # encodes each NAME/VALUE exactly once) and `parse_query_param`
+    # (NAME=VALUE split and validation for -q). Added at file-creation-of-
+    # scope time per the P22-001/D-149/S-MUTANTS-SCOPE-1 convention.
+    "src/cli/api.rs",
 ]
 
 # FIX-F7-001 deferred, not added: `src/cli/init.rs` is NOT added to
