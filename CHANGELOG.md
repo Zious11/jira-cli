@@ -4,6 +4,36 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Breaking: `jr user list` with no project resolvable now exits 64, not clap's
+  exit 2** (issue #862, BC-X.7.002, S-cycle14-user-list-project-resolution):
+  `UserCommand::List.project` was the only subcommand-local `--project` field in
+  the CLI typed as a clap-REQUIRED `String`, so `jr --project FOO user list`
+  (global flag only) exited 2 with clap's own "required argument" error before
+  clap's global-value propagation ever got a chance to fill the local field --
+  the flag looked unset even though it plainly was. `--project` is now
+  `Option<String>`, and `jr user list` resolves it through the same four-step
+  order `jr component list`/`jr queue`/`jr requesttype`/`jr field options
+  --type` already use:
+  1. **Local `--project`** -- supplied after `user list`.
+  2. **Global `--project`** -- supplied before the subcommand; fills the local
+     field via clap's own propagation when (1) is absent. Local wins when both
+     are given.
+  3. **Configured default** -- the per-project `.jr.toml` project, then the
+     active profile's configured `project` default, consulted only when (1)
+     and (2) are both absent.
+  4. **Exit 64** -- `JrError::UserError`, when none of (1)-(3) resolve, before
+     any HTTP call: `"No project configured. Run \"jr init\" or pass
+     --project. Run \"jr project list\" to see available projects."`
+
+  **Breaking change:** an invocation with no local/global `--project` and no
+  configured default previously failed with clap's exit-2 "required argument"
+  error; it now fails with `jr`'s own exit-64 `JrError::UserError` and the
+  message above. `jr --project FOO user list` (global-only) and a bare
+  `jr user list` backed by a configured default -- both previously rejected by
+  clap -- now succeed.
+
 ## [0.7.0] - 2026-09-23
 
 First stable release of the 0.7.0 line, consolidating the `0.7.0-dev.1`
