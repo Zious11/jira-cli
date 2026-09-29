@@ -12,16 +12,16 @@ use crate::types::jira::User;
 /// `--project` value (already local-vs-global resolved by clap's own
 /// global-value propagation) plus the configured default fallback chain.
 ///
-/// STUB (Red Gate, BC-5.38.001): real body lands in a later story task; this
-/// is a `pub(crate)` pure resolver mirroring
+/// `pub(crate)` pure resolver mirroring
 /// `src/cli/field.rs::resolve_m2_project`'s signature style, per BC-X.7.002
-/// Fix step 4.
+/// Fix step 4: delegates entirely to `Config::project_key`'s existing
+/// fallback chain (`.jr.toml` project, then the active profile's configured
+/// `project` default) — no new `Config`/`ProfileConfig` accessor is added.
 pub(crate) fn resolve_user_list_project(
     cli_project: Option<&str>,
     config: &Config,
 ) -> Option<String> {
-    let _ = (cli_project, config);
-    todo!()
+    config.project_key(cli_project)
 }
 
 pub async fn handle(
@@ -80,16 +80,16 @@ async fn handle_list(
     config: &Config,
     client: &JiraClient,
 ) -> Result<()> {
-    // STUB wiring (Task 1, Red Gate): a `Some(p)` post-clap value (local
-    // flag, global flag, or both — clap propagation has already resolved
-    // local-vs-global precedence) short-circuits straight into the existing
-    // HTTP path unchanged. `resolve_user_list_project` (still `todo!()`) is
-    // only reached on the `None` arm. This short-circuit is removed once the
-    // resolver's real body lands (BC-X.7.002 Fix step 4).
-    let resolved_project = match project {
-        Some(p) => p.to_string(),
-        None => resolve_user_list_project(project, config).unwrap_or_default(),
-    };
+    // BC-X.7.002 Fix step 4: unconditionally resolve via local flag > global
+    // flag (both already reflected in the post-clap `project` value) >
+    // configured default > exit 64, before any HTTP call.
+    let resolved_project = resolve_user_list_project(project, config).ok_or_else(|| {
+        JrError::UserError(
+            "No project configured. Run \"jr init\" or pass --project. \
+             Run \"jr project list\" to see available projects."
+                .into(),
+        )
+    })?;
 
     let effective = resolve_effective_limit(limit, all);
     let mut users = if all {

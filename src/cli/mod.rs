@@ -1143,7 +1143,9 @@ pub enum UserCommand {
     ///
     /// Results depend on the "Browse users and groups" global permission.
     List {
-        /// Project key (e.g., FOO)
+        /// Project key (overrides the configured default project). Required
+        /// when no project is configured in `.jr.toml` or the active
+        /// profile.
         #[arg(long, short = 'p')]
         project: Option<String>,
         /// Cap the number of results shown (default 30). Applies to both
