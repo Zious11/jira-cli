@@ -495,11 +495,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 method,
                 data,
                 header,
+                query_param,
             } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client =
                     api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
-                cli::api::handle_api(path, method, data, header, &client).await
+                cli::api::handle_api(path, method, data, header, query_param, &client).await
             }
         }
     };

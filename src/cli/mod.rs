@@ -146,6 +146,10 @@ pub enum Command {
         /// Custom header in "Key: Value" format (repeatable)
         #[arg(short = 'H', long = "header")]
         header: Vec<String>,
+
+        /// Query string parameter in NAME=VALUE format (repeatable)
+        #[arg(short = 'q', long = "query-param")]
+        query_param: Vec<String>,
     },
     /// Generate shell completions
     Completion {

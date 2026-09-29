@@ -87,6 +87,26 @@ pub fn parse_header(raw: &str) -> Result<(HeaderName, HeaderValue)> {
     Ok((name, value))
 }
 
+/// Merge percent-encoded `-q`/`--query-param NAME=VALUE` pairs onto an
+/// already-`normalize_path`-normalized API path.
+///
+/// BC-X.16.001. Stub stage (Task 1, `stub-architect`): `todo!()` body only —
+/// implemented by a later `implementer` task (AC-001..AC-004). Pure,
+/// side-effect-free (BC-X.16.001 Invariant 1): no I/O, no `JiraClient`.
+pub(crate) fn append_query_params(path: &str, pairs: &[(String, String)]) -> String {
+    todo!("BC-X.16.001 append_query_params stub: path={path:?}, pairs={pairs:?}")
+}
+
+/// Parse a single `-q`/`--query-param` raw value into a `(NAME, VALUE)` pair,
+/// splitting on the FIRST `=` only.
+///
+/// BC-X.16.002. Stub stage (Task 1, `stub-architect`): `todo!()` body only —
+/// implemented by a later `implementer` task (AC-005..AC-007). Pure,
+/// side-effect-free: no I/O, no `JiraClient`.
+pub(crate) fn parse_query_param(raw: &str) -> Result<(String, String)> {
+    todo!("BC-X.16.002 parse_query_param stub: raw={raw:?}")
+}
+
 /// Resolve the `--data` argument into an actual request body.
 /// - `None` → `None`
 /// - `Some("@-")` → read from `stdin` parameter
@@ -125,9 +145,33 @@ pub async fn handle_api(
     method: HttpMethod,
     data: Option<String>,
     header: Vec<String>,
+    query_param: Vec<String>,
     client: &JiraClient,
 ) -> Result<()> {
     let normalized_path = normalize_path(&path)?;
+
+    // `-q`/`--query-param` pre-flight (BC-X.16.001/BC-X.16.002): runs
+    // immediately after `normalize_path` and before `resolve_body`/`-H`
+    // parsing (AC-008).
+    //
+    // STUB-STAGE ONLY short-circuit (Task 1, P6-006): when zero `-q` flags
+    // are supplied, the pre-existing `normalize_path` output is used
+    // unchanged so the zero-flag path never touches either `todo!()` body —
+    // this keeps the crate compiling end-to-end at the Red Gate stub. Task
+    // 13 REMOVES this short-circuit and calls `parse_query_param`/
+    // `append_query_params` unconditionally, since
+    // `append_query_params(p, &[]) == p` is an identity (BC-X.16.001
+    // Postcondition 1 / Behavior 5) that makes the two forms behaviorally
+    // indistinguishable once implemented.
+    let normalized_path = if query_param.is_empty() {
+        normalized_path
+    } else {
+        let pairs: Vec<(String, String)> = query_param
+            .iter()
+            .map(|raw| parse_query_param(raw))
+            .collect::<Result<Vec<_>>>()?;
+        append_query_params(&normalized_path, &pairs)
+    };
 
     // Reads real stdin in production; resolve_body takes impl Read for testing.
     let body = resolve_body(data.as_deref(), std::io::stdin().lock())?;
