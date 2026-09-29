@@ -171,6 +171,13 @@ examine_globs = [
     # finding undermines the EXCLUDE rationale, so the file now enters the standing
     # gate. Small file, low incremental runtime. (added cycle-009 F7)
     "src/jql.rs",
+    # cycle-014 STORY-A (S-cycle14-user-list-project-resolution, issue #862,
+    # BC-X.7.002): `resolve_user_list_project` — the pure configured-default
+    # fallback resolver for `jr user list`'s post-clap `--project` value
+    # (wraps `Config::project_key`; local-vs-global precedence is clap
+    # global-value propagation, not `jr` code). Added at file-creation-of-
+    # scope time per the P22-001/D-149/S-MUTANTS-SCOPE-1 convention.
+    "src/cli/user.rs",
 ]
 
 # FIX-F7-001 deferred, not added: `src/cli/init.rs` is NOT added to

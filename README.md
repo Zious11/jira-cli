@@ -332,7 +332,7 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | `jr api <PATH>` | API passthrough — make an authenticated request to any Jira REST endpoint (`--method`, `--body`, `--output json`) |
 | `jr team list` | List available teams (`--refresh` to force update) |
 | `jr user search <query>` | Search users by display name or email (`--limit`/`--all`) |
-| `jr user list --project FOO` | List users assignable to a project (`--limit`/`--all`) |
+| `jr user list [--project FOO]` | List users assignable to a project (falls back to the configured default project when omitted; `--limit`/`--all`) |
 | `jr user view <accountId>` | Look up a single user by accountId |
 | `jr project list` | List accessible projects (`--type`, `--limit`/`--all`) |
 | `jr project fields --project FOO` | Show valid issue types, priorities, statuses, and asset custom fields |
