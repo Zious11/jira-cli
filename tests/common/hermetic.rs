@@ -54,8 +54,13 @@ pub fn scrub_ambient_jr_env<'a>(cmd: &'a mut Command, keep: &[&str]) -> &'a mut 
 ///
 /// Extracted as a standalone pure function so the matching logic — the
 /// part that must mirror figment's case-insensitive `Env::prefixed`
-/// behavior — can be unit-tested directly without spawning a subprocess.
-fn is_scrubbable(key: &str, keep: &[&str]) -> bool {
+/// behavior — can be unit-tested directly without spawning a subprocess,
+/// and so a caller that cannot use [`scrub_ambient_jr_env`]'s
+/// `assert_cmd::Command` signature (e.g. a raw `std::process::Command`)
+/// can still share this one implementation rather than hand-rolling an
+/// equivalent (and possibly divergent) scrub — see
+/// `tests/api_query_param.rs::Harness::std_cmd`.
+pub fn is_scrubbable(key: &str, keep: &[&str]) -> bool {
     key.len() >= 3
         && key.as_bytes()[..3].eq_ignore_ascii_case(b"JR_")
         && !keep.iter().any(|k| k.eq_ignore_ascii_case(key))

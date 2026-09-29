@@ -285,6 +285,7 @@ pub async fn handle_api(
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::io::Cursor;
 
     #[test]
     fn test_normalize_path_with_slash() {
@@ -400,13 +401,11 @@ mod tests {
     // ── BC-X.16.001/BC-X.16.002: `--query-param`/`-q` (issue #583) ─────────
     //
     // Direct-call cells for `append_query_params` (AC-001..AC-004) and
-    // `parse_query_param` (AC-005). All 23 cells below are RED at the Task 1
-    // `todo!()` stub — they invoke the pure functions directly and can only
-    // fail via a raw `todo!()` panic ("not yet implemented"), never a
-    // produced-and-asserted-wrong-value diff, until the implementer task
-    // (Task 11) lands. The subprocess/wiremock cells for the wiring layer
-    // (argv, `--help`, method-orthogonality, JSON envelope, ordering) live
-    // in `tests/api_query_param.rs`.
+    // `parse_query_param` (AC-005). The 23 cells below invoke the pure
+    // functions directly, asserting the values they produce against the
+    // behavioral contract. The subprocess/wiremock cells for the wiring
+    // layer (argv, `--help`, method-orthogonality, JSON envelope, ordering)
+    // live in `tests/api_query_param.rs`.
 
     /// Pinned M1 message, byte-for-byte from BC-X.16.002's "Pinned error
     /// messages" block. Shared helper so every direct-call/subprocess cell
@@ -424,7 +423,7 @@ mod tests {
         )
     }
 
-    // ── AC-001 (Task 2): separator oracle + pinned examples ─────────────
+    // ── AC-001: separator oracle + pinned examples ──────────────────────
 
     /// A small NAME alphabet shared by the "existing query" and "new pairs"
     /// generators below, so the proptest can and does exercise
@@ -458,7 +457,9 @@ mod tests {
     /// (EC-8 form 2), and a non-empty query component optionally ending in
     /// a literal `?` (EC-9) whose NAME may collide with a generated new
     /// pair's NAME (EC-12); `frag` covers no fragment and a fragment
-    /// containing `?`, `&` and `#`-adjacent content.
+    /// containing `?`, `&` and further `#` characters (VP-API-QP-001's
+    /// generator requirement that a fragment can itself contain any of
+    /// `?`/`&`/`#`).
     fn arb_pre_frag_pairs() -> impl Strategy<Value = (String, String, Vec<(String, String)>)> {
         let base = "/[a-zA-Z0-9_./-]{1,8}";
 
@@ -476,7 +477,7 @@ mod tests {
 
         let frag_strategy = prop_oneof![
             Just(String::new()),
-            "[a-zA-Z0-9?&]{0,8}".prop_map(|f| format!("#{f}")),
+            "[a-zA-Z0-9?&#]{0,8}".prop_map(|f| format!("#{f}")),
         ];
 
         let pairs_strategy = proptest::collection::vec((arb_name(), "[a-zA-Z0-9]{0,6}"), 1..4);
@@ -533,6 +534,17 @@ mod tests {
     }
 
     #[test]
+    fn test_bc_x_16_001_pinned_fragment_containing_hash_and_question_mark() {
+        // F-005(a): kills a `find` -> `rfind` regression on the `#` split.
+        // The FIRST `#` delimits pre/frag, even when the fragment itself
+        // contains further `?`/`#` characters. An `rfind`-based split would
+        // instead treat `#a?b` as part of `pre`, moving the assembled query
+        // past the LAST `#` and producing `/x#a?b&k=v#c`.
+        let out = append_query_params("/x#a?b#c", &[("k".to_string(), "v".to_string())]);
+        assert_eq!(out, "/x?k=v#a?b#c");
+    }
+
+    #[test]
     fn test_bc_x_16_001_empty_query_component_directly_followed_by_fragment() {
         // `/s?#f` + k=v -> `/s?k=v#f`: the query component (text after the
         // first `?`) is empty, so no separator is added, and the pair lands
@@ -582,7 +594,7 @@ mod tests {
         assert_eq!(out, "/x&?k=v");
     }
 
-    // ── AC-002 (Task 3): repeated-names oracle + pinned decode example ──
+    // ── AC-002: repeated-names oracle + pinned decode example ───────────
 
     /// A NAME=VALUE pair list, as produced by both the "existing query" and
     /// "new `-q` flags" generators below — factored into a named alias so
@@ -662,7 +674,7 @@ mod tests {
         );
     }
 
-    // ── AC-003 (Task 4): encoding-exactly-once biased proptest + pinned ──
+    // ── AC-003: encoding-exactly-once biased proptest + pinned ──────────
 
     /// Every byte of `s` is either an RFC 3986 UNRESERVED byte
     /// (`A-Za-z0-9-._~`) or a `%HH` triplet with UPPERCASE hex digits.
@@ -719,8 +731,8 @@ mod tests {
         /// for NAME and VALUE, where `encode(v)` is the segment EXTRACTED
         /// from `append_query_params`'s own output (never a direct
         /// `urlencoding::encode` call — a direct call would be tautological
-        /// and GREEN at the Task 1 stub); (b) alphabet — every byte is RFC
-        /// 3986 unreserved or an uppercase `%HH` triplet, space -> `%20`,
+        /// and vacuous); (b) alphabet — every byte is RFC 3986 unreserved
+        /// or an uppercase `%HH` triplet, space -> `%20`,
         /// never `+`; (c) encoder identity — the appended pair equals
         /// `format!("{}={}", urlencoding::encode(name),
         /// urlencoding::encode(value))` byte-for-byte; (d) no trimming is
@@ -804,7 +816,7 @@ mod tests {
         assert_eq!(out, "/x?k=%2525");
     }
 
-    // ── AC-004 (Task 5): zero-flag identity proptest ─────────────────────
+    // ── AC-004: zero-flag identity proptest ──────────────────────────────
 
     /// Generates arbitrary paths for the zero-flag identity property,
     /// including paths with an existing query, a trailing `?` or `&`, and a
@@ -824,11 +836,11 @@ mod tests {
     proptest! {
         /// VP-API-QP-004(1): `append_query_params(p, &[])` is the identity
         /// on `p` for arbitrary `p` (BC-X.16.001 Postcondition 1 /
-        /// Behavior 5). This is a DIRECT call to `append_query_params` and
-        /// is therefore RED at the Task 1 stub (`todo!()` panic) — distinct
-        /// from the non-exempt GREEN-at-stub zero-flag wiremock examples in
-        /// `tests/api_query_param.rs`, which route around the stub entirely
-        /// via Task 1's required short-circuit.
+        /// Behavior 5). This is a DIRECT call to `append_query_params`,
+        /// exercising the pure function's zero-pairs short-circuit in
+        /// isolation — distinct from the zero-flag wiremock examples in
+        /// `tests/api_query_param.rs`, which exercise the same identity
+        /// through the full `handle_api` argv-to-request path.
         #[test]
         fn test_bc_x_16_001_append_query_params_zero_pairs_is_identity(
             path in arb_zero_flag_path()
@@ -837,7 +849,7 @@ mod tests {
         }
     }
 
-    // ── AC-005 (Task 6): parse_query_param partition oracle + pinned ────
+    // ── AC-005: parse_query_param partition oracle + pinned ─────────────
 
     #[derive(Debug)]
     enum ParseQueryParamCase {
@@ -851,8 +863,8 @@ mod tests {
     }
 
     /// M1 raw values: NO `=` anywhere, but MAY carry leading and/or
-    /// trailing whitespace (Task 6's fault-kill pin for "`{raw}` replaced
-    /// by a trimmed or re-split value").
+    /// trailing whitespace (a fault-kill pin against `{raw}` being
+    /// replaced by a trimmed or re-split value).
     fn arb_m1_raw() -> impl Strategy<Value = String> {
         ("[ \t]{0,3}", "[a-zA-Z0-9 \t]{0,8}", "[ \t]{0,3}")
             .prop_map(|(lead, body, trail)| format!("{lead}{body}{trail}"))
@@ -868,11 +880,20 @@ mod tests {
     }
 
     /// Well-formed `(NAME, rest)` pairs: NAME is non-empty and `=`-free
-    /// (may be whitespace-only, EC-X.16.001-10); `rest` may itself contain
-    /// `=` (EC-X.16.001-2, "split on the FIRST `=` only") and may be empty
+    /// (may be whitespace-only, EC-X.16.001-10 — a dedicated whitespace-only
+    /// branch below makes this case likely enough to be generated reliably,
+    /// rather than left to the ~0.2% chance an all-alphanumeric-or-space
+    /// character class would land on all-whitespace by luck); `rest` may
+    /// itself contain `=` and whitespace (EC-X.16.001-2, "split on the
+    /// FIRST `=` only", plus F-001(a)'s no-trim guarantee) and may be empty
     /// (EC-X.16.001-1, empty VALUE is allowed).
     fn arb_ok_name_rest() -> impl Strategy<Value = (String, String)> {
-        ("[a-zA-Z0-9 ]{1,8}", "[a-zA-Z0-9=]{0,10}")
+        let name_strategy = prop_oneof![
+            1 => "[ \t]{1,8}",
+            4 => "[a-zA-Z0-9 \t]{1,8}",
+        ];
+        let rest_strategy = "[a-zA-Z0-9=\t ]{0,10}";
+        (name_strategy, rest_strategy)
     }
 
     fn arb_parse_query_param_case() -> impl Strategy<Value = ParseQueryParamCase> {
@@ -936,7 +957,21 @@ mod tests {
         assert_eq!(err.to_string(), m1_message(""));
     }
 
-    use std::io::Cursor;
+    #[test]
+    fn test_bc_x_16_002_parse_query_param_does_not_trim_whitespace_only_name() {
+        // F-001(a): a `name.trim().is_empty()` regression would misclassify
+        // a whitespace-only NAME as M2 (empty NAME) instead of parsing it.
+        let result = parse_query_param(" =v").unwrap();
+        assert_eq!(result, (" ".to_string(), "v".to_string()));
+    }
+
+    #[test]
+    fn test_bc_x_16_002_parse_query_param_does_not_trim_value_whitespace() {
+        // F-001(a): a `rest.trim()` regression on VALUE would strip the
+        // leading/trailing spaces below instead of preserving them verbatim.
+        let result = parse_query_param("k= v ").unwrap();
+        assert_eq!(result, ("k".to_string(), " v ".to_string()));
+    }
 
     #[test]
     fn test_resolve_body_none() {

@@ -20,9 +20,11 @@
 //!
 //! Direct-call cells for `append_query_params`/`parse_query_param`
 //! (AC-001..AC-005's proptests and pinned examples) live in
-//! `src/cli/api.rs`'s `#[cfg(test)] mod tests` instead — see that module for
-//! the 23 RED-at-stub direct-call cells this file's 22 subprocess cells
-//! complement.
+//! `src/cli/api.rs`'s `#[cfg(test)] mod tests` instead — see that module's
+//! direct-call cells, which exercise the pure functions in isolation, as
+//! the complement to this file's subprocess cells, which exercise the same
+//! behavior through the full CLI argv surface (clap parsing, `handle_api`
+//! wiring, and the wire-level HTTP request).
 
 #[allow(dead_code)]
 mod common;
@@ -112,9 +114,13 @@ impl Harness {
     /// which also drops stdin), so it cannot hold a pipe open.
     fn std_cmd(&self, server_uri: &str) -> std::process::Command {
         let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_jr"));
-        for (key, _) in std::env::vars() {
-            if key.len() >= 3 && key.as_bytes()[..3].eq_ignore_ascii_case(b"JR_") {
-                c.env_remove(&key);
+        // F-003: share `common::hermetic::is_scrubbable`'s scrub logic
+        // (vars_os + trimming) rather than a second, hand-rolled `vars()`
+        // implementation — see that function's doc comment.
+        for (key_os, _) in std::env::vars_os() {
+            let key_lossy = key_os.to_string_lossy();
+            if common::hermetic::is_scrubbable(key_lossy.trim(), &[]) {
+                c.env_remove(&key_os);
             }
         }
         c.env("JR_BASE_URL", server_uri)
@@ -169,7 +175,7 @@ fn query_pairs_of(req: &wiremock::Request) -> Vec<(String, String)> {
         .collect()
 }
 
-// ── AC-002 (Task 3): argv cells (handler wiring) ────────────────────────
+// ── AC-002: argv cells (handler wiring) ─────────────────────────────────
 
 /// EC-X.16.001-13: `-q fields=summary,status` (comma inside VALUE) — the
 /// `-q` clap field's plain `Vec<String>` declaration (no `value_delimiter`)
@@ -289,13 +295,56 @@ async fn test_bc_x_16_001_mixed_existing_query_and_repeated_flags_all_present() 
     );
 }
 
-// ── AC-003 (Task 4): --help pin ─────────────────────────────────────────
+/// F-001(b): `-q " =v" -q "k= v "` — a whitespace-only NAME and a VALUE
+/// with leading/trailing spaces must survive to the wire byte-for-byte
+/// (never trimmed). Asserts BOTH the raw received query string AND the
+/// decoded `query_pairs()` multiplicity/values on the single received
+/// request — a `name.trim().is_empty()` or `rest.trim()` regression in
+/// `parse_query_param` would either misreport the first pair as M2 (empty
+/// NAME, non-zero exit) or silently drop the VALUE's surrounding spaces.
+#[tokio::test]
+async fn test_bc_x_16_001_query_param_does_not_trim_whitespace_in_name_or_value() {
+    let h = Harness::new();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/x"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = h
+        .cmd(&server.uri())
+        .args(["api", "/x", "-q", " =v", "-q", "k= v "])
+        .output()
+        .unwrap();
+
+    server.verify().await;
+    assert!(
+        output.status.success(),
+        "expected exit 0; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let req = single_received_request(&server).await;
+    assert_eq!(req.url.query(), Some("%20=v&k=%20v%20"));
+    let pairs = query_pairs_of(&req);
+    assert_eq!(
+        pairs,
+        vec![
+            (" ".to_string(), "v".to_string()),
+            ("k".to_string(), " v ".to_string()),
+        ],
+        "expected exactly two pairs, whitespace preserved verbatim in both NAME and VALUE"
+    );
+}
+
+// ── AC-003: --help pin ──────────────────────────────────────────────────
 
 /// VP-API-QP-003(e): `jr api --help` exits 0 and its whitespace-collapsed
 /// stdout contains the pinned substring `"do not pre-encode"` (Behavior 3).
 /// Never reaches `handle_api` — no wiremock server, no async runtime
-/// needed. RED at the Task 1 stub: Task 1's own doc comment explicitly
-/// withholds this substring until Task 12 finalizes the clap help text.
+/// needed.
 #[test]
 fn test_bc_x_16_001_help_pins_do_not_pre_encode_substring() {
     let output = Command::cargo_bin("jr")
@@ -318,7 +367,7 @@ fn test_bc_x_16_001_help_pins_do_not_pre_encode_substring() {
     );
 }
 
-// ── AC-004 (Task 5): method orthogonality + zero-flag wiremock examples ─
+// ── AC-004: method orthogonality + zero-flag wiremock examples ──────────
 
 /// VP-API-QP-004(structural): a table-driven test over
 /// GET/POST/PUT/PATCH/DELETE, each with and without `-d`, asserts the SAME
@@ -390,10 +439,10 @@ async fn test_bc_x_16_001_query_assembly_identical_across_methods_and_body_prese
 
 /// VP-API-QP-004(2), example 1: `jr api rest/api/3/myself` (no `-q` flags)
 /// → the received request has NO query string at all — not even a bare
-/// `?`. Non-exempt GREEN at the Task 1 stub (PRE-EXISTING-BEHAVIOR): the
-/// stub's required zero-flag short-circuit routes this invocation around
-/// both `todo!()` bodies onto the pre-existing, unmodified `normalize_path`
-/// output — this cell is a regression guard, not a RED-at-stub cell.
+/// `?`. `handle_api` always runs the parser, and with zero `-q` flags
+/// `append_query_params` is the identity (BC-X.16.001 Postcondition 1) on
+/// `normalize_path`'s output — this cell is a regression guard on that
+/// pre-existing behavior.
 #[tokio::test]
 async fn test_bc_x_16_001_zero_flags_myself_path_has_no_query_at_all() {
     let h = Harness::new();
@@ -429,8 +478,8 @@ async fn test_bc_x_16_001_zero_flags_myself_path_has_no_query_at_all() {
 
 /// VP-API-QP-004(2), example 2: `jr api "/rest/api/3/search?jql=a&"` (no
 /// `-q` flags) → the received request's raw query is byte-identical to
-/// `normalize_path`'s own output, `jql=a&`, unchanged. Non-exempt GREEN at
-/// the Task 1 stub for the same reason as the example above.
+/// `normalize_path`'s own output, `jql=a&`, unchanged — the same zero-flag
+/// identity as the example above.
 #[tokio::test]
 async fn test_bc_x_16_001_zero_flags_preserves_existing_trailing_ampersand_query() {
     let h = Harness::new();
@@ -459,7 +508,46 @@ async fn test_bc_x_16_001_zero_flags_preserves_existing_trailing_ampersand_query
     assert_eq!(req.url.query(), Some("jql=a&"));
 }
 
-// ── AC-005/AC-006 (Task 6): wiremock M1/M2 cells + JSON envelope ────────
+/// F-005(c): VP-API-QP-004(2)'s zero-flag identity holds for every HTTP
+/// method `jr api -X` supports (GET/POST/PUT/PATCH/DELETE, per
+/// `api::HttpMethod` in `src/cli/mod.rs`) — the query is never gated on
+/// the method choice, including when no `-q` flags are present at all.
+#[tokio::test]
+async fn test_bc_x_16_001_zero_flags_no_query_across_all_methods() {
+    let methods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+    for method_flag in methods {
+        let h = Harness::new();
+        let server = MockServer::start().await;
+        Mock::given(method(method_flag))
+            .and(path("/x"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = h
+            .cmd(&server.uri())
+            .args(["api", "/x", "-X", method_flag])
+            .output()
+            .unwrap();
+
+        server.verify().await;
+        assert!(
+            output.status.success(),
+            "method {method_flag}: expected exit 0; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let req = single_received_request(&server).await;
+        assert_eq!(
+            req.url.query(),
+            None,
+            "method {method_flag}: expected no query string at all with zero -q flags"
+        );
+    }
+}
+
+// ── AC-005/AC-006: wiremock M1/M2 cells + JSON envelope ──────────────────
 
 /// VP-API-QP-005(2), M1 cell: `-q foo` exits 64, zero HTTP, and stderr
 /// contains the M1 message rendered byte-for-byte.
@@ -577,7 +665,7 @@ async fn test_bc_x_16_002_output_json_envelope_on_stderr_for_m1_and_m2() {
     }
 }
 
-// ── AC-009 (Task 9): attached-form argv cells (EC-X.16.002-5..10) ──────
+// ── AC-009: attached-form argv cells (EC-X.16.002-5..10) ────────────────
 
 /// EC-X.16.002-5: `-q=v` (short-flag attached, ONE `=`) — clap strips
 /// exactly one leading `=`, delivering `raw = "v"` → M1 `(got: v)`, D2
@@ -682,10 +770,8 @@ async fn test_bc_x_16_002_ec7_attached_long_form_two_equals_reports_m2_byte_iden
 /// value) — `-q` has NO `allow_hyphen_values`, so clap treats `-x=1` as a
 /// new, unrecognized flag: exit 2 (NOT 64), stderr contains `unexpected
 /// argument`, does NOT contain `Not authenticated` (which also exits 2),
-/// and contains NEITHER D1 nor D2 (`parse_query_param` never ran).
-/// GREEN-nonexempt at the Task 1 stub (PRE-EXISTING-BEHAVIOR, P11-005):
-/// `jr api /x -q -x=1` already exits 2 with clap's generic "unexpected
-/// argument" rejection when NO `-q` field is declared at all.
+/// and contains NEITHER D1 nor D2 (`parse_query_param` never ran) — this
+/// is clap's own argv-parsing rejection, before `handle_api` runs at all.
 #[tokio::test]
 async fn test_bc_x_16_002_ec8_hyphen_leading_value_fails_at_clap_level_exit_2() {
     let h = Harness::new();
@@ -715,7 +801,8 @@ async fn test_bc_x_16_002_ec8_hyphen_leading_value_fails_at_clap_level_exit_2() 
 /// EC-X.16.002-9: three forms of an empty raw value — `-q=`, `--query-param=`,
 /// `-q ""` — all reach `parse_query_param` as `raw = ""`, classifying as M1
 /// `(got: )` (NOT M2: the missing-`=` check runs before any NAME-emptiness
-/// check). Merged into ONE test per Task 9's counting-unit rule.
+/// check). Merged into ONE test, since all three forms exercise the same
+/// `parse_query_param` code path with an identical `raw`.
 #[tokio::test]
 async fn test_bc_x_16_002_ec9_empty_raw_value_three_forms_report_m1() {
     let cases: [&[&str]; 3] = [
@@ -752,10 +839,6 @@ async fn test_bc_x_16_002_ec9_empty_raw_value_three_forms_report_m1() {
 /// not an empty one) — clap itself rejects this before `parse_query_param`
 /// ever runs: exit 2, stderr contains `a value is required for`, does NOT
 /// contain `Not authenticated`, contains NEITHER D1 nor D2.
-/// WIRING-EXEMPT at the Task 1 stub: this cell's GREEN status genuinely
-/// depends on the stub's `-q` wiring (pre-story, with no `-q` field
-/// declared, this argv produces the generic "unexpected argument" text
-/// instead).
 #[tokio::test]
 async fn test_bc_x_16_002_ec10_missing_value_as_last_token_fails_at_clap_level_exit_2() {
     let h = Harness::new();
@@ -782,7 +865,7 @@ async fn test_bc_x_16_002_ec10_missing_value_as_last_token_fails_at_clap_level_e
     assert!(!stderr.contains(D2), "got: {stderr}");
 }
 
-// ── AC-007 (Task 7): all-or-nothing + first-malformed-reported ─────────
+// ── AC-007: all-or-nothing + first-malformed-reported ───────────────────
 
 /// VP-API-QP-006(i), cell 1: `-q a=1 -q bad` exits 64 with NO request sent
 /// — the well-formed pair is never transmitted.
@@ -874,7 +957,7 @@ async fn test_bc_x_16_002_first_malformed_reported_m2_before_m1_in_flag_order() 
     assert!(!stderr.contains(D1), "got: {stderr}");
 }
 
-// ── AC-008 (Task 8): pre-flight ordering ────────────────────────────────
+// ── AC-008: pre-flight ordering ──────────────────────────────────────────
 
 /// VP-API-QP-006(iii): `-q` validation runs BEFORE `resolve_body`'s
 /// blocking `-d @-` stdin read (EC-X.16.002-4). Spawned via raw
