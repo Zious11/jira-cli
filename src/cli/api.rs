@@ -130,7 +130,11 @@ pub(crate) fn append_query_params(path: &str, pairs: &[(String, String)]) -> Str
     let enc_pairs = pairs
         .iter()
         .map(|(name, value)| {
-            format!("{}={}", urlencoding::encode(name), urlencoding::encode(value))
+            format!(
+                "{}={}",
+                urlencoding::encode(name),
+                urlencoding::encode(value)
+            )
         })
         .collect::<Vec<_>>()
         .join("&");
