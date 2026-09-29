@@ -4,7 +4,7 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
-### Fixed
+### Breaking Changes
 
 - **Breaking: `jr user list` with no project resolvable now exits 64, not clap's
   exit 2** (issue #862, BC-X.7.002, S-cycle14-user-list-project-resolution):
@@ -14,8 +14,10 @@ All notable changes to jr will be documented here.
   clap's global-value propagation ever got a chance to fill the local field --
   the flag looked unset even though it plainly was. `--project` is now
   `Option<String>`, and `jr user list` resolves it through the same four-step
-  order `jr component list`/`jr queue`/`jr requesttype`/`jr field options
-  --type` already use:
+  order `jr component list`/`jr field options --type` already use, and which
+  matches the fallback used by `jr queue`/`jr requesttype` (global `--project`
+  > `.jr.toml` > profile default -- those two have no local `--project` flag,
+  so step 1 below doesn't apply to them):
   1. **Local `--project`** -- supplied after `user list`.
   2. **Global `--project`** -- supplied before the subcommand; fills the local
      field via clap's own propagation when (1) is absent. Local wins when both
@@ -27,12 +29,11 @@ All notable changes to jr will be documented here.
      any HTTP call: `"No project configured. Run \"jr init\" or pass
      --project. Run \"jr project list\" to see available projects."`
 
-  **Breaking change:** an invocation with no local/global `--project` and no
-  configured default previously failed with clap's exit-2 "required argument"
-  error; it now fails with `jr`'s own exit-64 `JrError::UserError` and the
-  message above. `jr --project FOO user list` (global-only) and a bare
-  `jr user list` backed by a configured default -- both previously rejected by
-  clap -- now succeed.
+  An invocation with no local/global `--project` and no configured default
+  previously failed with clap's exit-2 "required argument" error; it now fails
+  with `jr`'s own exit-64 `JrError::UserError` and the message above.
+  `jr --project FOO user list` (global-only) and a bare `jr user list` backed
+  by a configured default -- both previously rejected by clap -- now succeed.
 
 ## [0.7.0] - 2026-09-23
 
