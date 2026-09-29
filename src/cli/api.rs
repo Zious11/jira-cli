@@ -402,7 +402,7 @@ mod tests {
     // ── BC-X.16.001/BC-X.16.002: `--query-param`/`-q` (issue #583) ─────────
     //
     // Direct-call cells for `append_query_params` (AC-001..AC-004) and
-    // `parse_query_param` (AC-005). The 23 cells below invoke the pure
+    // `parse_query_param` (AC-005). The cells below invoke the pure
     // functions directly, asserting the values they produce against the
     // behavioral contract. The subprocess/wiremock cells for the wiring
     // layer (argv, `--help`, method-orthogonality, JSON envelope, ordering)

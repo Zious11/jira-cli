@@ -9,7 +9,8 @@
 //! `JR_AUTH_HEADER` supplying auth, and every other ambient `JR_`-prefixed
 //! variable removed (`common::hermetic::scrub_ambient_jr_env`) so a
 //! developer/CI environment's stray `JR_*` variable can't leak a configured
-//! default into these tests. Kept separate from `tests/cli_handler.rs`
+//! default into these tests (except the `--help` pin, which exits before any
+//! config loading). Kept separate from `tests/cli_handler.rs`
 //! (already ~2,200 LOC) per the story's File Structure Requirements.
 //!
 //! Every "exactly once"/multiplicity claim below is asserted by decoding
