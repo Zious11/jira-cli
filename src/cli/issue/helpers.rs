@@ -309,9 +309,16 @@ pub(crate) fn disambiguation_labels(duplicates: &[&User]) -> Vec<String> {
 /// Bumped from `fn` to `pub(super) fn` for S-cycle5-mention-resolution-wiring
 /// (AC-002) so `mentions::resolve_mentions` (a sibling module under
 /// `cli::issue`) can reuse it verbatim for `@Name` mention disambiguation —
-/// visibility change only, zero behavior change; the three existing callers
-/// below (`resolve_user`/`resolve_assignee`/`resolve_assignee_by_project`)
-/// are untouched.
+/// a visibility change only, with no behavior change to the four callers'
+/// pre-D-395 output; the three existing callers below
+/// (`resolve_user`/`resolve_assignee`/`resolve_assignee_by_project`) are
+/// untouched by the visibility bump itself. Every server-echoed field this
+/// function surfaces — `display_name`, `email_address`, and `account_id`,
+/// in its `ExactMultiple`/`Ambiguous` non-interactive error messages, its
+/// interactive picker labels, and the `None` branch's candidate list — is
+/// routed through [`crate::output::sanitize_terminal_text`] before
+/// reaching the user (BC-7.1.006, D-395), so "zero behavior change" above
+/// describes only the visibility bump, not this function's current output.
 pub(super) fn disambiguate_user(
     users: &[User],
     name: &str,
@@ -901,18 +908,20 @@ mod tests {
 
     // ── disambiguation_labels tests (D-395, FIX-P5-001) ───────────────
     //
-    // `disambiguation_labels` is currently a stub (`todo!()` body) —
-    // `disambiguate_user`'s ExactMultiple interactive branch does not call
-    // it yet; that branch still builds its `labels` via an inline,
-    // unsanitized `.map(...)` closure. These tests pin the function's
-    // TARGET (sanitized) behavior and panic on the `todo!()` (RED) until
-    // the implementer wires that branch to call this function instead.
+    // Pins production behavior: `disambiguate_user`'s `ExactMultiple`
+    // interactive branch builds its `labels` by calling
+    // `disambiguation_labels`, which sanitizes each server-supplied
+    // `display_name`/`email_address`/`account_id` via
+    // `output::sanitize_terminal_text` before formatting the existing
+    // label shape. These tests pin that sanitized behavior directly on
+    // the function, independent of `dialoguer::Select::interact()`'s
+    // blocking TTY call.
 
     /// Hostile `display_name` (CSI-wrapped) + hostile `email_address`
     /// (also CSI-wrapped) must both sanitize to their CSI-stripped survivor
     /// text, assembled into the existing `"{name} ({email})"` label format.
     #[test]
-    fn disambiguation_labels_sanitizes_hostile_display_name_and_email() {
+    fn test_disambiguation_labels_sanitizes_hostile_display_name_and_email() {
         let u = make_user_with_email(
             "acc-1",
             "\u{1b}[31mAlice\u{1b}[0m",
@@ -927,7 +936,7 @@ mod tests {
     /// (trailing C1 byte) must both sanitize, assembled into the existing
     /// `"{name} ({account_id})"` label format.
     #[test]
-    fn disambiguation_labels_sanitizes_hostile_display_name_and_account_id_when_no_email() {
+    fn test_disambiguation_labels_sanitizes_hostile_display_name_and_account_id_without_email() {
         let u = make_user("acc-1\u{9b}Z", "Al\u{9b}ice\u{1b}]0;x\u{7}");
         let labels = disambiguation_labels(&[&u]);
         assert_eq!(labels, vec!["Alice (acc-1Z)".to_string()]);
@@ -939,7 +948,7 @@ mod tests {
     /// multiple duplicates — so wiring sanitization into this function
     /// cannot itself change output for non-hostile data.
     #[test]
-    fn disambiguation_labels_preserves_format_for_clean_input() {
+    fn test_disambiguation_labels_preserves_clean_input_format() {
         let u1 = make_user_with_email("acc-1", "Jane Doe", "jane1@example.com");
         let u2 = make_user("acc-2", "Jane Doe");
         let labels = disambiguation_labels(&[&u1, &u2]);

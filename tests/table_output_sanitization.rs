@@ -1136,19 +1136,24 @@ async fn test_bc_7_1_006_issue_assign_human_output_clean_fixture_byte_identical(
 // Shared user disambiguation — D-395 (FIX-P5-001 extension)
 // ═══════════════════════════════════════════════════════════════════════
 //
-// `src/cli/issue/helpers.rs::disambiguate_user` (~L276-400, after the D-395
-// `disambiguation_labels` stub insertion) is the SHARED disambiguation
-// helper behind `resolve_user`, `resolve_assignee` (`jr issue assign
-// --to`), `resolve_assignee_by_project` (`jr issue create/edit
-// --assignee`), and `mentions::resolve_mentions`. Its two non-interactive
+// `src/cli/issue/helpers.rs::disambiguate_user` (~L276-400) is the SHARED
+// disambiguation helper behind `resolve_user`, `resolve_assignee` (`jr
+// issue assign --to`), `resolve_assignee_by_project` (`jr issue create/edit
+// --assignee`), and `mentions::resolve_mentions`. Its THREE non-interactive
 // (`--no-input`/non-TTY) `JrError::UserError` branches echo server-supplied,
-// user-editable `display_name`/`email_address`/`account_id` unsanitized:
+// user-editable `display_name`/`email_address`/`account_id` — each routed
+// through `output::sanitize_terminal_text` (D-395) before it reaches the
+// message:
 //   - `MatchResult::ExactMultiple`: `"Multiple users named \"{name}\"
 //     found:\n  {display_name} ({email}, account: {account_id})\n...\n
 //     Specify the accountId directly or use a more specific name."`
 //     (`email` absent → `"  {display_name} (account: {account_id})"`).
 //   - `MatchResult::Ambiguous`: `"Multiple users match \"{name}\": {csv of
 //     raw display_name}. Use a more specific name."`.
+//   - `MatchResult::None`: `resolve_assignee`'s `none_msg_fn` closure joins
+//     `all_names` — every assignable user on the issue, not only ones that
+//     matched the query — into its own `"… Found: {csv of raw
+//     display_name}"` message.
 // `name` (the CLI-supplied search string) is NOT itself server-derived, so
 // these tests deliberately keep the `--to`/`--assignee` argument ASCII-clean
 // — ExactMultiple's trigger mechanics require the argument to equal the
@@ -1246,10 +1251,11 @@ fn disambig_exact_multiple_hostile_users() -> Vec<Value> {
 /// STDERR, while the CSI/`\r`/C1-stripped survivor text must still render
 /// in the unchanged message format.
 ///
-/// RED against current code: `disambiguate_user`'s `ExactMultiple`
-/// non-interactive branch (`src/cli/issue/helpers.rs` ~L323-329) builds
-/// `lines` from raw, unsanitized `u.display_name`/`email`/`u.account_id` —
-/// the hostile bytes survive verbatim in stderr today.
+/// Pins production behavior: `disambiguate_user`'s `ExactMultiple`
+/// non-interactive branch (`src/cli/issue/helpers.rs`) builds `lines` from
+/// `u.display_name`/`email`/`u.account_id`, each routed through
+/// `output::sanitize_terminal_text` before formatting — the hostile bytes
+/// never reach stderr.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile_fields() {
     let h = Harness::new().await;
@@ -1290,11 +1296,11 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile
 /// byte, C1 code point, or OSC sequence into STDERR, while the
 /// CSI/C1/OSC-stripped survivor text must still render.
 ///
-/// RED against current code: `disambiguate_user`'s `Ambiguous`
-/// non-interactive branch (`src/cli/issue/helpers.rs` ~L350-356) builds its
-/// message from `matches.join(", ")`, where `matches` holds the raw,
-/// unsanitized `display_name` strings — the hostile bytes survive verbatim
-/// in stderr today.
+/// Pins production behavior: `disambiguate_user`'s `Ambiguous`
+/// non-interactive branch (`src/cli/issue/helpers.rs`) maps `matches`
+/// through `output::sanitize_terminal_text` into `sanitized_matches`
+/// before joining it into the message — the hostile bytes never reach
+/// stderr.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_ambiguous_human_output_strips_hostile_display_names() {
     let h = Harness::new().await;
@@ -1333,8 +1339,9 @@ async fn test_bc_7_1_006_issue_assign_ambiguous_human_output_strips_hostile_disp
 /// `resolve_assignee`. Same hostile `display_name` fixtures and expected
 /// sanitized message shape as the `jr issue assign` Ambiguous test above.
 ///
-/// RED against current code: same unsanitized `matches.join(", ")` shared
-/// code path, reached via `helpers::resolve_assignee_by_project` instead of
+/// Pins production behavior: same sanitized `matches.join(", ")` shared
+/// code path as the test above, reached via
+/// `helpers::resolve_assignee_by_project` instead of
 /// `helpers::resolve_assignee`.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_create_assignee_ambiguous_human_output_strips_hostile_display_names()
@@ -1515,10 +1522,10 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_clean_fixture_
 /// own code trace — not explicitly named in the originating SEC-891-2
 /// finding).
 ///
-/// RED against current code: `disambiguate_user`'s `MatchResult::None`
-/// branch (`src/cli/issue/helpers.rs`) hands the raw, unsanitized
-/// `all_names` vec straight to `none_msg_fn` — the hostile bytes survive
-/// verbatim in stderr today.
+/// Pins production behavior: `disambiguate_user`'s `MatchResult::None`
+/// branch (`src/cli/issue/helpers.rs`) maps `all_names` through
+/// `output::sanitize_terminal_text` into `sanitized_names` before handing
+/// that vec to `none_msg_fn` — the hostile bytes never reach stderr.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_none_human_output_strips_hostile_candidate_names() {
     let h = Harness::new().await;
