@@ -84,8 +84,8 @@ All notable changes to jr will be documented here.
 
 - **Table-mode output now strips terminal control/escape sequences from
   server-supplied text (FIX-P5-001, BC-7.1.006, SEC-001-RENDER-TABLE-ANSI-SANITIZE,
-  CWE-150/CWE-116):** `output::render_table` -- the single table-mode rendering
-  chokepoint behind every `jr` command's default (non-`--output json`) output --
+  CWE-150/CWE-116):** `output::render_table` -- the table-mode rendering
+  chokepoint behind most of `jr`'s default (non-`--output json`) output --
   previously wrote a server-supplied string (an issue summary, a field option
   label, a comment body fragment, a display name, ...) verbatim into a terminal
   that interprets it, letting a malicious or compromised Jira project (or a
@@ -110,6 +110,20 @@ All notable changes to jr will be documented here.
   since a server-supplied string can no longer carry its own ANSI styling
   through the sanitizer -- `--no-color`/`NO_COLOR` continue to suppress that
   coloring exactly as before.
+- **`jr issue comment view`'s human output now gets the same sanitization
+  (SEC-003, extension of FIX-P5-001 under D-393, BC-7.1.006):** this handler
+  prints its six labeled fields (`id`, `author`, `created`, `updated`, the
+  JSM-internal marker, and the restricted-visibility value) and its
+  ADF-derived body directly via `print!`/`println!` -- it never routed
+  through `render_table`, so it was not covered by the fix above. Every
+  server-derived value it prints (`id`, `author`, `created`, `updated`, the
+  visibility echo, and the body text) now passes through a new
+  `output::sanitize_terminal_text` alias for `sanitize_table_cell` (same
+  policy, same single implementation) before printing. `--output json`
+  stays untouched and lossless, as before. Known non-table human-output call
+  sites that still print server-supplied text unsanitized are tracked as
+  the NONTABLE-SERVER-TEXT-SANITIZE residual (see `output::sanitize_table_cell`'s
+  rustdoc for the current list) and are out of scope for this fix.
 
 ## [0.7.0] - 2026-09-23
 
