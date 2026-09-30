@@ -61,6 +61,24 @@ All notable changes to jr will be documented here.
   empty VALUE (`k=`) is allowed. No new dependency is added (`urlencoding`
   was already a dependency).
 
+### Fixed
+
+- **`jr field options <FIELD>` now resolves a real label for system-typed
+  fields, not just custom select fields** (issue #861, BC-X.14.001,
+  read-side only): `priority`, `components`, `versions`, `issuetype`, and
+  other system fields whose `allowedValues`/`validValues` entries carry only
+  `name` (not `value`) previously rendered `"(unnamed)"` (table) / `null`
+  (JSON) for every option. `normalize_from_allowed_values_at_depth` now
+  falls back to `name` when `value` is absent -- presence-based, not
+  emptiness-based (a wire `"value": ""` still wins over a populated `name`;
+  only an absent/`null` value falls through), and applied recursively to
+  cascading children. `--value <substring>` filtering picks up the fix as a
+  downstream consequence, matching option names it previously could not see.
+  M3 (JSM requesttype-fields, `normalize_from_valid_values`) is unchanged --
+  it already read `.label` directly and was never affected. The WRITE-side
+  `--field` value-matching path (`issue edit`/`issue create`) is unaffected;
+  this fix is read-side only (`jr field options`), per D-378.
+
 ## [0.7.0] - 2026-09-23
 
 First stable release of the 0.7.0 line, consolidating the `0.7.0-dev.1`
