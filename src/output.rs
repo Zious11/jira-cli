@@ -347,11 +347,12 @@ fn sanitize_control_and_ansi_core(
 /// or `render_table_with_styles` is required to sanitize its own inputs
 /// before passing them in.
 ///
-/// **Coverage claim, precisely stated (SEC-003/D-394, FIX-P5-001):** this
-/// function's callers are all of `render_table`/`render_table_with_styles`
-/// output, PLUS two non-table human (non-JSON) print sites that call this
-/// function (via the [`sanitize_terminal_text`] alias) directly at their own
-/// print sites instead of going through either table chokepoint:
+/// **Coverage claim, precisely stated (SEC-003/D-394/D-395, FIX-P5-001):**
+/// this function's callers are all of `render_table`/`render_table_with_styles`
+/// output, PLUS three non-table human (non-JSON) print/error-message sites
+/// that call this function (via the [`sanitize_terminal_text`] alias)
+/// directly at their own construction sites instead of going through either
+/// table chokepoint:
 /// - `jr issue comment view`'s human output
 ///   (`src/cli/issue/interactions.rs::handle_comment_view`), which prints
 ///   its six labeled fields and ADF-derived body directly via `print!`/
@@ -362,6 +363,24 @@ fn sanitize_control_and_ansi_core(
 ///   already-assigned site (`"{key} is already assigned to {name}"`) and
 ///   the newly-assigned/self-assign site (`"Assigned {key} to {name}"`),
 ///   via `output::print_success`.
+/// - `disambiguate_user`'s shared user-resolution disambiguation output
+///   (`src/cli/issue/helpers.rs::disambiguate_user`), reached by
+///   `resolve_assignee` (`jr issue assign --to`), `resolve_assignee_by_project`
+///   (`jr issue create`/`jr issue edit --assignee`), `resolve_user`
+///   (`jr issue list --assignee`), and `mentions::resolve_at_name_candidate`
+///   (`@Name` mention resolution): its `MatchResult::ExactMultiple` and
+///   `MatchResult::Ambiguous` non-interactive `JrError::UserError` messages,
+///   its interactive `dialoguer::Select` labels/items (the `ExactMultiple`
+///   labels via the factored-out `disambiguation_labels` helper,
+///   `src/cli/issue/helpers.rs`), and the `MatchResult::None` branch's
+///   `all_names` candidate list — sanitized once, before it is handed to
+///   the caller-supplied `none_msg_fn` closure, covering all four callers
+///   uniformly. Unlike the two sinks above, `disambiguate_user`'s
+///   `--output json` error envelope
+///   is NOT a separate lossless channel: `src/main.rs`'s single
+///   error-formatting site builds both the human-text and JSON `"error"`
+///   field from the same already-sanitized `JrError::UserError` `Display`
+///   string, so both channels render identically sanitized text.
 ///
 /// This is NOT "every table-mode command" and was never meant to be read
 /// that broadly — a number of other human-text call sites print
@@ -413,12 +432,16 @@ fn sanitize_control_and_ansi_core(
 ///   string into their `Display` output, which callers then print to
 ///   stderr. This includes `jr issue comment view`'s own 404/403 error
 ///   branch (`handle_comment_view` returns early with the raw body before
-///   any of its sanitized print sites below run).
+///   any of its sanitized print sites below run). **Excludes**
+///   `disambiguate_user`'s `ExactMultiple`/`Ambiguous`/`None`-branch
+///   `JrError::UserError` messages, covered above as of D-395 — other
+///   `JrError` bodies throughout the codebase remain residual.
 ///
-/// None of these residuals are closed by this function, SEC-003, or D-394;
-/// SEC-003's scope is `jr issue comment view`'s successful-fetch human
-/// output, and D-394's scope is `jr issue assign`'s human-output success
-/// messages, both covered above. A future fix closing any
+/// None of these residuals are closed by this function, SEC-003, D-394, or
+/// D-395; SEC-003's scope is `jr issue comment view`'s successful-fetch
+/// human output, D-394's scope is `jr issue assign`'s human-output success
+/// messages, and D-395's scope is `disambiguate_user`'s shared
+/// disambiguation output, all covered above. A future fix closing any
 /// NONTABLE-SERVER-TEXT-SANITIZE site should route it through
 /// [`sanitize_terminal_text`] and remove it from this list.
 ///
@@ -498,14 +521,18 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
 /// Alias for [`sanitize_table_cell`] applying the exact same BC-7.1.006
 /// character policy — see that function's rustdoc for the full per-character
 /// contract. This name is for call sites that print a single server-supplied
-/// string directly to a terminal via `print!`/`println!`/`eprintln!` rather
-/// than through `render_table`/`render_table_with_styles`, so `..._table_cell`
-/// would read misleadingly at the call site (there is no table involved).
+/// string directly to a terminal via `print!`/`println!`/`eprintln!`, embed
+/// it into a `JrError` message, or interpolate it into a `dialoguer::Select`
+/// label, rather than going through `render_table`/`render_table_with_styles`,
+/// so `..._table_cell` would read misleadingly at the call site (there is no
+/// table involved).
 /// `jr issue comment view`'s human output
 /// (`src/cli/issue/interactions.rs::handle_comment_view`, SEC-003) was the
 /// first caller; `jr issue assign`'s human-output success messages
-/// (`src/cli/issue/workflow.rs::handle_assign`, D-394) are the second. There
-/// is exactly one sanitization implementation behind both names — this
+/// (`src/cli/issue/workflow.rs::handle_assign`, D-394) are the second;
+/// `disambiguate_user`'s shared user-resolution disambiguation output
+/// (`src/cli/issue/helpers.rs::disambiguate_user`, D-395) is the third. There
+/// is exactly one sanitization implementation behind all these names — this
 /// function does not duplicate or fork the policy.
 pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     sanitize_table_cell(value)

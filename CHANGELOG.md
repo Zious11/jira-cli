@@ -137,6 +137,31 @@ All notable changes to jr will be documented here.
   and lossless, per the same human/machine-channel asymmetry as the fixes
   above. `handle_assign` is now a covered non-table sink, alongside `jr
   issue comment view` above.
+- **User-disambiguation output now gets the same sanitization (D-395,
+  extension of FIX-P5-001, BC-7.1.006, PR #891's final scope-expansion
+  amendment):** `disambiguate_user` (`src/cli/issue/helpers.rs`) — the
+  shared chokepoint reached by `jr issue assign --to`, `jr issue create`/
+  `jr issue edit --assignee`, `jr issue list --assignee`, and `@Name`
+  mention resolution — echoed server-supplied, user-editable
+  `displayName`/`emailAddress`/`accountId` values unsanitized in its
+  non-interactive `ExactMultiple`/`Ambiguous`/`None`-branch
+  `JrError::UserError` messages and its interactive `dialoguer::Select`
+  picker labels. Every such value is now sanitized via
+  `output::sanitize_terminal_text` at its point of embedding inside
+  `disambiguate_user` itself, covering all four callers uniformly with no
+  caller-side change; the `ExactMultiple` interactive picker labels are
+  built via a new, independently unit-testable `disambiguation_labels`
+  helper. **Unlike the two fixes above, this sink's `--output json` error
+  envelope is NOT a separate lossless channel**: `src/main.rs`'s single
+  error-formatting site builds both the human-text and the JSON `"error"`
+  field from the same `JrError::UserError` `Display` string, so
+  sanitizing the message once at construction time sanitizes both
+  channels identically — there is no raw, machine-readable counterpart to
+  preserve for this sink, unlike `render_table`'s table/JSON success-data
+  asymmetry or `handle_assign`'s separate `assignee` JSON field. This is
+  PR #891's final scope-expansion amendment; further residual
+  non-table/non-JSON sinks remain tracked as NONTABLE-SERVER-TEXT-SANITIZE
+  (see `output::sanitize_table_cell`'s rustdoc).
 
 ## [0.7.0] - 2026-09-23
 
