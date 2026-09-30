@@ -246,6 +246,7 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_render_table_with_data() {
@@ -487,5 +488,316 @@ mod tests {
         );
         assert!(!got.contains("VISIBLE"));
         assert!(!got.contains('\u{1b}'), "raw ESC byte must not survive");
+    }
+
+    // ── sanitize_table_cell (BC-7.1.006, FIX-P5-001, SEC-001-RENDER- ──
+    // TABLE-ANSI-SANITIZE) ─────────────────────────────────────────────
+    //
+    // Red Gate (step 2, FIX-P5-001): `sanitize_table_cell` is a `todo!()`
+    // stub as of this pass. EVERY EC-pinned test below and both
+    // property-based tests MUST currently FAIL by panicking on that
+    // `todo!()`. The `render_table`-level hostile-cell/header tests and
+    // the multi-line test call PRODUCTION `render_table` directly (not
+    // `sanitize_table_cell`), so they fail (or, for the multi-line test,
+    // pass) for a different reason — see each test's doc comment.
+
+    /// EC-1: an ANSI CSI color sequence is stripped WHOLESALE — not just
+    /// the leading ESC byte, leaving `[31m`/`[0m` behind as literal text.
+    #[test]
+    fn test_bc_7_1_006_ec1_ansi_csi_color_sequence_stripped() {
+        assert_eq!(sanitize_table_cell("\u{1b}[31mRED\u{1b}[0m"), "RED");
+    }
+
+    /// EC-2: an ANSI OSC window-title sequence, BEL-terminated, is
+    /// stripped wholesale.
+    #[test]
+    fn test_bc_7_1_006_ec2_ansi_osc_window_title_sequence_stripped() {
+        assert_eq!(
+            sanitize_table_cell("before\u{1b}]0;pwned\u{7}after"),
+            "beforeafter"
+        );
+    }
+
+    /// EC-3: an unterminated CSI sequence fails closed — consumed through
+    /// EOF, along with everything after it, so no raw ESC byte survives.
+    #[test]
+    fn test_bc_7_1_006_ec3_unterminated_csi_fails_closed_consumed_to_eof() {
+        assert_eq!(sanitize_table_cell("before\u{1b}[31;1;9"), "before");
+    }
+
+    /// EC-4: a bidi override pair is stripped outright.
+    #[test]
+    fn test_bc_7_1_006_ec4_bidi_override_pair_stripped() {
+        assert_eq!(
+            sanitize_table_cell("pre\u{202e}mid\u{202e}post"),
+            "premidpost"
+        );
+    }
+
+    /// EC-5: the C1 CSI introducer (`U+009B`) is stripped as a single code
+    /// point; the digits/letters that would have continued a 7-bit CSI
+    /// sequence are NOT consumed as a sequence and survive as literal text.
+    #[test]
+    fn test_bc_7_1_006_ec5_c1_csi_introducer_stripped_survivor_bytes_literal() {
+        assert_eq!(
+            sanitize_table_cell("pre\u{9b}31mFAKE\u{9b}0mpost"),
+            "pre31mFAKE0mpost"
+        );
+    }
+
+    /// EC-6: NUL and other C0 controls (here: NUL, BS, VT, DEL) are
+    /// stripped outright, with nothing substituted.
+    #[test]
+    fn test_bc_7_1_006_ec6_nul_and_other_c0_controls_stripped() {
+        assert_eq!(sanitize_table_cell("pre\u{0}post"), "prepost");
+        assert_eq!(
+            sanitize_table_cell("a\u{8}b\u{b}c\u{7f}d"),
+            "abcd",
+            "BS (0x08), VT (0x0B), and DEL (0x7F) must all be stripped outright"
+        );
+    }
+
+    /// EC-7: a bare `\r` is stripped with nothing substituted.
+    #[test]
+    fn test_bc_7_1_006_ec7_bare_cr_stripped_with_nothing_substituted() {
+        assert_eq!(sanitize_table_cell("pre\rpost"), "prepost");
+    }
+
+    /// EC-8: a `\r\n` pair collapses to a single `\n`.
+    #[test]
+    fn test_bc_7_1_006_ec8_crlf_collapses_to_lf() {
+        assert_eq!(sanitize_table_cell("line1\r\nline2"), "line1\nline2");
+    }
+
+    /// EC-9: a bare `\n` is preserved unchanged — multi-line cell
+    /// rendering must be unaffected.
+    #[test]
+    fn test_bc_7_1_006_ec9_bare_lf_preserved_unchanged() {
+        assert_eq!(sanitize_table_cell("line1\nline2"), "line1\nline2");
+    }
+
+    /// EC-10: `\t` is replaced with a single space, not dropped outright —
+    /// dropping it would merge the flanking words into a different (and
+    /// potentially dangerous-looking) string.
+    #[test]
+    fn test_bc_7_1_006_ec10_tab_replaced_with_single_space_not_dropped() {
+        assert_eq!(sanitize_table_cell("a\tb"), "a b");
+    }
+
+    /// EC-11 (a): a long (500-char) string of only printable non-control
+    /// characters passes through byte-for-byte unchanged — no length cap.
+    #[test]
+    fn test_bc_7_1_006_ec11_long_clean_text_unchanged_no_cap() {
+        let clean = "x".repeat(500);
+        assert_eq!(sanitize_table_cell(&clean), clean);
+        assert_eq!(sanitize_table_cell(&clean).chars().count(), 500);
+    }
+
+    /// EC-11 (b): non-ASCII printable text (accented Latin, CJK, emoji)
+    /// passes through unchanged — the sanitizer strips control/ANSI
+    /// classes only, never ordinary Unicode text.
+    #[test]
+    fn test_bc_7_1_006_ec11_non_ascii_text_unchanged() {
+        let clean = "café 好世界 🎉🚀";
+        assert_eq!(sanitize_table_cell(clean), clean);
+    }
+
+    /// Strategy biased toward the exact hostile classes `sanitize_table_cell`
+    /// must strip (control chars, full CSI/OSC sequences including
+    /// unterminated ones, C1 introducers, bidi overrides, line/paragraph
+    /// separators) interleaved with ordinary printable/non-ASCII text and
+    /// `\n`/`\r`/`\t`, so the property test below actually exercises the
+    /// stripping logic rather than drowning it in plain text.
+    fn hostile_table_cell_strategy() -> impl Strategy<Value = String> {
+        let token = prop_oneof![
+            10 => "[a-zA-Z0-9 .,!?/-]{1,6}",
+            4 => Just("\n".to_string()),
+            3 => Just("\r".to_string()),
+            3 => Just("\t".to_string()),
+            3 => (0u32..=0x1Fu32).prop_filter_map("exclude \\n \\r \\t (covered above)", |cp| {
+                let c = char::from_u32(cp).unwrap();
+                (c != '\n' && c != '\r' && c != '\t').then(|| c.to_string())
+            }),
+            2 => Just("\u{7f}".to_string()),
+            2 => Just("\u{1b}".to_string()),
+            4 => Just("\u{1b}[31m".to_string()),
+            4 => Just("\u{1b}[0m".to_string()),
+            3 => Just("\u{1b}]0;evil-title\u{7}".to_string()),
+            2 => Just("\u{1b}]8;;http://example.invalid\u{1b}\\".to_string()),
+            2 => Just("\u{1b}[31;1;9".to_string()),
+            2 => Just("\u{1b}]0;no-terminator".to_string()),
+            3 => (0x80u32..=0x9Fu32).prop_map(|cp| char::from_u32(cp).unwrap().to_string()),
+            3 => prop_oneof![
+                Just(0x202Au32),
+                Just(0x202Bu32),
+                Just(0x202Cu32),
+                Just(0x202Du32),
+                Just(0x202Eu32),
+                Just(0x2066u32),
+                Just(0x2067u32),
+                Just(0x2068u32),
+                Just(0x2069u32),
+            ]
+            .prop_map(|cp| char::from_u32(cp).unwrap().to_string()),
+            1 => Just("\u{2028}".to_string()),
+            1 => Just("\u{2029}".to_string()),
+            1 => Just("\u{85}".to_string()),
+            3 => prop_oneof![Just("é".to_string()), Just("好".to_string()), Just("🎉".to_string())],
+        ];
+        prop::collection::vec(token, 0..40).prop_map(|tokens| tokens.concat())
+    }
+
+    /// Strategy generating strings composed solely of printable non-control
+    /// characters plus `\n` — the identity-input space for VP-SEC-001-001(a)
+    /// (EC-11).
+    fn clean_table_cell_strategy() -> impl Strategy<Value = String> {
+        let token = prop_oneof![
+            8 => "[a-zA-Z0-9 .,!?/_-]{1,8}",
+            2 => Just("\n".to_string()),
+            1 => prop_oneof![Just("é".to_string()), Just("好".to_string()), Just("🎉".to_string())],
+        ];
+        prop::collection::vec(token, 0..40).prop_map(|tokens| tokens.concat())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        /// VP-SEC-001-001(a), whole-string invariant: over an arbitrary
+        /// hostile-biased input, the output contains no disallowed C0
+        /// control (anything <= 0x1F other than `\n`, plus `0x7F`), no C1
+        /// control (`0x80`-`0x9F`), no raw ESC, no `\r`, no `\t`, and none
+        /// of the bidi-override/line/paragraph-separator code points; every
+        /// `\n` present in the input survives in the output (same count).
+        #[test]
+        fn prop_bc_7_1_006_sanitize_table_cell_whole_string_invariant(
+            input in hostile_table_cell_strategy()
+        ) {
+            let output = sanitize_table_cell(&input);
+
+            for c in output.chars() {
+                let cp = c as u32;
+                let disallowed_c0_or_del = (cp <= 0x1F && c != '\n') || cp == 0x7F;
+                prop_assert!(
+                    !disallowed_c0_or_del,
+                    "disallowed C0/DEL control survived: {c:?} (U+{cp:04X}) in {output:?}"
+                );
+                prop_assert!(
+                    !(0x80..=0x9F).contains(&cp),
+                    "disallowed C1 control survived: {c:?} (U+{cp:04X}) in {output:?}"
+                );
+                prop_assert_ne!(c, '\u{1b}', "raw ESC survived in {:?}", output);
+                prop_assert_ne!(c, '\r', "raw CR survived in {:?}", output);
+                prop_assert_ne!(c, '\t', "raw TAB survived in {:?}", output);
+                let bidi_or_separator = matches!(cp, 0x202A..=0x202E | 0x2066..=0x2069)
+                    || cp == 0x2028
+                    || cp == 0x2029
+                    || cp == 0x0085;
+                prop_assert!(
+                    !bidi_or_separator,
+                    "bidi-override/line-separator survived: {c:?} (U+{cp:04X}) in {output:?}"
+                );
+            }
+
+            let input_newlines = input.chars().filter(|&c| c == '\n').count();
+            let output_newlines = output.chars().filter(|&c| c == '\n').count();
+            prop_assert_eq!(
+                input_newlines, output_newlines,
+                "newline count must be preserved: input had {}, output has {}",
+                input_newlines, output_newlines
+            );
+        }
+
+        /// VP-SEC-001-001(a), identity case (EC-11): on input composed
+        /// solely of printable non-control characters plus `\n`,
+        /// `sanitize_table_cell` is the identity function.
+        #[test]
+        fn prop_bc_7_1_006_sanitize_table_cell_identity_on_clean_input(
+            input in clean_table_cell_strategy()
+        ) {
+            prop_assert_eq!(sanitize_table_cell(&input), input);
+        }
+    }
+
+    // ── render_table chokepoint tests (BC-7.1.006) ──────────────────────
+    //
+    // These call PRODUCTION `render_table` directly (not the `todo!()`
+    // stub) — `sanitize_table_cell` is NOT wired into `render_table` yet
+    // (Step 1 of FIX-P5-001 deliberately leaves it unwired), so these
+    // tests exercise today's real, unsanitized behavior and are expected
+    // to FAIL today for a genuine reason: the hostile bytes currently
+    // survive into the rendered table.
+
+    /// A hostile cell containing an ANSI CSI sequence plus a C1 CSI
+    /// introducer must not leak a raw ESC byte or a raw C1 byte into
+    /// `render_table`'s output once BC-7.1.006 is wired in. Today, with no
+    /// sanitization wired into `render_table`, both survive — this test
+    /// fails against current production code.
+    #[test]
+    fn test_bc_7_1_006_render_table_strips_ansi_and_c1_from_hostile_cell() {
+        let headers = &["Key", "Summary"];
+        let hostile = "\u{1b}[31mFAKE\u{1b}[0m\u{9b}pwned";
+        let rows = vec![vec!["FOO-1".to_string(), hostile.to_string()]];
+
+        let output = render_table(headers, &rows);
+
+        assert!(
+            !output.contains('\u{1b}'),
+            "raw ESC byte must not survive in a rendered table cell: {output:?}"
+        );
+        assert!(
+            !output.chars().any(|c| (0x80..=0x9F).contains(&(c as u32))),
+            "raw C1 byte must not survive in a rendered table cell: {output:?}"
+        );
+    }
+
+    /// Same hostile-payload requirement as the cell test above, but for a
+    /// table HEADER — defense in depth (BC-7.1.006 sanitizes headers too,
+    /// even though every production header today is a `&'static str`
+    /// literal with nothing to strip).
+    #[test]
+    fn test_bc_7_1_006_render_table_strips_ansi_and_c1_from_hostile_header() {
+        let hostile_header = "\u{1b}[31mEvil\u{1b}[0m\u{9b}Header".to_string();
+        let headers: &[&str] = &[hostile_header.as_str(), "Value"];
+        let rows = vec![vec!["a".to_string(), "b".to_string()]];
+
+        let output = render_table(headers, &rows);
+
+        assert!(
+            !output.contains('\u{1b}'),
+            "raw ESC byte must not survive in a rendered table header: {output:?}"
+        );
+        assert!(
+            !output.chars().any(|c| (0x80..=0x9F).contains(&(c as u32))),
+            "raw C1 byte must not survive in a rendered table header: {output:?}"
+        );
+    }
+
+    /// GREEN today, justified: `comfy_table` already renders an embedded
+    /// `\n` as multiple physical lines — this is pre-existing, unrelated
+    /// to `sanitize_table_cell`. Included as a forward-looking regression
+    /// guard for BC-7.1.006's `\n`-preservation policy: once
+    /// `sanitize_table_cell` IS wired into `render_table`, `\n` must still
+    /// reach `comfy_table` verbatim (per EC-9), and multi-line cells (issue
+    /// view Description/Links, comment Body) must keep rendering as
+    /// multiple lines rather than regressing to a single line.
+    #[test]
+    fn test_bc_7_1_006_render_table_still_renders_multiline_cell() {
+        let headers = &["Key", "Description"];
+        let rows = vec![vec![
+            "FOO-1".to_string(),
+            "line one\nline two\nline three".to_string(),
+        ]];
+
+        let output = render_table(headers, &rows);
+
+        assert!(output.contains("line one"));
+        assert!(output.contains("line two"));
+        assert!(output.contains("line three"));
+        assert!(
+            output.lines().count() >= 5,
+            "expected a multi-line rendering (header + separators + 3 content \
+             lines), got {} lines: {output:?}",
+            output.lines().count()
+        );
     }
 }

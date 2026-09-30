@@ -1,0 +1,343 @@
+//! End-to-end table/JSON sanitization asymmetry (BC-7.1.006, FIX-P5-001,
+//! SEC-001-RENDER-TABLE-ANSI-SANITIZE, CWE-150/CWE-116).
+//!
+//! VP-SEC-001-001(c): a real command, driven through a hostile wiremock
+//! fixture, must never leak a raw ESC byte or a raw C1 code point
+//! (`U+0080`-`U+009F`) into `--output table` (default) stdout, while
+//! `--output json` must round-trip the identical hostile payload lossless
+//! (`sanitize_table_cell` is never invoked on the JSON path — mirrors
+//! `sanitize_env_display`'s own documented rule and the issue #398
+//! description-echo asymmetry). Note: JSON's own grammar mandates escaping
+//! ESC (`0x1B`) as `\u001b`, so the JSON-mode tests below check round-trip
+//! value equality (decode back to the exact same `char`s) plus the raw,
+//! unescaped survival of the C1 byte `U+009B` (which JSON does NOT mandate
+//! escaping) — not literal raw-ESC-byte containment in the serialized
+//! text, which no valid JSON string could ever satisfy.
+//!
+//! Red Gate (FIX-P5-001 Step 2): `output::sanitize_table_cell` exists but is
+//! a `todo!()` stub NOT yet wired into `render_table` — every table-mode
+//! assertion below therefore currently FAILS against real production code
+//! (the hostile bytes survive unsanitized in today's table output). The
+//! `--output json` assertions are expected to be GREEN today (see each
+//! test's doc comment) — the JSON path was already raw/lossless before this
+//! fix and must stay that way.
+//!
+//! Hermeticity per `tests/common/hermetic.rs` (S-cycle14 STORY-A
+//! convention): every command scrubs ambient `JR_*` env vars before
+//! re-injecting only the ones this test itself sets, and uses per-test
+//! isolated `JR_CACHE_DIR`/`JR_CONFIG_DIR`/cwd temp directories.
+
+#[allow(dead_code)]
+mod common;
+
+use assert_cmd::Command;
+use common::hermetic;
+use serde_json::{Value, json};
+use tempfile::TempDir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// The hostile payload used across both commands below: an ANSI CSI color
+/// sequence, its reset, and a C1 CSI introducer (`U+009B`) immediately
+/// followed by survivor text — exercising both the CSI-consumption state
+/// machine and the C1-single-code-point-removal path in one string (mirrors
+/// `src/output.rs`'s own EC-1/EC-5-flavored unit-test pin).
+const HOSTILE_PAYLOAD: &str = "\u{1b}[31mFAKE\u{1b}[0m\u{9b}pwned";
+
+/// Asserts `stdout` contains neither a raw ESC byte (`U+001B`) nor any
+/// character in the C1 control range `U+0080`-`U+009F` — the exact
+/// table-mode guarantee VP-SEC-001-001(c) requires. Decoding via
+/// `String::from_utf8_lossy` (not a raw byte scan) so a multi-byte UTF-8
+/// encoding of a C1 code point is caught via its decoded `char`, not missed
+/// by a byte-level substring search.
+fn assert_no_esc_or_c1(stdout: &str, context: &str) {
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "{context}: raw ESC byte must not survive in --output table stdout: {stdout:?}"
+    );
+    assert!(
+        !stdout.chars().any(|c| (0x80..=0x9F).contains(&(c as u32))),
+        "{context}: raw C1 code point must not survive in --output table stdout: {stdout:?}"
+    );
+}
+
+/// Isolated wiremock + cache/config/cwd harness, following the
+/// `tests/user_commands.rs` / `tests/field_options.rs` precedent.
+struct Harness {
+    server: MockServer,
+    cache: TempDir,
+    config: TempDir,
+    cwd: TempDir,
+}
+
+impl Harness {
+    async fn new() -> Self {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let config = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        hermetic::assert_no_ancestor_jr_toml(cwd.path());
+        Self {
+            server,
+            cache,
+            config,
+            cwd,
+        }
+    }
+
+    /// Runs `jr <args>`, scrubbing every ambient `JR_*` env var first
+    /// (`hermetic::scrub_ambient_jr_env`) so a developer/CI environment's
+    /// own `JR_*` settings can't leak into the subprocess, then re-injecting
+    /// only this harness's own isolated overrides.
+    fn run(&self, args: &[&str]) -> std::process::Output {
+        let mut cmd = Command::cargo_bin("jr").unwrap();
+        hermetic::scrub_ambient_jr_env(
+            &mut cmd,
+            &[
+                "JR_BASE_URL",
+                "JR_AUTH_HEADER",
+                "JR_CACHE_DIR",
+                "JR_CONFIG_DIR",
+            ],
+        );
+        cmd.env("JR_BASE_URL", self.server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("JR_CACHE_DIR", self.cache.path().join("jr"))
+            .env("JR_CONFIG_DIR", self.config.path().join("jr"))
+            .args(args)
+            .current_dir(self.cwd.path());
+        cmd.output().unwrap()
+    }
+}
+
+/// Mounts the two createmeta calls `jr field options --type` needs (S-331
+/// issue-type resolution + S-580-1 createmeta-fields enumeration), with a
+/// single `customfield_10084` option whose label is `label`.
+async fn mount_field_options_fixture(server: &MockServer, project: &str, label: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/rest/api/3/issue/createmeta/{project}/issuetypes"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issueTypes": [{"id": "10000", "name": "Bug"}],
+            "startAt": 0,
+            "maxResults": 200,
+            "total": 1
+        })))
+        .mount(server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/rest/api/3/issue/createmeta/{project}/issuetypes/10000"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "fields": [{
+                "fieldId": "customfield_10084",
+                "name": "SOC Client",
+                "schema": {
+                    "type": "option",
+                    "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select",
+                    "system": null
+                },
+                "allowedValues": [
+                    {"id": "10001", "value": label, "name": null}
+                ]
+            }],
+            "startAt": 0,
+            "maxResults": 200,
+            "total": 1
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `POST /rest/api/3/search/jql` returning one issue whose summary
+/// is `summary`.
+async fn mount_issue_list_fixture(server: &MockServer, key: &str, summary: &str) {
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![common::fixtures::issue_response(
+                key, summary, "To Do",
+            )]),
+        ))
+        .mount(server)
+        .await;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// `jr field options` — VP-SEC-001-001(c)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Table mode (default output): a hostile option label must not leak a raw
+/// ESC byte or C1 code point into stdout.
+///
+/// FAILS today: `sanitize_table_cell` is not wired into `render_table`, so
+/// the hostile payload survives verbatim in the "Label" column.
+#[tokio::test]
+async fn test_bc_7_1_006_field_options_table_mode_strips_hostile_option_label() {
+    let h = Harness::new().await;
+    mount_field_options_fixture(&h.server, "HELP", HOSTILE_PAYLOAD).await;
+
+    let output = h.run(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--type",
+        "Bug",
+        "--project",
+        "HELP",
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stdout, "jr field options (table mode)");
+}
+
+/// JSON mode: the identical hostile fixture must round-trip lossless —
+/// `sanitize_table_cell` is never invoked on the `--output json` path.
+///
+/// Note on "byte-for-byte": JSON's own grammar mandates escaping `0x1B`
+/// (ESC, within the `0x00`-`0x1F` mandatory-escape range) as the 6-char
+/// sequence `\u001b` — no valid JSON string can contain a literal raw ESC
+/// byte, sanitized or not, so a literal-byte containment check on the ESC
+/// portion of the payload would fail even against a CORRECT
+/// implementation. The C1 code point `U+009B`, by contrast, is NOT in
+/// JSON's mandatory-escape set, so it DOES survive as a literal raw byte
+/// in the serialized text when (and only when) nothing has sanitized it —
+/// asserted directly below as the strongest available "untouched" signal,
+/// alongside full round-trip equality of the decoded value (which does
+/// cover the ESC portion, since `serde_json::from_str` decodes `\u001b`
+/// back to the same `char` that was serialized).
+///
+/// Expected GREEN today: the JSON path was already raw/lossless before this
+/// fix (`output::render_json` never called `sanitize_table_cell`, which
+/// doesn't exist in any call graph yet), so this pins a pre-existing
+/// invariant rather than new behavior — included for completeness of the
+/// table/JSON asymmetry proof (VP-SEC-001-001(c) requires both sides be
+/// checked against the same fixture).
+#[tokio::test]
+async fn test_bc_7_1_006_field_options_json_mode_preserves_hostile_option_label_raw() {
+    let h = Harness::new().await;
+    mount_field_options_fixture(&h.server, "HELP", HOSTILE_PAYLOAD).await;
+
+    let output = h.run(&[
+        "field",
+        "options",
+        "customfield_10084",
+        "--type",
+        "Bug",
+        "--project",
+        "HELP",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stdout.contains('\u{9b}'),
+        "--output json must carry the hostile label's raw C1 byte literally \
+         (JSON does not mandate escaping it, and sanitize_table_cell must \
+         never run on the JSON path): {stdout:?}"
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got {stdout}\nerror: {e}"));
+    let arr = parsed.as_array().expect("expected a JSON array");
+    assert_eq!(
+        arr[0]["label"],
+        json!(HOSTILE_PAYLOAD),
+        "decoded JSON value must round-trip the hostile label exactly \
+         unchanged, including its ESC portion"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// `jr issue list` — VP-SEC-001-001(c)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Table mode (default output): a hostile issue summary must not leak a raw
+/// ESC byte or C1 code point into stdout.
+///
+/// FAILS today: `sanitize_table_cell` is not wired into `render_table`, so
+/// the hostile payload survives verbatim in the "Summary" column.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_list_table_mode_strips_hostile_summary() {
+    let h = Harness::new().await;
+    mount_issue_list_fixture(&h.server, "FOO-1", HOSTILE_PAYLOAD).await;
+
+    let output = h.run(&["issue", "list", "--jql", "project = FOO", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stdout, "jr issue list (table mode)");
+}
+
+/// JSON mode: the identical hostile fixture must round-trip lossless.
+///
+/// See the field-options JSON test above for why this checks the C1 byte's
+/// literal survival plus full round-trip equality, rather than raw-byte
+/// containment of the whole payload (JSON's grammar mandates escaping ESC
+/// `0x1B` as `\u001b`, so no valid JSON text can ever contain it as a
+/// literal byte — sanitized or not).
+///
+/// Expected GREEN today — same rationale as the field-options JSON test
+/// above: the JSON path is already lossless and untouched by this fix.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_list_json_mode_preserves_hostile_summary_raw() {
+    let h = Harness::new().await;
+    mount_issue_list_fixture(&h.server, "FOO-1", HOSTILE_PAYLOAD).await;
+
+    let output = h.run(&[
+        "issue",
+        "list",
+        "--jql",
+        "project = FOO",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stdout.contains('\u{9b}'),
+        "--output json must carry the hostile summary's raw C1 byte \
+         literally (JSON does not mandate escaping it, and \
+         sanitize_table_cell must never run on the JSON path): {stdout:?}"
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got {stdout}\nerror: {e}"));
+    let arr = parsed.as_array().expect("expected a JSON array");
+    assert_eq!(
+        arr[0]["fields"]["summary"],
+        json!(HOSTILE_PAYLOAD),
+        "decoded JSON value must round-trip the hostile summary exactly \
+         unchanged, including its ESC portion"
+    );
+}
