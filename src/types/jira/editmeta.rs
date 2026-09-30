@@ -65,8 +65,9 @@ pub struct EditMetaFieldSchema {
 ///
 /// WRITE-side option-value resolution in BC-3.4.016
 /// (`cli::issue::field_resolve::find_option_match`/`resolve_option_value`)
-/// matches against `value` only (case-insensitive) — `name` is out of scope
-/// there per D-378/BC-X.14.001's "Scope boundary — READ-SIDE ONLY" paragraph.
+/// label-matches against `value` only (case-insensitive; a numeric `id`
+/// bypass also exists) — `name` is out of scope there per D-378/BC-X.14.001's
+/// "Scope boundary — READ-SIDE ONLY" paragraph.
 /// `id` is placed on the wire as `{"id": "<id>"}`. READ-side, `name` IS a
 /// real, shipped consumer as of cycle-014 (#861, BC-X.14.001): `cli::field`'s
 /// `jr field options` label-resolution normalizer

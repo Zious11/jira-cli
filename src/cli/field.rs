@@ -1784,10 +1784,9 @@ mod tests {
         /// VP-580-013(3): a companion property serializing the normalizer's
         /// output — every emitted node's JSON key set is exactly
         /// `{"id","label","children"}`, with `label` a JSON string or
-        /// `null` — the `--output json` shape (VP-580-008(b)) is unchanged
-        /// by this story's label-fallback fix. GREEN, PRE-EXISTING-BEHAVIOR:
-        /// `FieldOption`'s own field set is untouched by this story, so
-        /// this property already holds before and after the fix.
+        /// `null` — the `--output json` shape (VP-580-008(b)) is invariant
+        /// under the label-fallback fix: `FieldOption`'s own field set is
+        /// unaffected by where `label` was sourced from.
         #[test]
         fn test_bc_x_14_001_normalize_from_allowed_values_output_key_set_serde(
             values in proptest::collection::vec(arb_allowed_value(), 0..6)
@@ -1804,9 +1803,9 @@ mod tests {
     /// `name` key must be ignored, never leaking into a fallback (M3 has
     /// none to leak into — BC-X.14.001's "M3 is UNCHANGED and ALREADY
     /// CORRECT" paragraph). Compared against a hand-written expected
-    /// output, not a golden file captured from the implementation. GREEN,
-    /// PRE-EXISTING-BEHAVIOR: this story does not modify
-    /// `normalize_from_valid_values`.
+    /// output, not a golden file captured from the implementation. M3
+    /// (`normalize_from_valid_values`) reads the label only from `.label`
+    /// and never consults `name`.
     #[test]
     fn test_bc_x_14_001_normalize_from_valid_values_m3_regression_no_name_fallback() {
         let values = vec![
@@ -1841,9 +1840,9 @@ mod tests {
 
     /// AC-003 / EC-X.14.001-13 / VP-580-013(5): `--value` filtering against
     /// a system field (a `priority`-shaped fixture carrying only `name`, no
-    /// `value`) matches via the fallback `label` as a downstream
-    /// consequence of AC-001's fix — not a new filter rule.
-    /// `filter_options`/`filter_one` are unchanged; `filter_one` is a
+    /// `value`) matches via the fallback `label` — `filter_options`/
+    /// `filter_one` apply the same substring match they always have,
+    /// against whichever `label` the normalizer resolved. `filter_one` is a
     /// private fn, unreachable from the external `tests/field_options.rs`
     /// integration binary, so this cell lives here.
     #[test]
