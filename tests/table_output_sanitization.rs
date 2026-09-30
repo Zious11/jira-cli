@@ -820,8 +820,9 @@ async fn test_bc_7_1_006_comment_view_human_output_clean_fixture_byte_identical(
 // `handle_assign` (`src/cli/issue/workflow.rs` ~L1006-1109) echoes the
 // assignee's server-side Jira `displayName` into its human-output success
 // messages via `output::print_success`, which writes to STDERR (see
-// `output::print_success`'s `eprintln!` body), at THREE sites that all
-// currently print the raw, unsanitized `display_name`:
+// `output::print_success`'s `eprintln!` body), at two print sites, reached
+// via three resolution paths that all sanitize the `display_name` before
+// printing:
 //   - `--to`/`--account-id` newly-assigned success:
 //     `"Assigned {key} to {display_name}"` (~L1104).
 //   - The idempotent already-assigned exit-0 path:
@@ -931,11 +932,11 @@ async fn mount_assign_put_assignee(server: &MockServer, key: &str) {
 /// CSI/OSC-stripped survivor text "Mallory" must still render in its normal
 /// position within the unchanged "Assigned {key} to {name}" format.
 ///
-/// RED against current code: `handle_assign`'s `Table` success arm
-/// (`src/cli/issue/workflow.rs` ~L1104) prints `display_name` raw via
+/// Pins production behavior: `handle_assign`'s `Table` success arm
+/// (`src/cli/issue/workflow.rs` ~L1104) sanitizes `display_name` via
+/// `output::sanitize_terminal_text` before formatting it into
 /// `output::print_success(&format!("Assigned {} to {}", key, display_name))`
-/// with no sanitization call — the hostile ESC/BEL/CSI bytes survive
-/// verbatim in stderr today.
+/// — no raw ESC/BEL/CSI byte survives in stderr.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name() {
     let h = Harness::new().await;
@@ -977,7 +978,7 @@ async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name()
 /// wiremock's unmocked-request default and fail the test via the exit-code
 /// assertion.
 ///
-/// RED against current code: same unsanitized `print_success` call site,
+/// Pins production behavior: same sanitized `print_success` call site,
 /// just the idempotent branch (~L1084) instead of the newly-assigned one.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_idempotent() {
@@ -1014,7 +1015,7 @@ async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_i
 /// search, but sharing the SAME "Assigned {key} to {name}" print-site
 /// (~L1104) as the `--to` test above.
 ///
-/// RED against current code: same unsanitized `print_success` call site,
+/// Pins production behavior: same sanitized `print_success` call site,
 /// reached via the self-assign resolution branch instead of `--to`.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_self_assign() {
@@ -1381,30 +1382,26 @@ async fn test_bc_7_1_006_issue_create_assignee_ambiguous_human_output_strips_hos
     );
 }
 
-/// `--output json`, ExactMultiple branch: pins TODAY's (pre-fix) JSON error
-/// envelope emitted by `main.rs`'s error path
-/// (`{"error": e.to_string(), "code": exit_code}`, `src/main.rs` ~L130-137)
-/// — NOT a target/fixed-behavior test like the others in this section.
-///
-/// `disambiguate_user` builds ONE `JrError::UserError` message string that
-/// both the table-mode "Error: {e}" arm and this JSON `"error"` field
-/// render from — main.rs's JSON envelope construction never calls
-/// `output::sanitize_table_cell`/`sanitize_terminal_text` itself. Per the
-/// D-395 task brief: "The spec author is deciding whether JSON error text
-/// should be sanitized, so don't assert a change there. Just report what it
-/// emits today." This test therefore asserts the RAW, unsanitized hostile
-/// bytes survive in the JSON `"error"` string, exactly as constructed by
-/// today's code — it documents current behavior and takes no position on
-/// whether a fix to `disambiguate_user`'s message-building should also
-/// change this JSON output (if the fix sanitizes at message-construction
-/// time rather than only at a table-mode print site, this pin would need
-/// deliberate revisiting, not a silent break).
-///
-/// Expected GREEN today (and will only change if the implementer chooses to
-/// sanitize message construction itself, in which case this specific pin
-/// is EXPECTED to need updating — see the caveat above).
+/// `--output json`, ExactMultiple branch: per BC-7.1.006's `disambiguate_user`
+/// Behavior subsection and its dedicated `--output json` decision paragraph
+/// (D-395), this sink has only ONE underlying message string —
+/// `src/main.rs`'s top-level error handler builds BOTH the human-mode
+/// `eprintln!("Error: {e}")` text AND the `--output json` error envelope's
+/// `{"error": e.to_string(), "code": <exit>}` from the SAME
+/// `JrError::UserError` `Display` string. Because `disambiguate_user`
+/// sanitizes at message-construction time (inside the function itself,
+/// not at a table-mode print site), that single shared string is already
+/// sanitized before either channel renders it — there is no separate,
+/// lossless machine channel for this sink the way `render_table`'s own
+/// table/JSON success-data asymmetry works. This test therefore asserts
+/// the JSON `"error"` field carries the SAME sanitized, CSI/`\r`/C1-stripped
+/// text as the table-mode stderr message (EC-16/VP-SEC-001-001(c)),
+/// covering a downstream script or CI log viewer that surfaces
+/// `--output json`'s `"error"` text to a terminal (e.g.
+/// `jr … --output json | jq -r .error`), which is exactly as exposed to
+/// CWE-150/CWE-116 as the human-mode path.
 #[tokio::test]
-async fn test_d395_issue_assign_exact_multiple_json_error_envelope_pins_current_raw_behavior() {
+async fn test_bc_7_1_006_issue_assign_exact_multiple_json_error_envelope_carries_sanitized_text() {
     let h = Harness::new().await;
     mount_disambig_search_by_issue(&h.server, "FOO-12", disambig_exact_multiple_hostile_users())
         .await;
@@ -1434,17 +1431,24 @@ async fn test_d395_issue_assign_exact_multiple_json_error_envelope_pins_current_
         .unwrap_or_else(|e| panic!("expected valid JSON on stderr, got {stderr}\nerror: {e}"));
     assert_eq!(parsed["code"], json!(64));
 
-    let expected_raw_error = format!(
-        "Multiple users named \"Mallory\" found:\n  Mallory ({DISAMBIG_HOSTILE_EMAIL_1}, account: {DISAMBIG_HOSTILE_ACC_1})\n  Mallory ({DISAMBIG_HOSTILE_EMAIL_2}, account: {DISAMBIG_HOSTILE_ACC_2})\nSpecify the accountId directly or use a more specific name."
-    );
+    let expected_sanitized_error = "Multiple users named \"Mallory\" found:\n  \
+         Mallory (mallory1@example.invalid, account: ACC-1)\n  \
+         Mallory (mallory2Q@example.invalid, account: ACC-2Z)\n\
+         Specify the accountId directly or use a more specific name.";
     assert_eq!(
         parsed["error"],
-        json!(expected_raw_error),
-        "TODAY's (pre-fix) JSON error envelope carries the raw, unsanitized \
-         hostile account_id/email bytes verbatim, since main.rs's JSON \
-         error-envelope construction never sanitizes — see this test's doc \
-         comment for why this is a documentation pin, not a target-behavior \
-         assertion: {parsed:?}"
+        json!(expected_sanitized_error),
+        "the JSON error envelope's \"error\" field must carry the identical \
+         sanitized, CSI/\\r/C1-stripped text as the table-mode stderr \
+         message — disambiguate_user sanitizes once at message-construction \
+         time, so both channels share the same already-sanitized string \
+         (BC-7.1.006's `disambiguate_user` --output json decision \
+         paragraph, D-395): {parsed:?}"
+    );
+    let raw_serialized = serde_json::to_string(&parsed).unwrap();
+    assert_no_esc_or_c1(
+        &raw_serialized,
+        "jr issue assign --to (ExactMultiple, --output json \"error\" field)",
     );
 }
 
@@ -1497,5 +1501,61 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_clean_fixture_
         "a clean ExactMultiple duplicate pair's human output must be \
          byte-identical before and after this fix — any diff here is a \
          format change, not a sanitization change: {stderr:?}"
+    );
+}
+
+/// `jr issue assign --to <no-match>`, `MatchResult::None` branch: the
+/// `all_names` candidate list — every assignable user on the issue, not
+/// only ones that matched the query — is joined by `resolve_assignee`'s
+/// `none_msg_fn` closure into its own "… Found: …" message. This is a
+/// WIDER exposure surface than the `ExactMultiple`/`Ambiguous` branches
+/// above, since a hostile display name can leak here merely by being
+/// assignable on the same issue, without ever matching the query string
+/// (D-395, §10 spec-delta, PR #891 finding found during the amendment's
+/// own code trace — not explicitly named in the originating SEC-891-2
+/// finding).
+///
+/// RED against current code: `disambiguate_user`'s `MatchResult::None`
+/// branch (`src/cli/issue/helpers.rs`) hands the raw, unsanitized
+/// `all_names` vec straight to `none_msg_fn` — the hostile bytes survive
+/// verbatim in stderr today.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_none_human_output_strips_hostile_candidate_names() {
+    let h = Harness::new().await;
+    mount_disambig_search_by_issue(
+        &h.server,
+        "FOO-14",
+        vec![
+            disambig_user_obj("ACC-A", DISAMBIG_HOSTILE_NAME_1, None),
+            disambig_user_obj("ACC-B", "Bob", None),
+        ],
+    )
+    .await;
+
+    let output = h.run(&[
+        "issue",
+        "assign",
+        "FOO-14",
+        "--to",
+        "zzz-no-match",
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stderr, "jr issue assign --to (None, stderr)");
+    assert_eq!(
+        stderr,
+        "Error: No assignable user with a name matching \"zzz-no-match\" \
+         on issue FOO-14. Found: Alice, Bob\n",
+        "sanitized None-branch message must show the CSI-stripped survivor \
+         text 'Alice' for the hostile candidate, in the unchanged 'Found: …' \
+         message format: {stderr:?}"
     );
 }
