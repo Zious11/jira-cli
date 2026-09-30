@@ -1127,8 +1127,9 @@ impl JiraClient {
         Ok(all)
     }
 
-    /// Enumerate a custom field's allowed options via project+issue-type
-    /// createmeta (M2, `jr field options --type <T>`, ADR-0019 §1).
+    /// Enumerate a field's allowed options (custom or system) via
+    /// project+issue-type createmeta (M2, `jr field options --type <T>`,
+    /// ADR-0019 §1).
     ///
     /// Calls `GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}`
     /// — the current, non-deprecated createmeta-fields-by-issue-type form

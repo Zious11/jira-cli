@@ -125,7 +125,7 @@ pub enum Command {
         #[command(subcommand)]
         command: ComponentSubcommand,
     },
-    /// Discover custom-field allowed options (issue #580)
+    /// Discover a field's allowed options (custom or system, issue #580/#861)
     Field {
         #[command(subcommand)]
         command: FieldCommand,
@@ -1227,7 +1227,7 @@ pub enum RequestTypeCommand {
 /// `jr field` subcommands (issue #580, BC-X.14.001..004).
 #[derive(Subcommand)]
 pub enum FieldCommand {
-    /// Enumerate a custom field's allowed options
+    /// Enumerate a field's allowed options (custom or system fields)
     ///
     /// Exactly one of `--type`, `--request-type`, `--issue` selects the
     /// enumeration mode; `--project` is a companion flag whose role
@@ -1235,7 +1235,7 @@ pub enum FieldCommand {
     /// mode. See ADR-0019 §1 / BC-X.14.001.
     Options {
         /// `customfield_NNNNN` literal, or a human field name resolved via
-        /// `list_fields()` + `partial_match`
+        /// `list_fields()` + `search_field_list`
         field: String,
 
         /// M2: enumerate via project+issue-type createmeta. Requires a

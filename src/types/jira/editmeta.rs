@@ -63,11 +63,17 @@ pub struct EditMetaFieldSchema {
 
 /// A single allowed option value for a single-select (`option`) field.
 ///
-/// Option-value resolution in BC-3.4.016 matches against `value` (case-
-/// insensitive). `id` is placed on the wire as `{"id": "<id>"}`. `name` is
-/// parsed but unused in v1 — retained for future cascade-select matching.
-/// Add `#[allow(dead_code)]` on `name` ONLY if the compiler warns; see
-/// prd-delta-396.md §5 O-2 amendment.
+/// WRITE-side option-value resolution in BC-3.4.016
+/// (`cli::issue::field_resolve::find_option_match`/`resolve_option_value`)
+/// matches against `value` only (case-insensitive) — `name` is out of scope
+/// there per D-378/BC-X.14.001's "Scope boundary — READ-SIDE ONLY" paragraph.
+/// `id` is placed on the wire as `{"id": "<id>"}`. READ-side, `name` IS a
+/// real, shipped consumer as of cycle-014 (#861, BC-X.14.001): `cli::field`'s
+/// `jr field options` label-resolution normalizer
+/// (`normalize_from_allowed_values_at_depth`) falls back to `name` when
+/// `value` is absent, so system-typed fields (e.g. `priority`, whose
+/// `allowedValues` entries carry only `name`) resolve a real label instead of
+/// `None`.
 ///
 /// `id` is `Option<String>` because the Jira Cloud OpenAPI schema for
 /// `allowedValues` entries has no required properties. GDPR-era user/group
@@ -81,8 +87,13 @@ pub struct AllowedValue {
     /// Human-readable option label; used for case-insensitive matching.
     pub value: Option<String>,
     /// Secondary label present on some Jira option types (e.g. cascade-select
-    /// children). Parsed from the API response; unused in v1 resolution logic.
-    /// Future: v2 cascade-select name matching. See prd-delta-396.md §5 O-2.
+    /// children, and system-typed fields like `priority` whose entries carry
+    /// only `name`, no `value`). WRITE-side resolution (BC-3.4.016) still does
+    /// not consult this field — see the struct-level doc comment's Scope
+    /// boundary note. READ-side, `cli::field`'s `jr field options`
+    /// label-resolution normalizer falls back to this field when `value` is
+    /// absent (BC-X.14.001, cycle-014 #861), a presence-based (not
+    /// emptiness-based) fallback.
     pub name: Option<String>,
     /// Cascading child options (cascading-select fields). Additive, behavior-
     /// preserving extension: `#[serde(default)]` means any existing caller

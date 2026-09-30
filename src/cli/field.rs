@@ -1,4 +1,5 @@
-//! `jr field options <field>` — enumerate a custom field's allowed options.
+//! `jr field options <field>` — enumerate a field's allowed options (custom
+//! or system fields).
 //!
 //! Anchors BC-X.14.001..004 (issue #580). Structural mirror of
 //! `src/cli/requesttype.rs` per ADR-0019 §1. Three mutually-exclusive
@@ -131,7 +132,7 @@ pub async fn handle(
 
     // Step 2 (AC-011): resolve <field> to a field id. `customfield_NNNNN`
     // literals bypass `list_fields()` entirely; otherwise resolved via the
-    // per-profile fields cache / `list_fields()` + `partial_match`.
+    // per-profile fields cache / `list_fields()` + `search_field_list`.
     let profile = &config.active_profile_name;
     let field_id = resolve_field_id(client, profile, &field).await?;
 

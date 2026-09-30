@@ -1433,7 +1433,7 @@ async fn test_bc_x_14_001_get_createmeta_fields_hard_cap_prevents_infinite_loop(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AC-011 — <field> resolution (customfield_NNNNN bypass / list_fields + partial_match)
+// AC-011 — <field> resolution (customfield_NNNNN bypass / list_fields + search_field_list)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// AC-011: `customfield_10084` literal bypasses `list_fields()` entirely
@@ -2049,7 +2049,7 @@ async fn test_bc_x_14_004_graceful_degrade_array_typed_cmdb_field() {
 async fn test_bc_x_14_004_graceful_degrade_labels_field() {
     let h = Harness::new().await;
     // "labels" is a human/system field name, not a `customfield_NNNNN`
-    // literal, so it resolves via `list_fields()` + `partial_match` first.
+    // literal, so it resolves via `list_fields()` + `search_field_list` first.
     mount_list_fields(
         &h.server,
         vec![json!({"id": "labels", "name": "Labels", "custom": false, "schema": null})],
