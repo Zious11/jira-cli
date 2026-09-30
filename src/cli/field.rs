@@ -1483,6 +1483,410 @@ mod tests {
         );
     }
 
+    // ── AC-001/AC-002/AC-003 / VP-580-013 (cycle-014, issue #861): M1/M2
+    // label-resolution fallback (`value`, else `name`, else `None`) —
+    // read-side only, D-378. ──
+
+    /// AC-001 top-level matrix (EC-X.14.001-7..11): the four
+    /// value/name-presence combinations at the top level of the tree, each
+    /// asserting the exact resolved `label`. The `neither` cell
+    /// additionally asserts the never-drop invariant (EC-X.14.001-7) — the
+    /// output `Vec`'s entry count must equal the input's.
+    #[test]
+    fn test_bc_x_14_001_normalize_from_allowed_values_label_fallback_top_level_matrix() {
+        let values = vec![
+            // value-only.
+            AllowedValue {
+                id: Some("1".to_string()),
+                value: Some("High".to_string()),
+                name: None,
+                children: Vec::new(),
+            },
+            // name-only (EC-X.14.001-8 — the exact #861 defect).
+            AllowedValue {
+                id: Some("2".to_string()),
+                value: None,
+                name: Some("Highest".to_string()),
+                children: Vec::new(),
+            },
+            // both present (EC-X.14.001-9 — value wins).
+            AllowedValue {
+                id: Some("3".to_string()),
+                value: Some("Low".to_string()),
+                name: Some("Lowest".to_string()),
+                children: Vec::new(),
+            },
+            // neither present (EC-X.14.001-10 — unchanged degenerate behavior).
+            AllowedValue {
+                id: Some("4".to_string()),
+                value: None,
+                name: None,
+                children: Vec::new(),
+            },
+        ];
+        let result = normalize_from_allowed_values(&values);
+        assert_eq!(
+            result.len(),
+            values.len(),
+            "EC-X.14.001-7 never-drop invariant: output entry count must equal input entry count"
+        );
+        assert_eq!(
+            result[0].label,
+            Some("High".to_string()),
+            "value-only must resolve label to the value"
+        );
+        assert_eq!(
+            result[1].label,
+            Some("Highest".to_string()),
+            "EC-X.14.001-8: name-only must resolve label via the name fallback, not None"
+        );
+        assert_eq!(
+            result[2].label,
+            Some("Low".to_string()),
+            "EC-X.14.001-9: value wins when both value and name are present"
+        );
+        assert_eq!(
+            result[3].label, None,
+            "EC-X.14.001-10: neither present must remain None"
+        );
+    }
+
+    /// AC-001 cascading-child-level matrix (EC-X.14.001-11): the same four
+    /// value/name-presence combinations, this time nested one level deep
+    /// under a parent's `children`, proving the fallback applies
+    /// recursively rather than only at the top level (one of VP-580-013's
+    /// fault models: "the fallback applied only at the top level"). The
+    /// `neither` cell again asserts the never-drop invariant at this
+    /// cascading-child level.
+    #[test]
+    fn test_bc_x_14_001_normalize_from_allowed_values_label_fallback_cascading_child_matrix() {
+        let children = vec![
+            AllowedValue {
+                id: Some("c1".to_string()),
+                value: Some("Child High".to_string()),
+                name: None,
+                children: Vec::new(),
+            },
+            AllowedValue {
+                id: Some("c2".to_string()),
+                value: None,
+                name: Some("Child Highest".to_string()),
+                children: Vec::new(),
+            },
+            AllowedValue {
+                id: Some("c3".to_string()),
+                value: Some("Child Low".to_string()),
+                name: Some("Child Lowest".to_string()),
+                children: Vec::new(),
+            },
+            AllowedValue {
+                id: Some("c4".to_string()),
+                value: None,
+                name: None,
+                children: Vec::new(),
+            },
+        ];
+        let parent = AllowedValue {
+            id: Some("p".to_string()),
+            value: Some("Parent".to_string()),
+            name: None,
+            children: children.clone(),
+        };
+        let result = normalize_from_allowed_values(std::slice::from_ref(&parent));
+        assert_eq!(result.len(), 1);
+        let kids = &result[0].children;
+        assert_eq!(
+            kids.len(),
+            children.len(),
+            "EC-X.14.001-7 never-drop invariant must also hold at a cascading-child level"
+        );
+        assert_eq!(
+            kids[0].label,
+            Some("Child High".to_string()),
+            "child value-only must resolve label to the value"
+        );
+        assert_eq!(
+            kids[1].label,
+            Some("Child Highest".to_string()),
+            "EC-X.14.001-11: child name-only must resolve label via the name fallback, \
+             applied recursively"
+        );
+        assert_eq!(
+            kids[2].label,
+            Some("Child Low".to_string()),
+            "child value wins when both value and name are present"
+        );
+        assert_eq!(
+            kids[3].label, None,
+            "child neither present must remain None"
+        );
+    }
+
+    /// AC-002 EC-X.14.001-12 fixtures: the fallback is presence-based, not
+    /// emptiness-based. `value: Some("")` (present-but-empty) wins over a
+    /// populated `name`; an explicit wire `"value": null` deserializes to
+    /// `None`, which DOES fall through to `name`. Each cell is asserted at
+    /// BOTH the top level and a cascading-child level, and every cell is
+    /// built by deserializing a JSON fixture into `AllowedValue` (not by
+    /// constructing the struct directly), so the explicit-null case
+    /// exercises the real deserializer, per VP-580-013(1)'s own
+    /// requirement.
+    #[test]
+    fn test_bc_x_14_001_normalize_from_allowed_values_label_fallback_presence_based_ec12() {
+        // Top level: `value: ""` wins over a populated `name`.
+        let empty_value: AllowedValue = serde_json::from_str(r#"{"id":"1","value":"","name":"N"}"#)
+            .expect("must deserialize a present-but-empty value");
+        let result = normalize_from_allowed_values(std::slice::from_ref(&empty_value));
+        assert_eq!(
+            result[0].label,
+            Some(String::new()),
+            "present-but-empty value must win over a populated name, never falling through"
+        );
+
+        // Top level: explicit `"value": null` deserializes to None and falls
+        // through to `name`.
+        let null_value: AllowedValue =
+            serde_json::from_str(r#"{"id":"1","value":null,"name":"N"}"#)
+                .expect("must deserialize an explicit JSON null value");
+        let result = normalize_from_allowed_values(std::slice::from_ref(&null_value));
+        assert_eq!(
+            result[0].label,
+            Some("N".to_string()),
+            "an explicit JSON null value is absence, and must fall through to name"
+        );
+
+        // Cascading-child level: the same two cells, nested one level deep.
+        let parent_empty: AllowedValue = serde_json::from_str(
+            r#"{"id":"p","value":"P","children":[{"id":"1","value":"","name":"N"}]}"#,
+        )
+        .expect("must deserialize a parent with a present-but-empty-value child");
+        let result = normalize_from_allowed_values(std::slice::from_ref(&parent_empty));
+        assert_eq!(
+            result[0].children[0].label,
+            Some(String::new()),
+            "child present-but-empty value must win over a populated name"
+        );
+
+        let parent_null: AllowedValue = serde_json::from_str(
+            r#"{"id":"p","value":"P","children":[{"id":"1","value":null,"name":"N"}]}"#,
+        )
+        .expect("must deserialize a parent with an explicit-null-value child");
+        let result = normalize_from_allowed_values(std::slice::from_ref(&parent_null));
+        assert_eq!(
+            result[0].children[0].label,
+            Some("N".to_string()),
+            "an explicit JSON null value in a child must also fall through to name"
+        );
+    }
+
+    /// A recursive `AllowedValue` strategy for VP-580-013(2)/(3)'s property
+    /// tests below. `id`/`value`/`name` are independently `Option<String>`
+    /// via a `{0,6}`-length regex (matches zero repetitions, so `Some("")`
+    /// is reachable alongside `None` and non-empty strings — required so
+    /// the proptest can generate the `value: Some("")` combination this
+    /// clause's own presence-based rule depends on). `children` nests to
+    /// depth <= 3, mirroring `arb_field_option`'s `prop_recursive(3, 16, 4,
+    /// ...)` shape above.
+    fn arb_allowed_value() -> impl Strategy<Value = AllowedValue> {
+        let field = proptest::option::of("[a-zA-Z0-9]{0,6}");
+        let leaf = (field.clone(), field.clone(), field.clone()).prop_map(|(id, value, name)| {
+            AllowedValue {
+                id,
+                value,
+                name,
+                children: Vec::new(),
+            }
+        });
+        leaf.prop_recursive(3, 16, 4, move |inner| {
+            (
+                field.clone(),
+                field.clone(),
+                field.clone(),
+                proptest::collection::vec(inner, 0..3),
+            )
+                .prop_map(|(id, value, name, children)| AllowedValue {
+                    id,
+                    value,
+                    name,
+                    children,
+                })
+        })
+    }
+
+    /// Recursive assertion helper for VP-580-013(2): `id` carries through
+    /// unchanged, `label == value.clone().or(name.clone())` at this node,
+    /// and the same recursion is repeated over every child pair in lockstep
+    /// (proving the emitted tree has the same shape — node count, child
+    /// order — as the input).
+    fn assert_allowed_value_fallback_matches(input: &AllowedValue, output: &FieldOption) {
+        assert_eq!(output.id, input.id, "id must carry through unchanged");
+        assert_eq!(
+            output.label,
+            input.value.clone().or_else(|| input.name.clone()),
+            "label must equal value.or(name)"
+        );
+        assert_eq!(
+            output.children.len(),
+            input.children.len(),
+            "child count (tree shape) must match the input at every depth"
+        );
+        for (child_in, child_out) in input.children.iter().zip(output.children.iter()) {
+            assert_allowed_value_fallback_matches(child_in, child_out);
+        }
+    }
+
+    proptest! {
+        /// VP-580-013(2): a recursive `AllowedValue` proptest asserting the
+        /// M1/M2 label-resolution fallback holds at every depth —
+        /// `label == value.clone().or(name.clone())` — with `id` carried
+        /// through unchanged and the emitted tree the same shape (node
+        /// count, child order) as the input, up to the existing
+        /// `MAX_FIELD_OPTION_DEPTH` cap (unreached here — this strategy
+        /// nests only to depth <= 3).
+        #[test]
+        fn test_bc_x_14_001_normalize_from_allowed_values_label_fallback_proptest(
+            values in proptest::collection::vec(arb_allowed_value(), 0..6)
+        ) {
+            let result = normalize_from_allowed_values(&values);
+            prop_assert_eq!(result.len(), values.len());
+            for (input, output) in values.iter().zip(result.iter()) {
+                assert_allowed_value_fallback_matches(input, output);
+            }
+        }
+    }
+
+    /// Recursive assertion helper for VP-580-013(3): every serialized node's
+    /// JSON key set is exactly `{"id","label","children"}`, with `label` a
+    /// JSON string or `null`.
+    fn assert_field_option_key_set(opt: &FieldOption) {
+        let json = serde_json::to_value(opt).expect("FieldOption must serialize");
+        let obj = json
+            .as_object()
+            .expect("FieldOption must serialize to a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["children", "id", "label"],
+            "FieldOption's serialized key set must be exactly {{id, label, children}}"
+        );
+        match obj.get("label") {
+            Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null) => {}
+            other => panic!("label must serialize as a JSON string or null, got {other:?}"),
+        }
+        for child in &opt.children {
+            assert_field_option_key_set(child);
+        }
+    }
+
+    proptest! {
+        /// VP-580-013(3): a companion property serializing the normalizer's
+        /// output — every emitted node's JSON key set is exactly
+        /// `{"id","label","children"}`, with `label` a JSON string or
+        /// `null` — the `--output json` shape (VP-580-008(b)) is unchanged
+        /// by this story's label-fallback fix. GREEN, PRE-EXISTING-BEHAVIOR:
+        /// `FieldOption`'s own field set is untouched by this story, so
+        /// this property already holds before and after the fix.
+        #[test]
+        fn test_bc_x_14_001_normalize_from_allowed_values_output_key_set_serde(
+            values in proptest::collection::vec(arb_allowed_value(), 0..6)
+        ) {
+            let result = normalize_from_allowed_values(&values);
+            for opt in &result {
+                assert_field_option_key_set(opt);
+            }
+        }
+    }
+
+    /// VP-580-013(4): M3 regression guard — `normalize_from_valid_values`
+    /// reads `id` from `.value` and `label` from `.label` ONLY; an unknown
+    /// `name` key must be ignored, never leaking into a fallback (M3 has
+    /// none to leak into — BC-X.14.001's "M3 is UNCHANGED and ALREADY
+    /// CORRECT" paragraph). Compared against a hand-written expected
+    /// output, not a golden file captured from the implementation. GREEN,
+    /// PRE-EXISTING-BEHAVIOR: this story does not modify
+    /// `normalize_from_valid_values`.
+    #[test]
+    fn test_bc_x_14_001_normalize_from_valid_values_m3_regression_no_name_fallback() {
+        let values = vec![
+            serde_json::json!({"value": "10", "name": "N"}),
+            serde_json::json!({"value": "11", "label": "L", "name": "N"}),
+            serde_json::json!({"value": "12", "label": "Twelve"}),
+        ];
+        let result = normalize_from_valid_values(&values);
+        let expected = vec![
+            FieldOption {
+                id: Some("10".to_string()),
+                label: None,
+                children: Vec::new(),
+            },
+            FieldOption {
+                id: Some("11".to_string()),
+                label: Some("L".to_string()),
+                children: Vec::new(),
+            },
+            FieldOption {
+                id: Some("12".to_string()),
+                label: Some("Twelve".to_string()),
+                children: Vec::new(),
+            },
+        ];
+        assert_eq!(
+            result, expected,
+            "an unknown `name` key must be ignored by M3 — a fallback leak would resolve the \
+             first entry's label to Some(\"N\") instead of None"
+        );
+    }
+
+    /// AC-003 / EC-X.14.001-13 / VP-580-013(5): `--value` filtering against
+    /// a system field (a `priority`-shaped fixture carrying only `name`, no
+    /// `value`) matches via the fallback `label` as a downstream
+    /// consequence of AC-001's fix — not a new filter rule.
+    /// `filter_options`/`filter_one` are unchanged; `filter_one` is a
+    /// private fn, unreachable from the external `tests/field_options.rs`
+    /// integration binary, so this cell lives here.
+    #[test]
+    fn test_bc_x_14_001_value_filter_matches_system_field_via_name_fallback() {
+        let values = vec![
+            AllowedValue {
+                id: Some("1".to_string()),
+                value: None,
+                name: Some("Highest".to_string()),
+                children: Vec::new(),
+            },
+            AllowedValue {
+                id: Some("2".to_string()),
+                value: None,
+                name: Some("High".to_string()),
+                children: Vec::new(),
+            },
+            AllowedValue {
+                id: Some("3".to_string()),
+                value: None,
+                name: Some("Low".to_string()),
+                children: Vec::new(),
+            },
+        ];
+        let options = normalize_from_allowed_values(&values);
+
+        let by_label = filter_options(&options, Some("high"));
+        assert_eq!(
+            by_label.len(),
+            2,
+            "--value high must match both Highest and High via their fallback label"
+        );
+        assert!(
+            by_label
+                .iter()
+                .any(|o| o.label.as_deref() == Some("Highest"))
+        );
+        assert!(by_label.iter().any(|o| o.label.as_deref() == Some("High")));
+
+        let by_id = filter_options(&options, Some("3"));
+        assert_eq!(by_id.len(), 1);
+        assert_eq!(by_id[0].label.as_deref(), Some("Low"));
+    }
+
     // ── AC-012 / BC-X.14.002 / VP-580-007: --value client-side filter ──
 
     fn opt(id: Option<&str>, label: Option<&str>) -> FieldOption {
