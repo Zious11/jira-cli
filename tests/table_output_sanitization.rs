@@ -25,6 +25,14 @@
 //! convention): every command scrubs ambient `JR_*` env vars before
 //! re-injecting only the ones this test itself sets, and uses per-test
 //! isolated `JR_CACHE_DIR`/`JR_CONFIG_DIR`/cwd temp directories.
+//!
+//! The `jr issue comment view` tests below (SEC-003, FIX-P5-001 extension,
+//! D-393) are the one exception to the "through `render_table`" framing
+//! above: `handle_comment_view` bypasses both table chokepoints entirely
+//! and prints its labeled fields and ADF-derived body directly via
+//! `print!`/`println!`, sanitizing each at its own print site through
+//! `output::sanitize_terminal_text` instead. Those tests exercise that
+//! direct-print-site sanitization, not `render_table`.
 
 #[allow(dead_code)]
 mod common;
@@ -448,11 +456,13 @@ async fn test_bc_7_1_006_user_list_json_mode_preserves_hostile_display_name_raw(
 // ═══════════════════════════════════════════════════════════════════════
 //
 // `handle_comment_view`'s table-mode arm (`src/cli/issue/interactions.rs`
-// ~L659-676) prints the comment `author`, `visibility`-derived `restricted`,
-// and ADF-rendered `body_text` via bare `print!`/`println!` — NOT through
-// `render_table`/`print_output`, so none of them are currently routed
-// through `sanitize_table_cell`. SEC-003 extends BC-7.1.006's chokepoint
-// guarantee to this handler's plain-text fields.
+// ~L657-689) prints the comment `id`, `author`, `created`, `updated`,
+// `visibility`-derived `restricted`, and ADF-rendered `body_text` via bare
+// `print!`/`println!` — NOT through `render_table`/`print_output`. SEC-003
+// extends BC-7.1.006's chokepoint guarantee to this handler's plain-text
+// fields: each one is sanitized at its own print site via
+// `output::sanitize_terminal_text` (pins production behavior, same as the
+// `render_table`-backed tests above).
 
 /// Hostile `author.displayName`: an ANSI CSI color sequence around
 /// survivor text "Mallory", matching `HOSTILE_PAYLOAD`'s CSI-consumption
@@ -464,6 +474,31 @@ const COMMENT_HOSTILE_AUTHOR: &str = "\u{1b}[31mMallory\u{1b}[0m";
 /// verbatim into the printed "Restricted: " field. This is the "some other
 /// printed field" server-controlled site beyond author/body.
 const COMMENT_HOSTILE_VISIBILITY_VALUE: &str = "\u{1b}[35mEvilRole\u{1b}[0m";
+
+/// Hostile response-body `id` field value (W-2: a prior version of this
+/// fixture gave `id`/`created`/`updated` clean values, so a regression
+/// deleting any of their `sanitize_terminal_text` call sites would go
+/// undetected). Decoupled from the mock's URL-path `id` / the CLI's `--id`
+/// argument, which must satisfy `validate_comment_id`'s alnum/underscore/
+/// hyphen charset and so cannot itself carry ESC/C1 bytes — the server is
+/// free to return any `id` value in the response body regardless of what
+/// `--id` the client requested with. Same CSI-wrap-plus-trailing-C1-byte
+/// shape as `COMMENT_HOSTILE_AUTHOR` above, sanitizing (per
+/// `output::sanitize_table_cell`'s documented policy) to `"10001X"`: the
+/// `ESC [ 33 m` and `ESC [ 0 m` CSI sequences are each consumed wholesale
+/// (a CSI sequence ends at the first byte in `0x40..=0x7E`, here `m`), and
+/// the lone `U+009B` C1 code point is dropped as a single code point —
+/// `"10001"` and the trailing `"X"` are both ordinary printable ASCII and
+/// pass through `Keep` unchanged.
+const COMMENT_HOSTILE_ID: &str = "\u{1b}[33m10001\u{1b}[0m\u{9b}X";
+
+/// Hostile `created` field value — same shape as `COMMENT_HOSTILE_ID`,
+/// sanitizing to `"2026-07-01T09:00:00.000+0000Y"`.
+const COMMENT_HOSTILE_CREATED: &str = "\u{1b}[36m2026-07-01T09:00:00.000+0000\u{1b}[0m\u{9b}Y";
+
+/// Hostile `updated` field value — same shape as `COMMENT_HOSTILE_ID`,
+/// sanitizing to `"2026-07-01T10:30:00.000+0000Z"`.
+const COMMENT_HOSTILE_UPDATED: &str = "\u{1b}[36m2026-07-01T10:30:00.000+0000\u{1b}[0m\u{9b}Z";
 
 /// ADF body: a single paragraph containing `"pwned"`, an OSC sequence, a
 /// bare CR, a `hardBreak`, then a C1-byte-prefixed `"line2"`.
@@ -502,19 +537,25 @@ fn comment_clean_body() -> Value {
 }
 
 /// Mounts `GET /rest/api/3/issue/{key}/comment/{id}` returning a comment
-/// with a hostile `author.displayName`, `visibility.value`, and ADF `body`.
-/// No `properties` key → "JSM internal: N/A" — a static fallback token
-/// (`format_jsm_internal_field` returns `"N/A"` when `properties` is
-/// absent), not server-controlled text, so it needs no hostile-payload
-/// coverage here.
+/// with a hostile response-body `id`, `author.displayName`, `created`,
+/// `updated`, `visibility.value`, and ADF `body` (W-2: every server-derived
+/// field `handle_comment_view` prints is hostile here, so a regression
+/// dropping any one of its `sanitize_terminal_text` call sites is caught).
+/// The `id` function parameter still identifies the mock's URL path (and so
+/// must match the CLI's `--id` argument, which is charset-restricted) — the
+/// response body's own `"id"` field is independently hostile via
+/// `COMMENT_HOSTILE_ID`, decoupled from that parameter. No `properties` key
+/// → "JSM internal: N/A" — a static fallback token (`format_jsm_internal_field`
+/// returns `"N/A"` when `properties` is absent), not server-controlled text,
+/// so it needs no hostile-payload coverage here.
 async fn mount_comment_view_hostile_fixture(server: &MockServer, key: &str, id: &str) {
     Mock::given(method("GET"))
         .and(path(format!("/rest/api/3/issue/{key}/comment/{id}")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": id,
+            "id": COMMENT_HOSTILE_ID,
             "author": { "displayName": COMMENT_HOSTILE_AUTHOR },
-            "created": "2026-07-01T09:00:00.000+0000",
-            "updated": "2026-07-01T10:30:00.000+0000",
+            "created": COMMENT_HOSTILE_CREATED,
+            "updated": COMMENT_HOSTILE_UPDATED,
             "body": comment_hostile_body(),
             "visibility": { "type": "role", "value": COMMENT_HOSTILE_VISIBILITY_VALUE }
         })))
@@ -539,18 +580,19 @@ async fn mount_comment_view_clean_fixture(server: &MockServer, key: &str, id: &s
         .await;
 }
 
-/// Table mode (default output): hostile `author`/`visibility.value`/ADF
-/// `body` fields must not leak a raw ESC byte, a raw C1 code point, or a
-/// bare `\r` into stdout — while the CSI/OSC-stripped survivor text
-/// (`Mallory`, and `pwned`/`line2` on two separate lines via the preserved
-/// `hardBreak`-turned-`\n`) must still render, and the six field labels
-/// must still all be present (layout unchanged).
+/// Table mode (default output): hostile `id`/`author`/`created`/`updated`/
+/// `visibility.value`/ADF `body` fields must not leak a raw ESC byte, a raw
+/// C1 code point, or a bare `\r` into stdout — while the CSI/C1-stripped
+/// survivor text (`10001X`, `Mallory`, the two timestamps each suffixed
+/// with `Y`/`Z`, `EvilRole`, and `pwned`/`line2` on two separate lines via
+/// the preserved `hardBreak`-turned-`\n`) must still render, and the six
+/// field labels must still all be present (layout unchanged).
 ///
-/// RED against current code: `handle_comment_view`'s table-mode arm prints
-/// `author`, `restricted`, and `body_text` via bare `print!`/`println!`,
-/// never through `sanitize_table_cell` — the hostile ESC/C1/`\r` bytes
-/// survive verbatim, so `assert_no_esc_or_c1` and the `\r`-absence
-/// assertion both fail today.
+/// Pins production behavior: `handle_comment_view`'s table-mode arm
+/// sanitizes `id`, `author`, `created`, `updated`, `restricted`, and
+/// `body_text` via `output::sanitize_terminal_text` at each of its own
+/// print sites before printing — the hostile ESC/C1/`\r` bytes must not
+/// survive, while the CSI/C1-stripped survivor text must still render.
 #[tokio::test]
 async fn test_bc_7_1_006_comment_view_human_output_strips_hostile_body_and_author() {
     let h = Harness::new().await;
@@ -580,10 +622,42 @@ async fn test_bc_7_1_006_comment_view_human_output_strips_hostile_body_and_autho
          stdout: {stdout:?}"
     );
 
+    // Positive survivor assertions (W-2): the exact sanitized value for
+    // every hostile field, not just "no raw ESC/C1 survived" — this is what
+    // actually detects a deleted `sanitize_terminal_text` call site on
+    // `id`/`created`/`updated` (a prior version of the fixture gave those
+    // three fields clean values, so `assert_no_esc_or_c1` alone could not
+    // have caught a regression there). Each expected literal is traced
+    // against `output::sanitize_table_cell`'s documented per-character
+    // policy: the `ESC [ … <final byte 0x40-0x7E>` CSI sequences wrapping
+    // each hostile constant are consumed wholesale, and the lone C1 code
+    // point (`U+009B`) before the trailing survivor letter is dropped as a
+    // single code point — see each `COMMENT_HOSTILE_*` constant's doc
+    // comment above for the full derivation.
+    assert!(
+        stdout.contains("ID: 10001X"),
+        "sanitized id must still render its CSI/C1-stripped survivor \
+         text: {stdout:?}"
+    );
     assert!(
         stdout.contains("Author: Mallory"),
         "sanitized author must still render its CSI-stripped survivor \
          text: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("Created: 2026-07-01T09:00:00.000+0000Y"),
+        "sanitized created must still render its CSI/C1-stripped survivor \
+         text: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("Updated: 2026-07-01T10:30:00.000+0000Z"),
+        "sanitized updated must still render its CSI/C1-stripped survivor \
+         text: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("Restricted: EvilRole"),
+        "sanitized visibility.value must still render its CSI-stripped \
+         survivor text via format_restricted_field's rung (a): {stdout:?}"
     );
 
     let pwned_line = stdout
@@ -598,6 +672,19 @@ async fn test_bc_7_1_006_comment_view_human_output_strips_hostile_body_and_autho
         pwned_line, line2_line,
         "the hardBreak-separated body text must still render on two \
          separate lines after sanitization: {stdout:?}"
+    );
+
+    // Pins the exact trailing body block: the blank-line separator after
+    // field 6, then the sanitized two-line body (OSC sequence, bare `\r`,
+    // and C1 byte all stripped; the `hardBreak` survives as the `\n`
+    // between "pwned" and "line2") followed by the `println!`-added final
+    // newline. Traced against `adf_to_text` + `sanitize_terminal_text`:
+    // "pwned" + (OSC dropped) + (`\r` dropped) + "\n" (hardBreak) +
+    // (C1 dropped) + "line2" + "\n" (println!) = "pwned\nline2\n", preceded
+    // by the print! block's own trailing "\n\n" separator.
+    assert!(
+        stdout.ends_with("\n\npwned\nline2\n"),
+        "exact trailing body block must match after sanitization: {stdout:?}"
     );
 
     for label in [
