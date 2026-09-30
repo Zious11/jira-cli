@@ -643,7 +643,7 @@ fn normalize_from_allowed_values_at_depth(
         .iter()
         .map(|v| FieldOption {
             id: v.id.clone(),
-            label: v.value.clone(),
+            label: v.value.clone().or_else(|| v.name.clone()),
             children: if depth >= MAX_FIELD_OPTION_DEPTH {
                 Vec::new()
             } else {
