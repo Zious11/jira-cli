@@ -14,13 +14,12 @@
 //! escaping) — not literal raw-ESC-byte containment in the serialized
 //! text, which no valid JSON string could ever satisfy.
 //!
-//! Red Gate (FIX-P5-001 Step 2): `output::sanitize_table_cell` exists but is
-//! a `todo!()` stub NOT yet wired into `render_table` — every table-mode
-//! assertion below therefore currently FAILS against real production code
-//! (the hostile bytes survive unsanitized in today's table output). The
-//! `--output json` assertions are expected to be GREEN today (see each
-//! test's doc comment) — the JSON path was already raw/lossless before this
-//! fix and must stay that way.
+//! `output::sanitize_table_cell` is implemented and wired into
+//! `render_table` (and its styled sibling `render_table_with_styles`) —
+//! every table-mode assertion below exercises and pins that production
+//! behavior. The `--output json` assertions pin a pre-existing, unrelated
+//! guarantee (see each test's doc comment): the JSON path was already
+//! raw/lossless before this fix and must stay that way.
 //!
 //! Hermeticity per `tests/common/hermetic.rs` (S-cycle14 STORY-A
 //! convention): every command scrubs ambient `JR_*` env vars before
@@ -34,7 +33,7 @@ use assert_cmd::Command;
 use common::hermetic;
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// The hostile payload used across both commands below: an ANSI CSI color
@@ -166,6 +165,23 @@ async fn mount_issue_list_fixture(server: &MockServer, key: &str, summary: &str)
         .await;
 }
 
+/// Mounts `GET /rest/api/3/user/assignable/multiProjectSearch` returning
+/// one user whose display name is `display_name` — the fixture `jr user
+/// list` (`src/cli/user.rs::handle_list`) hits without `--all`.
+async fn mount_user_list_fixture(server: &MockServer, project: &str, display_name: &str) {
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", project))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "accountId": "acc-hostile-1",
+            "displayName": display_name,
+            "emailAddress": "user@example.invalid",
+            "active": true,
+        }])))
+        .mount(server)
+        .await;
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // `jr field options` — VP-SEC-001-001(c)
 // ═══════════════════════════════════════════════════════════════════════
@@ -173,8 +189,9 @@ async fn mount_issue_list_fixture(server: &MockServer, key: &str, summary: &str)
 /// Table mode (default output): a hostile option label must not leak a raw
 /// ESC byte or C1 code point into stdout.
 ///
-/// FAILS today: `sanitize_table_cell` is not wired into `render_table`, so
-/// the hostile payload survives verbatim in the "Label" column.
+/// Pins production behavior: `sanitize_table_cell` is wired into
+/// `render_table`, so the hostile payload must not survive in the "Label"
+/// column.
 #[tokio::test]
 async fn test_bc_7_1_006_field_options_table_mode_strips_hostile_option_label() {
     let h = Harness::new().await;
@@ -273,8 +290,9 @@ async fn test_bc_7_1_006_field_options_json_mode_preserves_hostile_option_label_
 /// Table mode (default output): a hostile issue summary must not leak a raw
 /// ESC byte or C1 code point into stdout.
 ///
-/// FAILS today: `sanitize_table_cell` is not wired into `render_table`, so
-/// the hostile payload survives verbatim in the "Summary" column.
+/// Pins production behavior: `sanitize_table_cell` is wired into
+/// `render_table`, so the hostile payload must not survive in the "Summary"
+/// column.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_list_table_mode_strips_hostile_summary() {
     let h = Harness::new().await;
@@ -339,5 +357,88 @@ async fn test_bc_7_1_006_issue_list_json_mode_preserves_hostile_summary_raw() {
         json!(HOSTILE_PAYLOAD),
         "decoded JSON value must round-trip the hostile summary exactly \
          unchanged, including its ESC portion"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// `jr user list` — VP-SEC-001-001(c) (pr-review cycle-1 finding B-1)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Unlike `field options`/`issue list` above, `jr user list` renders
+// through the STYLED chokepoint (`output::render_table_with_styles` /
+// `output::print_output_with_styles`, via `src/cli/user.rs::print_user_list`
+// -> `format_user_row_styled`), not plain `render_table`/`print_output`.
+// These two tests are the end-to-end proof that the styled path is wired
+// to the same `sanitize_table_cell` chokepoint as every other table-mode
+// command — B-1 flagged that nothing exercised this path at all.
+
+/// Table mode (default output): a hostile server-supplied display name
+/// must not leak a raw ESC byte or C1 code point into stdout.
+///
+/// Pins production behavior: `render_table_with_styles` sanitizes cell
+/// TEXT exactly like plain `render_table` (the Active column's structural
+/// color is applied separately, via `active_cell`, and never bypasses
+/// this).
+#[tokio::test]
+async fn test_bc_7_1_006_user_list_table_mode_strips_hostile_display_name() {
+    let h = Harness::new().await;
+    mount_user_list_fixture(&h.server, "HELP", HOSTILE_PAYLOAD).await;
+
+    let output = h.run(&["user", "list", "--project", "HELP", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stdout, "jr user list (table mode)");
+}
+
+/// JSON mode: the identical hostile fixture must round-trip lossless —
+/// `sanitize_table_cell` is never invoked on the `--output json` path,
+/// including through the styled `print_output_with_styles` dispatch.
+///
+/// See the field-options JSON test above for why this checks the C1 byte's
+/// literal survival plus full round-trip equality, rather than raw-byte
+/// containment of the whole payload.
+#[tokio::test]
+async fn test_bc_7_1_006_user_list_json_mode_preserves_hostile_display_name_raw() {
+    let h = Harness::new().await;
+    mount_user_list_fixture(&h.server, "HELP", HOSTILE_PAYLOAD).await;
+
+    let output = h.run(&[
+        "user",
+        "list",
+        "--project",
+        "HELP",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stdout.contains('\u{9b}'),
+        "--output json must carry the hostile display name's raw C1 byte \
+         literally (JSON does not mandate escaping it, and \
+         sanitize_table_cell must never run on the JSON path): {stdout:?}"
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got {stdout}\nerror: {e}"));
+    let arr = parsed.as_array().expect("expected a JSON array");
+    assert_eq!(
+        arr[0]["displayName"],
+        json!(HOSTILE_PAYLOAD),
+        "decoded JSON value must round-trip the hostile display name \
+         exactly unchanged, including its ESC portion"
     );
 }

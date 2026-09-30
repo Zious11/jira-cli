@@ -373,27 +373,25 @@ mod tests {
         }
     }
 
-    /// BC-7.1.006: once `render_table` sanitizes every cell (via the new
-    /// `output::sanitize_table_cell`), a cell whose ANSI styling is baked
-    /// into the `String` itself — as `format_active` does TODAY via
-    /// `colored`'s `.to_string()` — would have that styling stripped
-    /// alongside any hostile payload, silently breaking jr's own
-    /// intentional Active-column coloring. The BC requires `format_active`'s
-    /// styling to move to structural `comfy_table::Cell` attributes,
-    /// meaning `format_active` itself must return the BARE glyph — no ANSI
-    /// bytes embedded in the `String` — regardless of whether color is
-    /// currently enabled.
+    /// BC-7.1.006: `render_table`/`render_table_with_styles` sanitize every
+    /// cell (via `output::sanitize_table_cell`), so a cell whose ANSI
+    /// styling was baked into the `String` itself would have that styling
+    /// stripped alongside any hostile payload, silently breaking jr's own
+    /// intentional Active-column coloring. The BC therefore requires
+    /// `format_active`'s styling to live on structural `comfy_table::Cell`
+    /// attributes instead (via `active_cell`) — `format_active` itself must
+    /// return the BARE glyph, no ANSI bytes embedded in the `String`,
+    /// regardless of whether color is currently enabled.
     ///
     /// Deterministic without a real TTY: `colored`'s own suppression when
     /// stdout isn't a terminal (the default under `cargo test`, where
-    /// stdout is captured) would make this assertion trivially true today
-    /// for the WRONG reason — not because `format_active` is structural,
-    /// but because `colored` isn't emitting ANSI at all in this process.
+    /// stdout is captured) would make this assertion trivially true for
+    /// the WRONG reason — not because `format_active` is structural, but
+    /// because `colored` isn't emitting ANSI at all in this process.
     /// Forcing the override ON via `ForcedColorOverride` closes that gap:
-    /// with color forced on, today's `format_active` DOES embed ANSI bytes
-    /// (`"\x1b[32m✓\x1b[0m"` / `"\x1b[31m✗\x1b[0m"`), so this test fails
-    /// against current production code and will only pass once
-    /// `format_active` returns the bare glyph unconditionally.
+    /// with color forced on, a non-structural `format_active` would embed
+    /// ANSI bytes (`"\x1b[32m✓\x1b[0m"` / `"\x1b[31m✗\x1b[0m"`), so this
+    /// test is a genuine regression guard against reintroducing that.
     #[test]
     fn test_bc_7_1_006_format_active_returns_bare_glyph_no_esc_bytes_when_color_forced_on() {
         let _color = ForcedColorOverride::new(true);
@@ -462,17 +460,16 @@ mod tests {
         );
     }
 
-    /// GREEN today, justified: this test validates the GENERAL TECHNIQUE
-    /// BC-7.1.006 prescribes for `format_active`'s refactor — structural
-    /// `comfy_table::Cell` styling (`Cell::new(glyph).fg(Color::Green)`)
-    /// survives even though the cell TEXT itself (the bare glyph, once
-    /// `format_active` is fixed) will pass through `sanitize_table_cell`
-    /// unchanged. It exercises `comfy_table` directly (not `format_active`
-    /// or jr's `render_table`, whose signature is `&[Vec<String>]` and
-    /// cannot carry a styled `Cell` without an implementation change that
-    /// is out of scope for this Red Gate pass — F6's job), so it does not
-    /// pin jr's own code and is expected to be GREEN both before and after
-    /// F6 lands.
+    /// This test validates the GENERAL TECHNIQUE BC-7.1.006 uses for
+    /// `format_active`'s structural styling — `comfy_table::Cell` styling
+    /// (`Cell::new(glyph).fg(Color::Green)`) survives even though the cell
+    /// TEXT itself (the bare glyph `format_active` returns) passes through
+    /// `sanitize_table_cell` unchanged. It exercises `comfy_table` directly
+    /// rather than `active_cell`/`render_table_with_styles` (whose actual
+    /// wiring is pinned by the `output::` unit tests and by
+    /// `active_cell`'s own tests below), so it does not pin jr's own code
+    /// — it's a documentation-style regression guard for the underlying
+    /// `comfy_table` behavior this BC's design depends on.
     ///
     /// `comfy_table::Table::should_style()` is gated on `is_tty()`
     /// (`std::io::stdout().is_terminal()`), which is false under `cargo

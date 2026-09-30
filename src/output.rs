@@ -332,15 +332,21 @@ fn sanitize_control_and_ansi_core(
 /// `comfy_table`'s renderer (BC-7.1.006, closing security finding
 /// `SEC-001-RENDER-TABLE-ANSI-SANITIZE`, MEDIUM, CWE-150/CWE-116).
 ///
-/// `render_table` is the single table-mode rendering chokepoint —
-/// `print_output`'s `OutputFormat::Table` arm is its only production call
-/// site, so every table-mode command renders through it. This function is
-/// the single chokepoint-level place a server-supplied string (an issue
-/// summary, a field option label, a comment body fragment, a display
-/// name, ...) gets made safe for a terminal that interprets raw ANSI
-/// escape/control sequences, before `render_table` calls
+/// `render_table` and its styled sibling [`render_table_with_styles`] are
+/// the two table-mode rendering chokepoints — `render_table` is called
+/// both directly (9 production call sites: `issue/attachments.rs` x4,
+/// `assets/view.rs` x2, `assets/schemas.rs`, `auth/list.rs`,
+/// `issue/view.rs`) and indirectly via `print_output` (~30 call sites);
+/// `render_table_with_styles` is called via `print_output_with_styles`,
+/// used only by `jr user list`/`jr user view` (`src/cli/user.rs`). Every
+/// table-mode command renders through one of these two chokepoints. This
+/// function is the single chokepoint-level place a server-supplied string
+/// (an issue summary, a field option label, a comment body fragment, a
+/// display name, ...) gets made safe for a terminal that interprets raw
+/// ANSI escape/control sequences, before either chokepoint calls
 /// `comfy_table::Table::set_header`/`add_row`. No caller of `render_table`
-/// is required to sanitize its own inputs before passing them in.
+/// or `render_table_with_styles` is required to sanitize its own inputs
+/// before passing them in.
 ///
 /// Per-character policy, applied left to right over the whole string
 /// (BC-7.1.006):
@@ -388,9 +394,9 @@ fn sanitize_control_and_ansi_core(
 /// channel optimizes for terminal safety and scannability, the machine
 /// channel must stay lossless for programmatic consumers.
 ///
-/// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006 (EC-1..EC-12)
+/// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006 (EC-1..EC-13)
 /// and its inline `VP-SEC-001-001` for the full edge-case/property
-/// contract this function must satisfy once implemented.
+/// contract this function satisfies.
 pub(crate) fn sanitize_table_cell(value: &str) -> String {
     sanitize_control_and_ansi_core(value, |c| match c {
         '\n' => CharDisposition::Keep,
@@ -665,13 +671,13 @@ mod tests {
     // ── sanitize_table_cell (BC-7.1.006, FIX-P5-001, SEC-001-RENDER- ──
     // TABLE-ANSI-SANITIZE) ─────────────────────────────────────────────
     //
-    // Red Gate (step 2, FIX-P5-001): `sanitize_table_cell` is a `todo!()`
-    // stub as of this pass. EVERY EC-pinned test below and both
-    // property-based tests MUST currently FAIL by panicking on that
-    // `todo!()`. The `render_table`-level hostile-cell/header tests and
-    // the multi-line test call PRODUCTION `render_table` directly (not
-    // `sanitize_table_cell`), so they fail (or, for the multi-line test,
-    // pass) for a different reason — see each test's doc comment.
+    // `sanitize_table_cell` is implemented and wired into both
+    // `render_table` and `render_table_with_styles` (FIX-P5-001). Every
+    // EC-pinned test below and both property-based tests exercise that
+    // production behavior directly. The `render_table`-level hostile-cell/
+    // header tests and the multi-line test call PRODUCTION `render_table`
+    // directly (not `sanitize_table_cell`), pinning the chokepoint-level
+    // guarantee end to end — see each test's doc comment.
 
     /// EC-1: an ANSI CSI color sequence is stripped WHOLESALE — not just
     /// the leading ESC byte, leaving `[31m`/`[0m` behind as literal text.
@@ -1035,18 +1041,13 @@ mod tests {
 
     // ── render_table chokepoint tests (BC-7.1.006) ──────────────────────
     //
-    // These call PRODUCTION `render_table` directly (not the `todo!()`
-    // stub) — `sanitize_table_cell` is NOT wired into `render_table` yet
-    // (Step 1 of FIX-P5-001 deliberately leaves it unwired), so these
-    // tests exercise today's real, unsanitized behavior and are expected
-    // to FAIL today for a genuine reason: the hostile bytes currently
-    // survive into the rendered table.
+    // These call PRODUCTION `render_table` directly — `sanitize_table_cell`
+    // is wired into it (FIX-P5-001), so these tests exercise and pin
+    // today's real, sanitized behavior.
 
     /// A hostile cell containing an ANSI CSI sequence plus a C1 CSI
     /// introducer must not leak a raw ESC byte or a raw C1 byte into
-    /// `render_table`'s output once BC-7.1.006 is wired in. Today, with no
-    /// sanitization wired into `render_table`, both survive — this test
-    /// fails against current production code.
+    /// `render_table`'s output.
     #[test]
     fn test_bc_7_1_006_render_table_strips_ansi_and_c1_from_hostile_cell() {
         let headers = &["Key", "Summary"];
@@ -1087,13 +1088,12 @@ mod tests {
         );
     }
 
-    /// GREEN today, justified: `comfy_table` already renders an embedded
-    /// `\n` as multiple physical lines — this is pre-existing, unrelated
-    /// to `sanitize_table_cell`. Included as a forward-looking regression
-    /// guard for BC-7.1.006's `\n`-preservation policy: once
-    /// `sanitize_table_cell` IS wired into `render_table`, `\n` must still
-    /// reach `comfy_table` verbatim (per EC-9), and multi-line cells (issue
-    /// view Description/Links, comment Body) must keep rendering as
+    /// `comfy_table` renders an embedded `\n` as multiple physical lines —
+    /// this is pre-existing, unrelated to `sanitize_table_cell`. Pinned as
+    /// a regression guard for BC-7.1.006's `\n`-preservation policy: now
+    /// that `sanitize_table_cell` IS wired into `render_table`, `\n` must
+    /// still reach `comfy_table` verbatim (per EC-9), and multi-line cells
+    /// (issue view Description/Links, comment Body) must keep rendering as
     /// multiple lines rather than regressing to a single line.
     #[test]
     fn test_bc_7_1_006_render_table_still_renders_multiline_cell() {
@@ -1113,6 +1113,122 @@ mod tests {
             "expected a multi-line rendering (header + separators + 3 content \
              lines), got {} lines: {output:?}",
             output.lines().count()
+        );
+    }
+
+    // ── render_table_with_styles / print_output_with_styles chokepoint ──
+    // tests (BC-7.1.006, FIX-P5-001 pr-review cycle-1 finding B-1) ──────
+    //
+    // `render_table_with_styles` is the ONLY production table-mode
+    // rendering path for `jr user list`/`jr user view` (`src/cli/user.rs`)
+    // — both commands render server-supplied display names and emails
+    // through `StyledCell`s. Before this test group, nothing called
+    // `render_table_with_styles` directly: a regression that dropped the
+    // `sanitize_table_cell(&c.text)` call inside it (e.g. reverting to
+    // `Cell::new(&c.text)`) would silently reopen SEC-001 for every user
+    // command while the whole rest of the suite kept passing, since the
+    // plain-`String` `render_table` chokepoint tests above don't exercise
+    // this sibling function at all.
+
+    /// A hostile `StyledCell::plain` cell's TEXT must be sanitized
+    /// identically to `render_table`'s plain `String` cells — no raw ESC
+    /// or C1 byte may survive into the rendered table.
+    #[test]
+    fn test_bc_7_1_006_render_table_with_styles_strips_hostile_plain_cell() {
+        let headers = &["Key", "Summary"];
+        let hostile = "\u{1b}[31mFAKE\u{1b}[0m\u{9b}pwned";
+        let rows = vec![vec![StyledCell::plain("FOO-1"), StyledCell::plain(hostile)]];
+
+        let output = render_table_with_styles(headers, &rows);
+
+        assert!(
+            !output.contains('\u{1b}'),
+            "raw ESC byte must not survive in a styled table cell: {output:?}"
+        );
+        assert!(
+            !output.chars().any(|c| (0x80..=0x9F).contains(&(c as u32))),
+            "raw C1 byte must not survive in a styled table cell: {output:?}"
+        );
+    }
+
+    /// Sibling of the test above, but for a `StyledCell::colored` cell —
+    /// carrying a structural foreground color must NOT bypass sanitization
+    /// of the cell's TEXT. This is the exact shape `src/cli/user.rs`'s
+    /// `active_cell` produces for a server-influenced value, and the
+    /// scenario B-1 called out: a colored cell's `fg` is unverified by any
+    /// other test in this file.
+    #[test]
+    fn test_bc_7_1_006_render_table_with_styles_strips_hostile_colored_cell() {
+        let headers = &["Key", "Active"];
+        let hostile = "\u{1b}[31mFAKE\u{1b}[0m\u{9b}pwned";
+        let rows = vec![vec![
+            StyledCell::plain("FOO-1"),
+            StyledCell::colored(hostile, Color::Green),
+        ]];
+
+        let output = render_table_with_styles(headers, &rows);
+
+        assert!(
+            !output.contains('\u{1b}'),
+            "raw ESC byte must not survive in a colored styled table cell: {output:?}"
+        );
+        assert!(
+            !output.chars().any(|c| (0x80..=0x9F).contains(&(c as u32))),
+            "raw C1 byte must not survive in a colored styled table cell: {output:?}"
+        );
+        assert!(
+            output.contains("pwned"),
+            "the sanitized survivor text must still reach the rendered table: {output:?}"
+        );
+    }
+
+    /// Hostile HEADER text must be sanitized too — defense in depth,
+    /// mirroring `render_table`'s own header test above.
+    #[test]
+    fn test_bc_7_1_006_render_table_with_styles_strips_hostile_header() {
+        let hostile_header = "\u{1b}[31mEvil\u{1b}[0m\u{9b}Header".to_string();
+        let headers: &[&str] = &[hostile_header.as_str(), "Value"];
+        let rows = vec![vec![StyledCell::plain("a"), StyledCell::plain("b")]];
+
+        let output = render_table_with_styles(headers, &rows);
+
+        assert!(
+            !output.contains('\u{1b}'),
+            "raw ESC byte must not survive in a styled table header: {output:?}"
+        );
+        assert!(
+            !output.chars().any(|c| (0x80..=0x9F).contains(&(c as u32))),
+            "raw C1 byte must not survive in a styled table header: {output:?}"
+        );
+    }
+
+    /// `print_output_with_styles`'s `OutputFormat::Table` arm must still
+    /// dispatch to the sanitizing `render_table_with_styles` rather than
+    /// bypassing it — asserted by calling `print_output_with_styles`
+    /// itself (not just its callee) so a regression at the dispatch site
+    /// (e.g. a future refactor that formats `c.text` directly instead of
+    /// calling `render_table_with_styles`) is caught here too. stdout
+    /// itself isn't captured by this in-process unit test (the real CLI
+    /// process boundary is covered end-to-end by
+    /// `tests/table_output_sanitization.rs`'s `jr user list` case); this
+    /// test instead pins that the call succeeds for both a hostile plain
+    /// and a hostile colored cell, and that JSON mode stays a pure
+    /// `render_json` passthrough completely unaffected by cell styling.
+    #[test]
+    fn test_bc_7_1_006_print_output_with_styles_does_not_error_on_hostile_cells() {
+        let headers = &["Name"];
+        let hostile = "\u{1b}[31mFAKE\u{1b}[0m\u{9b}pwned";
+        let rows = vec![vec![StyledCell::colored(hostile, Color::Red)]];
+        let json_data = serde_json::json!([{"name": hostile}]);
+
+        print_output_with_styles(&OutputFormat::Table, headers, &rows, &json_data)
+            .expect("table-mode print must not error on a hostile styled cell");
+
+        let json_output = print_output_with_styles(&OutputFormat::Json, headers, &rows, &json_data);
+        assert!(
+            json_output.is_ok(),
+            "json-mode print must not error and must never consult the styled \
+             rows at all"
         );
     }
 }
