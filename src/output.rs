@@ -1,17 +1,101 @@
 use crate::cli::OutputFormat;
 use colored::Colorize;
-use comfy_table::{ContentArrangement, Table, presets::UTF8_FULL_CONDENSED};
+use comfy_table::{Cell, Color, ContentArrangement, Table, presets::UTF8_FULL_CONDENSED};
 use serde::Serialize;
 
+/// `render_table`'s table-mode chokepoint (BC-7.1.006): every header and
+/// every cell is sanitized via [`sanitize_table_cell`] before it reaches
+/// `comfy_table`. See that function's rustdoc for the exact character
+/// policy. `--output json` never routes through here.
 pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     let mut table = Table::new();
     table
         .load_preset(UTF8_FULL_CONDENSED)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(headers);
+        .set_header(
+            headers
+                .iter()
+                .map(|h| sanitize_table_cell(h))
+                .collect::<Vec<_>>(),
+        );
 
     for row in rows {
-        table.add_row(row);
+        let sanitized: Vec<String> = row.iter().map(|c| sanitize_table_cell(c)).collect();
+        table.add_row(sanitized);
+    }
+
+    table.to_string()
+}
+
+/// A single table-mode cell carrying an optional structural foreground
+/// color, for [`render_table_with_styles`] (BC-7.1.006). The cell's TEXT is
+/// always sanitized via [`sanitize_table_cell`] before becoming a
+/// `comfy_table::Cell` — styling is applied as a structural `Cell`
+/// attribute afterward, never as ANSI bytes baked into the cell string, so
+/// styling can never bypass sanitization.
+///
+/// This is the general mechanism any future jr-authored styled cell content
+/// must use going forward: a server-supplied string can now never itself
+/// produce a colored cell (it is always sanitized), so jr's own styling
+/// must be expressed structurally. Today the only caller is `jr user
+/// list`/`jr user view`'s Active column (`src/cli/user.rs`); every other
+/// `render_table` call site keeps the plain `&[Vec<String>]` API above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyledCell {
+    text: String,
+    fg: Option<Color>,
+}
+
+impl StyledCell {
+    /// A cell with no structural color — the common case.
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            fg: None,
+        }
+    }
+
+    /// A cell styled with a structural foreground color. The caller is
+    /// responsible for deciding WHETHER to colorize (e.g. honoring
+    /// `--no-color`/`NO_COLOR` via `colored::control::SHOULD_COLORIZE`) —
+    /// this constructor unconditionally applies `fg` when used.
+    pub fn colored(text: impl Into<String>, fg: Color) -> Self {
+        Self {
+            text: text.into(),
+            fg: Some(fg),
+        }
+    }
+}
+
+/// Styled-cell sibling of [`render_table`] (BC-7.1.006). Sanitizes every
+/// header and every cell's text exactly like `render_table`, then applies
+/// each cell's optional structural foreground color to the resulting
+/// `comfy_table::Cell` — never as ANSI bytes embedded in the sanitized
+/// string.
+pub fn render_table_with_styles(headers: &[&str], rows: &[Vec<StyledCell>]) -> String {
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL_CONDENSED)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(
+            headers
+                .iter()
+                .map(|h| sanitize_table_cell(h))
+                .collect::<Vec<_>>(),
+        );
+
+    for row in rows {
+        let cells: Vec<Cell> = row
+            .iter()
+            .map(|c| {
+                let cell = Cell::new(sanitize_table_cell(&c.text));
+                match c.fg {
+                    Some(color) => cell.fg(color),
+                    None => cell,
+                }
+            })
+            .collect();
+        table.add_row(cells);
     }
 
     table.to_string()
@@ -33,6 +117,34 @@ pub fn print_output<T: Serialize>(
                 println!("{}", "No results found.".dimmed());
             } else {
                 println!("{}", render_table(headers, rows));
+            }
+        }
+        OutputFormat::Json => {
+            println!("{}", render_json(json_data)?);
+        }
+    }
+    Ok(())
+}
+
+/// Styled-cell sibling of [`print_output`] (BC-7.1.006). Identical
+/// dispatch — `OutputFormat::Table` renders via [`render_table_with_styles`]
+/// (falling back to the same "No results found." hint when `rows` is
+/// empty), `OutputFormat::Json` serializes `json_data` via [`render_json`]
+/// exactly as before, completely unaffected by any cell styling. Used only
+/// by `jr user list`/`jr user view`; every other call site keeps
+/// [`print_output`].
+pub fn print_output_with_styles<T: Serialize>(
+    format: &OutputFormat,
+    headers: &[&str],
+    rows: &[Vec<StyledCell>],
+    json_data: &T,
+) -> anyhow::Result<()> {
+    match format {
+        OutputFormat::Table => {
+            if rows.is_empty() {
+                println!("{}", "No results found.".dimmed());
+            } else {
+                println!("{}", render_table_with_styles(headers, rows));
             }
         }
         OutputFormat::Json => {
@@ -123,6 +235,58 @@ pub(crate) fn sanitize_env_display(value: &str) -> String {
 /// `test_sanitize_env_display_unterminated_csi_consumed_to_eof` /
 /// `..._unterminated_osc_consumed_to_eof` for the pinned behavior.
 fn strip_control_and_ansi(value: &str) -> String {
+    sanitize_control_and_ansi_core(value, |c| {
+        let code = c as u32;
+        if code <= 0x1F
+            || code == 0x7F
+            || (0x202A..=0x202E).contains(&code)
+            || (0x2066..=0x2069).contains(&code)
+            || code == 0x2028
+            || code == 0x2029
+            || code == 0x0085
+        {
+            CharDisposition::Drop
+        } else {
+            CharDisposition::Keep
+        }
+    })
+}
+
+/// Per-character disposition a [`sanitize_control_and_ansi_core`] policy
+/// closure returns for a single non-ANSI-sequence `char` — CSI/OSC sequence
+/// consumption itself is handled entirely by the shared core, never by the
+/// policy (BC-7.1.006 / `strip_control_and_ansi`).
+enum CharDisposition {
+    /// Pass the character through to the output unchanged.
+    Keep,
+    /// Drop the character outright, substituting nothing.
+    Drop,
+    /// Substitute the character with a single replacement character.
+    Replace(char),
+}
+
+/// Shared CSI/OSC-consuming state machine backing both
+/// [`strip_control_and_ansi`] (`sanitize_env_display`) and
+/// [`sanitize_table_cell`] (BC-7.1.006) — the two sibling sanitizers differ
+/// only in what they do with an ordinary (non-ESC) character, which this
+/// function delegates to the caller-supplied `policy` closure via
+/// [`CharDisposition`]. The ANSI CSI/OSC recognition and fail-closed
+/// unterminated-sequence behavior is identical for both callers and lives
+/// here exactly once.
+///
+/// An ANSI CSI sequence (`ESC [ … <final byte 0x40-0x7E>`) is consumed
+/// through its final byte; an OSC sequence (`ESC ] … <BEL 0x07 or ST
+/// ESC \>`) is consumed through its BEL or `ESC \` string terminator. A
+/// bare ESC not starting a recognized CSI/OSC sequence falls through to
+/// `policy` like any other character. If a CSI/OSC sequence's terminator
+/// never appears before end-of-string, the sequence (and everything after
+/// it) is consumed through EOF — fail-closed, no raw ESC byte ever
+/// survives — regardless of what `policy` would have done with the bytes
+/// that would have followed.
+fn sanitize_control_and_ansi_core(
+    value: &str,
+    mut policy: impl FnMut(char) -> CharDisposition,
+) -> String {
     let mut out = String::with_capacity(value.len());
     let mut chars = value.chars().peekable();
 
@@ -154,19 +318,11 @@ fn strip_control_and_ansi(value: &str) -> String {
             continue;
         }
 
-        let code = c as u32;
-        if code <= 0x1F
-            || code == 0x7F
-            || (0x202A..=0x202E).contains(&code)
-            || (0x2066..=0x2069).contains(&code)
-            || code == 0x2028
-            || code == 0x2029
-            || code == 0x0085
-        {
-            continue;
+        match policy(c) {
+            CharDisposition::Keep => out.push(c),
+            CharDisposition::Drop => {}
+            CharDisposition::Replace(r) => out.push(r),
         }
-
-        out.push(c);
     }
 
     out
@@ -236,11 +392,27 @@ fn strip_control_and_ansi(value: &str) -> String {
 /// and its inline `VP-SEC-001-001` for the full edge-case/property
 /// contract this function must satisfy once implemented.
 pub(crate) fn sanitize_table_cell(value: &str) -> String {
-    todo!(
-        "BC-7.1.006 / SEC-001-RENDER-TABLE-ANSI-SANITIZE: sanitize_table_cell \
-         is not yet implemented (FIX-P5-001, F6 target) — called with \
-         value = {value:?}"
-    )
+    sanitize_control_and_ansi_core(value, |c| match c {
+        '\n' => CharDisposition::Keep,
+        '\r' => CharDisposition::Drop,
+        '\t' => CharDisposition::Replace(' '),
+        _ => {
+            let code = c as u32;
+            if code <= 0x1F
+                || code == 0x7F
+                || (0x80..=0x9F).contains(&code)
+                || (0x202A..=0x202E).contains(&code)
+                || (0x2066..=0x2069).contains(&code)
+                || code == 0x2028
+                || code == 0x2029
+                || code == 0x0085
+            {
+                CharDisposition::Drop
+            } else {
+                CharDisposition::Keep
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -666,8 +838,11 @@ mod tests {
         /// hostile-biased input, the output contains no disallowed C0
         /// control (anything <= 0x1F other than `\n`, plus `0x7F`), no C1
         /// control (`0x80`-`0x9F`), no raw ESC, no `\r`, no `\t`, and none
-        /// of the bidi-override/line/paragraph-separator code points; every
-        /// `\n` present in the input survives in the output (same count).
+        /// of the bidi-override/line/paragraph-separator code points; the
+        /// output's `\n` count never exceeds the input's (the sanitizer
+        /// never fabricates a `\n` — see the `<=`-not-`==` note on the
+        /// newline assertion below for why exact preservation is not a
+        /// sound invariant against this generator).
         #[test]
         fn prop_bc_7_1_006_sanitize_table_cell_whole_string_invariant(
             input in hostile_table_cell_strategy()
@@ -698,12 +873,38 @@ mod tests {
                 );
             }
 
+            // NOTE (FIX-P5-001 Red Gate correction, provably wrong against
+            // BC-7.1.006 EC-3, not an implementation bug): this assertion
+            // was originally a strict `prop_assert_eq!` ("every `\n`
+            // present in the input survives in the output, same count").
+            // That is unsound against `hostile_table_cell_strategy`, which
+            // itself generates the unterminated-CSI token
+            // `"\u{1b}[31;1;9"` (the literal EC-3 fixture) interleaved with
+            // `\n` tokens. EC-3 mandates that an unterminated CSI/OSC
+            // sequence is consumed FAIL-CLOSED through end-of-string,
+            // discarding everything after it (including any `\n` that
+            // happens to follow) — reusing `strip_control_and_ansi`'s
+            // existing, already-pinned state machine verbatim, per this
+            // BC's own text. Minimal failing case:
+            // `sanitize_table_cell("\u{1b}[31;1;9\n")` == `""` (the entire
+            // string is the unterminated sequence's own scan, including the
+            // trailing `\n`) — proptest found this via
+            // `input = "\u{1b}[31;1;9\n"`. The always-true invariant this
+            // sanitizer actually guarantees is that it never FABRICATES a
+            // `\n` (no `CharDisposition::Replace` ever substitutes `\n`,
+            // and the CSI/OSC/C1/control-stripping paths only ever drop
+            // characters) — i.e. `output_newlines <= input_newlines`, never
+            // `>`. Exact preservation only holds on inputs free of an
+            // unterminated CSI/OSC sequence, which EC-1..EC-2/EC-8/EC-9's
+            // own well-terminated fixtures separately pin at the example
+            // level.
             let input_newlines = input.chars().filter(|&c| c == '\n').count();
             let output_newlines = output.chars().filter(|&c| c == '\n').count();
-            prop_assert_eq!(
-                input_newlines, output_newlines,
-                "newline count must be preserved: input had {}, output has {}",
-                input_newlines, output_newlines
+            prop_assert!(
+                output_newlines <= input_newlines,
+                "sanitize_table_cell must never fabricate a \\n: input had {} \
+                 newline(s), output has {} in {:?}",
+                input_newlines, output_newlines, output
             );
         }
 
