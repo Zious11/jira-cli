@@ -172,6 +172,77 @@ fn strip_control_and_ansi(value: &str) -> String {
     out
 }
 
+/// Sanitizes a single table-mode header or cell string before it reaches
+/// `comfy_table`'s renderer (BC-7.1.006, closing security finding
+/// `SEC-001-RENDER-TABLE-ANSI-SANITIZE`, MEDIUM, CWE-150/CWE-116).
+///
+/// `render_table` is the single table-mode rendering chokepoint —
+/// `print_output`'s `OutputFormat::Table` arm is its only production call
+/// site, so every table-mode command renders through it. This function is
+/// the single chokepoint-level place a server-supplied string (an issue
+/// summary, a field option label, a comment body fragment, a display
+/// name, ...) gets made safe for a terminal that interprets raw ANSI
+/// escape/control sequences, before `render_table` calls
+/// `comfy_table::Table::set_header`/`add_row`. No caller of `render_table`
+/// is required to sanitize its own inputs before passing them in.
+///
+/// Per-character policy, applied left to right over the whole string
+/// (BC-7.1.006):
+/// - `\n` (U+000A) is PRESERVED verbatim — the only mechanism by which a
+///   multi-line cell renders (issue view Description/Links, comment Body).
+/// - `\r` (U+000D) is STRIPPED outright, nothing substituted (a `\r\n`
+///   pair therefore collapses to `\n`; a bare `\r` disappears with no
+///   trace).
+/// - `\t` (U+0009) is REPLACED with a single space (`" "`) — deliberately
+///   NOT stripped outright like the other C0 controls below, to avoid
+///   merging the words flanking it into a different, and potentially
+///   dangerous-looking, string (e.g. `"rm -rf /\thome"` must not collapse
+///   to `"rm -rf /home"`).
+/// - All other C0 controls (`0x00`-`0x08`, `0x0B`-`0x1F`) and `0x7F` (DEL)
+///   are STRIPPED outright.
+/// - ANSI CSI sequences (`ESC [ … <final byte 0x40-0x7E>`) and OSC
+///   sequences (`ESC ] … <BEL 0x07 or ST ESC \>`) are consumed and
+///   STRIPPED wholesale, reusing [`strip_control_and_ansi`]'s existing
+///   CSI/OSC state machine verbatim — including its fail-closed
+///   unterminated-sequence behavior: an unterminated CSI/OSC is consumed
+///   through EOF (along with everything after it), so no raw ESC byte
+///   ever survives into a rendered cell.
+/// - C1 controls `U+0080`-`U+009F` are STRIPPED as a class, including the
+///   single-byte CSI introducer `U+009B` and the single-byte OSC
+///   introducer `U+009D` — new relative to `strip_control_and_ansi`
+///   (which has no C1 handling). This is a single-code-point removal, not
+///   a second state machine: bytes that would otherwise have continued a
+///   sequence started by a stripped C1 introducer are NOT consumed as
+///   part of that sequence — they survive in the output as inert literal
+///   text.
+/// - Bidi override characters `U+202A`-`U+202E` and `U+2066`-`U+2069`,
+///   plus `U+2028` (LINE SEPARATOR), `U+2029` (PARAGRAPH SEPARATOR), and
+///   `U+0085` (NEL) are STRIPPED — the same Unicode terminal-injection
+///   code-point set `strip_control_and_ansi` already strips for
+///   `sanitize_env_display`.
+/// - No length cap and no truncation are applied (unlike
+///   `sanitize_env_display`'s capped-and-marked behavior). Ordinary
+///   printable text — including non-ASCII such as `"é"`, CJK characters,
+///   and emoji — passes through completely unchanged, regardless of
+///   length.
+///
+/// **`--output json` MUST NEVER call this function.** This mirrors
+/// `sanitize_env_display`'s own documented rule and the issue #398
+/// description-echo asymmetry already codified in CLAUDE.md: the human
+/// channel optimizes for terminal safety and scannability, the machine
+/// channel must stay lossless for programmatic consumers.
+///
+/// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006 (EC-1..EC-12)
+/// and its inline `VP-SEC-001-001` for the full edge-case/property
+/// contract this function must satisfy once implemented.
+pub(crate) fn sanitize_table_cell(value: &str) -> String {
+    todo!(
+        "BC-7.1.006 / SEC-001-RENDER-TABLE-ANSI-SANITIZE: sanitize_table_cell \
+         is not yet implemented (FIX-P5-001, F6 target) — called with \
+         value = {value:?}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
