@@ -1527,11 +1527,13 @@ async fn test_bc_x_14_001_field_name_ambiguous_exits_64() {
 
 /// AC-011: a human field name resolving to a SINGLE unambiguous match
 /// succeeds end-to-end — the field-name-resolution happy path via
-/// `list_fields()` + `partial_match`. All pre-existing tests use either the
+/// `list_fields()` + `search_field_list`'s single-exact-match branch (the
+/// fixture's query `"Story Points"` matches exactly one of the two
+/// candidate names). All pre-existing tests use either the
 /// `customfield_NNNNN` bypass or the ambiguous-name error path; this is the
 /// first to exercise a successful human-name resolution.
 #[tokio::test]
-async fn test_bc_x_14_001_field_name_human_name_resolves_via_partial_match() {
+async fn test_bc_x_14_001_field_name_single_exact_match_resolves_via_search_field_list() {
     let h = Harness::new().await;
     mount_list_fields(
         &h.server,
