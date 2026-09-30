@@ -1130,3 +1130,372 @@ async fn test_bc_7_1_006_issue_assign_human_output_clean_fixture_byte_identical(
          sanitization change: {stderr:?}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Shared user disambiguation — D-395 (FIX-P5-001 extension)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// `src/cli/issue/helpers.rs::disambiguate_user` (~L276-400, after the D-395
+// `disambiguation_labels` stub insertion) is the SHARED disambiguation
+// helper behind `resolve_user`, `resolve_assignee` (`jr issue assign
+// --to`), `resolve_assignee_by_project` (`jr issue create/edit
+// --assignee`), and `mentions::resolve_mentions`. Its two non-interactive
+// (`--no-input`/non-TTY) `JrError::UserError` branches echo server-supplied,
+// user-editable `display_name`/`email_address`/`account_id` unsanitized:
+//   - `MatchResult::ExactMultiple`: `"Multiple users named \"{name}\"
+//     found:\n  {display_name} ({email}, account: {account_id})\n...\n
+//     Specify the accountId directly or use a more specific name."`
+//     (`email` absent → `"  {display_name} (account: {account_id})"`).
+//   - `MatchResult::Ambiguous`: `"Multiple users match \"{name}\": {csv of
+//     raw display_name}. Use a more specific name."`.
+// `name` (the CLI-supplied search string) is NOT itself server-derived, so
+// these tests deliberately keep the `--to`/`--assignee` argument ASCII-clean
+// — ExactMultiple's trigger mechanics require the argument to equal the
+// candidate display names EXACTLY (case-insensitively), so hostile
+// `display_name` values are exercised only via the Ambiguous (substring)
+// branch below, where equality is not required.
+//
+// Driven through TWO different callers (`jr issue assign` and `jr issue
+// create --assignee`) to prove the fix, once applied to the shared
+// `disambiguate_user` function, covers every caller — not just one
+// command's call site.
+
+/// ExactMultiple hostile `account_id`/`email_address` fixtures. `display_name`
+/// is deliberately the CLEAN, ASCII string `"Mallory"` for both users (see
+/// section header above for why) — these four consts exercise the CSI, `\r`,
+/// and C1 sanitization mechanisms across the two echoed server fields.
+const DISAMBIG_HOSTILE_ACC_1: &str = "\u{1b}[32mACC-1\u{1b}[0m";
+const DISAMBIG_HOSTILE_EMAIL_1: &str = "\u{1b}[35mmallory1\u{1b}[0m@example.invalid";
+const DISAMBIG_HOSTILE_ACC_2: &str = "ACC-2\rZ";
+const DISAMBIG_HOSTILE_EMAIL_2: &str = "mallory2\u{9b}Q@example.invalid";
+
+/// Ambiguous hostile `display_name` fixtures — the exact two example
+/// payloads from the D-395 task brief. Both sanitize to the identical
+/// survivor text `"Alice"` (traced in each const's doc comment) despite
+/// being raw-distinct strings, which is why the Ambiguous branch's
+/// `matches.join(", ")` is expected to render `"Alice, Alice"` once fixed.
+///
+/// `"\u{1b}[31mAlice\u{1b}[0m"`: CSI `ESC [ 31 m` (consumed through final
+/// byte `m`) + `"Alice"` (kept) + CSI `ESC [ 0 m` (consumed) → `"Alice"`.
+const DISAMBIG_HOSTILE_NAME_1: &str = "\u{1b}[31mAlice\u{1b}[0m";
+/// `"Al\u{9b}ice\u{1b}]0;x\u{7}"`: `"Al"` (kept) + C1 `U+009B` (dropped, a
+/// single code point — no separator inserted) + `"ice"` (kept) + OSC
+/// `ESC ] 0 ; x <BEL>` (consumed through its BEL terminator) → `"Alice"`.
+const DISAMBIG_HOSTILE_NAME_2: &str = "Al\u{9b}ice\u{1b}]0;x\u{7}";
+
+/// Builds a `User` JSON object (`accountId`/`displayName`/`active`, plus
+/// `emailAddress` when `email` is `Some`) for the two disambiguation search
+/// fixtures below.
+fn disambig_user_obj(account_id: &str, display_name: &str, email: Option<&str>) -> Value {
+    let mut obj = json!({
+        "accountId": account_id,
+        "displayName": display_name,
+        "active": true,
+    });
+    if let Some(e) = email {
+        obj["emailAddress"] = json!(e);
+    }
+    obj
+}
+
+/// Mounts `GET /rest/api/3/user/assignable/search` (the `jr issue assign
+/// --to` resolution endpoint, scoped by `issueKey`) returning `users`
+/// verbatim.
+async fn mount_disambig_search_by_issue(server: &MockServer, issue_key: &str, users: Vec<Value>) {
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .and(query_param("issueKey", issue_key))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(users)))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `GET /rest/api/3/user/assignable/multiProjectSearch` (the `jr
+/// issue create --assignee` resolution endpoint, scoped by `projectKeys`)
+/// returning `users` verbatim.
+async fn mount_disambig_search_by_project(server: &MockServer, project: &str, users: Vec<Value>) {
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", project))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(users)))
+        .mount(server)
+        .await;
+}
+
+/// The two ExactMultiple hostile duplicate users shared by the
+/// human-output, JSON-envelope-pin, and clean-fixture-guard tests below.
+fn disambig_exact_multiple_hostile_users() -> Vec<Value> {
+    vec![
+        disambig_user_obj(
+            DISAMBIG_HOSTILE_ACC_1,
+            "Mallory",
+            Some(DISAMBIG_HOSTILE_EMAIL_1),
+        ),
+        disambig_user_obj(
+            DISAMBIG_HOSTILE_ACC_2,
+            "Mallory",
+            Some(DISAMBIG_HOSTILE_EMAIL_2),
+        ),
+    ]
+}
+
+/// `jr issue assign --to Mallory`, ExactMultiple branch: a hostile
+/// `account_id`/`email_address` pair on each of two same-named duplicate
+/// users must not leak a raw ESC byte, C1 code point, or bare `\r` into
+/// STDERR, while the CSI/`\r`/C1-stripped survivor text must still render
+/// in the unchanged message format.
+///
+/// RED against current code: `disambiguate_user`'s `ExactMultiple`
+/// non-interactive branch (`src/cli/issue/helpers.rs` ~L323-329) builds
+/// `lines` from raw, unsanitized `u.display_name`/`email`/`u.account_id` —
+/// the hostile bytes survive verbatim in stderr today.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile_fields() {
+    let h = Harness::new().await;
+    mount_disambig_search_by_issue(&h.server, "FOO-10", disambig_exact_multiple_hostile_users())
+        .await;
+
+    let output = h.run(&["issue", "assign", "FOO-10", "--to", "Mallory", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stderr, "jr issue assign --to (ExactMultiple, stderr)");
+    assert!(
+        !stderr.contains('\r'),
+        "jr issue assign --to (ExactMultiple, stderr): raw CR must not \
+         survive: {stderr:?}"
+    );
+    assert_eq!(
+        stderr,
+        "Error: Multiple users named \"Mallory\" found:\n  \
+         Mallory (mallory1@example.invalid, account: ACC-1)\n  \
+         Mallory (mallory2Q@example.invalid, account: ACC-2Z)\n\
+         Specify the accountId directly or use a more specific name.\n",
+        "sanitized ExactMultiple message must show the CSI/\\r/C1-stripped \
+         survivor text for both duplicates' email/account_id, in their \
+         normal position within the unchanged message format: {stderr:?}"
+    );
+}
+
+/// `jr issue assign --to ic`, Ambiguous branch: two hostile `display_name`
+/// values (the exact D-395 task-brief example payloads — see
+/// `DISAMBIG_HOSTILE_NAME_1`/`_2`'s doc comments) must not leak a raw ESC
+/// byte, C1 code point, or OSC sequence into STDERR, while the
+/// CSI/C1/OSC-stripped survivor text must still render.
+///
+/// RED against current code: `disambiguate_user`'s `Ambiguous`
+/// non-interactive branch (`src/cli/issue/helpers.rs` ~L350-356) builds its
+/// message from `matches.join(", ")`, where `matches` holds the raw,
+/// unsanitized `display_name` strings — the hostile bytes survive verbatim
+/// in stderr today.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_ambiguous_human_output_strips_hostile_display_names() {
+    let h = Harness::new().await;
+    mount_disambig_search_by_issue(
+        &h.server,
+        "FOO-11",
+        vec![
+            disambig_user_obj("ACC-A", DISAMBIG_HOSTILE_NAME_1, None),
+            disambig_user_obj("ACC-B", DISAMBIG_HOSTILE_NAME_2, None),
+        ],
+    )
+    .await;
+
+    let output = h.run(&["issue", "assign", "FOO-11", "--to", "ic", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stderr, "jr issue assign --to (Ambiguous, stderr)");
+    assert_eq!(
+        stderr, "Error: Multiple users match \"ic\": Alice, Alice. Use a more specific name.\n",
+        "sanitized Ambiguous message must show the CSI/C1/OSC-stripped \
+         survivor text 'Alice' for both distinct hostile display names: \
+         {stderr:?}"
+    );
+}
+
+/// `jr issue create --assignee` (via `--to`), Ambiguous branch, proving the
+/// fix (once applied to the SHARED `disambiguate_user` function) covers a
+/// second, different caller — `resolve_assignee_by_project`, not
+/// `resolve_assignee`. Same hostile `display_name` fixtures and expected
+/// sanitized message shape as the `jr issue assign` Ambiguous test above.
+///
+/// RED against current code: same unsanitized `matches.join(", ")` shared
+/// code path, reached via `helpers::resolve_assignee_by_project` instead of
+/// `helpers::resolve_assignee`.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_create_assignee_ambiguous_human_output_strips_hostile_display_names()
+{
+    let h = Harness::new().await;
+    mount_disambig_search_by_project(
+        &h.server,
+        "FOO",
+        vec![
+            disambig_user_obj("ACC-A", DISAMBIG_HOSTILE_NAME_1, None),
+            disambig_user_obj("ACC-B", DISAMBIG_HOSTILE_NAME_2, None),
+        ],
+    )
+    .await;
+
+    let output = h.run(&[
+        "issue",
+        "create",
+        "--project",
+        "FOO",
+        "--type",
+        "Task",
+        "--summary",
+        "D-395 create --assignee coverage",
+        "--to",
+        "ic",
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stderr, "jr issue create --to (Ambiguous, stderr)");
+    assert_eq!(
+        stderr, "Error: Multiple users match \"ic\": Alice, Alice. Use a more specific name.\n",
+        "sanitized Ambiguous message must show the CSI/C1/OSC-stripped \
+         survivor text 'Alice' for both distinct hostile display names, \
+         proving the SHARED disambiguate_user fix covers this different \
+         caller too: {stderr:?}"
+    );
+}
+
+/// `--output json`, ExactMultiple branch: pins TODAY's (pre-fix) JSON error
+/// envelope emitted by `main.rs`'s error path
+/// (`{"error": e.to_string(), "code": exit_code}`, `src/main.rs` ~L130-137)
+/// — NOT a target/fixed-behavior test like the others in this section.
+///
+/// `disambiguate_user` builds ONE `JrError::UserError` message string that
+/// both the table-mode "Error: {e}" arm and this JSON `"error"` field
+/// render from — main.rs's JSON envelope construction never calls
+/// `output::sanitize_table_cell`/`sanitize_terminal_text` itself. Per the
+/// D-395 task brief: "The spec author is deciding whether JSON error text
+/// should be sanitized, so don't assert a change there. Just report what it
+/// emits today." This test therefore asserts the RAW, unsanitized hostile
+/// bytes survive in the JSON `"error"` string, exactly as constructed by
+/// today's code — it documents current behavior and takes no position on
+/// whether a fix to `disambiguate_user`'s message-building should also
+/// change this JSON output (if the fix sanitizes at message-construction
+/// time rather than only at a table-mode print site, this pin would need
+/// deliberate revisiting, not a silent break).
+///
+/// Expected GREEN today (and will only change if the implementer chooses to
+/// sanitize message construction itself, in which case this specific pin
+/// is EXPECTED to need updating — see the caveat above).
+#[tokio::test]
+async fn test_d395_issue_assign_exact_multiple_json_error_envelope_pins_current_raw_behavior() {
+    let h = Harness::new().await;
+    mount_disambig_search_by_issue(&h.server, "FOO-12", disambig_exact_multiple_hostile_users())
+        .await;
+
+    let output = h.run(&[
+        "issue",
+        "assign",
+        "FOO-12",
+        "--to",
+        "Mallory",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(stdout, "", "no data should reach stdout on an error path");
+
+    let parsed: Value = serde_json::from_str(stderr.trim_end())
+        .unwrap_or_else(|e| panic!("expected valid JSON on stderr, got {stderr}\nerror: {e}"));
+    assert_eq!(parsed["code"], json!(64));
+
+    let expected_raw_error = format!(
+        "Multiple users named \"Mallory\" found:\n  Mallory ({DISAMBIG_HOSTILE_EMAIL_1}, account: {DISAMBIG_HOSTILE_ACC_1})\n  Mallory ({DISAMBIG_HOSTILE_EMAIL_2}, account: {DISAMBIG_HOSTILE_ACC_2})\nSpecify the accountId directly or use a more specific name."
+    );
+    assert_eq!(
+        parsed["error"],
+        json!(expected_raw_error),
+        "TODAY's (pre-fix) JSON error envelope carries the raw, unsanitized \
+         hostile account_id/email bytes verbatim, since main.rs's JSON \
+         error-envelope construction never sanitizes — see this test's doc \
+         comment for why this is a documentation pin, not a target-behavior \
+         assertion: {parsed:?}"
+    );
+}
+
+/// Regression guard: a CLEAN ExactMultiple duplicate pair's human
+/// (table-mode) output must be byte-identical before and after this fix —
+/// pinning the exact expected stderr so any accidental format change is
+/// caught the same way a hostile-payload leak would be.
+///
+/// Expected GREEN today and after the fix: `sanitize_table_cell`/
+/// `sanitize_terminal_text` is a no-op on ASCII text containing no control
+/// characters, ANSI escapes, or C1 code points — none of this fixture's
+/// fields contain any, so wiring sanitization into `disambiguate_user`
+/// cannot change this specific output.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_clean_fixture_byte_identical() {
+    let h = Harness::new().await;
+    mount_disambig_search_by_issue(
+        &h.server,
+        "FOO-13",
+        vec![
+            disambig_user_obj("acc-jane-1", "Jane Doe", Some("jane1@example.com")),
+            disambig_user_obj("acc-jane-2", "Jane Doe", Some("jane2@example.com")),
+        ],
+    )
+    .await;
+
+    let output = h.run(&[
+        "issue",
+        "assign",
+        "FOO-13",
+        "--to",
+        "Jane Doe",
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(
+        stderr,
+        "Error: Multiple users named \"Jane Doe\" found:\n  \
+         Jane Doe (jane1@example.com, account: acc-jane-1)\n  \
+         Jane Doe (jane2@example.com, account: acc-jane-2)\n\
+         Specify the accountId directly or use a more specific name.\n",
+        "a clean ExactMultiple duplicate pair's human output must be \
+         byte-identical before and after this fix — any diff here is a \
+         format change, not a sanitization change: {stderr:?}"
+    );
+}

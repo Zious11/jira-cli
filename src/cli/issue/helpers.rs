@@ -882,6 +882,59 @@ mod tests {
         assert!(msg.contains("Bob"));
     }
 
+    // ── disambiguation_labels tests (D-395, FIX-P5-001) ───────────────
+    //
+    // `disambiguation_labels` is currently a stub (`todo!()` body) —
+    // `disambiguate_user`'s ExactMultiple interactive branch does not call
+    // it yet; that branch still builds its `labels` via an inline,
+    // unsanitized `.map(...)` closure. These tests pin the function's
+    // TARGET (sanitized) behavior and panic on the `todo!()` (RED) until
+    // the implementer wires that branch to call this function instead.
+
+    /// Hostile `display_name` (CSI-wrapped) + hostile `email_address`
+    /// (also CSI-wrapped) must both sanitize to their CSI-stripped survivor
+    /// text, assembled into the existing `"{name} ({email})"` label format.
+    #[test]
+    fn disambiguation_labels_sanitizes_hostile_display_name_and_email() {
+        let u = make_user_with_email(
+            "acc-1",
+            "\u{1b}[31mAlice\u{1b}[0m",
+            "\u{1b}[35mevil\u{1b}[0m@example.invalid",
+        );
+        let labels = disambiguation_labels(&[&u]);
+        assert_eq!(labels, vec!["Alice (evil@example.invalid)".to_string()]);
+    }
+
+    /// No `email_address` → the label falls back to `account_id`. Hostile
+    /// `display_name` (C1-byte + OSC mix) and hostile `account_id`
+    /// (trailing C1 byte) must both sanitize, assembled into the existing
+    /// `"{name} ({account_id})"` label format.
+    #[test]
+    fn disambiguation_labels_sanitizes_hostile_display_name_and_account_id_when_no_email() {
+        let u = make_user("acc-1\u{9b}Z", "Al\u{9b}ice\u{1b}]0;x\u{7}");
+        let labels = disambiguation_labels(&[&u]);
+        assert_eq!(labels, vec!["Alice (acc-1Z)".to_string()]);
+    }
+
+    /// Regression guard: clean (ASCII, no control/escape bytes) input must
+    /// produce byte-identical labels in the existing format — for BOTH the
+    /// email-present and no-email cases, and preserving input order across
+    /// multiple duplicates — so wiring sanitization into this function
+    /// cannot itself change output for non-hostile data.
+    #[test]
+    fn disambiguation_labels_preserves_format_for_clean_input() {
+        let u1 = make_user_with_email("acc-1", "Jane Doe", "jane1@example.com");
+        let u2 = make_user("acc-2", "Jane Doe");
+        let labels = disambiguation_labels(&[&u1, &u2]);
+        assert_eq!(
+            labels,
+            vec![
+                "Jane Doe (jane1@example.com)".to_string(),
+                "Jane Doe (acc-2)".to_string(),
+            ]
+        );
+    }
+
     // ── compose_extra_fields tests ────────────────────────────────────
 
     #[test]
