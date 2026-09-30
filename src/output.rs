@@ -358,27 +358,57 @@ fn sanitize_control_and_ansi_core(
 /// was never meant to be read that broadly — a number of other human-text
 /// call sites print server-supplied strings without routing through this
 /// function at all. Those are tracked as the **NONTABLE-SERVER-TEXT-SANITIZE**
-/// residual, named here for anyone auditing sanitization coverage rather
-/// than re-discovering them one at a time:
+/// residual — a KNOWN, NON-EXHAUSTIVE inventory for anyone auditing
+/// sanitization coverage rather than re-discovering them one at a time.
+/// Every entry below has been verified against the code as of the cited
+/// fix, but the absence of a site from this list is NOT evidence it's
+/// sanitized — only entries present have been checked:
 /// - `src/cli/project.rs` — `jr project fields`'s issue-type/priority/status/
 ///   CMDB-field name lists (`println!` loops over server-supplied names).
-/// - `src/cli/issue/workflow.rs` — `jr issue transitions`'s and `jr issue
-///   move`'s interactive/listing transition-name prompts (`eprintln!`/
-///   `dialoguer::Select` item text).
+/// - `src/cli/issue/workflow.rs`:
+///   - `jr issue transitions`'s and `jr issue move`'s interactive/listing
+///     transition-name prompts (`eprintln!`/`dialoguer::Select` item text).
+///   - `handle_move`/`handle_move_bulk`'s status-name echoes on a
+///     successful move (`output::print_success`, e.g. `Moved {key} to
+///     "{status}"`, `{key} is already in status "{status}"`).
+///   - `handle_move_bulk`'s per-key bulk-transition error line
+///     (`eprintln!("error: {key}: {err_msg}")`), where `err_msg` is
+///     `BulkActionError::summary()` — raw Jira bulk-API error text.
+/// - `src/cli/issue/links.rs` — `handle_link`'s link-creation confirmation
+///   echo of the server-resolved link-type name (`resolved_name`, drawn
+///   from `list_link_types()`'s response via `partial_match`;
+///   `output::print_success`).
 /// - `src/cli/sprint.rs` — `jr sprint current`'s summary-line hint
 ///   (`eprintln!`).
-/// - `src/cli/component.rs` — `jr component delete`'s confirmation/result
-///   echo of the component name (`eprintln!`).
+/// - `src/cli/component.rs`:
+///   - `jr component delete`'s confirmation/result echo of the component
+///     name (`eprintln!`).
+///   - `jr component list --counts`'s per-component fetch-failure warning,
+///     which echoes the component's `name` alongside the raw server error
+///     (`eprintln!`).
+///   - `jr component create`/`edit`'s confirmation echo of the server
+///     response's `name`/`project` fields (`eprintln!`).
+///   - `jr component rename`'s `--dry-run` preview and `--all-projects`
+///     live fan-out summary, which echo the server-supplied project key
+///     (`t.project`) for each target (`eprintln!`).
 /// - `src/cli/field.rs` — `jr field options`'s graceful-degrade hint
 ///   (`degrade_hint_for_schema`, `eprintln!`).
+/// - `src/cli/board.rs` — the single-board auto-discovery notice, which
+///   echoes the server's board `name`/`board_type` (`eprintln!`).
+/// - `src/cli/init.rs` — the interactive board-selection prompt's item
+///   text, built from the server's board `name`/`board_type`
+///   (`dialoguer::Select`).
 /// - `JrError` variants that echo a raw server-supplied error body/message
 ///   string into their `Display` output, which callers then print to
-///   stderr.
+///   stderr. This includes `jr issue comment view`'s own 404/403 error
+///   branch (`handle_comment_view` returns early with the raw body before
+///   any of its sanitized print sites below run).
 ///
 /// None of these residuals are closed by this function or by SEC-003;
-/// SEC-003's scope is `jr issue comment view` only. A future fix closing
-/// any NONTABLE-SERVER-TEXT-SANITIZE site should route it through
-/// [`sanitize_terminal_text`] and remove it from this list.
+/// SEC-003's scope is `jr issue comment view`'s successful-fetch human
+/// output only. A future fix closing any NONTABLE-SERVER-TEXT-SANITIZE
+/// site should route it through [`sanitize_terminal_text`] and remove it
+/// from this list.
 ///
 /// Per-character policy, applied left to right over the whole string
 /// (BC-7.1.006):

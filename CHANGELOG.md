@@ -122,8 +122,9 @@ All notable changes to jr will be documented here.
   policy, same single implementation) before printing. `--output json`
   stays untouched and lossless, as before. Known non-table human-output call
   sites that still print server-supplied text unsanitized are tracked as
-  the NONTABLE-SERVER-TEXT-SANITIZE residual (see `output::sanitize_table_cell`'s
-  rustdoc for the current list) and are out of scope for this fix.
+  the NONTABLE-SERVER-TEXT-SANITIZE residual -- a known, non-exhaustive
+  inventory (see `output::sanitize_table_cell`'s rustdoc for the current,
+  verified-against-the-code list) -- and are out of scope for this fix.
 
 ## [0.7.0] - 2026-09-23
 
