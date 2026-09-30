@@ -442,3 +442,286 @@ async fn test_bc_7_1_006_user_list_json_mode_preserves_hostile_display_name_raw(
          exactly unchanged, including its ESC portion"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// `jr issue comment view` — SEC-003 (FIX-P5-001 extension, D-393)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// `handle_comment_view`'s table-mode arm (`src/cli/issue/interactions.rs`
+// ~L659-676) prints the comment `author`, `visibility`-derived `restricted`,
+// and ADF-rendered `body_text` via bare `print!`/`println!` — NOT through
+// `render_table`/`print_output`, so none of them are currently routed
+// through `sanitize_table_cell`. SEC-003 extends BC-7.1.006's chokepoint
+// guarantee to this handler's plain-text fields.
+
+/// Hostile `author.displayName`: an ANSI CSI color sequence around
+/// survivor text "Mallory", matching `HOSTILE_PAYLOAD`'s CSI-consumption
+/// shape above but scoped to this section's own fixtures.
+const COMMENT_HOSTILE_AUTHOR: &str = "\u{1b}[31mMallory\u{1b}[0m";
+
+/// Hostile `visibility.value` — exercises `format_restricted_field`'s rung
+/// (a) (`role`/`group` with non-empty `value`), which echoes `value`
+/// verbatim into the printed "Restricted: " field. This is the "some other
+/// printed field" server-controlled site beyond author/body.
+const COMMENT_HOSTILE_VISIBILITY_VALUE: &str = "\u{1b}[35mEvilRole\u{1b}[0m";
+
+/// ADF body: a single paragraph containing `"pwned"`, an OSC sequence, a
+/// bare CR, a `hardBreak`, then a C1-byte-prefixed `"line2"`.
+///
+/// A raw `\n` inside one ADF `text` node is not how real ADF encodes a line
+/// break (BC-7.2.011's file-wide invariant: no `text` node may contain a
+/// raw `\n`) — multi-line content here comes from the `hardBreak` node
+/// between the two `text` nodes instead, mirroring `adf_to_text`'s own
+/// `"hardBreak" => self.output.push('\n')` rendering.
+fn comment_hostile_body() -> Value {
+    json!({
+        "version": 1,
+        "type": "doc",
+        "content": [{
+            "type": "paragraph",
+            "content": [
+                { "type": "text", "text": "pwned\u{1b}]0;evil\u{7}\r" },
+                { "type": "hardBreak" },
+                { "type": "text", "text": "\u{9b}line2" }
+            ]
+        }]
+    })
+}
+
+/// Entirely clean, ASCII-only ADF body — the regression-guard pin's body
+/// source.
+fn comment_clean_body() -> Value {
+    json!({
+        "version": 1,
+        "type": "doc",
+        "content": [{
+            "type": "paragraph",
+            "content": [{ "type": "text", "text": "hello world" }]
+        }]
+    })
+}
+
+/// Mounts `GET /rest/api/3/issue/{key}/comment/{id}` returning a comment
+/// with a hostile `author.displayName`, `visibility.value`, and ADF `body`.
+/// No `properties` key → "JSM internal: N/A" — a static fallback token
+/// (`format_jsm_internal_field` returns `"N/A"` when `properties` is
+/// absent), not server-controlled text, so it needs no hostile-payload
+/// coverage here.
+async fn mount_comment_view_hostile_fixture(server: &MockServer, key: &str, id: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/issue/{key}/comment/{id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": id,
+            "author": { "displayName": COMMENT_HOSTILE_AUTHOR },
+            "created": "2026-07-01T09:00:00.000+0000",
+            "updated": "2026-07-01T10:30:00.000+0000",
+            "body": comment_hostile_body(),
+            "visibility": { "type": "role", "value": COMMENT_HOSTILE_VISIBILITY_VALUE }
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mounts the same endpoint with an entirely clean, ASCII-only fixture — no
+/// `properties` (→ "JSM internal: N/A") and no `visibility` (→
+/// "Restricted: None") — the regression-guard pin's data source.
+async fn mount_comment_view_clean_fixture(server: &MockServer, key: &str, id: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/issue/{key}/comment/{id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": id,
+            "author": { "displayName": "Jane Smith" },
+            "created": "2026-07-01T09:00:00.000+0000",
+            "updated": "2026-07-01T10:30:00.000+0000",
+            "body": comment_clean_body()
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Table mode (default output): hostile `author`/`visibility.value`/ADF
+/// `body` fields must not leak a raw ESC byte, a raw C1 code point, or a
+/// bare `\r` into stdout — while the CSI/OSC-stripped survivor text
+/// (`Mallory`, and `pwned`/`line2` on two separate lines via the preserved
+/// `hardBreak`-turned-`\n`) must still render, and the six field labels
+/// must still all be present (layout unchanged).
+///
+/// RED against current code: `handle_comment_view`'s table-mode arm prints
+/// `author`, `restricted`, and `body_text` via bare `print!`/`println!`,
+/// never through `sanitize_table_cell` — the hostile ESC/C1/`\r` bytes
+/// survive verbatim, so `assert_no_esc_or_c1` and the `\r`-absence
+/// assertion both fail today.
+#[tokio::test]
+async fn test_bc_7_1_006_comment_view_human_output_strips_hostile_body_and_author() {
+    let h = Harness::new().await;
+    mount_comment_view_hostile_fixture(&h.server, "FOO-1", "10001").await;
+
+    let output = h.run(&[
+        "issue",
+        "comment",
+        "view",
+        "FOO-1",
+        "--id",
+        "10001",
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stdout, "jr issue comment view (table mode)");
+    assert!(
+        !stdout.contains('\r'),
+        "jr issue comment view (table mode): raw CR must not survive in \
+         stdout: {stdout:?}"
+    );
+
+    assert!(
+        stdout.contains("Author: Mallory"),
+        "sanitized author must still render its CSI-stripped survivor \
+         text: {stdout:?}"
+    );
+
+    let pwned_line = stdout
+        .lines()
+        .find(|l| l.contains("pwned"))
+        .unwrap_or_else(|| panic!("expected a line containing 'pwned': {stdout:?}"));
+    let line2_line = stdout
+        .lines()
+        .find(|l| l.contains("line2"))
+        .unwrap_or_else(|| panic!("expected a line containing 'line2': {stdout:?}"));
+    assert_ne!(
+        pwned_line, line2_line,
+        "the hardBreak-separated body text must still render on two \
+         separate lines after sanitization: {stdout:?}"
+    );
+
+    for label in [
+        "ID:",
+        "Author:",
+        "Created:",
+        "Updated:",
+        "JSM internal:",
+        "Restricted:",
+    ] {
+        assert!(
+            stdout.contains(label),
+            "label layout must be unchanged — missing '{label}': {stdout:?}"
+        );
+    }
+}
+
+/// JSON mode: the identical hostile fixture must round-trip lossless —
+/// `sanitize_table_cell` must never run on the `--output json` path for
+/// `jr issue comment view` either.
+///
+/// Expected GREEN today and after the fix: `handle_comment_view`'s JSON arm
+/// (`println!("{}", output::render_json(&response)?)`) already passes the
+/// raw `serde_json::Value` straight through (EC-3.5.010-1, #526 invariant)
+/// — this pins a pre-existing guarantee, not new behavior, completing the
+/// table/JSON asymmetry proof for this handler.
+#[tokio::test]
+async fn test_bc_7_1_006_comment_view_json_output_preserves_hostile_body_and_author_raw() {
+    let h = Harness::new().await;
+    mount_comment_view_hostile_fixture(&h.server, "FOO-1", "10001").await;
+
+    let output = h.run(&[
+        "issue",
+        "comment",
+        "view",
+        "FOO-1",
+        "--id",
+        "10001",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stdout.contains('\u{9b}'),
+        "--output json must carry the hostile body's raw C1 byte literally \
+         (JSON does not mandate escaping it, and sanitize_table_cell must \
+         never run on the JSON path): {stdout:?}"
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got {stdout}\nerror: {e}"));
+    assert_eq!(
+        parsed["author"]["displayName"],
+        json!(COMMENT_HOSTILE_AUTHOR),
+        "author.displayName must round-trip exactly unchanged, including \
+         its ESC portion"
+    );
+    assert_eq!(
+        parsed["visibility"]["value"],
+        json!(COMMENT_HOSTILE_VISIBILITY_VALUE),
+        "visibility.value must round-trip exactly unchanged, including its \
+         ESC portion"
+    );
+    assert_eq!(
+        parsed["body"],
+        comment_hostile_body(),
+        "the ADF body must round-trip exactly unchanged, including its OSC \
+         sequence, bare CR, and C1 byte"
+    );
+}
+
+/// Regression guard: a CLEAN comment's human (table-mode) output must be
+/// byte-identical before and after SEC-003's sanitization fix — pinning the
+/// exact expected stdout so any accidental format change (label wording,
+/// spacing, blank-line placement, trailing newline) is caught the same way
+/// a hostile-payload leak would be.
+///
+/// Expected GREEN today and after the fix: `sanitize_table_cell` is a
+/// no-op on ASCII text containing no control characters, ANSI escapes, or
+/// C1 code points — this fixture contains none, so wiring sanitization into
+/// `handle_comment_view` cannot change this specific output.
+#[tokio::test]
+async fn test_bc_7_1_006_comment_view_human_output_clean_fixture_byte_identical() {
+    let h = Harness::new().await;
+    mount_comment_view_clean_fixture(&h.server, "FOO-1", "10001").await;
+
+    let output = h.run(&[
+        "issue",
+        "comment",
+        "view",
+        "FOO-1",
+        "--id",
+        "10001",
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+
+    let expected = "ID: 10001\n\
+                     Author: Jane Smith\n\
+                     Created: 2026-07-01T09:00:00.000+0000\n\
+                     Updated: 2026-07-01T10:30:00.000+0000\n\
+                     JSM internal: N/A\n\
+                     Restricted: None\n\
+                     \n\
+                     hello world\n";
+    assert_eq!(
+        stdout, expected,
+        "a clean comment's human output must be byte-identical before and \
+         after SEC-003's sanitization fix — any diff here is a format \
+         change, not a sanitization change: {stdout:?}"
+    );
+}
