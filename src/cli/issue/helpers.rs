@@ -275,14 +275,27 @@ pub(super) fn is_me_keyword(input: &str) -> bool {
 /// escape/control sequence, e.g. a terminal-title OSC or a bare C1 byte)
 /// can never reach `dialoguer::Select`'s rendered item text.
 ///
-/// Stub: `todo!()` body. `disambiguate_user`'s `MatchResult::ExactMultiple`
-/// interactive branch does not call this yet — its `labels: Vec<String>` is
-/// still built by an inline, unsanitized `.map(...)` closure. Wiring that
-/// branch to call `disambiguation_labels(&duplicates)` in place of the
-/// inline closure is what turns the `disambiguation_labels_*` unit tests in
-/// this module's `#[cfg(test)]` block from RED to GREEN.
-pub(crate) fn disambiguation_labels(_duplicates: &[&User]) -> Vec<String> {
-    todo!("D-395: wire disambiguate_user's ExactMultiple interactive branch to call this")
+/// `disambiguate_user`'s `MatchResult::ExactMultiple` interactive branch
+/// calls this in place of an inline closure, so the picker-label
+/// construction is independently unit-testable without
+/// `dialoguer::Select::interact()`'s blocking TTY call (D-395).
+pub(crate) fn disambiguation_labels(duplicates: &[&User]) -> Vec<String> {
+    duplicates
+        .iter()
+        .map(|u| {
+            let display_name = crate::output::sanitize_terminal_text(&u.display_name);
+            match &u.email_address {
+                Some(email) => {
+                    let email = crate::output::sanitize_terminal_text(email);
+                    format!("{display_name} ({email})")
+                }
+                None => {
+                    let account_id = crate::output::sanitize_terminal_text(&u.account_id);
+                    format!("{display_name} ({account_id})")
+                }
+            }
+        })
+        .collect()
 }
 
 /// Disambiguate a list of users by display name using partial matching.
@@ -336,13 +349,15 @@ pub(super) fn disambiguate_user(
             if no_input {
                 let lines: Vec<String> = duplicates
                     .iter()
-                    .map(|u| match &u.email_address {
-                        Some(email) => format!(
-                            "  {} ({}, account: {})",
-                            u.display_name, email, u.account_id
-                        ),
-                        None => {
-                            format!("  {} (account: {})", u.display_name, u.account_id)
+                    .map(|u| {
+                        let display_name = crate::output::sanitize_terminal_text(&u.display_name);
+                        let account_id = crate::output::sanitize_terminal_text(&u.account_id);
+                        match &u.email_address {
+                            Some(email) => {
+                                let email = crate::output::sanitize_terminal_text(email);
+                                format!("  {display_name} ({email}, account: {account_id})")
+                            }
+                            None => format!("  {display_name} (account: {account_id})"),
                         }
                     })
                     .collect();
@@ -354,13 +369,7 @@ pub(super) fn disambiguate_user(
                 .into());
             }
 
-            let labels: Vec<String> = duplicates
-                .iter()
-                .map(|u| match &u.email_address {
-                    Some(email) => format!("{} ({})", u.display_name, email),
-                    None => format!("{} ({})", u.display_name, u.account_id),
-                })
-                .collect();
+            let labels: Vec<String> = disambiguation_labels(&duplicates);
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple users named \"{}\"", name))
                 .items(&labels)
@@ -372,17 +381,21 @@ pub(super) fn disambiguate_user(
             ))
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
+            let sanitized_matches: Vec<String> = matches
+                .iter()
+                .map(|m| crate::output::sanitize_terminal_text(m))
+                .collect();
             if no_input {
                 return Err(JrError::UserError(format!(
                     "Multiple users match \"{}\": {}. Use a more specific name.",
                     name,
-                    matches.join(", ")
+                    sanitized_matches.join(", ")
                 ))
                 .into());
             }
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple users match \"{name}\""))
-                .items(&matches)
+                .items(&sanitized_matches)
                 .interact()
                 .context("failed to prompt for user selection")?;
             let selected_name = &matches[selection];
@@ -396,7 +409,11 @@ pub(super) fn disambiguate_user(
             ))
         }
         crate::partial_match::MatchResult::None(all_names) => {
-            Err(JrError::UserError(none_msg_fn(&all_names)).into())
+            let sanitized_names: Vec<String> = all_names
+                .iter()
+                .map(|n| crate::output::sanitize_terminal_text(n))
+                .collect();
+            Err(JrError::UserError(none_msg_fn(&sanitized_names)).into())
         }
     }
 }
