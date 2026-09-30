@@ -338,8 +338,7 @@ fn sanitize_control_and_ansi_core(
 /// `assets/view.rs` x2, `assets/schemas.rs`, `auth/list.rs`,
 /// `issue/view.rs`) and indirectly via `print_output` (~30 call sites);
 /// `render_table_with_styles` is called via `print_output_with_styles`,
-/// used only by `jr user list`/`jr user view` (`src/cli/user.rs`). Every
-/// table-mode command renders through one of these two chokepoints. This
+/// used only by `jr user list`/`jr user view` (`src/cli/user.rs`). This
 /// function is the single chokepoint-level place a server-supplied string
 /// (an issue summary, a field option label, a comment body fragment, a
 /// display name, ...) gets made safe for a terminal that interprets raw
@@ -347,6 +346,39 @@ fn sanitize_control_and_ansi_core(
 /// `comfy_table::Table::set_header`/`add_row`. No caller of `render_table`
 /// or `render_table_with_styles` is required to sanitize its own inputs
 /// before passing them in.
+///
+/// **Coverage claim, precisely stated (SEC-003, FIX-P5-001):** this
+/// function's callers are all of `render_table`/`render_table_with_styles`
+/// output, PLUS `jr issue comment view`'s human (non-JSON) output
+/// (`src/cli/issue/interactions.rs::handle_comment_view`), which prints
+/// its six labeled fields and ADF-derived body directly via `print!`/
+/// `println!` rather than through either table chokepoint and so calls
+/// this function (via the [`sanitize_terminal_text`] alias) at each of its
+/// own print sites instead. This is NOT "every table-mode command" and
+/// was never meant to be read that broadly — a number of other human-text
+/// call sites print server-supplied strings without routing through this
+/// function at all. Those are tracked as the **NONTABLE-SERVER-TEXT-SANITIZE**
+/// residual, named here for anyone auditing sanitization coverage rather
+/// than re-discovering them one at a time:
+/// - `src/cli/project.rs` — `jr project fields`'s issue-type/priority/status/
+///   CMDB-field name lists (`println!` loops over server-supplied names).
+/// - `src/cli/issue/workflow.rs` — `jr issue transitions`'s and `jr issue
+///   move`'s interactive/listing transition-name prompts (`eprintln!`/
+///   `dialoguer::Select` item text).
+/// - `src/cli/sprint.rs` — `jr sprint current`'s summary-line hint
+///   (`eprintln!`).
+/// - `src/cli/component.rs` — `jr component delete`'s confirmation/result
+///   echo of the component name (`eprintln!`).
+/// - `src/cli/field.rs` — `jr field options`'s graceful-degrade hint
+///   (`degrade_hint_for_schema`, `eprintln!`).
+/// - `JrError` variants that echo a raw server-supplied error body/message
+///   string into their `Display` output, which callers then print to
+///   stderr.
+///
+/// None of these residuals are closed by this function or by SEC-003;
+/// SEC-003's scope is `jr issue comment view` only. A future fix closing
+/// any NONTABLE-SERVER-TEXT-SANITIZE site should route it through
+/// [`sanitize_terminal_text`] and remove it from this list.
 ///
 /// Per-character policy, applied left to right over the whole string
 /// (BC-7.1.006):
@@ -419,6 +451,21 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
             }
         }
     })
+}
+
+/// Alias for [`sanitize_table_cell`] applying the exact same BC-7.1.006
+/// character policy — see that function's rustdoc for the full per-character
+/// contract. This name is for call sites that print a single server-supplied
+/// string directly to a terminal via `print!`/`println!`/`eprintln!` rather
+/// than through `render_table`/`render_table_with_styles`, so `..._table_cell`
+/// would read misleadingly at the call site (there is no table involved).
+/// `jr issue comment view`'s human output
+/// (`src/cli/issue/interactions.rs::handle_comment_view`) is the first and,
+/// as of SEC-003/FIX-P5-001, only caller. There is exactly one sanitization
+/// implementation behind both names — this function does not duplicate or
+/// fork the policy.
+pub(crate) fn sanitize_terminal_text(value: &str) -> String {
+    sanitize_table_cell(value)
 }
 
 #[cfg(test)]

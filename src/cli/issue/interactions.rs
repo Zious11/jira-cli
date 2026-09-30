@@ -646,14 +646,30 @@ pub(super) async fn handle_comment_view(
             //   field 1 id  → "N/A" when absent/null
             //   field 2 author.displayName → "Unknown" when author null or displayName absent
             //   fields 3/4 created/updated → "N/A" when absent/null
-            let id_val = response["id"].as_str().unwrap_or("N/A");
-            let author = response["author"]["displayName"]
-                .as_str()
-                .unwrap_or("Unknown");
-            let created = response["created"].as_str().unwrap_or("N/A");
-            let updated = response["updated"].as_str().unwrap_or("N/A");
-            let jsm_internal = format_jsm_internal_field(response.get("properties"));
-            let restricted = format_restricted_field(response.get("visibility"));
+            // SEC-003 (FIX-P5-001, BC-7.1.006): every server-derived value
+            // printed below passes through output::sanitize_terminal_text
+            // before reaching the terminal — this handler bypasses both
+            // render_table chokepoints (it prints its own plain key-value
+            // lines + body block directly), so it must sanitize at each
+            // print site itself. `jsm_internal` is a static "Yes"/"No"/"N/A"
+            // token (never server text) but is sanitized anyway for
+            // uniformity — harmless no-op on those values.
+            let id_val = output::sanitize_terminal_text(response["id"].as_str().unwrap_or("N/A"));
+            let author = output::sanitize_terminal_text(
+                response["author"]["displayName"]
+                    .as_str()
+                    .unwrap_or("Unknown"),
+            );
+            let created =
+                output::sanitize_terminal_text(response["created"].as_str().unwrap_or("N/A"));
+            let updated =
+                output::sanitize_terminal_text(response["updated"].as_str().unwrap_or("N/A"));
+            let jsm_internal = output::sanitize_terminal_text(format_jsm_internal_field(
+                response.get("properties"),
+            ));
+            let restricted = output::sanitize_terminal_text(&format_restricted_field(
+                response.get("visibility"),
+            ));
 
             // Fields 1–6 as plain key-value lines; blank-line separator before body block.
             print!(
@@ -670,7 +686,7 @@ pub(super) async fn handle_comment_view(
             // EC-3.5.010-2(a): JrError::UserError from depth guard propagates as exit 64.
             // When body key is absent, response["body"] == Value::Null → adf_to_text
             // returns Ok("") → nothing printed after the blank-line separator.
-            let body_text = adf::adf_to_text(&response["body"])?;
+            let body_text = output::sanitize_terminal_text(&adf::adf_to_text(&response["body"])?);
             if !body_text.is_empty() {
                 println!("{body_text}");
             }
