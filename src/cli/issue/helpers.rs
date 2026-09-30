@@ -259,6 +259,32 @@ pub(super) fn is_me_keyword(input: &str) -> bool {
 
 // ── Shared user disambiguation ──────────────────────────────────────
 
+/// Builds the `dialoguer::Select` item labels for `disambiguate_user`'s
+/// `MatchResult::ExactMultiple` interactive branch — the duplicate-name
+/// picker shown when two or more users share the exact display name the
+/// caller searched for (D-395, FIX-P5-001).
+///
+/// Matches the EXISTING inline label format exactly, unchanged by D-395:
+/// - `"{display_name} ({email})"` when the user has an `email_address`
+/// - `"{display_name} ({account_id})"` otherwise
+///
+/// `display_name`, `email_address`, and `account_id` are all
+/// server-supplied, user-editable Jira profile fields — each is routed
+/// through [`crate::output::sanitize_terminal_text`] before being
+/// interpolated into the label, so a hostile value (an embedded ANSI
+/// escape/control sequence, e.g. a terminal-title OSC or a bare C1 byte)
+/// can never reach `dialoguer::Select`'s rendered item text.
+///
+/// Stub: `todo!()` body. `disambiguate_user`'s `MatchResult::ExactMultiple`
+/// interactive branch does not call this yet — its `labels: Vec<String>` is
+/// still built by an inline, unsanitized `.map(...)` closure. Wiring that
+/// branch to call `disambiguation_labels(&duplicates)` in place of the
+/// inline closure is what turns the `disambiguation_labels_*` unit tests in
+/// this module's `#[cfg(test)]` block from RED to GREEN.
+pub(crate) fn disambiguation_labels(_duplicates: &[&User]) -> Vec<String> {
+    todo!("D-395: wire disambiguate_user's ExactMultiple interactive branch to call this")
+}
+
 /// Disambiguate a list of users by display name using partial matching.
 ///
 /// Handles: empty list, single result, exact match, duplicate display names,
