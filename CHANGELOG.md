@@ -80,6 +80,37 @@ All notable changes to jr will be documented here.
   (`issue edit`/`issue create`) is unaffected; this fix is read-side only
   (`jr field options`), per D-378.
 
+### Security
+
+- **Table-mode output now strips terminal control/escape sequences from
+  server-supplied text (FIX-P5-001, BC-7.1.006, SEC-001-RENDER-TABLE-ANSI-SANITIZE,
+  CWE-150/CWE-116):** `output::render_table` -- the single table-mode rendering
+  chokepoint behind every `jr` command's default (non-`--output json`) output --
+  previously wrote a server-supplied string (an issue summary, a field option
+  label, a comment body fragment, a display name, ...) verbatim into a terminal
+  that interprets it, letting a malicious or compromised Jira project (or a
+  response tampered with before TLS termination) redraw the terminal, rewrite
+  the window title, or otherwise manipulate terminal state via a rendered cell.
+  A new `output::sanitize_table_cell` now sanitizes every header and every cell
+  before either reaches `comfy_table`: `\n` is preserved (the only way a
+  multi-line cell renders); `\r` is stripped outright; `\t` becomes a single
+  space (not dropped outright -- dropping it could merge flanking words into a
+  different, and potentially dangerous-looking, string); all other C0 controls
+  and DEL are stripped; C1 controls (`U+0080`-`U+009F`) are stripped; ANSI
+  CSI/OSC escape sequences are consumed and stripped wholesale, failing closed
+  (consumed through end-of-string) on an unterminated sequence; bidi-override
+  and line/paragraph-separator code points are stripped; there is no length
+  cap. **`--output json` is unaffected -- it remains raw and lossless**,
+  mirroring the existing `sanitize_env_display`/issue #398 description-echo
+  asymmetry: the human channel optimizes for terminal safety, the machine
+  channel stays lossless for programmatic consumers. `jr user list`/`jr user
+  view`'s Active column (`✓`/`✗`) coloring moved from ANSI bytes embedded in
+  the cell string to a structural `comfy_table::Cell` foreground-color
+  attribute (via a new `output::StyledCell`/`render_table_with_styles` API),
+  since a server-supplied string can no longer carry its own ANSI styling
+  through the sanitizer -- `--no-color`/`NO_COLOR` continue to suppress that
+  coloring exactly as before.
+
 ## [0.7.0] - 2026-09-23
 
 First stable release of the 0.7.0 line, consolidating the `0.7.0-dev.1`
