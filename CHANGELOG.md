@@ -65,7 +65,7 @@ All notable changes to jr will be documented here.
 
 - **`jr field options <FIELD>` now resolves a real label for system-typed
   fields, not just custom select fields** (issue #861, BC-X.14.001,
-  read-side only): `priority`, `components`, `versions`, `issuetype`, and
+  read-side only): Priority, Components, Fix versions, Issue Type, and
   other system fields whose M1 (editmeta)/M2 (createmeta) `allowedValues`
   entries carry only `name` (not `value`) previously rendered `"(unnamed)"`
   (table) / `null` (JSON) for every option. `normalize_from_allowed_values_at_depth`
