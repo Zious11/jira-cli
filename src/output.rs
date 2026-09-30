@@ -697,6 +697,19 @@ mod tests {
         assert_eq!(sanitize_table_cell("before\u{1b}[31;1;9"), "before");
     }
 
+    /// EC-13: fail-closed consumption of an unterminated CSI sequence
+    /// includes any `\n` that happens to fall inside the unterminated
+    /// scan — the newline is not special-cased or preserved just because
+    /// EC-9 normally preserves bare `\n`. `\n` (0x0A) is not a valid CSI
+    /// final byte (0x40-0x7E), so it never terminates the scan on its
+    /// own; here nothing in the remainder of the string is a valid final
+    /// byte either, so the whole string — params and trailing `\n` alike
+    /// — is consumed through EOF, leaving `""`.
+    #[test]
+    fn test_bc_7_1_006_ec13_unterminated_csi_consumption_includes_embedded_newline() {
+        assert_eq!(sanitize_table_cell("\u{1b}[31;1;9\n"), "");
+    }
+
     /// EC-4: a bidi override pair is stripped outright.
     #[test]
     fn test_bc_7_1_006_ec4_bidi_override_pair_stripped() {
@@ -831,6 +844,96 @@ mod tests {
         prop::collection::vec(token, 0..40).prop_map(|tokens| tokens.concat())
     }
 
+    /// Strategy generating strings that exercise every hostile class
+    /// `sanitize_table_cell` strips or transforms, EXCLUDING any
+    /// unterminated CSI/OSC sequence — the input space for the exact-`\n`-
+    /// preservation property below (VP-SEC-001-001(a)(ii)).
+    ///
+    /// Every ANSI escape token this generator emits is fully
+    /// self-terminated *within that one token*: the CSI token always
+    /// appends an explicit final byte (0x40-0x7E) after its digit/`;`
+    /// params, and each OSC token always appends its own BEL or `ESC \`
+    /// string terminator after its param-free body — so termination never
+    /// depends on what a neighboring token happens to contain.
+    ///
+    /// No token here contains a lone/bare ESC byte, and no token's plain
+    /// text contains a literal `[` or `]`. This rules out the
+    /// cross-token composition hazard analyzed in
+    /// `sanitize_control_and_ansi_core`'s rustdoc: the core only starts
+    /// consuming a CSI/OSC sequence when it sees a raw ESC char followed
+    /// immediately by `[` or `]` (`chars.peek()`), so a lone ESC emitted
+    /// by one token immediately followed by a `[`/`]` literal from the
+    /// next token could otherwise accidentally form a fresh escape
+    /// sequence whose termination depends on further-downstream tokens.
+    /// Since ESC appears only inside the CSI/OSC tokens themselves (never
+    /// standalone, never adjacent to a bare `[`/`]` from another token),
+    /// every escape sequence this generator can produce is guaranteed
+    /// terminated, and `\n` tokens can never be swallowed by one.
+    ///
+    /// Separately safe by inspection: U+009B/U+009D (the C1 CSI/OSC
+    /// introducers, included via the 0x80-0x9F range below) do NOT start
+    /// a consuming state in `sanitize_control_and_ansi_core` at all — the
+    /// core only recognizes the 7-bit `ESC [` / `ESC ]` forms — so they
+    /// are always a harmless single-code-point drop, per
+    /// `sanitize_table_cell`'s own rustdoc ("bytes that would otherwise
+    /// have continued a sequence started by a stripped C1 introducer are
+    /// NOT consumed as part of that sequence").
+    fn hostile_no_unterminated_escape_strategy() -> impl Strategy<Value = String> {
+        let csi_params = "[0-9;]{0,4}";
+        let csi_terminator = prop_oneof![
+            Just('m'),
+            Just('K'),
+            Just('H'),
+            Just('J'),
+            Just('A'),
+            Just('~')
+        ];
+        let csi = (csi_params, csi_terminator)
+            .prop_map(|(params, term): (String, char)| format!("\u{1b}[{params}{term}"));
+
+        let osc_bel =
+            "[a-zA-Z0-9 ,.:_!?-]{0,8}".prop_map(|body: String| format!("\u{1b}]{body}\u{7}"));
+        let osc_st =
+            "[a-zA-Z0-9 ,.:_!?-]{0,8}".prop_map(|body: String| format!("\u{1b}]{body}\u{1b}\\"));
+
+        let token = prop_oneof![
+            10 => "[a-zA-Z0-9 .,!?/-]{1,6}",
+            4 => Just("\n".to_string()),
+            3 => Just("\r".to_string()),
+            3 => Just("\t".to_string()),
+            3 => (0u32..=0x1Fu32).prop_filter_map(
+                "exclude \\n \\r \\t (covered above) and ESC (handled only by the \
+                 self-terminated csi/osc tokens below)",
+                |cp| {
+                    let c = char::from_u32(cp).unwrap();
+                    (c != '\n' && c != '\r' && c != '\t' && c != '\u{1b}').then(|| c.to_string())
+                }
+            ),
+            2 => Just("\u{7f}".to_string()),
+            4 => csi,
+            3 => osc_bel,
+            2 => osc_st,
+            3 => (0x80u32..=0x9Fu32).prop_map(|cp| char::from_u32(cp).unwrap().to_string()),
+            3 => prop_oneof![
+                Just(0x202Au32),
+                Just(0x202Bu32),
+                Just(0x202Cu32),
+                Just(0x202Du32),
+                Just(0x202Eu32),
+                Just(0x2066u32),
+                Just(0x2067u32),
+                Just(0x2068u32),
+                Just(0x2069u32),
+            ]
+            .prop_map(|cp| char::from_u32(cp).unwrap().to_string()),
+            1 => Just("\u{2028}".to_string()),
+            1 => Just("\u{2029}".to_string()),
+            1 => Just("\u{85}".to_string()),
+            3 => prop_oneof![Just("é".to_string()), Just("好".to_string()), Just("🎉".to_string())],
+        ];
+        prop::collection::vec(token, 0..40).prop_map(|tokens| tokens.concat())
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
 
@@ -873,31 +976,19 @@ mod tests {
                 );
             }
 
-            // NOTE (FIX-P5-001 Red Gate correction, provably wrong against
-            // BC-7.1.006 EC-3, not an implementation bug): this assertion
-            // was originally a strict `prop_assert_eq!` ("every `\n`
-            // present in the input survives in the output, same count").
-            // That is unsound against `hostile_table_cell_strategy`, which
-            // itself generates the unterminated-CSI token
-            // `"\u{1b}[31;1;9"` (the literal EC-3 fixture) interleaved with
-            // `\n` tokens. EC-3 mandates that an unterminated CSI/OSC
-            // sequence is consumed FAIL-CLOSED through end-of-string,
-            // discarding everything after it (including any `\n` that
-            // happens to follow) — reusing `strip_control_and_ansi`'s
-            // existing, already-pinned state machine verbatim, per this
-            // BC's own text. Minimal failing case:
-            // `sanitize_table_cell("\u{1b}[31;1;9\n")` == `""` (the entire
-            // string is the unterminated sequence's own scan, including the
-            // trailing `\n`) — proptest found this via
-            // `input = "\u{1b}[31;1;9\n"`. The always-true invariant this
-            // sanitizer actually guarantees is that it never FABRICATES a
-            // `\n` (no `CharDisposition::Replace` ever substitutes `\n`,
-            // and the CSI/OSC/C1/control-stripping paths only ever drop
-            // characters) — i.e. `output_newlines <= input_newlines`, never
-            // `>`. Exact preservation only holds on inputs free of an
-            // unterminated CSI/OSC sequence, which EC-1..EC-2/EC-8/EC-9's
-            // own well-terminated fixtures separately pin at the example
-            // level.
+            // Never-fabricate invariant: every disposition this sanitizer
+            // applies either drops a character or replaces `\t` with a
+            // single space — nothing ever substitutes a `\n` — so the
+            // output's `\n` count can never exceed the input's. Exact
+            // preservation (`==`, not `<=`) holds only when the input
+            // contains no unterminated CSI/OSC sequence: EC-3's fail-closed
+            // rule consumes an unterminated sequence through end-of-string,
+            // discarding everything after it, including any `\n` that
+            // follows (EC-13 pins the minimal case:
+            // `sanitize_table_cell("\u{1b}[31;1;9\n")` == `""`). Exact `\n`
+            // preservation on inputs free of that hazard is covered by
+            // `prop_bc_7_1_006_sanitize_table_cell_newlines_preserved_without_unterminated_escape`
+            // below.
             let input_newlines = input.chars().filter(|&c| c == '\n').count();
             let output_newlines = output.chars().filter(|&c| c == '\n').count();
             prop_assert!(
@@ -916,6 +1007,29 @@ mod tests {
             input in clean_table_cell_strategy()
         ) {
             prop_assert_eq!(sanitize_table_cell(&input), input);
+        }
+
+        /// VP-SEC-001-001(a) part (ii): on an input containing no
+        /// unterminated CSI/OSC sequence, `sanitize_table_cell` preserves
+        /// the `\n` count EXACTLY — not merely `<=` as the whole-string
+        /// invariant above must allow for an arbitrary (possibly
+        /// unterminated-escape-containing) input. See
+        /// `hostile_no_unterminated_escape_strategy`'s doc comment for why
+        /// every input this generator produces is guaranteed free of an
+        /// unterminated CSI/OSC sequence.
+        #[test]
+        fn prop_bc_7_1_006_sanitize_table_cell_newlines_preserved_without_unterminated_escape(
+            input in hostile_no_unterminated_escape_strategy()
+        ) {
+            let output = sanitize_table_cell(&input);
+            let input_newlines = input.chars().filter(|&c| c == '\n').count();
+            let output_newlines = output.chars().filter(|&c| c == '\n').count();
+            prop_assert_eq!(
+                input_newlines, output_newlines,
+                "expected exact \\n preservation on an input with no unterminated \
+                 CSI/OSC sequence: {:?} -> {:?}",
+                input, output
+            );
         }
     }
 
