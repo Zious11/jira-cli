@@ -812,3 +812,321 @@ async fn test_bc_7_1_006_comment_view_human_output_clean_fixture_byte_identical(
          change, not a sanitization change: {stdout:?}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// `jr issue assign` — D-394 (FIX-P5-001 extension)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// `handle_assign` (`src/cli/issue/workflow.rs` ~L1006-1109) echoes the
+// assignee's server-side Jira `displayName` into its human-output success
+// messages via `output::print_success`, which writes to STDERR (see
+// `output::print_success`'s `eprintln!` body), at THREE sites that all
+// currently print the raw, unsanitized `display_name`:
+//   - `--to`/`--account-id` newly-assigned success:
+//     `"Assigned {key} to {display_name}"` (~L1104).
+//   - The idempotent already-assigned exit-0 path:
+//     `"{key} is already assigned to {display_name}"` (~L1084).
+//   - Self-assign (bare `jr issue assign <key>`, no `--to`/`--account-id`,
+//     which resolves `display_name` via `client.get_myself()`): shares the
+//     same "Assigned {key} to {display_name}" success format as the `--to`
+//     path above — same L1104 call site, not a fourth site.
+// `--unassign`'s two human-output messages (`"Unassigned {key}"` /
+// `"{key} is already unassigned"`) echo only the CLI-supplied issue key,
+// never a server-derived display name, so they need no hostile-payload
+// coverage here.
+//
+// `--output json` emits `display_name` raw via the `assignee` key
+// (`json_output::assign_changed_response`/`assign_unchanged_response`,
+// `src/cli/issue/json_output.rs`) — lossless, per the issue #398
+// description-echo asymmetry convention documented in CLAUDE.md.
+
+/// Hostile assignee `displayName`: an OSC window-title sequence (terminated
+/// by BEL) immediately followed by survivor text "Mallory", then a CSI
+/// "clear screen" sequence (`ESC [ 2 J` — `J` is `0x4A`, within the
+/// `0x40..=0x7E` CSI final-byte range). Traced against
+/// `output::sanitize_table_cell`'s documented per-character policy: the OSC
+/// sequence (`ESC ] 0 ; pwned <BEL>`) is consumed wholesale through its BEL
+/// terminator, "Mallory" is ordinary printable ASCII and passes through
+/// `Keep` unchanged, and the CSI sequence (`ESC [ 2 J`) is consumed wholesale
+/// through its final byte `J` — sanitizing to exactly `"Mallory"`.
+const ASSIGN_HOSTILE_DISPLAY_NAME: &str = "\u{1b}]0;pwned\u{7}Mallory\u{1b}[2J";
+
+/// Mounts `GET /rest/api/3/user/assignable/search` (the `--to` resolution
+/// endpoint, scoped by `issueKey`) returning a single user — `handle_assign`
+/// -> `helpers::resolve_assignee` -> `disambiguate_user` returns a
+/// single-element result set immediately without matching `name` against
+/// `display_name` at all, so the mocked `display_name` need not relate to
+/// the CLI's `--to` argument value.
+async fn mount_assign_search_fixture(
+    server: &MockServer,
+    issue_key: &str,
+    account_id: &str,
+    display_name: &str,
+) {
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .and(query_param("issueKey", issue_key))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::user_search_response(vec![(account_id, display_name, true)]),
+        ))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `GET /rest/api/3/myself` (the self-assign / `me` resolution
+/// endpoint) with a hostile `displayName`.
+async fn mount_assign_myself_fixture(server: &MockServer, account_id: &str, display_name: &str) {
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": account_id,
+            "displayName": display_name,
+            "emailAddress": "mallory@example.invalid"
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `GET /rest/api/3/issue/{key}` returning a currently-unassigned
+/// issue (so `handle_assign`'s idempotent check falls through to the PUT).
+async fn mount_assign_get_issue_unassigned(server: &MockServer, key: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/issue/{key}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee(key, "Assign sanitization test", None),
+        ))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `GET /rest/api/3/issue/{key}` returning an issue already assigned
+/// to `account_id` (so `handle_assign`'s idempotent check short-circuits
+/// before any PUT).
+async fn mount_assign_get_issue_assigned(server: &MockServer, key: &str, account_id: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/issue/{key}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee(
+                key,
+                "Assign sanitization test",
+                Some((account_id, "Whatever The Server Has On File")),
+            ),
+        ))
+        .mount(server)
+        .await;
+}
+
+/// Mounts `PUT /rest/api/3/issue/{key}/assignee` -> 204.
+async fn mount_assign_put_assignee(server: &MockServer, key: &str) {
+    Mock::given(method("PUT"))
+        .and(path(format!("/rest/api/3/issue/{key}/assignee")))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(server)
+        .await;
+}
+
+/// Table mode (default output), `--to` path: a hostile server-supplied
+/// assignee `displayName` must not leak a raw ESC byte or C1 code point into
+/// STDERR (`print_success` writes to stderr, not stdout), while the
+/// CSI/OSC-stripped survivor text "Mallory" must still render in its normal
+/// position within the unchanged "Assigned {key} to {name}" format.
+///
+/// RED against current code: `handle_assign`'s `Table` success arm
+/// (`src/cli/issue/workflow.rs` ~L1104) prints `display_name` raw via
+/// `output::print_success(&format!("Assigned {} to {}", key, display_name))`
+/// with no sanitization call — the hostile ESC/BEL/CSI bytes survive
+/// verbatim in stderr today.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name() {
+    let h = Harness::new().await;
+    mount_assign_search_fixture(
+        &h.server,
+        "FOO-1",
+        "acc-mallory",
+        ASSIGN_HOSTILE_DISPLAY_NAME,
+    )
+    .await;
+    mount_assign_get_issue_unassigned(&h.server, "FOO-1").await;
+    mount_assign_put_assignee(&h.server, "FOO-1").await;
+
+    let output = h.run(&["issue", "assign", "FOO-1", "--to", "Mallory", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stderr, "jr issue assign --to (human output, stderr)");
+    assert_eq!(
+        stderr, "Assigned FOO-1 to Mallory\n",
+        "sanitized message must show the CSI/OSC-stripped survivor text \
+         'Mallory' in its normal position within the unchanged 'Assigned \
+         {{key}} to {{name}}' format: {stderr:?}"
+    );
+}
+
+/// Table mode, idempotent already-assigned path: same hostile-payload
+/// guarantee as the newly-assigned case above, for the
+/// `"{key} is already assigned to {display_name}"` message
+/// (`src/cli/issue/workflow.rs` ~L1084). No PUT is mocked — the idempotent
+/// short-circuit must fire before any HTTP write, exactly as
+/// `test_handler_assign_idempotent` (`tests/cli_handler.rs`) already proves
+/// for the non-hostile case; a stray PUT call here would 404 against
+/// wiremock's unmocked-request default and fail the test via the exit-code
+/// assertion.
+///
+/// RED against current code: same unsanitized `print_success` call site,
+/// just the idempotent branch (~L1084) instead of the newly-assigned one.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_idempotent() {
+    let h = Harness::new().await;
+    mount_assign_search_fixture(
+        &h.server,
+        "FOO-2",
+        "acc-mallory",
+        ASSIGN_HOSTILE_DISPLAY_NAME,
+    )
+    .await;
+    mount_assign_get_issue_assigned(&h.server, "FOO-2", "acc-mallory").await;
+
+    let output = h.run(&["issue", "assign", "FOO-2", "--to", "Mallory", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stderr, "jr issue assign --to (idempotent, stderr)");
+    assert_eq!(
+        stderr, "FOO-2 is already assigned to Mallory\n",
+        "sanitized idempotent message must show the CSI/OSC-stripped \
+         survivor text 'Mallory' in its normal position: {stderr:?}"
+    );
+}
+
+/// Table mode, self-assign path (bare `jr issue assign <key>`, no `--to`/
+/// `--account-id`): same hostile-payload guarantee, resolving
+/// `display_name` via `client.get_myself()` instead of the assignable-user
+/// search, but sharing the SAME "Assigned {key} to {name}" print-site
+/// (~L1104) as the `--to` test above.
+///
+/// RED against current code: same unsanitized `print_success` call site,
+/// reached via the self-assign resolution branch instead of `--to`.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_self_assign() {
+    let h = Harness::new().await;
+    mount_assign_myself_fixture(&h.server, "acc-mallory", ASSIGN_HOSTILE_DISPLAY_NAME).await;
+    mount_assign_get_issue_unassigned(&h.server, "FOO-3").await;
+    mount_assign_put_assignee(&h.server, "FOO-3").await;
+
+    let output = h.run(&["issue", "assign", "FOO-3", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(
+        &stderr,
+        "jr issue assign self-assign (human output, stderr)",
+    );
+    assert_eq!(
+        stderr, "Assigned FOO-3 to Mallory\n",
+        "sanitized self-assign message must show the CSI/OSC-stripped \
+         survivor text 'Mallory' in its normal position: {stderr:?}"
+    );
+}
+
+/// JSON mode: the identical hostile fixture must round-trip lossless via
+/// the `assignee` key — `sanitize_table_cell`/`sanitize_terminal_text` must
+/// never run on the `--output json` path, mirroring every other JSON-mode
+/// test in this file.
+///
+/// Expected GREEN today and after the fix: `handle_assign`'s `Json` success
+/// arm (`src/cli/issue/workflow.rs` ~L1093-1101) already passes
+/// `json_output::assign_changed_response`'s raw `display_name` straight
+/// through `output::render_json` (#526 invariant) — this pins a
+/// pre-existing guarantee, not new behavior, completing the table/JSON
+/// asymmetry proof for this handler.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_json_output_preserves_hostile_display_name_raw() {
+    let h = Harness::new().await;
+    mount_assign_search_fixture(
+        &h.server,
+        "FOO-4",
+        "acc-mallory",
+        ASSIGN_HOSTILE_DISPLAY_NAME,
+    )
+    .await;
+    mount_assign_get_issue_unassigned(&h.server, "FOO-4").await;
+    mount_assign_put_assignee(&h.server, "FOO-4").await;
+
+    let output = h.run(&[
+        "issue",
+        "assign",
+        "FOO-4",
+        "--to",
+        "Mallory",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got {stdout}\nerror: {e}"));
+    assert_eq!(
+        parsed["assignee"],
+        json!(ASSIGN_HOSTILE_DISPLAY_NAME),
+        "--output json's 'assignee' key must round-trip the hostile display \
+         name exactly unchanged, including its ESC/BEL/CSI bytes: {parsed:?}"
+    );
+    assert_eq!(parsed["changed"], json!(true));
+}
+
+/// Regression guard: a CLEAN assignee display name's human (table-mode)
+/// output must be byte-identical before and after this fix — pinning the
+/// exact expected stderr so any accidental format change (wording, spacing,
+/// trailing newline) is caught the same way a hostile-payload leak would be.
+///
+/// Expected GREEN today and after the fix: `sanitize_table_cell`/
+/// `sanitize_terminal_text` is a no-op on ASCII text containing no control
+/// characters, ANSI escapes, or C1 code points — "Jane Doe" contains none,
+/// so wiring sanitization into `handle_assign` cannot change this specific
+/// output.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_human_output_clean_fixture_byte_identical() {
+    let h = Harness::new().await;
+    mount_assign_search_fixture(&h.server, "FOO-5", "acc-jane", "Jane Doe").await;
+    mount_assign_get_issue_unassigned(&h.server, "FOO-5").await;
+    mount_assign_put_assignee(&h.server, "FOO-5").await;
+
+    let output = h.run(&["issue", "assign", "FOO-5", "--to", "Jane", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(
+        stderr, "Assigned FOO-5 to Jane Doe\n",
+        "a clean assignee's human output must be byte-identical before and \
+         after this fix — any diff here is a format change, not a \
+         sanitization change: {stderr:?}"
+    );
+}
