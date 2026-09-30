@@ -1,5 +1,5 @@
 use anyhow::Result;
-use colored::Colorize;
+use comfy_table::Color;
 
 use crate::api::client::JiraClient;
 use crate::cli::{OutputFormat, UserCommand, resolve_effective_limit};
@@ -127,27 +127,54 @@ async fn handle_view(
         }
     };
 
+    // BC-7.1.006: the Active row's color is a structural Cell attribute
+    // (via active_cell), never ANSI bytes embedded in the cell String.
     let rows = vec![
-        vec!["Account ID".into(), user.account_id.clone()],
-        vec!["Display Name".into(), user.display_name.clone()],
         vec![
-            "Email".into(),
-            user.email_address.clone().unwrap_or_else(|| "—".into()),
+            output::StyledCell::plain("Account ID"),
+            output::StyledCell::plain(user.account_id.clone()),
         ],
-        vec!["Active".into(), format_active(user.active)],
+        vec![
+            output::StyledCell::plain("Display Name"),
+            output::StyledCell::plain(user.display_name.clone()),
+        ],
+        vec![
+            output::StyledCell::plain("Email"),
+            output::StyledCell::plain(user.email_address.clone().unwrap_or_else(|| "—".into())),
+        ],
+        vec![
+            output::StyledCell::plain("Active"),
+            active_cell(user.active),
+        ],
     ];
 
-    output::print_output(output_format, &["Field", "Value"], &rows, &user)
+    output::print_output_with_styles(output_format, &["Field", "Value"], &rows, &user)
 }
 
 fn print_user_list(users: &[User], output_format: &OutputFormat) -> Result<()> {
-    let rows: Vec<Vec<String>> = users.iter().map(format_user_row).collect();
-    output::print_output(
+    let rows: Vec<Vec<output::StyledCell>> = users.iter().map(format_user_row_styled).collect();
+    output::print_output_with_styles(
         output_format,
         &["Display Name", "Email", "Active", "Account ID"],
         &rows,
         &users,
     )
+}
+
+/// Styled-cell sibling of [`format_user_row`] for `print_user_list`'s
+/// table-mode rendering (BC-7.1.006): identical to `format_user_row`
+/// except the Active column carries its green/red coloring as a
+/// structural `Cell` attribute (via [`active_cell`]) rather than as plain
+/// text. Built on top of `format_user_row` itself so that function stays a
+/// live production call site, not test-only dead code.
+fn format_user_row_styled(user: &User) -> Vec<output::StyledCell> {
+    let plain = format_user_row(user);
+    vec![
+        output::StyledCell::plain(plain[0].clone()),
+        output::StyledCell::plain(plain[1].clone()),
+        active_cell(user.active),
+        output::StyledCell::plain(plain[3].clone()),
+    ]
 }
 
 fn format_user_row(user: &User) -> Vec<String> {
@@ -159,11 +186,42 @@ fn format_user_row(user: &User) -> Vec<String> {
     ]
 }
 
+/// The Active column's bare glyph (BC-7.1.006) — no ANSI bytes embedded.
+/// Styling now lives on a structural `comfy_table::Cell` attribute, built
+/// by [`active_cell`], since a cell string can no longer carry its own
+/// ANSI escape bytes once `render_table`/`render_table_with_styles`
+/// sanitize every cell (this BC's whole point — see
+/// `output::sanitize_table_cell`).
 fn format_active(active: Option<bool>) -> String {
     match active {
-        Some(true) => "✓".green().to_string(),
-        Some(false) => "✗".red().to_string(),
+        Some(true) => "✓".into(),
+        Some(false) => "✗".into(),
         None => "—".into(),
+    }
+}
+
+/// Builds the Active column's structurally-styled cell (BC-7.1.006):
+/// green/red applied via `comfy_table::Cell::fg`, never as ANSI bytes in
+/// the cell text (which is always the bare [`format_active`] glyph).
+///
+/// Gated on `colored::control::SHOULD_COLORIZE.should_colorize()` — the
+/// same process-wide flag `main.rs` forces to `false` for `--no-color` /
+/// `NO_COLOR` (`colored::control::set_override(false)`). This is
+/// necessary, not redundant with `comfy_table`'s own TTY-based
+/// `Table::should_style()` check: `comfy_table`'s styling gate only knows
+/// about the ambient TTY, not jr's `--no-color` flag or the `NO_COLOR`
+/// env var, so without this explicit gate `--no-color`/`NO_COLOR` would
+/// fail to suppress the Active column's color on a real TTY even though
+/// it suppresses every other `colored`-crate-driven color in jr's output.
+fn active_cell(active: Option<bool>) -> output::StyledCell {
+    let glyph = format_active(active);
+    if !colored::control::SHOULD_COLORIZE.should_colorize() {
+        return output::StyledCell::plain(glyph);
+    }
+    match active {
+        Some(true) => output::StyledCell::colored(glyph, Color::Green),
+        Some(false) => output::StyledCell::colored(glyph, Color::Red),
+        None => output::StyledCell::plain(glyph),
     }
 }
 
@@ -442,5 +500,51 @@ mod tests {
         );
         assert!(rendered.contains('✓'));
         assert!(rendered.contains('✗'));
+    }
+
+    /// BC-7.1.006: `--no-color`/`NO_COLOR` must still suppress the Active
+    /// column's structural coloring, even though `comfy_table`'s own
+    /// `Table::should_style()` gate knows nothing about either — it's a
+    /// pure TTY check. `active_cell` must consult
+    /// `colored::control::SHOULD_COLORIZE.should_colorize()` (the same
+    /// flag `main.rs` drives via `colored::control::set_override(false)`
+    /// for `--no-color`/`NO_COLOR`) and fall back to a plain,
+    /// uncolored `StyledCell` when it is false — regardless of what the
+    /// `active` value would otherwise resolve to.
+    #[test]
+    fn test_bc_7_1_006_active_cell_no_color_override_suppresses_structural_color() {
+        let _color = ForcedColorOverride::new(false);
+
+        assert_eq!(
+            active_cell(Some(true)),
+            output::StyledCell::plain("✓"),
+            "--no-color/NO_COLOR must suppress the Active column's \
+             structural green styling, not just its ANSI-in-text form"
+        );
+        assert_eq!(
+            active_cell(Some(false)),
+            output::StyledCell::plain("✗"),
+            "--no-color/NO_COLOR must suppress the Active column's \
+             structural red styling, not just its ANSI-in-text form"
+        );
+        assert_eq!(active_cell(None), output::StyledCell::plain("—"));
+    }
+
+    /// Sibling of the suppression test above: with color forced ON, the
+    /// Active column's structural styling IS applied — `active_cell` must
+    /// not suppress unconditionally.
+    #[test]
+    fn test_bc_7_1_006_active_cell_colorizes_when_should_colorize_true() {
+        let _color = ForcedColorOverride::new(true);
+
+        assert_eq!(
+            active_cell(Some(true)),
+            output::StyledCell::colored("✓", Color::Green)
+        );
+        assert_eq!(
+            active_cell(Some(false)),
+            output::StyledCell::colored("✗", Color::Red)
+        );
+        assert_eq!(active_cell(None), output::StyledCell::plain("—"));
     }
 }
