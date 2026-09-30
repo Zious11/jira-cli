@@ -1081,7 +1081,11 @@ pub(super) async fn handle_assign(
                 );
             }
             OutputFormat::Table => {
-                output::print_success(&format!("{} is already assigned to {}", key, display_name));
+                output::print_success(&format!(
+                    "{} is already assigned to {}",
+                    key,
+                    output::sanitize_terminal_text(&display_name)
+                ));
             }
         }
         return Ok(());
@@ -1101,7 +1105,11 @@ pub(super) async fn handle_assign(
             );
         }
         OutputFormat::Table => {
-            output::print_success(&format!("Assigned {} to {}", key, display_name));
+            output::print_success(&format!(
+                "Assigned {} to {}",
+                key,
+                output::sanitize_terminal_text(&display_name)
+            ));
         }
     }
 
