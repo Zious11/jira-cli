@@ -125,6 +125,18 @@ All notable changes to jr will be documented here.
   the NONTABLE-SERVER-TEXT-SANITIZE residual -- a known, non-exhaustive
   inventory (see `output::sanitize_table_cell`'s rustdoc for the current,
   verified-against-the-code list) -- and are out of scope for this fix.
+- **`jr issue assign`'s human-output success messages now get the same
+  sanitization (D-394, extension of FIX-P5-001, BC-7.1.006):**
+  `handle_assign` echoes the server-derived assignee `displayName` into two
+  `output::print_success` messages -- the idempotent already-assigned path
+  (`"{key} is already assigned to {name}"`) and the newly-assigned/
+  self-assign path (`"Assigned {key} to {name}"`) -- both of which
+  previously printed the raw, unsanitized display name. Both sites now pass
+  the display name through `output::sanitize_terminal_text` before
+  formatting. `--output json`'s `assignee` key is unaffected and stays raw
+  and lossless, per the same human/machine-channel asymmetry as the fixes
+  above. `handle_assign` is now a covered non-table sink, alongside `jr
+  issue comment view` above.
 
 ## [0.7.0] - 2026-09-23
 

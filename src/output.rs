@@ -347,22 +347,31 @@ fn sanitize_control_and_ansi_core(
 /// or `render_table_with_styles` is required to sanitize its own inputs
 /// before passing them in.
 ///
-/// **Coverage claim, precisely stated (SEC-003, FIX-P5-001):** this
+/// **Coverage claim, precisely stated (SEC-003/D-394, FIX-P5-001):** this
 /// function's callers are all of `render_table`/`render_table_with_styles`
-/// output, PLUS `jr issue comment view`'s human (non-JSON) output
-/// (`src/cli/issue/interactions.rs::handle_comment_view`), which prints
-/// its six labeled fields and ADF-derived body directly via `print!`/
-/// `println!` rather than through either table chokepoint and so calls
-/// this function (via the [`sanitize_terminal_text`] alias) at each of its
-/// own print sites instead. This is NOT "every table-mode command" and
-/// was never meant to be read that broadly — a number of other human-text
-/// call sites print server-supplied strings without routing through this
-/// function at all. Those are tracked as the **NONTABLE-SERVER-TEXT-SANITIZE**
-/// residual — a KNOWN, NON-EXHAUSTIVE inventory for anyone auditing
-/// sanitization coverage rather than re-discovering them one at a time.
-/// Every entry below has been verified against the code as of the cited
-/// fix, but the absence of a site from this list is NOT evidence it's
-/// sanitized — only entries present have been checked:
+/// output, PLUS two non-table human (non-JSON) print sites that call this
+/// function (via the [`sanitize_terminal_text`] alias) directly at their own
+/// print sites instead of going through either table chokepoint:
+/// - `jr issue comment view`'s human output
+///   (`src/cli/issue/interactions.rs::handle_comment_view`), which prints
+///   its six labeled fields and ADF-derived body directly via `print!`/
+///   `println!`.
+/// - `jr issue assign`'s human-output success messages
+///   (`src/cli/issue/workflow.rs::handle_assign`), which echo the
+///   server-derived assignee `display_name` at both the idempotent
+///   already-assigned site (`"{key} is already assigned to {name}"`) and
+///   the newly-assigned/self-assign site (`"Assigned {key} to {name}"`),
+///   via `output::print_success`.
+///
+/// This is NOT "every table-mode command" and was never meant to be read
+/// that broadly — a number of other human-text call sites print
+/// server-supplied strings without routing through this function at all.
+/// Those are tracked as the **NONTABLE-SERVER-TEXT-SANITIZE** residual — a
+/// KNOWN, NON-EXHAUSTIVE inventory for anyone auditing sanitization
+/// coverage rather than re-discovering them one at a time. Every entry
+/// below has been verified against the code as of the cited fix, but the
+/// absence of a site from this list is NOT evidence it's sanitized — only
+/// entries present have been checked:
 /// - `src/cli/project.rs` — `jr project fields`'s issue-type/priority/status/
 ///   CMDB-field name lists (`println!` loops over server-supplied names).
 /// - `src/cli/issue/workflow.rs`:
@@ -374,6 +383,8 @@ fn sanitize_control_and_ansi_core(
 ///   - `handle_move_bulk`'s per-key bulk-transition error line
 ///     (`eprintln!("error: {key}: {err_msg}")`), where `err_msg` is
 ///     `BulkActionError::summary()` — raw Jira bulk-API error text.
+///   - (`handle_assign` is NOT in this residual list — see above, it is a
+///     covered non-table sink as of D-394.)
 /// - `src/cli/issue/links.rs` — `handle_link`'s link-creation confirmation
 ///   echo of the server-resolved link-type name (`resolved_name`, drawn
 ///   from `list_link_types()`'s response via `partial_match`;
@@ -404,11 +415,12 @@ fn sanitize_control_and_ansi_core(
 ///   branch (`handle_comment_view` returns early with the raw body before
 ///   any of its sanitized print sites below run).
 ///
-/// None of these residuals are closed by this function or by SEC-003;
+/// None of these residuals are closed by this function, SEC-003, or D-394;
 /// SEC-003's scope is `jr issue comment view`'s successful-fetch human
-/// output only. A future fix closing any NONTABLE-SERVER-TEXT-SANITIZE
-/// site should route it through [`sanitize_terminal_text`] and remove it
-/// from this list.
+/// output, and D-394's scope is `jr issue assign`'s human-output success
+/// messages, both covered above. A future fix closing any
+/// NONTABLE-SERVER-TEXT-SANITIZE site should route it through
+/// [`sanitize_terminal_text`] and remove it from this list.
 ///
 /// Per-character policy, applied left to right over the whole string
 /// (BC-7.1.006):
@@ -490,10 +502,11 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
 /// than through `render_table`/`render_table_with_styles`, so `..._table_cell`
 /// would read misleadingly at the call site (there is no table involved).
 /// `jr issue comment view`'s human output
-/// (`src/cli/issue/interactions.rs::handle_comment_view`) is the first and,
-/// as of SEC-003/FIX-P5-001, only caller. There is exactly one sanitization
-/// implementation behind both names — this function does not duplicate or
-/// fork the policy.
+/// (`src/cli/issue/interactions.rs::handle_comment_view`, SEC-003) was the
+/// first caller; `jr issue assign`'s human-output success messages
+/// (`src/cli/issue/workflow.rs::handle_assign`, D-394) are the second. There
+/// is exactly one sanitization implementation behind both names — this
+/// function does not duplicate or fork the policy.
 pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     sanitize_table_cell(value)
 }
