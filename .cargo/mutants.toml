@@ -235,11 +235,11 @@ additional_cargo_test_args = ["--all-features"]
 #     these assert the loop DOES terminate, which is the property this mutant would break.
 #
 # Regex is anchored to file:line:col + exact function name so it matches ONLY this one
-# mutant — NOT the sibling `delete ! in JiraClient::search_issues` (issues.rs:273, same
+# mutant — NOT the sibling `delete ! in JiraClient::search_issues` (issues.rs:292, same
 # `if !page_has_more { break; }` shape, different function) or `search_issue_keys`, and not
 # any of the sibling `>`/`>=`/`||`/`&&`/`==` mutants at nearby lines in the same function.
 exclude_re = [
-    '^src/api/jira/issues\.rs:374:16: delete ! in JiraClient::search_issues_with_fields$',
+    '^src/api/jira/issues\.rs:393:16: delete ! in JiraClient::search_issues_with_fields$',
     # CR-002 / F-C007-M1 (cycle-007 F5 fix bundle): `probe_matching_kind_credential`
     # was consolidated from two byte-identical per-file copies (formerly in
     # `cli/auth/list.rs` and `cli/auth/status.rs`) into ONE shared implementation in
