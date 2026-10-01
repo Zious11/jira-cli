@@ -270,10 +270,13 @@ pub(super) fn is_me_keyword(input: &str) -> bool {
 ///
 /// `display_name`, `email_address`, and `account_id` are all
 /// server-supplied, user-editable Jira profile fields — each is routed
-/// through [`crate::output::sanitize_terminal_text`] before being
-/// interpolated into the label, so a hostile value (an embedded ANSI
-/// escape/control sequence, e.g. a terminal-title OSC or a bare C1 byte)
-/// can never reach `dialoguer::Select`'s rendered item text.
+/// through [`crate::output::sanitize_terminal_line`] (D-396/FIX-P5-002;
+/// was [`crate::output::sanitize_terminal_text`] before D-396, which does
+/// not neutralize an embedded `\n`) before being interpolated into the
+/// label, so a hostile value (an embedded ANSI escape/control sequence,
+/// e.g. a terminal-title OSC, a bare C1 byte, or a raw `\n` that would
+/// otherwise fabricate an extra picker row, EC-17b) can never reach
+/// `dialoguer::Select`'s rendered item text.
 ///
 /// `disambiguate_user`'s `MatchResult::ExactMultiple` interactive branch
 /// calls this in place of an inline closure, so the picker-label
@@ -283,14 +286,14 @@ pub(crate) fn disambiguation_labels(duplicates: &[&User]) -> Vec<String> {
     duplicates
         .iter()
         .map(|u| {
-            let display_name = crate::output::sanitize_terminal_text(&u.display_name);
+            let display_name = crate::output::sanitize_terminal_line(&u.display_name);
             match &u.email_address {
                 Some(email) => {
-                    let email = crate::output::sanitize_terminal_text(email);
+                    let email = crate::output::sanitize_terminal_line(email);
                     format!("{display_name} ({email})")
                 }
                 None => {
-                    let account_id = crate::output::sanitize_terminal_text(&u.account_id);
+                    let account_id = crate::output::sanitize_terminal_line(&u.account_id);
                     format!("{display_name} ({account_id})")
                 }
             }
@@ -316,9 +319,15 @@ pub(crate) fn disambiguation_labels(duplicates: &[&User]) -> Vec<String> {
 /// function surfaces — `display_name`, `email_address`, and `account_id`,
 /// in its `ExactMultiple`/`Ambiguous` non-interactive error messages, its
 /// interactive picker labels, and the `None` branch's candidate list — is
-/// routed through [`crate::output::sanitize_terminal_text`] before
-/// reaching the user (BC-7.1.006, D-395), so "zero behavior change" above
-/// describes only the visibility bump, not this function's current output.
+/// routed through [`crate::output::sanitize_terminal_line`] before
+/// reaching the user (BC-7.1.006, D-395/D-396), so "zero behavior change"
+/// above describes only the visibility bump, not this function's current
+/// output. All of these sinks render exactly one line of text (a message
+/// line, a picker label/item), so as of D-396/FIX-P5-002 they route through
+/// [`crate::output::sanitize_terminal_line`] rather than
+/// [`crate::output::sanitize_terminal_text`] — the latter preserves an
+/// embedded `\n`, which would otherwise let a hostile value fabricate an
+/// extra line/item (EC-17, CWE-116).
 pub(super) fn disambiguate_user(
     users: &[User],
     name: &str,
@@ -357,11 +366,11 @@ pub(super) fn disambiguate_user(
                 let lines: Vec<String> = duplicates
                     .iter()
                     .map(|u| {
-                        let display_name = crate::output::sanitize_terminal_text(&u.display_name);
-                        let account_id = crate::output::sanitize_terminal_text(&u.account_id);
+                        let display_name = crate::output::sanitize_terminal_line(&u.display_name);
+                        let account_id = crate::output::sanitize_terminal_line(&u.account_id);
                         match &u.email_address {
                             Some(email) => {
-                                let email = crate::output::sanitize_terminal_text(email);
+                                let email = crate::output::sanitize_terminal_line(email);
                                 format!("  {display_name} ({email}, account: {account_id})")
                             }
                             None => format!("  {display_name} (account: {account_id})"),
@@ -390,7 +399,7 @@ pub(super) fn disambiguate_user(
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             let sanitized_matches: Vec<String> = matches
                 .iter()
-                .map(|m| crate::output::sanitize_terminal_text(m))
+                .map(|m| crate::output::sanitize_terminal_line(m))
                 .collect();
             if no_input {
                 return Err(JrError::UserError(format!(
@@ -418,7 +427,7 @@ pub(super) fn disambiguate_user(
         crate::partial_match::MatchResult::None(all_names) => {
             let sanitized_names: Vec<String> = all_names
                 .iter()
-                .map(|n| crate::output::sanitize_terminal_text(n))
+                .map(|n| crate::output::sanitize_terminal_line(n))
                 .collect();
             Err(JrError::UserError(none_msg_fn(&sanitized_names)).into())
         }
@@ -912,10 +921,11 @@ mod tests {
     // interactive branch builds its `labels` by calling
     // `disambiguation_labels`, which sanitizes each server-supplied
     // `display_name`/`email_address`/`account_id` via
-    // `output::sanitize_terminal_text` before formatting the existing
-    // label shape. These tests pin that sanitized behavior directly on
-    // the function, independent of `dialoguer::Select::interact()`'s
-    // blocking TTY call.
+    // `output::sanitize_terminal_line` (D-396/FIX-P5-002; was
+    // `output::sanitize_terminal_text` before D-396) before formatting the
+    // existing label shape. These tests pin that sanitized behavior
+    // directly on the function, independent of
+    // `dialoguer::Select::interact()`'s blocking TTY call.
 
     /// Hostile `display_name` (CSI-wrapped) + hostile `email_address`
     /// (also CSI-wrapped) must both sanitize to their CSI-stripped survivor
@@ -956,11 +966,11 @@ mod tests {
     /// email `"mallory@example.com"` (clean) → expected sanitized label
     /// `"Mallory Eve (mallory@example.com)"`.
     ///
-    /// Expected RED today: `disambiguation_labels` currently routes
-    /// `display_name` through `output::sanitize_terminal_text` (an alias of
-    /// `sanitize_table_cell`, which PRESERVES `\n`), so this assertion
-    /// fails until FIX-P5-002 rewires this call site to
-    /// `output::sanitize_terminal_line`.
+    /// `disambiguation_labels` routes `display_name` through
+    /// `output::sanitize_terminal_line` (FIX-P5-002) rather than
+    /// `output::sanitize_terminal_text` (an alias of `sanitize_table_cell`,
+    /// which PRESERVES `\n`), so the embedded `\n` above is neutralized to
+    /// a single space instead of surviving into the picker label.
     #[test]
     fn test_disambiguation_labels_sanitizes_embedded_newline_to_single_line() {
         let u = make_user_with_email("acc-1", "Mallory\nEve", "mallory@example.com");

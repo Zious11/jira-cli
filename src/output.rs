@@ -109,14 +109,15 @@ fn render_table_with_styles_inner(
                 .collect::<Vec<_>>(),
         );
 
+    let should_colorize = colored::control::SHOULD_COLORIZE.should_colorize();
     for row in rows {
         let cells: Vec<Cell> = row
             .iter()
             .map(|c| {
                 let cell = Cell::new(sanitize_table_cell(&c.text));
                 match c.fg {
-                    Some(color) => cell.fg(color),
-                    None => cell,
+                    Some(color) if should_colorize => cell.fg(color),
+                    _ => cell,
                 }
             })
             .collect();
@@ -593,21 +594,35 @@ pub(crate) fn sanitize_terminal_text(value: &str) -> String {
 /// - `handle_assign`'s two human-output success messages
 ///   (`src/cli/issue/workflow.rs`).
 ///
-/// **NOT YET WIRED into any of the call sites above as of this stub** — the
-/// call-site rewiring is a pending FIX-P5-002 implementation obligation.
-/// Those call sites currently still route through `sanitize_terminal_text`,
-/// which does NOT neutralize an embedded `\n` — see BC-7.1.006's EC-17 for
-/// the verified-hostile fixture and contrast case this function closes.
+/// All three sink groups above are wired to this function (FIX-P5-002) —
+/// see BC-7.1.006's EC-17 for the verified-hostile fixture and the contrast
+/// case against the `\n`-preserving `sanitize_terminal_text` this function
+/// closes.
 ///
 /// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006 (EC-17) and its
 /// inline `VP-SEC-001-001` for the full contract.
 pub(crate) fn sanitize_terminal_line(value: &str) -> String {
-    todo!(
-        "FIX-P5-002 (BC-7.1.006 CR-1): single-line sibling of \
-         sanitize_table_cell — identical policy except \\n must map to a \
-         single space (CharDisposition::Replace(' ')), mirroring the \
-         existing \\t substitution"
-    )
+    sanitize_control_and_ansi_core(value, |c| match c {
+        '\n' => CharDisposition::Replace(' '),
+        '\r' => CharDisposition::Drop,
+        '\t' => CharDisposition::Replace(' '),
+        _ => {
+            let code = c as u32;
+            if code <= 0x1F
+                || code == 0x7F
+                || (0x80..=0x9F).contains(&code)
+                || (0x202A..=0x202E).contains(&code)
+                || (0x2066..=0x2069).contains(&code)
+                || code == 0x2028
+                || code == 0x2029
+                || code == 0x0085
+            {
+                CharDisposition::Drop
+            } else {
+                CharDisposition::Keep
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1601,11 +1616,11 @@ mod tests {
     /// `comfy_table`'s own TTY gate would suppress ANSI regardless of `fg`,
     /// making "no ANSI present" trivially true for the WRONG reason.
     ///
-    /// Expected RED today: `render_table_with_styles` has no
-    /// `SHOULD_COLORIZE` gate of its own, so with styling forced on and
-    /// colorize forced OFF, the `Color::Green` `fg` is still applied to the
-    /// `comfy_table::Cell` and ANSI bytes DO appear in the output — this
-    /// test fails until a future fix adds the gate CR-2 names as a residual.
+    /// `render_table_with_styles_inner` now gates `fg` application on
+    /// `colored::control::SHOULD_COLORIZE.should_colorize()` (D-396/CR-2,
+    /// FIX-P5-002) — with styling forced on and colorize forced OFF, the
+    /// `Color::Green` `fg` is never applied to the `comfy_table::Cell`, so
+    /// no ANSI bytes appear in the output.
     #[test]
     fn test_bc_7_1_006_render_table_with_styles_suppresses_fg_when_colorize_disabled() {
         let _color = TerminalColorOverride::new(false);

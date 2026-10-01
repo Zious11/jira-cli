@@ -1084,7 +1084,7 @@ pub(super) async fn handle_assign(
                 output::print_success(&format!(
                     "{} is already assigned to {}",
                     key,
-                    output::sanitize_terminal_text(&display_name)
+                    output::sanitize_terminal_line(&display_name)
                 ));
             }
         }
@@ -1108,7 +1108,7 @@ pub(super) async fn handle_assign(
             output::print_success(&format!(
                 "Assigned {} to {}",
                 key,
-                output::sanitize_terminal_text(&display_name)
+                output::sanitize_terminal_line(&display_name)
             ));
         }
     }

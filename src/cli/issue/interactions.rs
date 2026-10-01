@@ -646,28 +646,34 @@ pub(super) async fn handle_comment_view(
             //   field 1 id  → "N/A" when absent/null
             //   field 2 author.displayName → "Unknown" when author null or displayName absent
             //   fields 3/4 created/updated → "N/A" when absent/null
-            // SEC-003 (FIX-P5-001, BC-7.1.006): every server-derived value
-            // printed below passes through output::sanitize_terminal_text
+            // SEC-003 (FIX-P5-001, BC-7.1.006), rewired to the single-line
+            // sanitizer by D-396/FIX-P5-002: every server-derived value
+            // printed below passes through output::sanitize_terminal_line
             // before reaching the terminal — this handler bypasses both
             // render_table chokepoints (it prints its own plain key-value
             // lines + body block directly), so it must sanitize at each
-            // print site itself. `jsm_internal` is a static "Yes"/"No"/"N/A"
+            // print site itself. Each of these six fields renders as
+            // exactly one line, so `sanitize_terminal_line` (not the
+            // `\n`-preserving `sanitize_terminal_text`) is required — an
+            // embedded `\n` in e.g. a hostile Author display name would
+            // otherwise fabricate what looks like an extra labeled field
+            // (EC-17a, CWE-116). `jsm_internal` is a static "Yes"/"No"/"N/A"
             // token (never server text) but is sanitized anyway for
             // uniformity — harmless no-op on those values.
-            let id_val = output::sanitize_terminal_text(response["id"].as_str().unwrap_or("N/A"));
-            let author = output::sanitize_terminal_text(
+            let id_val = output::sanitize_terminal_line(response["id"].as_str().unwrap_or("N/A"));
+            let author = output::sanitize_terminal_line(
                 response["author"]["displayName"]
                     .as_str()
                     .unwrap_or("Unknown"),
             );
             let created =
-                output::sanitize_terminal_text(response["created"].as_str().unwrap_or("N/A"));
+                output::sanitize_terminal_line(response["created"].as_str().unwrap_or("N/A"));
             let updated =
-                output::sanitize_terminal_text(response["updated"].as_str().unwrap_or("N/A"));
-            let jsm_internal = output::sanitize_terminal_text(format_jsm_internal_field(
+                output::sanitize_terminal_line(response["updated"].as_str().unwrap_or("N/A"));
+            let jsm_internal = output::sanitize_terminal_line(format_jsm_internal_field(
                 response.get("properties"),
             ));
-            let restricted = output::sanitize_terminal_text(&format_restricted_field(
+            let restricted = output::sanitize_terminal_line(&format_restricted_field(
                 response.get("visibility"),
             ));
 
