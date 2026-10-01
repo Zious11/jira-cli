@@ -73,7 +73,32 @@ impl StyledCell {
 /// `comfy_table::Cell` — never as ANSI bytes embedded in the sanitized
 /// string.
 pub fn render_table_with_styles(headers: &[&str], rows: &[Vec<StyledCell>]) -> String {
+    render_table_with_styles_inner(headers, rows, false)
+}
+
+/// Test-only seam behind [`render_table_with_styles`] (BC-7.1.006, CR-2,
+/// D-396/FIX-P5-002): identical logic, with one additional parameter,
+/// `force_styling`. When `true`, `comfy_table`'s own
+/// `Table::force_no_tty().enforce_styling()` is applied before rendering,
+/// so a test can deterministically observe whether a `StyledCell`'s `fg`
+/// reaches the rendered ANSI output regardless of the ambient (non-TTY
+/// under `cargo test`, where `comfy_table`'s own ANSI-styling gate would
+/// otherwise always suppress color — see
+/// `src/cli/user.rs::test_bc_7_1_006_structural_cell_styling_technique_survives_rendering`
+/// for the same technique applied directly against `comfy_table`) terminal
+/// state. `render_table_with_styles` itself always calls this with
+/// `force_styling = false`, so production behavior/output is byte-for-byte
+/// unchanged by this refactor — this is a pure test-observability seam, not
+/// a behavior change.
+fn render_table_with_styles_inner(
+    headers: &[&str],
+    rows: &[Vec<StyledCell>],
+    force_styling: bool,
+) -> String {
     let mut table = Table::new();
+    if force_styling {
+        table.force_no_tty().enforce_styling();
+    }
     table
         .load_preset(UTF8_FULL_CONDENSED)
         .set_content_arrangement(ContentArrangement::Dynamic)
@@ -536,6 +561,53 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
 /// function does not duplicate or fork the policy.
 pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     sanitize_table_cell(value)
+}
+
+/// Single-line sibling of [`sanitize_table_cell`] (BC-7.1.006, CR-1,
+/// D-396/FIX-P5-002). Applies the IDENTICAL per-character policy, with
+/// exactly one difference: an embedded `\n` (U+000A) is REPLACED with a
+/// single space instead of preserved — the same substitution
+/// `sanitize_table_cell` already applies to `\t`. Consecutive `\n`
+/// characters become the same number of consecutive spaces (the simplest
+/// option; no further collapsing to a single space).
+///
+/// **Why this function exists, and when to use it instead of
+/// [`sanitize_table_cell`]/[`sanitize_terminal_text`]:** those two
+/// functions deliberately PRESERVE `\n`, which is correct for a
+/// genuinely multi-line sink (`render_table`/`render_table_with_styles`
+/// cells, `handle_comment_view`'s ADF-derived body block) — it's the only
+/// mechanism by which a multi-line cell renders at all. But a sink that is
+/// supposed to render EXACTLY ONE line of text has no such excuse: a
+/// hostile value with an embedded `\n` routed through the `\n`-preserving
+/// sanitizer can fabricate what LOOKS like an extra labeled field or picker
+/// item on its own line — a CWE-116 line-fabrication/field-spoofing hazard.
+/// `sanitize_terminal_line` is the fix for exactly that class of sink:
+/// - `disambiguate_user`'s non-interactive `JrError::UserError` messages and
+///   interactive `dialoguer::Select` picker labels/items
+///   (`src/cli/issue/helpers.rs`, including the `disambiguation_labels`
+///   helper).
+/// - `handle_comment_view`'s six labeled fields (`ID`/`Author`/`Created`/
+///   `Updated`/`JSM internal`/`Restricted`) (`src/cli/issue/interactions.rs`)
+///   — but NOT its ADF-derived body block, which stays on
+///   `sanitize_terminal_text` (genuinely multi-line).
+/// - `handle_assign`'s two human-output success messages
+///   (`src/cli/issue/workflow.rs`).
+///
+/// **NOT YET WIRED into any of the call sites above as of this stub** — the
+/// call-site rewiring is a pending FIX-P5-002 implementation obligation.
+/// Those call sites currently still route through `sanitize_terminal_text`,
+/// which does NOT neutralize an embedded `\n` — see BC-7.1.006's EC-17 for
+/// the verified-hostile fixture and contrast case this function closes.
+///
+/// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006 (EC-17) and its
+/// inline `VP-SEC-001-001` for the full contract.
+pub(crate) fn sanitize_terminal_line(value: &str) -> String {
+    todo!(
+        "FIX-P5-002 (BC-7.1.006 CR-1): single-line sibling of \
+         sanitize_table_cell — identical policy except \\n must map to a \
+         single space (CharDisposition::Replace(' ')), mirroring the \
+         existing \\t substitution"
+    )
 }
 
 #[cfg(test)]
