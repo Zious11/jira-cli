@@ -30,8 +30,9 @@
 //! D-393) are the one exception to the "through `render_table`" framing
 //! above: `handle_comment_view` bypasses both table chokepoints entirely
 //! and prints its labeled fields and ADF-derived body directly via
-//! `print!`/`println!`, sanitizing each at its own print site through
-//! `output::sanitize_terminal_text` instead. Those tests exercise that
+//! `print!`/`println!`, sanitizing each at its own print site instead (the labeled fields via
+//! `output::sanitize_terminal_line`, the multi-line ADF body via
+//! `output::sanitize_terminal_text`). Those tests exercise that
 //! direct-print-site sanitization, not `render_table`.
 
 #[allow(dead_code)]
@@ -461,7 +462,8 @@ async fn test_bc_7_1_006_user_list_json_mode_preserves_hostile_display_name_raw(
 // `print!`/`println!` — NOT through `render_table`/`print_output`. SEC-003
 // extends BC-7.1.006's chokepoint guarantee to this handler's plain-text
 // fields: each one is sanitized at its own print site via
-// `output::sanitize_terminal_text` (pins production behavior, same as the
+// `output::sanitize_terminal_line` (labeled fields) or
+// `output::sanitize_terminal_text` (ADF body only) (pins production behavior, same as the
 // `render_table`-backed tests above).
 
 /// Hostile `author.displayName`: an ANSI CSI color sequence around
@@ -477,7 +479,7 @@ const COMMENT_HOSTILE_VISIBILITY_VALUE: &str = "\u{1b}[35mEvilRole\u{1b}[0m";
 
 /// Hostile response-body `id` field value (W-2: a prior version of this
 /// fixture gave `id`/`created`/`updated` clean values, so a regression
-/// deleting any of their `sanitize_terminal_text` call sites would go
+/// deleting any of their `sanitize_terminal_line` call sites would go
 /// undetected). Decoupled from the mock's URL-path `id` / the CLI's `--id`
 /// argument, which must satisfy `validate_comment_id`'s alnum/underscore/
 /// hyphen charset and so cannot itself carry ESC/C1 bytes — the server is
@@ -540,7 +542,7 @@ fn comment_clean_body() -> Value {
 /// with a hostile response-body `id`, `author.displayName`, `created`,
 /// `updated`, `visibility.value`, and ADF `body` (W-2: every server-derived
 /// field `handle_comment_view` prints is hostile here, so a regression
-/// dropping any one of its `sanitize_terminal_text` call sites is caught).
+/// dropping any one of its `sanitize_terminal_line` call sites is caught).
 /// The `id` function parameter still identifies the mock's URL path (and so
 /// must match the CLI's `--id` argument, which is charset-restricted) — the
 /// response body's own `"id"` field is independently hostile via
@@ -589,8 +591,9 @@ async fn mount_comment_view_clean_fixture(server: &MockServer, key: &str, id: &s
 /// field labels must still all be present (layout unchanged).
 ///
 /// Pins production behavior: `handle_comment_view`'s table-mode arm
-/// sanitizes `id`, `author`, `created`, `updated`, `restricted`, and
-/// `body_text` via `output::sanitize_terminal_text` at each of its own
+/// sanitizes `id`, `author`, `created`, `updated`, `restricted` (via
+/// `output::sanitize_terminal_line`) and `body_text` (via
+/// `output::sanitize_terminal_text`, genuinely multi-line) at each of its own
 /// print sites before printing — the hostile ESC/C1/`\r` bytes must not
 /// survive, while the CSI/C1-stripped survivor text must still render.
 #[tokio::test]
@@ -624,7 +627,7 @@ async fn test_bc_7_1_006_comment_view_human_output_strips_hostile_body_and_autho
 
     // Positive survivor assertions (W-2): the exact sanitized value for
     // every hostile field, not just "no raw ESC/C1 survived" — this is what
-    // actually detects a deleted `sanitize_terminal_text` call site on
+    // actually detects a deleted `sanitize_terminal_line` call site on
     // `id`/`created`/`updated` (a prior version of the fixture gave those
     // three fields clean values, so `assert_no_esc_or_c1` alone could not
     // have caught a regression there). Each expected literal is traced
@@ -934,7 +937,7 @@ async fn mount_assign_put_assignee(server: &MockServer, key: &str) {
 ///
 /// Pins production behavior: `handle_assign`'s `Table` success arm
 /// (`src/cli/issue/workflow.rs` ~L1104) sanitizes `display_name` via
-/// `output::sanitize_terminal_text` before formatting it into
+/// `output::sanitize_terminal_line` before formatting it into
 /// `output::print_success(&format!("Assigned {} to {}", key, display_name))`
 /// — no raw ESC/BEL/CSI byte survives in stderr.
 #[tokio::test]
@@ -1045,7 +1048,7 @@ async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_s
 }
 
 /// JSON mode: the identical hostile fixture must round-trip lossless via
-/// the `assignee` key — `sanitize_table_cell`/`sanitize_terminal_text` must
+/// the `assignee` key — `sanitize_table_cell`/`sanitize_terminal_line` must
 /// never run on the `--output json` path, mirroring every other JSON-mode
 /// test in this file.
 ///
@@ -1104,7 +1107,7 @@ async fn test_bc_7_1_006_issue_assign_json_output_preserves_hostile_display_name
 /// trailing newline) is caught the same way a hostile-payload leak would be.
 ///
 /// Expected GREEN today and after the fix: `sanitize_table_cell`/
-/// `sanitize_terminal_text` is a no-op on ASCII text containing no control
+/// `sanitize_terminal_line` is a no-op on ASCII text containing no control
 /// characters, ANSI escapes, or C1 code points — "Jane Doe" contains none,
 /// so wiring sanitization into `handle_assign` cannot change this specific
 /// output.
@@ -1138,11 +1141,11 @@ async fn test_bc_7_1_006_issue_assign_human_output_clean_fixture_byte_identical(
 //
 // `src/cli/issue/helpers.rs::disambiguate_user` (~L276-400) is the SHARED
 // disambiguation helper behind `resolve_user`, `resolve_assignee` (`jr
-// issue assign --to`), `resolve_assignee_by_project` (`jr issue create/edit
-// --assignee`), and `mentions::resolve_mentions`. Its THREE non-interactive
+// issue assign --to`), `resolve_assignee_by_project` (`jr issue create
+// --to`, its only call site), and `mentions::resolve_mentions`. Its THREE non-interactive
 // (`--no-input`/non-TTY) `JrError::UserError` branches echo server-supplied,
 // user-editable `display_name`/`email_address`/`account_id` — each routed
-// through `output::sanitize_terminal_text` (D-395) before it reaches the
+// through `output::sanitize_terminal_line` (D-395) before it reaches the
 // message:
 //   - `MatchResult::ExactMultiple`: `"Multiple users named \"{name}\"
 //     found:\n  {display_name} ({email}, account: {account_id})\n...\n
@@ -1254,7 +1257,7 @@ fn disambig_exact_multiple_hostile_users() -> Vec<Value> {
 /// Pins production behavior: `disambiguate_user`'s `ExactMultiple`
 /// non-interactive branch (`src/cli/issue/helpers.rs`) builds `lines` from
 /// `u.display_name`/`email`/`u.account_id`, each routed through
-/// `output::sanitize_terminal_text` before formatting — the hostile bytes
+/// `output::sanitize_terminal_line` before formatting — the hostile bytes
 /// never reach stderr.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile_fields() {
@@ -1298,7 +1301,7 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile
 ///
 /// Pins production behavior: `disambiguate_user`'s `Ambiguous`
 /// non-interactive branch (`src/cli/issue/helpers.rs`) maps `matches`
-/// through `output::sanitize_terminal_text` into `sanitized_matches`
+/// through `output::sanitize_terminal_line` into `sanitized_matches`
 /// before joining it into the message — the hostile bytes never reach
 /// stderr.
 #[tokio::test]
@@ -1465,7 +1468,7 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_json_error_envelope_carries
 /// caught the same way a hostile-payload leak would be.
 ///
 /// Expected GREEN today and after the fix: `sanitize_table_cell`/
-/// `sanitize_terminal_text` is a no-op on ASCII text containing no control
+/// `sanitize_terminal_line` is a no-op on ASCII text containing no control
 /// characters, ANSI escapes, or C1 code points — none of this fixture's
 /// fields contain any, so wiring sanitization into `disambiguate_user`
 /// cannot change this specific output.
@@ -1524,7 +1527,7 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_clean_fixture_
 ///
 /// Pins production behavior: `disambiguate_user`'s `MatchResult::None`
 /// branch (`src/cli/issue/helpers.rs`) maps `all_names` through
-/// `output::sanitize_terminal_text` into `sanitized_names` before handing
+/// `output::sanitize_terminal_line` into `sanitized_names` before handing
 /// that vec to `none_msg_fn` — the hostile bytes never reach stderr.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_none_human_output_strips_hostile_candidate_names() {
@@ -1767,7 +1770,7 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile
 // ═══════════════════════════════════════════════════════════════════════
 // F-002 missing coverage (D-396/FIX-P5-002) — five new test targets named
 // in BC-7.1.006's F-002 disposition. Some of these are expected GREEN
-// today ("GREEN-by-design"): the underlying `sanitize_terminal_text` call
+// today ("GREEN-by-design"): the underlying `sanitize_terminal_line` call
 // already covers the hostile payload in question via a caller this suite
 // had not yet exercised — F-002 was a MISSING-TEST finding, not a bug.
 // ═══════════════════════════════════════════════════════════════════════
