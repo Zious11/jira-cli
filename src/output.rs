@@ -89,9 +89,10 @@ pub fn render_table_with_styles(headers: &[&str], rows: &[Vec<StyledCell>]) -> S
 /// `force_styling`. When `true`, `comfy_table`'s own
 /// `Table::force_no_tty().enforce_styling()` is applied before rendering,
 /// so a test can deterministically observe whether a `StyledCell`'s `fg`
-/// reaches the rendered ANSI output regardless of the ambient (non-TTY
-/// under `cargo test`, where `comfy_table`'s own ANSI-styling gate would
-/// otherwise always suppress color — see
+/// reaches the rendered ANSI output regardless of the ambient (whether
+/// stdout is a TTY depends on how the test runner was launched, since
+/// libtest's capture does not redirect fd 1, and `comfy_table`'s own
+/// ANSI-styling gate would otherwise suppress color when it is not — see
 /// `src/cli/user.rs::test_bc_7_1_006_structural_cell_styling_technique_survives_rendering`
 /// for the same technique applied directly against `comfy_table`) terminal
 /// state. `render_table_with_styles` itself always calls this with
@@ -300,9 +301,10 @@ enum CharDisposition {
     Replace(char),
 }
 
-/// Shared CSI/OSC-consuming state machine backing both
-/// [`strip_control_and_ansi`] (`sanitize_env_display`) and
-/// [`sanitize_table_cell`] (BC-7.1.006) — the two sibling sanitizers differ
+/// Shared CSI/OSC-consuming state machine backing every sanitizer here:
+/// [`strip_control_and_ansi`] (`sanitize_env_display`),
+/// [`sanitize_table_cell`] (BC-7.1.006, also reached through its alias
+/// [`sanitize_terminal_text`]), and [`sanitize_terminal_line`] — they differ
 /// only in what they do with an ordinary (non-ESC) character, which this
 /// function delegates to the caller-supplied `policy` closure via
 /// [`CharDisposition`]. The ANSI CSI/OSC recognition and fail-closed

@@ -440,8 +440,10 @@ mod tests {
     /// `comfy_table` behavior this BC's design depends on.
     ///
     /// `comfy_table::Table::should_style()` is gated on `is_tty()`
-    /// (`std::io::stdout().is_terminal()`), which is false under `cargo
-    /// test` (stdout is captured) — `colored`'s own override mechanism
+    /// (`std::io::stdout().is_terminal()`), whose result depends on the
+    /// ambient fd 1 (libtest's output capture does not redirect fd 1, so it
+    /// is false only when the test runner's stdout is piped/redirected, as
+    /// in CI, and may be true in an interactive terminal) — `colored`'s own override mechanism
     /// does NOT affect `comfy_table`'s independent TTY gate. Determinism
     /// here comes from `Table::force_no_tty().enforce_styling()`, which
     /// `comfy_table` documents as the supported way to force styled output

@@ -952,11 +952,6 @@ mod tests {
         assert_eq!(labels, vec!["Alice (acc-1Z)".to_string()]);
     }
 
-    /// Regression guard: clean (ASCII, no control/escape bytes) input must
-    /// produce byte-identical labels in the existing format — for BOTH the
-    /// email-present and no-email cases, and preserving input order across
-    /// multiple duplicates — so wiring sanitization into this function
-    /// cannot itself change output for non-hostile data.
     /// EC-17b (BC-7.1.006, CR-1, D-396/FIX-P5-002): a hostile `display_name`
     /// with an embedded `\n` must collapse to a SINGLE space at the `\n`
     /// boundary — not survive as a raw newline inside the picker label,
@@ -983,6 +978,11 @@ mod tests {
         );
     }
 
+    /// Regression guard: clean (ASCII, no control/escape bytes) input must
+    /// produce byte-identical labels in the existing format — for BOTH the
+    /// email-present and no-email cases, and preserving input order across
+    /// multiple duplicates — so wiring sanitization into this function
+    /// cannot itself change output for non-hostile data.
     #[test]
     fn test_disambiguation_labels_preserves_clean_input_format() {
         let u1 = make_user_with_email("acc-1", "Jane Doe", "jane1@example.com");

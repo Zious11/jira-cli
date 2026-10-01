@@ -249,8 +249,7 @@ async fn test_bc_7_1_006_field_options_table_mode_strips_hostile_option_label() 
 /// back to the same `char` that was serialized).
 ///
 /// Expected GREEN today: the JSON path was already raw/lossless before this
-/// fix (`output::render_json` never called `sanitize_table_cell`, which
-/// doesn't exist in any call graph yet), so this pins a pre-existing
+/// fix (`output::render_json` never calls `sanitize_table_cell`), so this pins a pre-existing
 /// invariant rather than new behavior — included for completeness of the
 /// table/JSON asymmetry proof (VP-SEC-001-001(c) requires both sides be
 /// checked against the same fixture).
