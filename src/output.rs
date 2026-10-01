@@ -1645,6 +1645,123 @@ mod tests {
         }
     }
 
+    // ── invisible format characters (BC-7.1.006 EC-18/19/20, VP-SEC-001-002,
+    // FIX-P5-004, D-398, CWE-451) ────────────────────────────────────────
+
+    /// Every code point the invisible-format policy must DROP.
+    fn invisible_format_chars() -> Vec<char> {
+        let mut v: Vec<char> = Vec::new();
+        for r in [
+            0x200B..=0x200F,
+            0x061C..=0x061C,
+            0x2060..=0x2064,
+            0xFEFF..=0xFEFF,
+            0xE0000..=0xE007F,
+        ] {
+            v.extend(r.map(|u| char::from_u32(u).expect("valid scalar")));
+        }
+        v
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        /// VP-SEC-001-002 (a): all three wrappers strip every invisible
+        /// format character, wherever it is injected into clean text.
+        #[test]
+        fn prop_bc_7_1_006_sanitizers_strip_invisible_format_characters(
+            idx in 0usize..invisible_format_chars().len(),
+            prefix in "[a-z]{0,6}",
+            suffix in "[a-z]{0,6}",
+            endpoint in prop::bool::ANY,
+        ) {
+            let chars = invisible_format_chars();
+            // Bias to range endpoints half the time.
+            let c = if endpoint {
+                [0x200B, 0x200F, 0x061C, 0x2060, 0x2064, 0xFEFF, 0xE0000, 0xE007F]
+                    [idx % 8]
+            } else {
+                chars[idx] as u32
+            };
+            let c = char::from_u32(c).unwrap();
+            let input = format!("{prefix}{c}{suffix}");
+            let expected = format!("{prefix}{suffix}");
+            prop_assert_eq!(sanitize_table_cell(&input), expected.clone());
+            prop_assert_eq!(sanitize_terminal_text(&input), expected.clone());
+            prop_assert_eq!(sanitize_terminal_line(&input), expected);
+        }
+    }
+
+    #[test]
+    fn test_bc_7_1_006_sanitize_strips_zero_width_and_directional_marks() {
+        for (name, c) in [
+            ("ZWSP", '\u{200B}'),
+            ("ZWNJ", '\u{200C}'),
+            ("ZWJ", '\u{200D}'),
+            ("LRM", '\u{200E}'),
+            ("RLM", '\u{200F}'),
+            ("ALM", '\u{061C}'),
+            ("WORD JOINER", '\u{2060}'),
+            ("FUNCTION APPLICATION", '\u{2061}'),
+            ("INVISIBLE TIMES", '\u{2062}'),
+            ("INVISIBLE SEPARATOR", '\u{2063}'),
+            ("INVISIBLE PLUS", '\u{2064}'),
+            ("BOM", '\u{FEFF}'),
+        ] {
+            let input = format!("a{c}b");
+            assert_eq!(sanitize_table_cell(&input), "ab", "{name}");
+            assert_eq!(sanitize_terminal_text(&input), "ab", "{name}");
+            assert_eq!(sanitize_terminal_line(&input), "ab", "{name}");
+        }
+    }
+
+    #[test]
+    fn test_bc_7_1_006_sanitize_invisible_format_range_boundaries_kept() {
+        for c in [
+            '\u{200A}', '\u{2010}', '\u{205F}', '\u{2065}', '\u{FEFE}', '\u{FF00}',
+            '\u{E0080}', '\u{1F600}',
+        ] {
+            let input = format!("a{c}b");
+            assert_eq!(sanitize_table_cell(&input), input, "U+{:04X}", c as u32);
+            assert_eq!(sanitize_terminal_text(&input), input, "U+{:04X}", c as u32);
+            assert_eq!(sanitize_terminal_line(&input), input, "U+{:04X}", c as u32);
+        }
+    }
+
+    #[test]
+    fn test_bc_7_1_006_sanitize_strips_unicode_tag_block() {
+        let all: String = (0xE0000u32..=0xE007F)
+            .map(|u| char::from_u32(u).unwrap())
+            .collect();
+        let input = format!("x{all}y");
+        assert_eq!(sanitize_table_cell(&input), "xy");
+        assert_eq!(sanitize_terminal_text(&input), "xy");
+        assert_eq!(sanitize_terminal_line(&input), "xy");
+        // Both endpoints individually.
+        assert_eq!(sanitize_table_cell("a\u{E0000}b"), "ab");
+        assert_eq!(sanitize_table_cell("a\u{E007F}b"), "ab");
+    }
+
+    /// EC-20: accepted trade-off, ZWJ is stripped so emoji sequences split.
+    #[test]
+    fn test_bc_7_1_006_sanitize_zwj_emoji_sequence_loses_joiner() {
+        let input = "\u{1F469}\u{200D}\u{1F4BB}";
+        let expected = "\u{1F469}\u{1F4BB}";
+        assert_eq!(sanitize_table_cell(input), expected);
+        assert_eq!(sanitize_terminal_text(input), expected);
+        assert_eq!(sanitize_terminal_line(input), expected);
+    }
+
+    /// Identity collapse: a spoofed name with invisible characters becomes
+    /// byte-identical to the genuine one after sanitizing.
+    #[test]
+    fn test_bc_7_1_006_sanitize_terminal_line_invisible_chars_identity_collapse() {
+        let genuine = "Alice Admin";
+        let spoof = "Ali\u{200B}ce\u{FEFF} \u{2060}Ad\u{200D}min\u{E0041}";
+        assert_ne!(genuine, spoof);
+        assert_eq!(sanitize_terminal_line(spoof), genuine);
+    }
+
     // ── render_table_with_styles structural color gating (BC-7.1.006,
     // CR-2, D-396/FIX-P5-002) ────────────────────────────────────────────
     //
