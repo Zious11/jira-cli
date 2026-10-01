@@ -311,8 +311,8 @@ enum CharDisposition {
 /// An ANSI CSI sequence (`ESC [ … <final byte 0x40-0x7E>`) is consumed
 /// through its final byte; an OSC sequence (`ESC ] … <BEL 0x07 or ST
 /// ESC \>`) is consumed through its BEL or `ESC \` string terminator. A
-/// bare ESC not starting a recognized CSI/OSC sequence falls through to
-/// `policy` like any other character. If a CSI/OSC sequence's terminator
+/// bare ESC not starting a recognized CSI/OSC sequence is dropped
+/// unconditionally (it never reaches `policy`). If a CSI/OSC sequence's terminator
 /// never appears before end-of-string, the sequence (and everything after
 /// it) is consumed through EOF — fail-closed, no raw ESC byte ever
 /// survives — regardless of what `policy` would have done with the bytes
@@ -531,6 +531,12 @@ fn sanitize_control_and_ansi_core(
 ///   `U+0085` (NEL) are STRIPPED — the same Unicode terminal-injection
 ///   code-point set `strip_control_and_ansi` already strips for
 ///   `sanitize_env_display`.
+/// - Invisible format characters are STRIPPED (FIX-P5-004, D-398, CWE-451):
+///   `U+200B`-`U+200F` (ZWSP, ZWNJ, ZWJ, LRM, RLM), `U+061C` (ALM),
+///   `U+2060`-`U+2064` (word joiner, function application, invisible
+///   times/separator/plus), `U+FEFF` (BOM), and the Unicode tag block
+///   `U+E0000`-`U+E007F`. Accepted trade-off (EC-20): ZWJ emoji sequences
+///   lose their joiner in table/human output.
 /// - No length cap and no truncation are applied (unlike
 ///   `sanitize_env_display`'s capped-and-marked behavior). Ordinary
 ///   printable text — including non-ASCII such as `"é"`, CJK characters,
@@ -588,7 +594,12 @@ pub(crate) fn sanitize_terminal_text(value: &str) -> String {
 /// [`sanitize_terminal_line`] (FIX-P5-003, CR2-1): every character other than
 /// the three whitespace controls (`\n`, `\r`, `\t`, which each function
 /// classifies itself) is DROPPED if it is a C0 control, DEL, a C1 control,
-/// a bidi override, or a Unicode line/paragraph separator/NEL; otherwise KEPT.
+/// a bidi override, a Unicode line/paragraph separator/NEL, or an invisible
+/// format character (FIX-P5-004, D-398, CWE-451: `U+200B..=U+200F` ZWSP/ZWNJ/
+/// ZWJ/LRM/RLM, `U+061C` ALM, `U+2060..=U+2064` word joiner and invisible
+/// operators, `U+FEFF` BOM, `U+E0000..=U+E007F` Unicode tag block); otherwise
+/// KEPT. ZWJ is stripped deliberately (EC-20): ZWJ emoji sequences lose the
+/// joiner in human output; `--output json` is never sanitized.
 fn classify_default_char(c: char) -> CharDisposition {
     let code = c as u32;
     if code <= 0x1F
@@ -599,6 +610,11 @@ fn classify_default_char(c: char) -> CharDisposition {
         || code == 0x2028
         || code == 0x2029
         || code == 0x0085
+        || (0x200B..=0x200F).contains(&code)
+        || code == 0x061C
+        || (0x2060..=0x2064).contains(&code)
+        || code == 0xFEFF
+        || (0xE0000..=0xE007F).contains(&code)
     {
         CharDisposition::Drop
     } else {
@@ -1495,12 +1511,13 @@ mod tests {
     /// calling `render_table_with_styles`) is caught here too. stdout
     /// itself isn't captured by this in-process unit test (the real CLI
     /// process boundary is covered end-to-end by
-    /// `tests/table_output_sanitization.rs`'s `jr user list` case); this
+    /// `tests/table_output_sanitization.rs`'s `jr user list` case, which owns
+    /// the actual sanitization guarantee; this test asserts only `Ok(())`); this
     /// test instead pins that the call succeeds for both a hostile plain
     /// and a hostile colored cell, and that JSON mode stays a pure
     /// `render_json` passthrough completely unaffected by cell styling.
     #[test]
-    fn test_bc_7_1_006_print_output_with_styles_does_not_error_on_hostile_cells() {
+    fn test_bc_7_1_006_print_output_with_styles_returns_ok_on_hostile_cells() {
         let headers = &["Name"];
         let hostile = "\u{1b}[31mFAKE\u{1b}[0m\u{9b}pwned";
         let rows = vec![vec![StyledCell::colored(hostile, Color::Red)]];
