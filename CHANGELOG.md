@@ -209,6 +209,13 @@ All notable changes to jr will be documented here.
     both gates agree. End-user-visible behavior for `active_cell`, the
     only caller today, is unchanged by this gate — see the corrected
     `CLICOLOR_FORCE` note below.
+  - **Corrected `CLICOLOR_FORCE` note (FIX-P5-004, P3-001):** color for the
+    `jr user list`/`jr user view` Active column requires BOTH a TTY and
+    `colored::control::SHOULD_COLORIZE.should_colorize()`; `--no-color`/
+    `NO_COLOR` suppress it. `CLICOLOR_FORCE` with piped (non-TTY) stdout
+    still does NOT color it, because `comfy_table`'s own TTY gate is
+    independent of `CLICOLOR_FORCE`/`SHOULD_COLORIZE` and sees a non-TTY
+    stdout regardless.
   - **`jr api`'s raw response-body passthrough is a documented exception,
     not a residual.** `src/cli/api.rs::handle_api` writes the raw HTTP
     response body directly to stdout, by design, for `gh api` parity —
@@ -236,6 +243,18 @@ All notable changes to jr will be documented here.
     known limitation and a follow-up enhancement (add `email`/`accountId`
     to the `Ambiguous` branch's labels/message, mirroring
     `ExactMultiple`), not fixed by this change.
+- **Table/human output now strips invisible format characters from
+  server-supplied text (FIX-P5-004, BC-7.1.006 EC-18/19/20, CWE-451):** the
+  shared per-character policy behind `sanitize_table_cell`,
+  `sanitize_terminal_text` and `sanitize_terminal_line` now also drops
+  zero-width and directional marks (`U+200B`-`U+200F`, `U+061C`), word
+  joiner/invisible operators (`U+2060`-`U+2064`), the BOM (`U+FEFF`), and
+  the Unicode tag block (`U+E0000`-`U+E007F`), which could otherwise make
+  two different display names render identically. Accepted trade-off: ZWJ
+  (`U+200D`) is stripped too, so ZWJ emoji sequences (and legitimate
+  LRM/RLM/ZWNJ in RTL names) lose those characters in table/human output
+  (`woman + ZWJ + laptop` renders as two separate emoji). `--output json`
+  is never sanitized and is unaffected.
 
 ## [0.7.0] - 2026-09-23
 
