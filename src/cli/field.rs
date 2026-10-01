@@ -425,14 +425,21 @@ fn degrade_hint_for_schema(display_name: &str, schema: DegradeSchemaInfo<'_>) ->
     )
 }
 
-/// Resolve `<field>` to a `customfield_NNNNN`-shaped field id (AC-011).
+/// Resolve `<field>` to a field id — a custom id (`customfield_NNNNN`) or a
+/// system id such as `issuetype` (AC-011).
 ///
-/// `customfield_NNNNN` literals bypass `list_fields()` entirely (zero HTTP).
-/// Otherwise matches the query against field ids (system ids like
-/// `issuetype`) and then names, resolving via the per-profile fields cache (`cache::
-/// read_fields_cache`), falling back to `list_fields()` on a cache miss or
-/// a field absent from the cached list, writing the fresh list back
-/// (best-effort) before re-searching exactly once.
+/// Resolution order:
+/// 1. `customfield_NNNNN` literals bypass `list_fields()` entirely (zero HTTP).
+/// 2. An empty query is rejected with a `UserError`.
+/// 3. Exact ASCII-case-insensitive field-ID match (the list's canonical id
+///    casing is returned).
+/// 4. Exact case-insensitive name match.
+/// 5. Case-insensitive substring match on names.
+///
+/// Steps 3-5 run via [`search_field_list`] against the per-profile fields
+/// cache (`cache::read_fields_cache`), falling back to `list_fields()` on a
+/// cache miss or a field absent from the cached list, writing the fresh list
+/// back (best-effort) before re-searching exactly once.
 async fn resolve_field_id(
     client: &JiraClient,
     profile: &crate::profile::Profile,
@@ -1066,6 +1073,28 @@ mod tests {
         ];
         let msg = format!("{}", search_field_list(&sub, "dup", "dup").unwrap_err());
         assert!(msg.contains(HINT), "{msg}");
+    }
+
+    #[test]
+    fn test_bc_x_14_001_search_field_list_duplicate_case_insensitive_ids_is_ambiguous() {
+        const HINT: &str = "the field ID (e.g. customfield_NNNNN or a system id like issuetype)";
+        let list = vec![
+            ("issuetype".to_string(), "Issue Type".to_string()),
+            ("IssueType".to_string(), "Issue Type Legacy".to_string()),
+        ];
+        let err = search_field_list(&list, "issuetype", "issuetype").unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Field ID 'issuetype' matches multiple fields"),
+            "{msg}"
+        );
+        assert!(msg.contains("Issue Type (issuetype)"), "{msg}");
+        assert!(msg.contains("Issue Type Legacy (IssueType)"), "{msg}");
+        assert!(msg.contains(HINT), "{msg}");
+        match err.downcast_ref::<JrError>() {
+            Some(JrError::UserError(_)) => {}
+            other => panic!("expected JrError::UserError (exit 64), got {other:?}"),
+        }
     }
 
     /// `resolve_request_type_id`'s `MatchResult::ExactMultiple` arm
