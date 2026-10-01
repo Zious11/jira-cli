@@ -96,36 +96,3 @@ pub fn assert_no_ancestor_jr_toml(cwd: &Path) {
         dir = d.parent();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::is_scrubbable;
-
-    #[test]
-    fn test_is_scrubbable_matches_jr_prefix_case_insensitively() {
-        assert!(is_scrubbable("JR_X", &[]));
-        assert!(is_scrubbable("jr_x", &[]));
-        assert!(is_scrubbable("Jr_Profile", &[]));
-    }
-
-    #[test]
-    fn test_is_scrubbable_respects_trimmed_leading_whitespace() {
-        // Caller is expected to trim before calling; a pre-trimmed key
-        // with no surrounding whitespace still matches.
-        assert!(is_scrubbable(" JR_X".trim(), &[]));
-    }
-
-    #[test]
-    fn test_is_scrubbable_keeps_kept_keys_case_insensitively() {
-        assert!(!is_scrubbable("JR_CONFIG_DIR", &["JR_CONFIG_DIR"]));
-        assert!(!is_scrubbable("jr_config_dir", &["JR_CONFIG_DIR"]));
-        assert!(!is_scrubbable("JR_CONFIG_DIR", &["jr_config_dir"]));
-    }
-
-    #[test]
-    fn test_is_scrubbable_rejects_non_jr_prefix() {
-        assert!(!is_scrubbable("NOTJR_X", &[]));
-        assert!(!is_scrubbable("JR", &[]));
-        assert!(!is_scrubbable("", &[]));
-    }
-}

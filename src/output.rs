@@ -1735,8 +1735,14 @@ mod tests {
     #[test]
     fn test_bc_7_1_006_sanitize_invisible_format_range_boundaries_kept() {
         for c in [
-            '\u{200A}', '\u{2010}', '\u{205F}', '\u{2065}', '\u{FEFE}', '\u{FF00}',
-            '\u{E0080}', '\u{1F600}',
+            '\u{200A}',
+            '\u{2010}',
+            '\u{205F}',
+            '\u{2065}',
+            '\u{FEFE}',
+            '\u{FF00}',
+            '\u{E0080}',
+            '\u{1F600}',
         ] {
             let input = format!("a{c}b");
             assert_eq!(sanitize_table_cell(&input), input, "U+{:04X}", c as u32);

@@ -112,6 +112,11 @@ impl Harness {
             .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
             .env("JR_CACHE_DIR", self.cache.path().join("jr"))
             .env("JR_CONFIG_DIR", self.config.path().join("jr"))
+            // Color-hermetic (P3-004): an ambient CLICOLOR_FORCE/CLICOLOR must
+            // not leak ANSI into the output these tests assert is ANSI-free.
+            .env("NO_COLOR", "1")
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("CLICOLOR")
             .args(args)
             .current_dir(self.cwd.path());
         cmd.output().unwrap()
