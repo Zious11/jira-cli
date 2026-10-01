@@ -55,10 +55,12 @@ impl StyledCell {
         }
     }
 
-    /// A cell styled with a structural foreground color. The caller is
-    /// responsible for deciding WHETHER to colorize (e.g. honoring
-    /// `--no-color`/`NO_COLOR` via `colored::control::SHOULD_COLORIZE`) —
-    /// this constructor unconditionally applies `fg` when used.
+    /// A cell styled with a structural foreground color. This constructor
+    /// only RECORDS `fg`; since CR-2 (D-396/FIX-P5-002),
+    /// [`render_table_with_styles`] applies it structurally ONLY when
+    /// `colored::control::SHOULD_COLORIZE.should_colorize()` is true (so
+    /// `--no-color`/`NO_COLOR` suppress it for every caller), ANDed with
+    /// `comfy_table`'s own TTY gate. A caller need not check it itself.
     pub fn colored(text: impl Into<String>, fg: Color) -> Self {
         Self {
             text: text.into(),
@@ -72,6 +74,12 @@ impl StyledCell {
 /// each cell's optional structural foreground color to the resulting
 /// `comfy_table::Cell` — never as ANSI bytes embedded in the sanitized
 /// string.
+///
+/// **Structural color gate (CR-2, D-396/FIX-P5-002):** a cell's `fg` is
+/// applied only when `colored::control::SHOULD_COLORIZE.should_colorize()`
+/// is true (false under `--no-color`/`NO_COLOR`), and the resulting styling
+/// is additionally subject to `comfy_table`'s own TTY gate — color needs
+/// BOTH. Callers therefore need not gate their own `StyledCell::colored`.
 pub fn render_table_with_styles(headers: &[&str], rows: &[Vec<StyledCell>]) -> String {
     render_table_with_styles_inner(headers, rows, false)
 }
@@ -373,36 +381,44 @@ fn sanitize_control_and_ansi_core(
 /// or `render_table_with_styles` is required to sanitize its own inputs
 /// before passing them in.
 ///
-/// **Coverage claim, precisely stated (SEC-003/D-394/D-395, FIX-P5-001):**
-/// this function's callers are all of `render_table`/`render_table_with_styles`
-/// output, PLUS three non-table human (non-JSON) print/error-message sites
-/// that call this function (via the [`sanitize_terminal_text`] alias)
-/// directly at their own construction sites instead of going through either
-/// table chokepoint:
+/// **Coverage claim, precisely stated (SEC-003/D-394/D-395/D-396, FIX-P5-001,
+/// FIX-P5-002):** this function's callers are all of `render_table`/
+/// `render_table_with_styles` output, PLUS three non-table human (non-JSON)
+/// print/error-message sites that sanitize server-supplied text directly at
+/// their own construction sites instead of going through either table
+/// chokepoint. Which sibling each uses matters (CR-1, D-396): a sink that
+/// renders EXACTLY ONE line uses [`sanitize_terminal_line`] (embedded `\n`
+/// becomes a space, so a hostile value cannot fabricate an extra line or
+/// field); only genuinely multi-line content uses [`sanitize_terminal_text`]
+/// (this function's `\n`-preserving alias):
 /// - `jr issue comment view`'s human output
 ///   (`src/cli/issue/interactions.rs::handle_comment_view`), which prints
-///   its six labeled fields and ADF-derived body directly via `print!`/
-///   `println!`.
+///   its fields and ADF-derived body directly via `print!`/`println!`. Its
+///   six labeled fields (`ID`/`Author`/`Created`/`Updated`/`JSM internal`/
+///   `Restricted`) use [`sanitize_terminal_line`]; ONLY its ADF-derived
+///   body block uses [`sanitize_terminal_text`].
 /// - `jr issue assign`'s human-output success messages
 ///   (`src/cli/issue/workflow.rs::handle_assign`), which echo the
 ///   server-derived assignee `display_name` at both the idempotent
 ///   already-assigned site (`"{key} is already assigned to {name}"`) and
 ///   the newly-assigned/self-assign site (`"Assigned {key} to {name}"`),
-///   via `output::print_success`.
+///   via `output::print_success` and [`sanitize_terminal_line`].
 /// - `disambiguate_user`'s shared user-resolution disambiguation output
 ///   (`src/cli/issue/helpers.rs::disambiguate_user`), reached by
 ///   `resolve_assignee` (`jr issue assign --to`), `resolve_assignee_by_project`
-///   (`jr issue create`/`jr issue edit --assignee`), `resolve_user`
-///   (`jr issue list --assignee`), and `mentions::resolve_at_name_candidate`
-///   (`@Name` mention resolution): its `MatchResult::ExactMultiple` and
-///   `MatchResult::Ambiguous` non-interactive `JrError::UserError` messages,
-///   its interactive `dialoguer::Select` labels/items (the `ExactMultiple`
-///   labels via the factored-out `disambiguation_labels` helper,
+///   (`jr issue create --to`, its only call site; `issue edit` has no
+///   assignee flag), `resolve_user`
+///   (`jr issue list --assignee`/`--reporter`), and
+///   `mentions::resolve_at_name_candidate` (`@Name` mention resolution): its
+///   `MatchResult::ExactMultiple` and `MatchResult::Ambiguous`
+///   non-interactive `JrError::UserError` messages, its interactive
+///   `dialoguer::Select` labels/items (the `ExactMultiple` labels via the
+///   factored-out `disambiguation_labels` helper,
 ///   `src/cli/issue/helpers.rs`), and the `MatchResult::None` branch's
-///   `all_names` candidate list — sanitized once, before it is handed to
-///   the caller-supplied `none_msg_fn` closure, covering all four callers
-///   uniformly. Unlike the two sinks above, `disambiguate_user`'s
-///   `--output json` error envelope
+///   `all_names` candidate list — all via [`sanitize_terminal_line`],
+///   sanitized once, before it is handed to the caller-supplied
+///   `none_msg_fn` closure, covering all four callers uniformly. Unlike the
+///   two sinks above, `disambiguate_user`'s `--output json` error envelope
 ///   is NOT a separate lossless channel: `src/main.rs`'s single
 ///   error-formatting site builds both the human-text and JSON `"error"`
 ///   field from the same already-sanitized `JrError::UserError` `Display`
@@ -430,6 +446,13 @@ fn sanitize_control_and_ansi_core(
 ///     `BulkActionError::summary()` — raw Jira bulk-API error text.
 ///   - (`handle_assign` is NOT in this residual list — see above, it is a
 ///     covered non-table sink as of D-394.)
+/// - `src/cli/issue/create.rs::handle_create` — the table-mode field-echo
+///   loop (`create_echo`), which prints the raw, unsanitized `--to`-resolved
+///   assignee `displayName` and resolved team name (same exposure class as
+///   the now-covered `handle_assign` sink; found during D-396).
+/// - `src/cli/issue/helpers.rs::resolve_asset` — the Assets `--asset`
+///   disambiguation flow, which puts raw `label`/`object_key` into both its
+///   `JrError` messages and its interactive picker items.
 /// - `src/cli/issue/links.rs` — `handle_link`'s link-creation confirmation
 ///   echo of the server-resolved link-type name (`resolved_name`, drawn
 ///   from `list_link_types()`'s response via `partial_match`;
@@ -469,7 +492,10 @@ fn sanitize_control_and_ansi_core(
 /// messages, and D-395's scope is `disambiguate_user`'s shared
 /// disambiguation output, all covered above. A future fix closing any
 /// NONTABLE-SERVER-TEXT-SANITIZE site should route it through
-/// [`sanitize_terminal_text`] and remove it from this list.
+/// [`sanitize_terminal_line`] if the sink renders exactly one line (the
+/// common case), or [`sanitize_terminal_text`] only for genuinely multi-line
+/// content, and remove it from this list. Using [`sanitize_terminal_text`] for
+/// a single-line sink would reopen CR-1.
 ///
 /// Per-character policy, applied left to right over the whole string
 /// (BC-7.1.006):
@@ -525,22 +551,7 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
         '\n' => CharDisposition::Keep,
         '\r' => CharDisposition::Drop,
         '\t' => CharDisposition::Replace(' '),
-        _ => {
-            let code = c as u32;
-            if code <= 0x1F
-                || code == 0x7F
-                || (0x80..=0x9F).contains(&code)
-                || (0x202A..=0x202E).contains(&code)
-                || (0x2066..=0x2069).contains(&code)
-                || code == 0x2028
-                || code == 0x2029
-                || code == 0x0085
-            {
-                CharDisposition::Drop
-            } else {
-                CharDisposition::Keep
-            }
-        }
+        _ => classify_default_char(c),
     })
 }
 
@@ -564,11 +575,35 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
 /// [`sanitize_terminal_line`] by D-396/FIX-P5-002, which neutralizes an
 /// embedded `\n` instead of preserving it (CR-1, EC-17) — preserving `\n`
 /// in a single-line sink let a hostile value fabricate what looks like an
-/// extra labeled field or picker item (CWE-116). There is exactly one
-/// sanitization implementation (`sanitize_control_and_ansi_core`) behind
-/// both names — this function does not duplicate or fork the policy.
+/// extra labeled field or picker item (CWE-116). Only the CSI/OSC
+/// state-machine engine (`sanitize_control_and_ansi_core`) and the default
+/// per-character policy (`classify_default_char`) are shared with
+/// [`sanitize_terminal_line`]; this function is a pure alias of
+/// [`sanitize_table_cell`] and does not fork the policy.
 pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     sanitize_table_cell(value)
+}
+
+/// Shared default per-character policy for [`sanitize_table_cell`] and
+/// [`sanitize_terminal_line`] (FIX-P5-003, CR2-1): every character other than
+/// the three whitespace controls (`\n`, `\r`, `\t`, which each function
+/// classifies itself) is DROPPED if it is a C0 control, DEL, a C1 control,
+/// a bidi override, or a Unicode line/paragraph separator/NEL; otherwise KEPT.
+fn classify_default_char(c: char) -> CharDisposition {
+    let code = c as u32;
+    if code <= 0x1F
+        || code == 0x7F
+        || (0x80..=0x9F).contains(&code)
+        || (0x202A..=0x202E).contains(&code)
+        || (0x2066..=0x2069).contains(&code)
+        || code == 0x2028
+        || code == 0x2029
+        || code == 0x0085
+    {
+        CharDisposition::Drop
+    } else {
+        CharDisposition::Keep
+    }
 }
 
 /// Single-line sibling of [`sanitize_table_cell`] (BC-7.1.006, CR-1,
@@ -613,23 +648,41 @@ pub(crate) fn sanitize_terminal_line(value: &str) -> String {
         '\n' => CharDisposition::Replace(' '),
         '\r' => CharDisposition::Drop,
         '\t' => CharDisposition::Replace(' '),
-        _ => {
-            let code = c as u32;
-            if code <= 0x1F
-                || code == 0x7F
-                || (0x80..=0x9F).contains(&code)
-                || (0x202A..=0x202E).contains(&code)
-                || (0x2066..=0x2069).contains(&code)
-                || code == 0x2028
-                || code == 0x2029
-                || code == 0x0085
-            {
-                CharDisposition::Drop
-            } else {
-                CharDisposition::Keep
-            }
-        }
+        _ => classify_default_char(c),
     })
+}
+
+/// Shared test-only serialization for `colored`'s process-global override
+/// (FIX-P5-003, P2-002/CR2-2). `colored::control::set_override` mutates one
+/// process-wide `AtomicBool`, so EVERY test in this crate that sets it must
+/// hold this ONE lock; separate per-module locks cannot exclude each other.
+#[cfg(test)]
+pub(crate) mod color_test_lock {
+    static COLOR_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII guard forcing `colored`'s global override for its lifetime while
+    /// holding the shared lock. Restores via `unset_override()` on drop
+    /// (including on panic/unwind); a poisoned lock is recovered so one
+    /// failing test cannot cascade.
+    pub(crate) struct ColorOverride {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ColorOverride {
+        pub(crate) fn new(enabled: bool) -> Self {
+            let guard = COLOR_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            colored::control::set_override(enabled);
+            Self { _guard: guard }
+        }
+    }
+
+    impl Drop for ColorOverride {
+        fn drop(&mut self) {
+            colored::control::unset_override();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1377,18 +1430,23 @@ mod tests {
             StyledCell::colored(hostile, Color::Green),
         ]];
 
-        let output = render_table_with_styles(headers, &rows);
+        // Deterministic regardless of ambient TTY: force color ON and
+        // styling ON via the CR-2 seam, so the `fg` really is applied (a
+        // legitimate structural SGR may therefore appear in the output);
+        // assert only on the hostile payload itself.
+        let _color = TerminalColorOverride::new(true);
+        let output = render_table_with_styles_inner(headers, &rows, true);
 
         assert!(
-            !output.contains('\u{1b}'),
-            "raw ESC byte must not survive in a colored styled table cell: {output:?}"
+            !output.contains("[31m"),
+            "the hostile CSI sequence must not survive in a colored styled table cell: {output:?}"
         );
         assert!(
             !output.chars().any(|c| (0x80..=0x9F).contains(&(c as u32))),
             "raw C1 byte must not survive in a colored styled table cell: {output:?}"
         );
         assert!(
-            output.contains("pwned"),
+            output.contains("FAKEpwned"),
             "the sanitized survivor text must still reach the rendered table: {output:?}"
         );
     }
@@ -1574,37 +1632,10 @@ mod tests {
     // ── render_table_with_styles structural color gating (BC-7.1.006,
     // CR-2, D-396/FIX-P5-002) ────────────────────────────────────────────
     //
-    // `colored`'s global override (`colored::control::set_override`) is a
-    // single process-wide `AtomicBool` shared by every thread in this test
-    // binary (see `src/cli/user.rs`'s `ForcedColorOverride`/
-    // `COLOR_OVERRIDE_LOCK` for the identical rationale, mirrored here as
-    // its own serialized guard since `user.rs`'s is private to its own
-    // `mod tests`).
-    static TERMINAL_COLOR_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// RAII guard forcing `colored`'s global override for its lifetime,
-    /// serialized against `TERMINAL_COLOR_OVERRIDE_LOCK`. Always restores
-    /// via `colored::control::unset_override()` on drop (including on
-    /// panic/unwind).
-    struct TerminalColorOverride {
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl TerminalColorOverride {
-        fn new(enabled: bool) -> Self {
-            let guard = TERMINAL_COLOR_OVERRIDE_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            colored::control::set_override(enabled);
-            Self { _guard: guard }
-        }
-    }
-
-    impl Drop for TerminalColorOverride {
-        fn drop(&mut self) {
-            colored::control::unset_override();
-        }
-    }
+    // Color-override tests use the single shared `color_test_lock::ColorOverride`
+    // guard (one process-wide mutex for every test in the crate that touches
+    // `colored::control`'s global override — FIX-P5-003, P2-002/CR2-2).
+    use super::color_test_lock::ColorOverride as TerminalColorOverride;
 
     /// CR-2 (D-396): `render_table_with_styles` must apply a `StyledCell`'s
     /// `fg` ONLY when `colored::control::SHOULD_COLORIZE.should_colorize()`

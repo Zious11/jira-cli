@@ -206,13 +206,13 @@ fn format_active(active: Option<bool>) -> String {
 ///
 /// Gated on `colored::control::SHOULD_COLORIZE.should_colorize()` — the
 /// same process-wide flag `main.rs` forces to `false` for `--no-color` /
-/// `NO_COLOR` (`colored::control::set_override(false)`). This is
-/// necessary, not redundant with `comfy_table`'s own TTY-based
-/// `Table::should_style()` check: `comfy_table`'s styling gate only knows
-/// about the ambient TTY, not jr's `--no-color` flag or the `NO_COLOR`
-/// env var, so without this explicit gate `--no-color`/`NO_COLOR` would
-/// fail to suppress the Active column's color on a real TTY even though
-/// it suppresses every other `colored`-crate-driven color in jr's output.
+/// `NO_COLOR` (`colored::control::set_override(false)`). Since CR-2
+/// (D-396/FIX-P5-002), `output::render_table_with_styles` enforces the same
+/// gate structurally for every `StyledCell`, so this check is now
+/// redundant but harmless; it is kept so `active_cell` itself never
+/// produces a colored cell under `--no-color`/`NO_COLOR`, independent of
+/// the renderer. (`comfy_table`'s own TTY-based `Table::should_style()`
+/// knows nothing about jr's `--no-color` flag or `NO_COLOR`.)
 fn active_cell(active: Option<bool>) -> output::StyledCell {
     let glyph = format_active(active);
     if !colored::control::SHOULD_COLORIZE.should_colorize() {
@@ -335,43 +335,11 @@ mod tests {
 
     // ── format_active structural styling (BC-7.1.006, FIX-P5-001) ──────
     //
-    // `colored`'s global override (`colored::control::set_override`) is a
-    // single process-wide `AtomicBool` (see `colored::control::SHOULD_COLORIZE`,
-    // colored 3.1.1) shared by every thread in this test binary. Rust test
-    // threads run in parallel by default, so any test that forces the
-    // override must serialize against every OTHER test in this binary that
-    // could observe color state — hence `COLOR_OVERRIDE_LOCK` below, held
-    // for the guard's whole lifetime, plus a `Drop` impl that always
-    // restores via `unset_override()` (including on panic/unwind — this
-    // crate's test profile is NOT `panic = "abort"`; only
-    // `[profile.release]` is), so a failing assertion inside the guarded
-    // block can't leave color permanently forced on for later tests.
-    static COLOR_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// RAII guard forcing `colored`'s global override for its lifetime,
-    /// serialized against `COLOR_OVERRIDE_LOCK` so concurrent test threads
-    /// in this binary can't race on the process-wide `colored::control`
-    /// static (see module doc above). Always restores via
-    /// `colored::control::unset_override()` on drop.
-    struct ForcedColorOverride {
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl ForcedColorOverride {
-        fn new(enabled: bool) -> Self {
-            let guard = COLOR_OVERRIDE_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            colored::control::set_override(enabled);
-            Self { _guard: guard }
-        }
-    }
-
-    impl Drop for ForcedColorOverride {
-        fn drop(&mut self) {
-            colored::control::unset_override();
-        }
-    }
+    // Color-override tests use the single crate-wide guard in
+    // `output::color_test_lock` (FIX-P5-003, P2-002/CR2-2): one mutex for
+    // every test touching `colored::control`'s process-global override, so
+    // tests in different modules cannot race each other.
+    use crate::output::color_test_lock::ColorOverride as ForcedColorOverride;
 
     /// BC-7.1.006: `render_table`/`render_table_with_styles` sanitize every
     /// cell (via `output::sanitize_table_cell`), so a cell whose ANSI
