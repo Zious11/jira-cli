@@ -382,7 +382,7 @@ fn sanitize_control_and_ansi_core(
 /// before passing them in.
 ///
 /// **Coverage claim, precisely stated (SEC-003/D-394/D-395/D-396, FIX-P5-001,
-/// FIX-P5-002):** this function's callers are all of `render_table`/
+/// FIX-P5-002):** this sanitization family covers all of `render_table`/
 /// `render_table_with_styles` output, PLUS three non-table human (non-JSON)
 /// print/error-message sites that sanitize server-supplied text directly at
 /// their own construction sites instead of going through either table
@@ -1448,6 +1448,22 @@ mod tests {
         assert!(
             output.contains("FAKEpwned"),
             "the sanitized survivor text must still reach the rendered table: {output:?}"
+        );
+
+        // Load-bearing equality: the hostile cell (which carries a raw ESC
+        // and a C1 CSI) must render byte-identically to a clean reference
+        // cell holding only the survivor text with the same structural
+        // color. A regression that stripped CSI parameters but left a lone
+        // ESC would diverge here.
+        assert!(hostile.contains('\u{1b}'), "hostile input must carry ESC");
+        let clean_rows = vec![vec![
+            StyledCell::plain("FOO-1"),
+            StyledCell::colored("FAKEpwned", Color::Green),
+        ]];
+        let clean = render_table_with_styles_inner(headers, &clean_rows, true);
+        assert_eq!(
+            output, clean,
+            "hostile bytes must contribute nothing beyond the survivor text"
         );
     }
 
