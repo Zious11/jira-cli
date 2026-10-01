@@ -947,6 +947,32 @@ mod tests {
     /// email-present and no-email cases, and preserving input order across
     /// multiple duplicates — so wiring sanitization into this function
     /// cannot itself change output for non-hostile data.
+    /// EC-17b (BC-7.1.006, CR-1, D-396/FIX-P5-002): a hostile `display_name`
+    /// with an embedded `\n` must collapse to a SINGLE space at the `\n`
+    /// boundary — not survive as a raw newline inside the picker label,
+    /// which would render as what looks like two separate `dialoguer::Select`
+    /// rows (CWE-116 interactive-prompt line injection). Fixture exactly as
+    /// specified in BC-7.1.006's EC-17b: display name `"Mallory\nEve"`,
+    /// email `"mallory@example.com"` (clean) → expected sanitized label
+    /// `"Mallory Eve (mallory@example.com)"`.
+    ///
+    /// Expected RED today: `disambiguation_labels` currently routes
+    /// `display_name` through `output::sanitize_terminal_text` (an alias of
+    /// `sanitize_table_cell`, which PRESERVES `\n`), so this assertion
+    /// fails until FIX-P5-002 rewires this call site to
+    /// `output::sanitize_terminal_line`.
+    #[test]
+    fn test_disambiguation_labels_sanitizes_embedded_newline_to_single_line() {
+        let u = make_user_with_email("acc-1", "Mallory\nEve", "mallory@example.com");
+        let labels = disambiguation_labels(&[&u]);
+        assert_eq!(
+            labels,
+            vec!["Mallory Eve (mallory@example.com)".to_string()],
+            "embedded \\n in display_name must become a single space, not \
+             survive as a raw newline inside the picker label"
+        );
+    }
+
     #[test]
     fn test_disambiguation_labels_preserves_clean_input_format() {
         let u1 = make_user_with_email("acc-1", "Jane Doe", "jane1@example.com");

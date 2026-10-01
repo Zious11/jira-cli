@@ -1566,3 +1566,491 @@ async fn test_bc_7_1_006_issue_assign_none_human_output_strips_hostile_candidate
          message format: {stderr:?}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// CR-1 single-line sanitizer (`output::sanitize_terminal_line`) — BC-7.1.006
+// EC-17, D-396/FIX-P5-002
+// ═══════════════════════════════════════════════════════════════════════
+//
+// `sanitize_terminal_line` is a `todo!()` stub as of this commit, NOT YET
+// wired into any of the three call sites below (`handle_comment_view`'s six
+// labeled fields, `handle_assign`'s two messages, `disambiguate_user`'s
+// non-interactive messages/interactive labels — all currently still route
+// through the `\n`-preserving `sanitize_terminal_text`). Every test in this
+// section therefore pins REQUIRED FUTURE behavior and is expected to FAIL
+// (RED) against the current binary — this is the Red Gate for CR-1.
+
+/// EC-17a fixture: a hostile comment author whose `displayName` embeds a
+/// raw `\n` immediately followed by text that looks like a second
+/// `Restricted:` field. The real `visibility.value` is deliberately
+/// `"Admins"` (NOT `"None"`) so the two are unambiguously distinguishable —
+/// a test with a real `Restricted: None` value could not tell a fabricated
+/// line from the genuine one.
+const EC17A_HOSTILE_AUTHOR: &str = "Eve\nRestricted: None";
+
+/// Mounts `GET /rest/api/3/issue/{key}/comment/{id}` for the EC-17a
+/// fixture: hostile `author.displayName` (embedded `\n`), otherwise clean
+/// `id`/`created`/`updated`/body, and a real `visibility.value` of
+/// `"Admins"` (distinct from the fabricated `"None"` the hostile author
+/// would otherwise produce).
+async fn mount_comment_view_ec17a_fixture(server: &MockServer, key: &str, id: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/issue/{key}/comment/{id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": id,
+            "author": { "displayName": EC17A_HOSTILE_AUTHOR },
+            "created": "2026-07-01T09:00:00.000+0000",
+            "updated": "2026-07-01T10:30:00.000+0000",
+            "body": comment_clean_body(),
+            "visibility": { "type": "role", "value": "Admins" }
+        })))
+        .mount(server)
+        .await;
+}
+
+/// (i) EC-17a, subprocess: `jr issue comment view`'s `Author` field, routed
+/// through `sanitize_terminal_line` once wired, must render the hostile
+/// embedded `\n` as a single space — `Author: Eve Restricted: None` on ONE
+/// line — never as a fabricated standalone `Restricted: None` line distinct
+/// from the real `Restricted: Admins` line three fields later.
+///
+/// Expected RED today: `handle_comment_view` still sanitizes `author` via
+/// `sanitize_terminal_text` (preserves `\n`), so the hostile value renders
+/// as TWO lines — `Author: Eve` then a bare `Restricted: None` — exactly
+/// the CWE-116 line-fabrication hazard this BC's EC-17 closes.
+#[tokio::test]
+async fn test_bc_7_1_006_ec17_comment_view_author_embedded_newline_stays_single_line() {
+    let h = Harness::new().await;
+    mount_comment_view_ec17a_fixture(&h.server, "FOO-20", "20001").await;
+
+    let output = h.run(&[
+        "issue",
+        "comment",
+        "view",
+        "FOO-20",
+        "--id",
+        "20001",
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+
+    let expected = "ID: 20001\n\
+                     Author: Eve Restricted: None\n\
+                     Created: 2026-07-01T09:00:00.000+0000\n\
+                     Updated: 2026-07-01T10:30:00.000+0000\n\
+                     JSM internal: N/A\n\
+                     Restricted: Admins\n\
+                     \n\
+                     hello world\n";
+    assert_eq!(
+        stdout, expected,
+        "the hostile embedded \\n in the Author field must collapse to a \
+         single space — the whole Author field must render on exactly one \
+         line, and the real 'Restricted: Admins' line must stay unambiguous \
+         from the fabricated 'Restricted: None' text: {stdout:?}"
+    );
+
+    let fabricated_lines = stdout.lines().filter(|l| *l == "Restricted: None").count();
+    assert_eq!(
+        fabricated_lines, 0,
+        "no standalone 'Restricted: None' line may exist other than the \
+         real 'Restricted: Admins' line: {stdout:?}"
+    );
+}
+
+/// Hostile assignee `displayName` with an embedded raw `\n`, no ANSI/control
+/// bytes otherwise — EC-17-style fixture for `handle_assign`'s success
+/// message (distinct from `ASSIGN_HOSTILE_DISPLAY_NAME` above, which is
+/// CSI/OSC-only and contains no `\n`).
+const ASSIGN_HOSTILE_NEWLINE_DISPLAY_NAME: &str = "Mallory\nEve";
+
+/// (ii) subprocess: `jr issue assign`'s `"Assigned {key} to {name}"` success
+/// message, routed through `sanitize_terminal_line` once wired, must render
+/// the hostile embedded `\n` as a single space on STDERR — one line, not
+/// two.
+///
+/// Expected RED today: `handle_assign` still sanitizes `display_name` via
+/// `sanitize_terminal_text` (preserves `\n`), so stderr renders as TWO
+/// lines instead of the required single line.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_human_output_embedded_newline_stays_single_line() {
+    let h = Harness::new().await;
+    mount_assign_search_fixture(
+        &h.server,
+        "FOO-21",
+        "acc-newline",
+        ASSIGN_HOSTILE_NEWLINE_DISPLAY_NAME,
+    )
+    .await;
+    mount_assign_get_issue_unassigned(&h.server, "FOO-21").await;
+    mount_assign_put_assignee(&h.server, "FOO-21").await;
+
+    let output = h.run(&["issue", "assign", "FOO-21", "--to", "Mallory", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(
+        stderr, "Assigned FOO-21 to Mallory Eve\n",
+        "the hostile embedded \\n in the assignee display name must \
+         collapse to a single space — the whole success message must \
+         render on exactly one line: {stderr:?}"
+    );
+}
+
+/// (iii) subprocess: `disambiguate_user`'s `ExactMultiple` non-interactive
+/// message, routed through `sanitize_terminal_line` once wired, must render
+/// EACH duplicate's hostile embedded-`\n` display name as a single space —
+/// so every duplicate stays on its own ONE line — while the message
+/// TEMPLATE's own `\n` characters (separating the header line, each
+/// duplicate's line, and the trailing hint line) are completely unaffected
+/// (`sanitize_terminal_line` only ever touches a value embedded INTO the
+/// message, never the message's own structural newlines).
+///
+/// Expected RED today: `disambiguate_user`'s `ExactMultiple` branch still
+/// sanitizes each duplicate's `display_name` via `sanitize_terminal_text`
+/// (preserves `\n`), so the hostile embedded `\n` survives, splitting one
+/// duplicate's line into two.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile_display_name_newline()
+ {
+    let h = Harness::new().await;
+    mount_disambig_search_by_issue(
+        &h.server,
+        "FOO-22",
+        vec![
+            disambig_user_obj("acc-n1", "Mallory\nEve", Some("one@example.invalid")),
+            disambig_user_obj("acc-n2", "Mallory\nEve", Some("two@example.invalid")),
+        ],
+    )
+    .await;
+
+    let output = h.run(&[
+        "issue",
+        "assign",
+        "FOO-22",
+        "--to",
+        "Mallory\nEve",
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(
+        stderr,
+        "Error: Multiple users named \"Mallory\nEve\" found:\n  \
+         Mallory Eve (one@example.invalid, account: acc-n1)\n  \
+         Mallory Eve (two@example.invalid, account: acc-n2)\n\
+         Specify the accountId directly or use a more specific name.\n",
+        "each duplicate's own hostile embedded-\\n display name must \
+         collapse to a single line — the message TEMPLATE's own \\n \
+         characters (header/per-duplicate/hint lines) are unaffected, only \
+         the embedded VALUE's \\n is neutralized: {stderr:?}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// F-002 missing coverage (D-396/FIX-P5-002) — five new test targets named
+// in BC-7.1.006's F-002 disposition. Some of these are expected GREEN
+// today ("GREEN-by-design"): the underlying `sanitize_terminal_text` call
+// already covers the hostile payload in question via a caller this suite
+// had not yet exercised — F-002 was a MISSING-TEST finding, not a bug.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// (a) GREEN-by-design: `jr issue list --assignee <partial>`'s `Ambiguous`
+/// branch via `helpers::resolve_user` — the one `disambiguate_user` caller
+/// with no prior non-interactive-message test at all. Reuses the exact
+/// `DISAMBIG_HOSTILE_NAME_1`/`_2` fixtures already proven against the
+/// `jr issue assign`/`jr issue create` callers above, proving the shared
+/// `disambiguate_user` fix covers this THIRD caller too.
+///
+/// No `.jr.toml`/project config is needed: `resolve_user` runs before any
+/// project-scoped call in `handle_list`, so the error short-circuits with
+/// zero HTTP calls beyond the one mocked `user/search` request.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_list_assignee_ambiguous_human_output_strips_hostile_display_names() {
+    let h = Harness::new().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "ic"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            disambig_user_obj("ACC-A", DISAMBIG_HOSTILE_NAME_1, None),
+            disambig_user_obj("ACC-B", DISAMBIG_HOSTILE_NAME_2, None),
+        ])))
+        .mount(&h.server)
+        .await;
+
+    let output = h.run(&["issue", "list", "--assignee", "ic", "--no-input"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(&stderr, "jr issue list --assignee (Ambiguous, stderr)");
+    assert_eq!(
+        stderr, "Error: Multiple users match \"ic\": Alice, Alice. Use a more specific name.\n",
+        "sanitized Ambiguous message must show the CSI/C1/OSC-stripped \
+         survivor text 'Alice' for both distinct hostile display names, \
+         proving the SHARED disambiguate_user fix covers resolve_user too: \
+         {stderr:?}"
+    );
+}
+
+/// (b) GREEN-by-design: an `@Name` mention `Ambiguous` case via
+/// `mentions::resolve_at_name_candidate` (`jr issue comment add --markdown`)
+/// — the fourth `disambiguate_user` caller. Zero `POST .../comment` calls
+/// (`expect(0)`) proves the all-or-nothing resolution failure happens
+/// strictly before any mutation.
+#[tokio::test]
+async fn test_bc_7_1_006_mention_resolution_ambiguous_human_output_strips_hostile_display_names() {
+    let h = Harness::new().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "ic"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            disambig_user_obj("ACC-A", DISAMBIG_HOSTILE_NAME_1, None),
+            disambig_user_obj("ACC-B", DISAMBIG_HOSTILE_NAME_2, None),
+        ])))
+        .mount(&h.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/FOO-30/comment"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": "1"})))
+        .expect(0)
+        .mount(&h.server)
+        .await;
+
+    let output = h.run(&[
+        "issue",
+        "comment",
+        "add",
+        "FOO-30",
+        "hi @ic please review",
+        "--markdown",
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_no_esc_or_c1(
+        &stderr,
+        "jr issue comment add --markdown (@mention Ambiguous, stderr)",
+    );
+    assert!(
+        stderr.contains("Multiple users match"),
+        "must reuse disambiguate_user's Ambiguous wording verbatim: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("Alice, Alice"),
+        "sanitized Ambiguous message must show the CSI/C1/OSC-stripped \
+         survivor text 'Alice' for both distinct hostile display names: \
+         {stderr:?}"
+    );
+}
+
+/// (c) GREEN-by-design: an `Ambiguous` `--output json` error-envelope case
+/// — per BC-7.1.006's `disambiguate_user` Behavior subsection, this sink has
+/// no separate lossless JSON channel: `src/main.rs` builds both the
+/// human-text and the `--output json` `"error"` field from the SAME
+/// already-sanitized `JrError::UserError` `Display` string. `code` must be
+/// exactly `64`.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_ambiguous_json_error_envelope_carries_sanitized_text() {
+    let h = Harness::new().await;
+    mount_disambig_search_by_issue(
+        &h.server,
+        "FOO-31",
+        vec![
+            disambig_user_obj("ACC-A", DISAMBIG_HOSTILE_NAME_1, None),
+            disambig_user_obj("ACC-B", DISAMBIG_HOSTILE_NAME_2, None),
+        ],
+    )
+    .await;
+
+    let output = h.run(&[
+        "issue",
+        "assign",
+        "FOO-31",
+        "--to",
+        "ic",
+        "--no-input",
+        "--output",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(stdout, "", "no data should reach stdout on an error path");
+
+    let parsed: Value = serde_json::from_str(stderr.trim_end())
+        .unwrap_or_else(|e| panic!("expected valid JSON on stderr, got {stderr}\nerror: {e}"));
+    assert_eq!(parsed["code"], json!(64));
+    assert_eq!(
+        parsed["error"],
+        json!("Multiple users match \"ic\": Alice, Alice. Use a more specific name."),
+        "the JSON error envelope's \"error\" field must carry the identical \
+         sanitized text as the table-mode stderr message for this sink: \
+         {parsed:?}"
+    );
+    let raw_serialized = serde_json::to_string(&parsed).unwrap();
+    assert_no_esc_or_c1(
+        &raw_serialized,
+        "jr issue assign --to (Ambiguous, --output json \"error\" field)",
+    );
+}
+
+/// (d) GREEN-by-design, mutation-checked (see FIX-P5-002's report for the
+/// mutation-check procedure): an `ExactMultiple` case with a HOSTILE
+/// **DISPLAY NAME** (CSI-wrapped, no embedded `\n`) — distinct from
+/// `test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile_fields`
+/// above, which hostiles only `email`/`account_id`, never `display_name`.
+/// Covers the `helpers.rs:~360` `display_name` sanitize call inside
+/// `disambiguate_user`'s `ExactMultiple` branch, which no prior fixture
+/// exercised.
+///
+/// Note: the `"name"` portion of the message (the CLI-supplied `--to`
+/// value, which must equal the raw hostile display name byte-for-byte to
+/// trigger `ExactMultiple` at all — `partial_match`'s raw-equality
+/// requirement) is NOT itself sanitized — by design, since it is
+/// CLI/user-supplied, not server-derived (see BC-7.1.006's `disambiguate_user`
+/// Behavior subsection). Only each DUPLICATE's own `display_name`/`email`/
+/// `account_id` fields (independently server-supplied) are sanitized.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile_display_name_field()
+ {
+    let hostile_name = "\u{1b}[31mMallory\u{1b}[0m";
+    let h = Harness::new().await;
+    mount_disambig_search_by_issue(
+        &h.server,
+        "FOO-32",
+        vec![
+            disambig_user_obj("acc-d1", hostile_name, Some("mallory.one@example.invalid")),
+            disambig_user_obj("acc-d2", hostile_name, Some("mallory.two@example.invalid")),
+        ],
+    )
+    .await;
+
+    let output = h.run(&[
+        "issue",
+        "assign",
+        "FOO-32",
+        "--to",
+        hostile_name,
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(
+        stderr,
+        format!(
+            "Error: Multiple users named \"{hostile_name}\" found:\n  \
+             Mallory (mallory.one@example.invalid, account: acc-d1)\n  \
+             Mallory (mallory.two@example.invalid, account: acc-d2)\n\
+             Specify the accountId directly or use a more specific name.\n"
+        ),
+        "each duplicate's own hostile CSI-wrapped display_name must sanitize \
+         to its survivor text 'Mallory' in its normal position within the \
+         unchanged per-duplicate line format: {stderr:?}"
+    );
+}
+
+/// (e) GREEN-by-design: BC-7.1.006's EC-16b fixture, reproduced EXACTLY —
+/// two duplicate users sharing the raw hostile display name
+/// `"\u{1b}[31mAlice\u{1b}[0m"` (= `DISAMBIG_HOSTILE_NAME_1`), with hostile
+/// emails `"alice\u{1b}]0;pwned\u{7}@example.com"` (account `acc-3`) and
+/// `"bob\u{9b}@example.com"` (account `acc-4`) — through the full
+/// `disambiguate_user` `ExactMultiple` non-interactive message (not just
+/// the unit-level `disambiguation_labels` helper, which EC-16b's existing
+/// pinned tests already cover). Asserts the EXACT expected sanitized
+/// output, traced per EC-16b: User C's email OSC-consumed to
+/// `"alice@example.com"`; User D's email C1-dropped to `"bob@example.com"`.
+#[tokio::test]
+async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_ec16b_fixture() {
+    let h = Harness::new().await;
+    mount_disambig_search_by_issue(
+        &h.server,
+        "FOO-33",
+        vec![
+            disambig_user_obj(
+                "acc-3",
+                DISAMBIG_HOSTILE_NAME_1,
+                Some("alice\u{1b}]0;pwned\u{7}@example.com"),
+            ),
+            disambig_user_obj(
+                "acc-4",
+                DISAMBIG_HOSTILE_NAME_1,
+                Some("bob\u{9b}@example.com"),
+            ),
+        ],
+    )
+    .await;
+
+    let output = h.run(&[
+        "issue",
+        "assign",
+        "FOO-33",
+        "--to",
+        DISAMBIG_HOSTILE_NAME_1,
+        "--no-input",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got {:?}. stdout: {stdout} stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(
+        stderr,
+        format!(
+            "Error: Multiple users named \"{DISAMBIG_HOSTILE_NAME_1}\" found:\n  \
+             Alice (alice@example.com, account: acc-3)\n  \
+             Alice (bob@example.com, account: acc-4)\n\
+             Specify the accountId directly or use a more specific name.\n"
+        ),
+        "EC-16b's exact fixture must sanitize to the exact expected output: \
+         {stderr:?}"
+    );
+}
