@@ -546,20 +546,27 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
 
 /// Alias for [`sanitize_table_cell`] applying the exact same BC-7.1.006
 /// character policy — see that function's rustdoc for the full per-character
-/// contract. This name is for call sites that print a single server-supplied
-/// string directly to a terminal via `print!`/`println!`/`eprintln!`, embed
-/// it into a `JrError` message, or interpolate it into a `dialoguer::Select`
-/// label, rather than going through `render_table`/`render_table_with_styles`,
-/// so `..._table_cell` would read misleadingly at the call site (there is no
-/// table involved).
-/// `jr issue comment view`'s human output
-/// (`src/cli/issue/interactions.rs::handle_comment_view`, SEC-003) was the
-/// first caller; `jr issue assign`'s human-output success messages
-/// (`src/cli/issue/workflow.rs::handle_assign`, D-394) are the second;
-/// `disambiguate_user`'s shared user-resolution disambiguation output
-/// (`src/cli/issue/helpers.rs::disambiguate_user`, D-395) is the third. There
-/// is exactly one sanitization implementation behind all these names — this
-/// function does not duplicate or fork the policy.
+/// contract. This name is for a non-`render_table`/`render_table_with_styles`
+/// call site that prints a GENUINELY MULTI-LINE server-supplied string
+/// directly to a terminal, so `..._table_cell` would read misleadingly at
+/// the call site (there is no table involved) while the `\n`-preserving
+/// policy is still exactly what's needed.
+///
+/// **As of D-396/FIX-P5-002, this function has exactly ONE caller left:**
+/// `jr issue comment view`'s ADF-derived body block
+/// (`src/cli/issue/interactions.rs::handle_comment_view`, SEC-003) — the
+/// unlabeled, free-form comment-prose field that is the one genuinely
+/// multi-line non-table sink this BC covers. Every other sink that used to
+/// route through this alias (`handle_comment_view`'s six labeled fields,
+/// `handle_assign`'s two success messages, and `disambiguate_user`'s
+/// non-interactive messages/interactive picker labels — all of which render
+/// exactly ONE line of text) was rewired to the single-line sibling
+/// [`sanitize_terminal_line`] by D-396/FIX-P5-002, which neutralizes an
+/// embedded `\n` instead of preserving it (CR-1, EC-17) — preserving `\n`
+/// in a single-line sink let a hostile value fabricate what looks like an
+/// extra labeled field or picker item (CWE-116). There is exactly one
+/// sanitization implementation (`sanitize_control_and_ansi_core`) behind
+/// both names — this function does not duplicate or fork the policy.
 pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     sanitize_table_cell(value)
 }

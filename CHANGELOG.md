@@ -109,7 +109,9 @@ All notable changes to jr will be documented here.
   attribute (via a new `output::StyledCell`/`render_table_with_styles` API),
   since a server-supplied string can no longer carry its own ANSI styling
   through the sanitizer -- `--no-color`/`NO_COLOR` continue to suppress that
-  coloring exactly as before.
+  coloring (originally via `active_cell`'s own `SHOULD_COLORIZE` check only;
+  as of FIX-P5-002 below, `render_table_with_styles` itself also enforces
+  this, structurally, for every `StyledCell` caller).
 - **`jr issue comment view`'s human output now gets the same sanitization
   (SEC-003, extension of FIX-P5-001 under D-393, BC-7.1.006):** this handler
   prints its six labeled fields (`id`, `author`, `created`, `updated`, the
@@ -140,9 +142,11 @@ All notable changes to jr will be documented here.
 - **User-disambiguation output now gets the same sanitization (D-395,
   extension of FIX-P5-001, BC-7.1.006, PR #891's final scope-expansion
   amendment):** `disambiguate_user` (`src/cli/issue/helpers.rs`) — the
-  shared chokepoint reached by `jr issue assign --to`, `jr issue create`/
-  `jr issue edit --assignee`, `jr issue list --assignee`, and `@Name`
-  mention resolution — echoed server-supplied, user-editable
+  shared chokepoint reached by `jr issue assign --to`, `jr issue create
+  --to`, `jr issue list --assignee`/`--reporter`, and `@Name`
+  mention resolution (corrected caller list, D-396/FIX-P5-002 below —
+  there is no `jr issue edit --assignee` flag; it does not exist) — echoed
+  server-supplied, user-editable
   `displayName`/`emailAddress`/`accountId` values unsanitized in its
   non-interactive `ExactMultiple`/`Ambiguous`/`None`-branch
   `JrError::UserError` messages and its interactive `dialoguer::Select`
@@ -162,6 +166,76 @@ All notable changes to jr will be documented here.
   PR #891's final scope-expansion amendment; further residual
   non-table/non-JSON sinks remain tracked as NONTABLE-SERVER-TEXT-SANITIZE
   (see `output::sanitize_table_cell`'s rustdoc).
+- **Single-line sinks now neutralize an embedded `\n` instead of
+  fabricating an extra line/field/picker item, and a `StyledCell`'s color
+  is now structurally gated on `--no-color`/`NO_COLOR` inside the
+  renderer itself (D-396, FIX-P5-002, BC-7.1.006 CR-1/CR-2, follow-up to
+  cycle-014 F5 pass-1 adversarial review of PR #891):**
+  - **CR-1 — single-line sanitizer.** `sanitize_table_cell`/
+    `sanitize_terminal_text` deliberately PRESERVE `\n`, which is correct
+    for a genuinely multi-line sink (`render_table`/
+    `render_table_with_styles` cells, `jr issue comment view`'s ADF-derived
+    body block) but left a gap in every sink that renders exactly ONE
+    line: a hostile value with an embedded `\n` could fabricate what looks
+    like an extra labeled field or picker row (CWE-116). A new sibling,
+    `output::sanitize_terminal_line`, applies the identical CSI/OSC/C0/C1/
+    bidi policy with one difference — `\n` maps to a single space, the
+    same substitution already applied to `\t` (consecutive `\n` produce
+    the same number of consecutive spaces, no further collapsing). Every
+    single-line sink is rewired to it: `jr issue comment view`'s six
+    labeled fields (`ID`/`Author`/`Created`/`Updated`/`JSM internal`/
+    `Restricted` — the body block stays on `sanitize_terminal_text`);
+    `jr issue assign`'s two success messages; and `disambiguate_user`'s
+    non-interactive `ExactMultiple`/`Ambiguous`/`None`-branch messages,
+    the `None` branch's `all_names` echo, and the `disambiguation_labels`
+    interactive-picker-label helper.
+  - **Caller-list correction.** The caller list for `disambiguate_user`
+    documented above (D-395) named a nonexistent `jr issue edit
+    --assignee` flag and omitted `jr issue list --reporter`; both are
+    corrected here — the four underlying callers themselves
+    (`resolve_assignee`/`resolve_assignee_by_project`/`resolve_user`/
+    `mentions::resolve_at_name_candidate`) are unchanged.
+  - **CR-2 — structural color gate.** `output::render_table_with_styles`
+    now applies a `StyledCell`'s `fg` only when
+    `colored::control::SHOULD_COLORIZE.should_colorize()` is `true` —
+    making `--no-color`/`NO_COLOR` suppression a structural guarantee the
+    renderer itself provides to every `StyledCell` caller, present
+    (`active_cell`, the `jr user list`/`jr user view` Active column) and
+    future, rather than a per-caller responsibility the renderer played no
+    part in. `active_cell` keeps its own existing `SHOULD_COLORIZE` check
+    unchanged (now redundant for this one caller, but harmless).
+    `comfy_table`'s own TTY-based `should_style()` gate is unaffected and
+    still applies on top (ANDed): color reaches the terminal only when
+    both gates agree. End-user-visible behavior for `active_cell`, the
+    only caller today, is unchanged by this gate — see the corrected
+    `CLICOLOR_FORCE` note below.
+  - **`jr api`'s raw response-body passthrough is a documented exception,
+    not a residual.** `src/cli/api.rs::handle_api` writes the raw HTTP
+    response body directly to stdout, by design, for `gh api` parity —
+    it is never sanitized by any of `sanitize_table_cell`/
+    `sanitize_terminal_text`/`sanitize_terminal_line`, and never will be,
+    the same posture `--output json` already has for every other command.
+  - **New residual:** `jr issue create`'s table-mode field-echo loop
+    (`src/cli/issue/create.rs::handle_create`, `create_echo`) echoes the
+    raw, unsanitized `--to`-resolved assignee `displayName` and the
+    resolved team name — the same exposure class as the now-covered
+    `handle_assign` sink, found during this fix's own code trace. Not
+    fixed here; added to the known, non-exhaustive
+    NONTABLE-SERVER-TEXT-SANITIZE list. `src/cli/issue/helpers.rs::
+    resolve_asset` (the Assets `--asset` disambiguation flow) remains a
+    separate, previously-identified residual on that same list — also
+    not fixed here.
+  - **Retraction:** an earlier claim that `disambiguate_user`'s
+    `Ambiguous` branch "still distinguishes the two accounts by their
+    email/account-id fields" even when two display names sanitize to the
+    same text is FALSE and is retracted — the `Ambiguous` branch carries
+    `display_name` only, never `email_address`/`account_id` (only
+    `ExactMultiple` carries those). Two users whose display names
+    sanitize to the identical survivor string are genuinely
+    indistinguishable in this branch's rendered output. Tracked as a
+    known limitation and a follow-up enhancement (add `email`/`accountId`
+    to the `Ambiguous` branch's labels/message, mirroring
+    `ExactMultiple`), not fixed by this change.
 
 ## [0.7.0] - 2026-09-23
 
