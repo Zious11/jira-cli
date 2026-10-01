@@ -63,6 +63,14 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **`jr field options <FIELD>` now accepts system field IDs** (D-399,
+  BC-X.14.001/004, CR4-002): after the `customfield_NNNNN` literal bypass,
+  `<FIELD>` is first matched as an exact, ASCII-case-insensitive field id
+  against the same cached `(id, name)` list (e.g. `issuetype`, `priority`,
+  returning the list's canonical id; no extra HTTP), and only then by name.
+  An ID match wins over a name collision; there is no substring matching on
+  IDs. Both ambiguity hints now read "the field ID (e.g. customfield_NNNNN
+  or a system id like issuetype)".
 - **`jr field options <FIELD>` now resolves a real label for system-typed
   fields, not just custom select fields** (issue #861, BC-X.14.001,
   read-side only): Priority, Components, Fix versions, Issue Type, and
@@ -118,10 +126,12 @@ All notable changes to jr will be documented here.
   JSM-internal marker, and the restricted-visibility value) and its
   ADF-derived body directly via `print!`/`println!` -- it never routed
   through `render_table`, so it was not covered by the fix above. Every
-  server-derived value it prints (`id`, `author`, `created`, `updated`, the
-  visibility echo, and the body text) now passes through a new
-  `output::sanitize_terminal_text` alias for `sanitize_table_cell` (same
-  policy, same single implementation) before printing. `--output json`
+  server-derived value it prints is now sanitized before printing: the six
+  single-line labeled fields via `output::sanitize_terminal_line`
+  (single-line sibling of `sanitize_table_cell`; an embedded `\n` becomes a
+  space, see FIX-P5-002 below), and only the genuinely multi-line ADF body
+  via the new `output::sanitize_terminal_text` alias for
+  `sanitize_table_cell` (same policy, `\n` preserved). `--output json`
   stays untouched and lossless, as before. Known non-table human-output call
   sites that still print server-supplied text unsanitized are tracked as
   the NONTABLE-SERVER-TEXT-SANITIZE residual -- a known, non-exhaustive
@@ -134,8 +144,9 @@ All notable changes to jr will be documented here.
   (`"{key} is already assigned to {name}"`) and the newly-assigned/
   self-assign path (`"Assigned {key} to {name}"`) -- both of which
   previously printed the raw, unsanitized display name. Both sites now pass
-  the display name through `output::sanitize_terminal_text` before
-  formatting. `--output json`'s `assignee` key is unaffected and stays raw
+  the display name through `output::sanitize_terminal_line` before
+  formatting (single-line sink; `sanitize_terminal_text` would preserve an
+  embedded `\n`). `--output json`'s `assignee` key is unaffected and stays raw
   and lossless, per the same human/machine-channel asymmetry as the fixes
   above. `handle_assign` is now a covered non-table sink, alongside `jr
   issue comment view` above.
@@ -151,7 +162,7 @@ All notable changes to jr will be documented here.
   non-interactive `ExactMultiple`/`Ambiguous`/`None`-branch
   `JrError::UserError` messages and its interactive `dialoguer::Select`
   picker labels. Every such value is now sanitized via
-  `output::sanitize_terminal_text` at its point of embedding inside
+  `output::sanitize_terminal_line` at its point of embedding inside
   `disambiguate_user` itself, covering all four callers uniformly with no
   caller-side change; the `ExactMultiple` interactive picker labels are
   built via a new, independently unit-testable `disambiguation_labels`
@@ -243,18 +254,26 @@ All notable changes to jr will be documented here.
     known limitation and a follow-up enhancement (add `email`/`accountId`
     to the `Ambiguous` branch's labels/message, mirroring
     `ExactMultiple`), not fixed by this change.
-- **Table/human output now strips invisible format characters from
-  server-supplied text (FIX-P5-004, BC-7.1.006 EC-18/19/20, CWE-451):** the
-  shared per-character policy behind `sanitize_table_cell`,
-  `sanitize_terminal_text` and `sanitize_terminal_line` now also drops
-  zero-width and directional marks (`U+200B`-`U+200F`, `U+061C`), word
-  joiner/invisible operators (`U+2060`-`U+2064`), the BOM (`U+FEFF`), and
-  the Unicode tag block (`U+E0000`-`U+E007F`), which could otherwise make
-  two different display names render identically. Accepted trade-off: ZWJ
-  (`U+200D`) is stripped too, so ZWJ emoji sequences (and legitimate
-  LRM/RLM/ZWNJ in RTL names) lose those characters in table/human output
-  (`woman + ZWJ + laptop` renders as two separate emoji). `--output json`
-  is never sanitized and is unaffected.
+- **Table/human output now strips every Unicode format (Cf) character plus
+  blank-rendering fillers (FIX-P5-004, expanded by FIX-P5-005/D-399,
+  BC-7.1.006 EC-18..EC-23, CWE-451):** the shared per-character policy
+  behind `sanitize_table_cell`, `sanitize_terminal_text` and
+  `sanitize_terminal_line` (`classify_default_char`) now drops the full
+  Unicode 17.0.0 `General_Category=Cf` set (a sorted 21-range table: soft
+  hyphen `U+00AD`, Arabic prepended marks, `U+200B`-`U+200F`,
+  `U+202A`-`U+202E`, `U+2060`-`U+2064`, `U+2066`-`U+206F`, `U+FEFF`,
+  interlinear annotation, Egyptian/Kaithi/musical format controls, and the
+  tag characters), the combining grapheme joiner `U+034F`, the Hangul
+  fillers (`U+115F`, `U+1160`, `U+3164`, `U+FFA0`), and the whole tag block
+  `U+E0000`-`U+E007F`, which could otherwise make two different display
+  names render identically. Deliberately KEPT: variation selectors
+  (`U+FE00`-`U+FE0F`, `U+E0100`-`U+E01EF`; emoji VS16 must survive,
+  smuggling residual accepted, EC-23). Accepted trade-offs: ZWJ emoji
+  sequences (and legitimate LRM/RLM/ZWNJ in RTL names) lose those
+  characters in table/human output, and visible-ish prepended marks
+  (`U+0600`-`U+0605`, `U+06DD`, `U+0890`-`U+0891`, `U+08E2`, `U+110BD`,
+  `U+110CD`) and soft hyphen are stripped. `--output json` is never
+  sanitized and is unaffected.
 
 ## [0.7.0] - 2026-09-23
 
