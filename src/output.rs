@@ -257,8 +257,9 @@ pub(crate) fn sanitize_env_display(value: &str) -> String {
 /// A CSI sequence (`ESC [ … <final byte 0x40-0x7E>`) is consumed through
 /// its final byte; an OSC sequence (`ESC ] … <BEL or ST>`) is consumed
 /// through its BEL (`0x07`) or `ESC \` string terminator. A bare ESC not
-/// starting a recognized CSI/OSC sequence is dropped as an ordinary control
-/// character (it falls in `0x00-0x1F`).
+/// starting a recognized CSI/OSC sequence is dropped unconditionally by the
+/// shared `sanitize_control_and_ansi_core` before any per-character policy
+/// runs (it never reaches this function's policy closure).
 ///
 /// **Unterminated CSI/OSC (fail-closed):** if a CSI or OSC sequence's
 /// final byte / string terminator never appears before end-of-string, the
@@ -1503,19 +1504,16 @@ mod tests {
         );
     }
 
-    /// `print_output_with_styles`'s `OutputFormat::Table` arm must still
-    /// dispatch to the sanitizing `render_table_with_styles` rather than
-    /// bypassing it — asserted by calling `print_output_with_styles`
-    /// itself (not just its callee) so a regression at the dispatch site
-    /// (e.g. a future refactor that formats `c.text` directly instead of
-    /// calling `render_table_with_styles`) is caught here too. stdout
-    /// itself isn't captured by this in-process unit test (the real CLI
-    /// process boundary is covered end-to-end by
-    /// `tests/table_output_sanitization.rs`'s `jr user list` case, which owns
-    /// the actual sanitization guarantee; this test asserts only `Ok(())`); this
-    /// test instead pins that the call succeeds for both a hostile plain
-    /// and a hostile colored cell, and that JSON mode stays a pure
-    /// `render_json` passthrough completely unaffected by cell styling.
+    /// Smoke test for `print_output_with_styles` with a hostile styled cell.
+    ///
+    /// Asserts only that the call returns `Ok(())` in both modes: `Table`
+    /// mode with a hostile colored cell, and `Json` mode with the same
+    /// styled rows (which JSON mode never consults).
+    ///
+    /// It does NOT capture stdout, so it cannot detect a `Table` arm that
+    /// bypasses `render_table_with_styles`, and it does not check that
+    /// anything was sanitized. The end-to-end sanitization guarantee is
+    /// owned by `tests/table_output_sanitization.rs`'s `jr user list` case.
     #[test]
     fn test_bc_7_1_006_print_output_with_styles_returns_ok_on_hostile_cells() {
         let headers = &["Name"];
