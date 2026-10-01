@@ -532,12 +532,16 @@ fn sanitize_control_and_ansi_core(
 ///   `U+0085` (NEL) are STRIPPED — the same Unicode terminal-injection
 ///   code-point set `strip_control_and_ansi` already strips for
 ///   `sanitize_env_display`.
-/// - Invisible format characters are STRIPPED (FIX-P5-004, D-398, CWE-451):
-///   `U+200B`-`U+200F` (ZWSP, ZWNJ, ZWJ, LRM, RLM), `U+061C` (ALM),
-///   `U+2060`-`U+2064` (word joiner, function application, invisible
-///   times/separator/plus), `U+FEFF` (BOM), and the Unicode tag block
-///   `U+E0000`-`U+E007F`. Accepted trade-off (EC-20): ZWJ emoji sequences
-///   lose their joiner in table/human output.
+/// - Every Unicode 17.0.0 `General_Category=Cf` format character is
+///   STRIPPED (FIX-P5-004 D-398 introduced the first set; FIX-P5-005 D-399
+///   generalized it to the full category rule, CWE-451), plus the combining
+///   grapheme joiner `U+034F`, the Hangul fillers (`U+115F`, `U+1160`,
+///   `U+3164`, `U+FFA0`) and the whole tag block `U+E0000`-`U+E007F`.
+///   See `classify_default_char` for the table and rationale. Variation
+///   selectors (`U+FE00`-`U+FE0F`, `U+E0100`-`U+E01EF`) are deliberately
+///   KEPT (EC-23). Accepted trade-offs: ZWJ emoji sequences lose their
+///   joiner (EC-20); prepended Cf marks such as `U+0600`-`U+0605` and
+///   `U+00AD` (soft hyphen) are stripped (EC-21).
 /// - No length cap and no truncation are applied (unlike
 ///   `sanitize_env_display`'s capped-and-marked behavior). Ordinary
 ///   printable text — including non-ASCII such as `"é"`, CJK characters,
@@ -591,30 +595,89 @@ pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     sanitize_table_cell(value)
 }
 
+/// Unicode 17.0.0 `General_Category=Cf` (format characters), inclusive
+/// ranges, sorted and non-overlapping (FIX-P5-005, D-399, CWE-451).
+/// Source: `ucd/UnicodeData.txt` 17.0.0 cross-checked against
+/// `DerivedGeneralCategory.txt`; 170 code points in 21 ranges. Kept pure-Cf
+/// so the conformance tests can compare it to the spec verbatim; the
+/// tag block as a whole is added separately in [`classify_default_char`].
+const CF_RANGES: &[(u32, u32)] = &[
+    (0x00AD, 0x00AD),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0xFEFF, 0xFEFF),
+    (0xFFF9, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
+];
+
+/// `true` if `code` lies in [`CF_RANGES`] (binary search over the sorted,
+/// non-overlapping table).
+fn is_cf(code: u32) -> bool {
+    CF_RANGES
+        .binary_search_by(|&(start, end)| {
+            if code < start {
+                std::cmp::Ordering::Greater
+            } else if code > end {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
 /// Shared default per-character policy for [`sanitize_table_cell`] and
-/// [`sanitize_terminal_line`] (FIX-P5-003, CR2-1): every character other than
-/// the three whitespace controls (`\n`, `\r`, `\t`, which each function
-/// classifies itself) is DROPPED if it is a C0 control, DEL, a C1 control,
-/// a bidi override, a Unicode line/paragraph separator/NEL, or an invisible
-/// format character (FIX-P5-004, D-398, CWE-451: `U+200B..=U+200F` ZWSP/ZWNJ/
-/// ZWJ/LRM/RLM, `U+061C` ALM, `U+2060..=U+2064` word joiner and invisible
-/// operators, `U+FEFF` BOM, `U+E0000..=U+E007F` Unicode tag block); otherwise
-/// KEPT. ZWJ is stripped deliberately (EC-20): ZWJ emoji sequences lose the
-/// joiner in human output; `--output json` is never sanitized.
+/// [`sanitize_terminal_line`] (FIX-P5-003, CR2-1; category rule FIX-P5-005,
+/// D-399, CWE-451). Every character other than the three whitespace
+/// controls (`\n`, `\r`, `\t`, which each function classifies itself) is
+/// DROPPED if it is:
+/// - a C0 control, DEL, a C1 control, a bidi override/isolate, a Unicode
+///   line/paragraph separator, or NEL; or
+/// - any Unicode 17.0.0 `General_Category=Cf` format character
+///   ([`CF_RANGES`]: soft hyphen, Arabic prepended marks, ZWSP/ZWNJ/ZWJ/
+///   LRM/RLM, word joiner and invisible operators, all bidi controls
+///   `U+2066..=U+206F`, BOM, interlinear annotation, Egyptian/Kaithi/
+///   musical format controls, `U+E0001`, `U+E0020..=U+E007F`); or
+/// - the combining grapheme joiner `U+034F` or a blank-rendering Hangul
+///   filler (`U+115F`, `U+1160`, `U+3164`, `U+FFA0`); or
+/// - anywhere in the Unicode tag block `U+E0000..=U+E007F` (deliberate
+///   superset of the Cf subset: `U+E0000` and `U+E0002..=U+E001F` are
+///   unassigned).
+///
+/// Otherwise KEPT. **Deliberately KEPT:** variation selectors
+/// `U+FE00..=U+FE0F` and `U+E0100..=U+E01EF` (emoji VS16 must survive;
+/// smuggling residual accepted, EC-23), and with them the Mongolian free
+/// variation selectors `U+180B..=U+180D`/`U+180F`.
+///
+/// Accepted trade-offs: ZWJ emoji sequences lose their joiner (EC-20);
+/// visible-ish prepended Cf marks (`U+0600..=U+0605`, `U+06DD`,
+/// `U+0890..=U+0891`, `U+08E2`, `U+110BD`, `U+110CD`) and `U+00AD` are
+/// stripped. `--output json` is never sanitized. The table is pinned to
+/// Unicode 17.0.0; a future Unicode revision requires a deliberate update.
 fn classify_default_char(c: char) -> CharDisposition {
     let code = c as u32;
     if code <= 0x1F
         || code == 0x7F
         || (0x80..=0x9F).contains(&code)
-        || (0x202A..=0x202E).contains(&code)
-        || (0x2066..=0x2069).contains(&code)
         || code == 0x2028
         || code == 0x2029
-        || code == 0x0085
-        || (0x200B..=0x200F).contains(&code)
-        || code == 0x061C
-        || (0x2060..=0x2064).contains(&code)
-        || code == 0xFEFF
+        || is_cf(code)
+        || matches!(code, 0x034F | 0x115F | 0x1160 | 0x3164 | 0xFFA0)
         || (0xE0000..=0xE007F).contains(&code)
     {
         CharDisposition::Drop
@@ -1779,6 +1842,164 @@ mod tests {
     fn test_bc_7_1_006_sanitize_terminal_line_invisible_chars_identity_collapse() {
         let genuine = "Alice Admin";
         let spoof = "Ali\u{200B}ce\u{FEFF} \u{2060}Ad\u{200D}min\u{E0041}";
+        assert_ne!(genuine, spoof);
+        assert_eq!(sanitize_terminal_line(spoof), genuine);
+    }
+
+    // ── Unicode 17.0.0 General_Category=Cf policy (FIX-P5-005, D-399,
+    // P4-003/CR4-001/SEC4-001; BC-7.1.006 EC-21/22/23, VP-SEC-001-003) ───
+
+    /// Independent oracle copy of the spec's Cf table (Unicode 17.0.0).
+    const SPEC_CF_RANGES: &[(u32, u32)] = &[
+        (0x00AD, 0x00AD),
+        (0x0600, 0x0605),
+        (0x061C, 0x061C),
+        (0x06DD, 0x06DD),
+        (0x070F, 0x070F),
+        (0x0890, 0x0891),
+        (0x08E2, 0x08E2),
+        (0x180E, 0x180E),
+        (0x200B, 0x200F),
+        (0x202A, 0x202E),
+        (0x2060, 0x2064),
+        (0x2066, 0x206F),
+        (0xFEFF, 0xFEFF),
+        (0xFFF9, 0xFFFB),
+        (0x110BD, 0x110BD),
+        (0x110CD, 0x110CD),
+        (0x13430, 0x1343F),
+        (0x1BCA0, 0x1BCA3),
+        (0x1D173, 0x1D17A),
+        (0xE0001, 0xE0001),
+        (0xE0020, 0xE007F),
+    ];
+
+    fn spec_drops(code: u32) -> bool {
+        code <= 0x1F
+            || code == 0x7F
+            || (0x80..=0x9F).contains(&code)
+            || (0x202A..=0x202E).contains(&code)
+            || (0x2066..=0x2069).contains(&code)
+            || code == 0x2028
+            || code == 0x2029
+            || code == 0x0085
+            || SPEC_CF_RANGES.iter().any(|&(a, b)| (a..=b).contains(&code))
+            || matches!(code, 0x034F | 0x115F | 0x1160 | 0x3164 | 0xFFA0)
+            || (0xE0000..=0xE007F).contains(&code)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        /// VP-SEC-001-003: `classify_default_char` drops iff the code point is
+        /// in the spec's Cf table, the explicit sets, the extras, or the tag
+        /// block. Sampled across the whole scalar range, biased near ranges.
+        #[test]
+        fn prop_bc_7_1_006_classify_default_char_matches_spec_cf_table(
+            raw in prop_oneof![
+                0u32..0x3200,
+                0xF000u32..0x10000,
+                0x110B0u32..0x110E0,
+                0x13420u32..0x13450,
+                0x1BC90u32..0x1BCB0,
+                0x1D160u32..0x1D190,
+                0xDFFF0u32..0xE0200,
+                0u32..0x110000,
+            ],
+        ) {
+            if let Some(c) = char::from_u32(raw) {
+                let got = classify_default_char(c);
+                let expected = spec_drops(raw);
+                prop_assert_eq!(
+                    matches!(got, CharDisposition::Drop),
+                    expected,
+                    "U+{:04X}", raw
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_bc_7_1_006_cf_range_table_is_sorted_and_non_overlapping() {
+        assert!(!CF_RANGES.is_empty());
+        let mut prev_end: Option<u32> = None;
+        for &(start, end) in CF_RANGES {
+            assert!(start <= end, "start > end: {start:X}..{end:X}");
+            assert!(end <= 0x10FFFF, "out of range: {end:X}");
+            assert!(
+                char::from_u32(start).is_some() && char::from_u32(end).is_some(),
+                "surrogate endpoint {start:X}..{end:X}"
+            );
+            if let Some(p) = prev_end {
+                assert!(start > p + 1, "touching/overlapping/unsorted at {start:X}");
+            }
+            prev_end = Some(end);
+        }
+        assert_eq!(CF_RANGES, SPEC_CF_RANGES);
+    }
+
+    #[test]
+    fn test_bc_7_1_006_sanitize_strips_all_cf_format_characters() {
+        for &(start, end) in SPEC_CF_RANGES {
+            for u in start..=end {
+                let c = char::from_u32(u).unwrap();
+                let input = format!("a{c}b");
+                assert_eq!(sanitize_table_cell(&input), "ab", "U+{u:04X}");
+                assert_eq!(sanitize_terminal_text(&input), "ab", "U+{u:04X}");
+                assert_eq!(sanitize_terminal_line(&input), "ab", "U+{u:04X}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_bc_7_1_006_sanitize_cf_range_neighbors_kept() {
+        let kept: &[u32] = &[
+            0x00AC, 0x00AE, 0x05FF, 0x0606, 0x061B, 0x061D, 0x06DC, 0x06DE, 0x070E, 0x0710,
+            0x088F, 0x0892, 0x08E1, 0x08E3, 0x180D, 0x180F, 0x200A, 0x2010, 0x202F, 0x205F,
+            0x2065, 0x2070, 0xFEFE, 0xFF00, 0xFFF8, 0xFFFC, 0x110BC, 0x110BE, 0x110CC,
+            0x110CE, 0x1342F, 0x13440, 0x1BC9F, 0x1BCA4, 0x1D172, 0x1D17B, 0xE0080, 0x1F600,
+            // filler / CGJ neighbors
+            0x034E, 0x0350, 0x115E, 0x1161, 0x3163, 0x3165, 0xFF9F, 0xFFA1,
+            // FE10 / FDFF
+            0xFE10, 0xFDFF,
+        ];
+        for &u in kept {
+            let c = char::from_u32(u).unwrap();
+            let input = format!("a{c}b");
+            assert_eq!(sanitize_table_cell(&input), input, "U+{u:04X}");
+            assert_eq!(sanitize_terminal_text(&input), input, "U+{u:04X}");
+            assert_eq!(sanitize_terminal_line(&input), input, "U+{u:04X}");
+        }
+    }
+
+    /// EC-22.
+    #[test]
+    fn test_bc_7_1_006_sanitize_strips_cgj_and_hangul_fillers() {
+        for u in [0x034Fu32, 0x115F, 0x1160, 0x3164, 0xFFA0] {
+            let c = char::from_u32(u).unwrap();
+            let input = format!("a{c}b");
+            assert_eq!(sanitize_table_cell(&input), "ab", "U+{u:04X}");
+            assert_eq!(sanitize_terminal_text(&input), "ab", "U+{u:04X}");
+            assert_eq!(sanitize_terminal_line(&input), "ab", "U+{u:04X}");
+        }
+    }
+
+    /// EC-23: variation selectors are deliberately KEPT.
+    #[test]
+    fn test_bc_7_1_006_sanitize_keeps_variation_selectors() {
+        for u in [0xFE00u32, 0xFE0F, 0xE0100, 0xE01EF, 0x180B, 0x180C, 0x180D] {
+            let c = char::from_u32(u).unwrap();
+            let input = format!("a{c}b");
+            assert_eq!(sanitize_table_cell(&input), input, "U+{u:04X}");
+            assert_eq!(sanitize_terminal_text(&input), input, "U+{u:04X}");
+            assert_eq!(sanitize_terminal_line(&input), input, "U+{u:04X}");
+        }
+    }
+
+    #[test]
+    fn test_bc_7_1_006_sanitize_terminal_line_cf_identity_collapse() {
+        let genuine = "Bob Admin";
+        let spoof = "B\u{00AD}ob\u{0600} A\u{180E}d\u{FFF9}m\u{110BD}i\u{1D173}n\u{034F}\u{3164}";
         assert_ne!(genuine, spoof);
         assert_eq!(sanitize_terminal_line(spoof), genuine);
     }
