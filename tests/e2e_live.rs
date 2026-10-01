@@ -4933,7 +4933,7 @@ fn adf_has_linked_url(node: &Value, url: &str) -> bool {
     let norm = |s: &str| s.trim_end_matches('/').to_string();
     let target = norm(url);
     if node.get("type").and_then(Value::as_str) == Some("text")
-        && node.get("text").and_then(Value::as_str).map(&norm) == Some(target.clone())
+        && node.get("text").and_then(Value::as_str).map(norm) == Some(target.clone())
         && let Some(marks) = node.get("marks").and_then(Value::as_array)
     {
         let hit = marks.iter().any(|m| {
@@ -4941,7 +4941,7 @@ fn adf_has_linked_url(node: &Value, url: &str) -> bool {
                 && m.get("attrs")
                     .and_then(|a| a.get("href"))
                     .and_then(Value::as_str)
-                    .map(&norm)
+                    .map(norm)
                     == Some(target.clone())
         });
         if hit {
