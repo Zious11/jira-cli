@@ -2871,7 +2871,14 @@ async fn test_bc_x_14_001_system_field_id_issuetype_resolves_via_id_match() {
     mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
 
     let assert = h.cmd(&[
-        "field", "options", "issuetype", "--issue", "FOO-1", "--no-input", "--output", "json",
+        "field",
+        "options",
+        "issuetype",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+        "--output",
+        "json",
     ]);
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2892,7 +2899,14 @@ async fn test_bc_x_14_001_system_field_id_match_is_case_insensitive_and_returns_
     mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
 
     let assert = h.cmd(&[
-        "field", "options", "IssueType", "--issue", "FOO-1", "--no-input", "--output", "json",
+        "field",
+        "options",
+        "IssueType",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+        "--output",
+        "json",
     ]);
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2917,7 +2931,14 @@ async fn test_bc_x_14_001_field_id_match_wins_over_name_collision() {
     mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
 
     let assert = h.cmd(&[
-        "field", "options", "issuetype", "--issue", "FOO-1", "--no-input", "--output", "json",
+        "field",
+        "options",
+        "issuetype",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+        "--output",
+        "json",
     ]);
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2949,7 +2970,12 @@ async fn test_bc_x_14_001_field_id_match_is_exact_not_substring() {
         .await;
 
     let assert = h.cmd(&[
-        "field", "options", "issuet", "--issue", "FOO-1", "--no-input",
+        "field",
+        "options",
+        "issuet",
+        "--issue",
+        "FOO-1",
+        "--no-input",
     ]);
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2970,7 +2996,14 @@ async fn test_bc_x_14_001_field_id_match_warm_cache_zero_http() {
     mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
 
     let assert = h.cmd(&[
-        "field", "options", "issuetype", "--issue", "FOO-1", "--no-input", "--output", "json",
+        "field",
+        "options",
+        "issuetype",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+        "--output",
+        "json",
     ]);
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2993,7 +3026,14 @@ async fn test_bc_x_14_001_field_id_absent_from_cache_refetches_once() {
     mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
 
     let assert = h.cmd(&[
-        "field", "options", "issuetype", "--issue", "FOO-1", "--no-input", "--output", "json",
+        "field",
+        "options",
+        "issuetype",
+        "--issue",
+        "FOO-1",
+        "--no-input",
+        "--output",
+        "json",
     ]);
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -3012,7 +3052,12 @@ async fn test_bc_x_14_004_ambiguous_field_name_hint_names_system_id_form() {
     )
     .await;
     let assert = h.cmd(&[
-        "field", "options", "SOC Client", "--issue", "FOO-1", "--no-input",
+        "field",
+        "options",
+        "SOC Client",
+        "--issue",
+        "FOO-1",
+        "--no-input",
     ]);
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
