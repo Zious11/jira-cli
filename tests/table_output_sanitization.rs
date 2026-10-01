@@ -1572,13 +1572,11 @@ async fn test_bc_7_1_006_issue_assign_none_human_output_strips_hostile_candidate
 // EC-17, D-396/FIX-P5-002
 // ═══════════════════════════════════════════════════════════════════════
 //
-// `sanitize_terminal_line` is a `todo!()` stub as of this commit, NOT YET
-// wired into any of the three call sites below (`handle_comment_view`'s six
-// labeled fields, `handle_assign`'s two messages, `disambiguate_user`'s
-// non-interactive messages/interactive labels — all currently still route
-// through the `\n`-preserving `sanitize_terminal_text`). Every test in this
-// section therefore pins REQUIRED FUTURE behavior and is expected to FAIL
-// (RED) against the current binary — this is the Red Gate for CR-1.
+// `sanitize_terminal_line` is implemented and wired into all three call
+// sites below (`handle_comment_view`'s six labeled fields, `handle_assign`'s
+// two messages, `disambiguate_user`'s non-interactive messages/interactive
+// labels). Every test in this section pins that behavior and is expected
+// to pass.
 
 /// EC-17a fixture: a hostile comment author whose `displayName` embeds a
 /// raw `\n` immediately followed by text that looks like a second
@@ -1614,10 +1612,10 @@ async fn mount_comment_view_ec17a_fixture(server: &MockServer, key: &str, id: &s
 /// line — never as a fabricated standalone `Restricted: None` line distinct
 /// from the real `Restricted: Admins` line three fields later.
 ///
-/// Expected RED today: `handle_comment_view` still sanitizes `author` via
-/// `sanitize_terminal_text` (preserves `\n`), so the hostile value renders
-/// as TWO lines — `Author: Eve` then a bare `Restricted: None` — exactly
-/// the CWE-116 line-fabrication hazard this BC's EC-17 closes.
+/// Expected PASS: `handle_comment_view`'s `author` field is now sanitized
+/// via `sanitize_terminal_line`, so the hostile embedded `\n` collapses to
+/// a single space instead of fabricating a standalone `Restricted: None`
+/// line — the CWE-116 line-fabrication hazard this BC's EC-17 closes.
 #[tokio::test]
 async fn test_bc_7_1_006_ec17_comment_view_author_embedded_newline_stays_single_line() {
     let h = Harness::new().await;
@@ -1676,9 +1674,9 @@ const ASSIGN_HOSTILE_NEWLINE_DISPLAY_NAME: &str = "Mallory\nEve";
 /// the hostile embedded `\n` as a single space on STDERR — one line, not
 /// two.
 ///
-/// Expected RED today: `handle_assign` still sanitizes `display_name` via
-/// `sanitize_terminal_text` (preserves `\n`), so stderr renders as TWO
-/// lines instead of the required single line.
+/// Expected PASS: `handle_assign`'s `display_name` is now sanitized via
+/// `sanitize_terminal_line`, so stderr renders as a single line instead of
+/// splitting on the hostile embedded `\n`.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_human_output_embedded_newline_stays_single_line() {
     let h = Harness::new().await;
@@ -1718,10 +1716,10 @@ async fn test_bc_7_1_006_issue_assign_human_output_embedded_newline_stays_single
 /// (`sanitize_terminal_line` only ever touches a value embedded INTO the
 /// message, never the message's own structural newlines).
 ///
-/// Expected RED today: `disambiguate_user`'s `ExactMultiple` branch still
-/// sanitizes each duplicate's `display_name` via `sanitize_terminal_text`
-/// (preserves `\n`), so the hostile embedded `\n` survives, splitting one
-/// duplicate's line into two.
+/// Expected PASS: `disambiguate_user`'s `ExactMultiple` branch now
+/// sanitizes each duplicate's `display_name` via `sanitize_terminal_line`,
+/// so the hostile embedded `\n` collapses to a single space instead of
+/// splitting one duplicate's line into two.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile_display_name_newline()
  {

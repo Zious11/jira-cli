@@ -1445,11 +1445,10 @@ mod tests {
 
     // ── sanitize_terminal_line (BC-7.1.006, CR-1, D-396/FIX-P5-002) ─────
     //
-    // `sanitize_terminal_line` is a `todo!()` stub as of this commit — not
-    // yet wired into any call site. These tests pin its REQUIRED future
-    // behavior (identical to `sanitize_table_cell`, except `\n` maps to a
-    // single space) and MUST FAIL (panic via `todo!()`) until FIX-P5-002's
-    // implementation lands — this is the Red Gate for CR-1.
+    // `sanitize_terminal_line` is implemented and wired into its call
+    // sites (`handle_comment_view`, `handle_assign`, `disambiguate_user`).
+    // These tests pin its behavior (identical to `sanitize_table_cell`,
+    // except `\n` maps to a single space) and are expected to pass.
 
     /// EC-17a: the exact `handle_comment_view` `Author`-field fixture from
     /// BC-7.1.006's spec. A hostile value with an embedded `\n` and no
@@ -1609,10 +1608,12 @@ mod tests {
 
     /// CR-2 (D-396): `render_table_with_styles` must apply a `StyledCell`'s
     /// `fg` ONLY when `colored::control::SHOULD_COLORIZE.should_colorize()`
-    /// is true — today it applies `fg` UNCONDITIONALLY whenever `fg` is
-    /// `Some`, performing no `SHOULD_COLORIZE` check of its own (that check
-    /// currently lives only in `src/cli/user.rs::active_cell`, the sole
-    /// `StyledCell`-constructing caller). This test calls
+    /// is true — before this fix it applied `fg` UNCONDITIONALLY whenever
+    /// `fg` was `Some`, performing no `SHOULD_COLORIZE` check of its own
+    /// (that check lived only in `src/cli/user.rs::active_cell`, the sole
+    /// `StyledCell`-constructing caller). As of this fix,
+    /// `render_table_with_styles_inner` gates `fg` on this check itself.
+    /// This test calls
     /// `render_table_with_styles` directly (not `active_cell`), so it is
     /// unaffected by `active_cell`'s own gating and isolates
     /// `render_table_with_styles`'s OWN behavior.
@@ -1648,9 +1649,10 @@ mod tests {
     /// Companion to the suppression test above: with colorize forced ON
     /// (and styling forced on via the same test seam), the `StyledCell`'s
     /// `fg` IS applied — `render_table_with_styles` must not suppress
-    /// unconditionally. Expected GREEN today: this is `render_table_with_styles`'s
-    /// existing unconditional-`fg`-application behavior, which happens to
-    /// already satisfy the "colorize ON → color present" half of CR-2.
+    /// unconditionally. Expected GREEN: with
+    /// `SHOULD_COLORIZE.should_colorize()` true, `render_table_with_styles_inner`'s
+    /// gate (CR-2) lets `fg` through, satisfying the "colorize ON → color
+    /// present" half of CR-2.
     #[test]
     fn test_bc_7_1_006_render_table_with_styles_applies_fg_when_colorize_enabled() {
         let _color = TerminalColorOverride::new(true);
