@@ -2824,3 +2824,201 @@ async fn test_bc_x_14_001_warm_cache_resolves_without_list_fields_call() {
         "expected the 2 options for the cache-resolved field"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX-P5-005 (D-399, CR4-002) — system field IDs resolve via exact ID match
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn issuetype_editmeta() -> Value {
+    json!({
+        "issuetype": {
+            "name": "Issue Type",
+            "schema": {"type": "issuetype", "system": "issuetype"},
+            "allowedValues": [{"id": "1", "name": "Bug"}, {"id": "2", "name": "Task"}],
+            "operations": ["set"],
+            "required": true
+        }
+    })
+}
+
+fn write_warm_fields_cache(h: &Harness, fields: Value) {
+    let cache_file = h
+        .cache_dir
+        .path()
+        .join("jr")
+        .join("v1")
+        .join("default")
+        .join("fields.json");
+    std::fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &cache_file,
+        json!({"fields": fields, "fetched_at": chrono::Utc::now().to_rfc3339()}).to_string(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn test_bc_x_14_001_system_field_id_issuetype_resolves_via_id_match() {
+    let h = Harness::new().await;
+    mount_list_fields(
+        &h.server,
+        vec![
+            json!({"id": "issuetype", "name": "Issue Type", "custom": false, "schema": null}),
+            json!({"id": "customfield_10002", "name": "Sprint", "custom": true, "schema": null}),
+        ],
+    )
+    .await;
+    mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
+
+    let assert = h.cmd(&[
+        "field", "options", "issuetype", "--issue", "FOO-1", "--no-input", "--output", "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    let parsed: Value = serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    assert_eq!(parsed.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn test_bc_x_14_001_system_field_id_match_is_case_insensitive_and_returns_canonical_id() {
+    let h = Harness::new().await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({"id": "issuetype", "name": "Issue Type", "custom": false, "schema": null})],
+    )
+    .await;
+    // editmeta is keyed by the canonical (list-casing) id `issuetype`.
+    mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
+
+    let assert = h.cmd(&[
+        "field", "options", "IssueType", "--issue", "FOO-1", "--no-input", "--output", "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    let parsed: Value = serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    assert_eq!(parsed.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn test_bc_x_14_001_field_id_match_wins_over_name_collision() {
+    let h = Harness::new().await;
+    mount_list_fields(
+        &h.server,
+        vec![
+            json!({"id": "issuetype", "name": "Issue Type", "custom": false, "schema": null}),
+            json!({"id": "customfield_10050", "name": "issuetype", "custom": true, "schema": null}),
+        ],
+    )
+    .await;
+    // Only the SYSTEM field is in editmeta; resolving to the custom field
+    // would degrade/fail instead of listing Bug/Task.
+    mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
+
+    let assert = h.cmd(&[
+        "field", "options", "issuetype", "--issue", "FOO-1", "--no-input", "--output", "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("matches multiple fields"),
+        "ID match must win silently: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Bug"), "{stdout}");
+}
+
+#[tokio::test]
+async fn test_bc_x_14_001_field_id_match_is_exact_not_substring() {
+    let h = Harness::new().await;
+    mount_list_fields(
+        &h.server,
+        vec![
+            json!({"id": "issuetype", "name": "Kind", "custom": false, "schema": null}),
+            json!({"id": "customfield_10002", "name": "Sprint", "custom": true, "schema": null}),
+        ],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"fields": {}})))
+        .expect(0)
+        .mount(&h.server)
+        .await;
+
+    let assert = h.cmd(&[
+        "field", "options", "issuet", "--issue", "FOO-1", "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(64), "stderr: {stderr}");
+    assert!(stderr.contains("not found"), "{stderr}");
+}
+
+#[tokio::test]
+async fn test_bc_x_14_001_field_id_match_warm_cache_zero_http() {
+    let h = Harness::new().await;
+    write_warm_fields_cache(&h, json!([["issuetype", "Issue Type"]]));
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&h.server)
+        .await;
+    mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
+
+    let assert = h.cmd(&[
+        "field", "options", "issuetype", "--issue", "FOO-1", "--no-input", "--output", "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+}
+
+#[tokio::test]
+async fn test_bc_x_14_001_field_id_absent_from_cache_refetches_once() {
+    let h = Harness::new().await;
+    write_warm_fields_cache(&h, json!([["customfield_10002", "Sprint"]]));
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": "issuetype", "name": "Issue Type", "custom": false, "schema": null},
+            {"id": "customfield_10002", "name": "Sprint", "custom": true, "schema": null}
+        ])))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+    mount_editmeta(&h.server, "FOO-1", issuetype_editmeta()).await;
+
+    let assert = h.cmd(&[
+        "field", "options", "issuetype", "--issue", "FOO-1", "--no-input", "--output", "json",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+}
+
+#[tokio::test]
+async fn test_bc_x_14_004_ambiguous_field_name_hint_names_system_id_form() {
+    let h = Harness::new().await;
+    mount_list_fields(
+        &h.server,
+        vec![
+            json!({"id": "customfield_10084", "name": "SOC Client A", "custom": true, "schema": null}),
+            json!({"id": "customfield_10085", "name": "SOC Client B", "custom": true, "schema": null}),
+        ],
+    )
+    .await;
+    let assert = h.cmd(&[
+        "field", "options", "SOC Client", "--issue", "FOO-1", "--no-input",
+    ]);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(64), "{stderr}");
+    assert!(
+        stderr.contains("the field ID (e.g. customfield_NNNNN or a system id like issuetype)"),
+        "{stderr}"
+    );
+}
