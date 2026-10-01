@@ -15,10 +15,15 @@ fn test_is_scrubbable_matches_jr_prefix_case_insensitively() {
     assert!(is_scrubbable("Jr_Profile", &[]));
 }
 
+/// `is_scrubbable` itself does NOT trim: its input is documented as already
+/// trimmed (`scrub_ambient_jr_env` calls `.trim()` before it). So an
+/// untrimmed key with leading whitespace is not matched, while the same key
+/// after the caller's trim is. (This pins the predicate's contract; it does
+/// not exercise `scrub_ambient_jr_env`'s own trim, which would require
+/// mutating the process environment.)
 #[test]
-fn test_is_scrubbable_respects_trimmed_leading_whitespace() {
-    // Caller is expected to trim before calling; a pre-trimmed key
-    // with no surrounding whitespace still matches.
+fn test_is_scrubbable_does_not_trim_its_own_input() {
+    assert!(!is_scrubbable(" JR_X", &[]));
     assert!(is_scrubbable(" JR_X".trim(), &[]));
 }
 
