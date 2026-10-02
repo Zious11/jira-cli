@@ -1770,14 +1770,15 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile
     );
     assert_eq!(
         stderr,
-        "Error: Multiple users named \"Mallory\nEve\" found:\n  \
+        "Error: Multiple users named \"Mallory Eve\" found:\n  \
          Mallory Eve (one@example.invalid, account: acc-n1)\n  \
          Mallory Eve (two@example.invalid, account: acc-n2)\n\
          Specify the accountId directly or use a more specific name.\n",
-        "each duplicate's own hostile embedded-\\n display name must \
-         collapse to a single line — the message TEMPLATE's own \\n \
-         characters (header/per-duplicate/hint lines) are unaffected, only \
-         the embedded VALUE's \\n is neutralized: {stderr:?}"
+        "each duplicate's own hostile embedded-\\n display name AND the echoed \
+         `--to` name (FIX-P5-009, EC-25) must collapse to a single line — the \
+         message TEMPLATE's own \\n characters (header/per-duplicate/hint \
+         lines) are unaffected, only the embedded VALUES' \\n is neutralized: \
+         {stderr:?}"
     );
 }
 
@@ -1997,14 +1998,14 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile
     assert_eq!(
         stderr,
         format!(
-            "Error: Multiple users named \"{hostile_name}\" found:\n  \
+            "Error: Multiple users named \"Mallory\" found:\n  \
              Mallory (mallory.one@example.invalid, account: acc-d1)\n  \
              Mallory (mallory.two@example.invalid, account: acc-d2)\n\
              Specify the accountId directly or use a more specific name.\n"
         ),
-        "each duplicate's own hostile CSI-wrapped display_name must sanitize \
-         to its survivor text 'Mallory' in its normal position within the \
-         unchanged per-duplicate line format: {stderr:?}"
+        "each duplicate's own hostile CSI-wrapped display_name, and the echoed \
+         `--to` name in the header (FIX-P5-009, EC-25), must sanitize to the \
+         survivor text 'Mallory' within the unchanged line format: {stderr:?}"
     );
 }
 
@@ -2059,12 +2060,13 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_ec16b_f
     assert_eq!(
         stderr,
         format!(
-            "Error: Multiple users named \"{DISAMBIG_HOSTILE_NAME_1}\" found:\n  \
+            "Error: Multiple users named \"Alice\" found:\n  \
              Alice (alice@example.com, account: acc-3)\n  \
              Alice (bob@example.com, account: acc-4)\n\
              Specify the accountId directly or use a more specific name.\n"
         ),
-        "EC-16b's exact fixture must sanitize to the exact expected output: \
+        "EC-16b's exact fixture must sanitize to the exact expected output, \
+         including the echoed `--to` name in the header (FIX-P5-009, EC-25): \
          {stderr:?}"
     );
 }
