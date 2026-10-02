@@ -35,8 +35,11 @@
 //! `output::sanitize_terminal_text`). Those tests exercise that
 //! direct-print-site sanitization, not `render_table`. The `jr issue assign`
 //! and shared user-disambiguation tests further below likewise do not go
-//! through `render_table`: they pin `output::sanitize_terminal_line` applied
-//! to stderr messages (success echoes and `JrError::UserError` text).
+//! through `render_table`: their human-output and error-envelope assertions
+//! pin `output::sanitize_terminal_line` applied to stderr messages (success
+//! echoes and `JrError::UserError` text), while the assign `--output json`
+//! success test pins the raw, unsanitized stdout channel, like the other
+//! JSON tests in this file.
 
 #[allow(dead_code)]
 mod common;
