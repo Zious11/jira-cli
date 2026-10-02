@@ -74,8 +74,12 @@ examine_globs = [
     "src/cli/issue/field_resolve.rs",
     # S-cycle3-env-tag — `sanitize_env_display`/`strip_control_and_ansi`:
     # security-relevant display-sanitization (terminal-escape injection), same
-    # class as attachments.rs::display_sanitize_filename. Whole-file scope brings
-    # render_table/render_json in too — accepted, tracked, same as main.rs/queue.rs.
+    # class as attachments.rs::display_sanitize_filename. Cycle-014 F5 added
+    # more security functions to this file: `sanitize_table_cell`,
+    # `sanitize_terminal_line`, `classify_default_char`, `is_cf`,
+    # `sanitize_control_and_ansi_core`, `render_table_with_styles` (FIX-P5-006).
+    # Whole-file scope brings render_table/render_json in too — accepted,
+    # tracked, same as main.rs/queue.rs.
     "src/output.rs",
     # FIX-F6-1 (cycle-004 F6 hardening, examine_globs policy gap): S-cycle4-cloud-id-
     # correctness's cloud_id acquisition (`fetch_cloud_id`, `validate_and_trim_site_url`,

@@ -63,6 +63,11 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **`jr field options --help` now documents system field IDs (FIX-P5-006,
+  BC-X.14.001 EC-X.14.001-22, P5-001):** the `<FIELD>` argument help reads
+  "a customfield_NNNNN literal, a field ID such as issuetype or priority
+  (exact, case-insensitive), or a field name" and no longer leaks internal
+  function names (`list_fields()`, `search_field_list`).
 - **`jr field options <FIELD>` now accepts system field IDs** (D-399,
   BC-X.14.001/004, CR4-002): after the `customfield_NNNNN` literal bypass,
   `<FIELD>` is first matched as an exact, ASCII-case-insensitive field id
@@ -89,6 +94,16 @@ All notable changes to jr will be documented here.
   (`jr field options`), per D-378.
 
 ### Security
+
+- **`jr field options` field-ambiguity errors now sanitize server-supplied
+  candidate names and IDs (FIX-P5-006, BC-X.14.004 EC-X.14.004-9, SEC5-002,
+  D-400, CWE-150/CWE-116):** all three `search_field_list` ambiguity
+  messages (duplicate field ID, duplicate exact name, substring ambiguity)
+  route every candidate `name`/`id` -- and the echoed query -- through
+  `output::sanitize_terminal_line`, so a hostile field name can no longer
+  inject ANSI/OSC sequences, C1 controls, or a fabricated extra line into
+  stderr or the `--output json` `"error"` field. Message format, order, exit
+  code 64 and the field-ID hint are unchanged.
 
 - **Table-mode output now strips terminal control/escape sequences from
   server-supplied text (FIX-P5-001, BC-7.1.006, SEC-001-RENDER-TABLE-ANSI-SANITIZE,
