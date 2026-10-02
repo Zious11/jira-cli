@@ -161,8 +161,8 @@ All notable changes to jr will be documented here.
   stays untouched and lossless, as before. Known non-table human-output call
   sites that still print server-supplied text unsanitized are tracked as
   the NONTABLE-SERVER-TEXT-SANITIZE residual -- a known, non-exhaustive
-  inventory (see `output::sanitize_table_cell`'s rustdoc for the current,
-  verified-against-the-code list) -- and are out of scope for this fix.
+  inventory (see BC-7.1.006's "Canonical Sink Inventory" for the current
+  list) -- and are out of scope for this fix.
 - **`jr issue assign`'s human-output success messages now get the same
   sanitization (D-394, extension of FIX-P5-001, BC-7.1.006):**
   `handle_assign` echoes the server-derived assignee `displayName` into two
@@ -202,7 +202,7 @@ All notable changes to jr will be documented here.
   asymmetry or `handle_assign`'s separate `assignee` JSON field. This is
   PR #891's final scope-expansion amendment; further residual
   non-table/non-JSON sinks remain tracked as NONTABLE-SERVER-TEXT-SANITIZE
-  (see `output::sanitize_table_cell`'s rustdoc).
+  (see BC-7.1.006's "Canonical Sink Inventory").
 - **Single-line sinks now neutralize an embedded `\n` instead of
   fabricating an extra line/field/picker item, and a `StyledCell`'s color
   is now structurally gated on `--no-color`/`NO_COLOR` inside the
