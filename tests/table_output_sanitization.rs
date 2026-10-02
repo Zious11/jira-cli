@@ -1997,12 +1997,10 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile
     );
     assert_eq!(
         stderr,
-        format!(
-            "Error: Multiple users named \"Mallory\" found:\n  \
+        "Error: Multiple users named \"Mallory\" found:\n  \
              Mallory (mallory.one@example.invalid, account: acc-d1)\n  \
              Mallory (mallory.two@example.invalid, account: acc-d2)\n\
-             Specify the accountId directly or use a more specific name.\n"
-        ),
+             Specify the accountId directly or use a more specific name.\n",
         "each duplicate's own hostile CSI-wrapped display_name, and the echoed \
          `--to` name in the header (FIX-P5-009, EC-25), must sanitize to the \
          survivor text 'Mallory' within the unchanged line format: {stderr:?}"
@@ -2059,12 +2057,10 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_ec16b_f
     );
     assert_eq!(
         stderr,
-        format!(
-            "Error: Multiple users named \"Alice\" found:\n  \
+        "Error: Multiple users named \"Alice\" found:\n  \
              Alice (alice@example.com, account: acc-3)\n  \
              Alice (bob@example.com, account: acc-4)\n\
-             Specify the accountId directly or use a more specific name.\n"
-        ),
+             Specify the accountId directly or use a more specific name.\n",
         "EC-16b's exact fixture must sanitize to the exact expected output, \
          including the echoed `--to` name in the header (FIX-P5-009, EC-25): \
          {stderr:?}"
