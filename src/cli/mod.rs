@@ -1234,8 +1234,9 @@ pub enum FieldCommand {
     /// (required-or-defaulted / optional / ignored) depends on the selected
     /// mode. See ADR-0019 §1 / BC-X.14.001.
     Options {
-        /// `customfield_NNNNN` literal, or a human field name resolved via
-        /// `list_fields()` + `search_field_list`
+        /// The field to enumerate: a customfield_NNNNN literal, a field ID
+        /// such as issuetype or priority (exact, case-insensitive), or a
+        /// field name
         field: String,
 
         /// M2: enumerate via project+issue-type createmeta. Requires a
