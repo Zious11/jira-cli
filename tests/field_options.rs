@@ -1178,6 +1178,61 @@ async fn test_bc_x_14_001_m1_stray_project_harmlessly_ignored() {
     );
 }
 
+/// SEC6-002 / EC-X.14.004-10: a hostile server-supplied field id (resolved
+/// via name lookup) echoed in the M1 "not on the Edit screen" error is
+/// sanitized on both stderr and the JSON `"error"` field.
+#[tokio::test]
+async fn test_bc_x_14_004_not_available_field_id_echo_is_sanitized_in_stderr_and_json() {
+    let h = Harness::new().await;
+    mount_list_fields(
+        &h.server,
+        vec![json!({
+            "id": "customfield_1\u{1b}[31m\nFAKE\u{7}",
+            "name": "Hostile Field",
+            "custom": true,
+            "schema": {"type": "option"}
+        })],
+    )
+    .await;
+    mount_editmeta(&h.server, "FOO-1", json!({})).await;
+
+    for json_mode in [false, true] {
+        let mut args = vec!["field", "options", "Hostile Field", "--issue", "FOO-1"];
+        if json_mode {
+            args.extend(["--output", "json"]);
+        }
+        args.push("--no-input");
+        let assert = h.cmd(&args);
+        let output = assert.get_output();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        assert_eq!(output.status.code(), Some(64), "stderr: {stderr}");
+        let text = if json_mode {
+            let v: Value = serde_json::from_str(stderr.trim())
+                .or_else(|_| serde_json::from_str(stdout.trim()))
+                .unwrap_or_else(|e| {
+                    panic!("no JSON error ({e}); stderr={stderr:?} stdout={stdout:?}")
+                });
+            v["error"].as_str().expect("error string").to_string()
+        } else {
+            // Drop the one-time config-migration notice line; keep the error.
+            let at = stderr.find("Error:").expect("Error: line on stderr");
+            stderr[at..].to_string()
+        };
+        assert!(text.contains("is not on the Edit screen"), "{text:?}");
+        assert!(text.contains("Field 'customfield_1 FAKE'"), "{text:?}");
+        assert!(
+            !text.contains('\u{1b}') && !text.contains('\u{7}'),
+            "{text:?}"
+        );
+        assert_eq!(text.trim_end().lines().count(), 1, "multi-line: {text:?}");
+        assert!(
+            !stderr.contains('\u{1b}') && !stderr.contains('\u{7}'),
+            "{stderr:?}"
+        );
+    }
+}
+
 /// AC-007 / EC-3.4.015-7 parallel: `--issue <KEY>` not found (404) -> exit
 /// 64, "issue not found or not accessible".
 #[tokio::test]

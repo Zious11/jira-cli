@@ -186,9 +186,10 @@ pub async fn handle(
                 .into_iter()
                 .find(|f| f.field_id == field_id)
                 .ok_or_else(|| {
-                    JrError::UserError(format!(
-                        "Field '{field_id}' is not available for issue type '{type_name}' \
-                         in project '{project_key}'."
+                    JrError::UserError(field_not_available_for_type_msg(
+                        &field_id,
+                        &type_name,
+                        &project_key,
                     ))
                 })?;
 
@@ -230,8 +231,8 @@ pub async fn handle(
                 .into_iter()
                 .find(|f| f.field_id == field_id)
                 .ok_or_else(|| {
-                    JrError::UserError(format!(
-                        "Field '{field_id}' is not available on request type '{rt_query}'."
+                    JrError::UserError(field_not_available_on_request_type_msg(
+                        &field_id, &rt_query,
                     ))
                 })?;
 
@@ -271,10 +272,7 @@ pub async fn handle(
                 .await
                 .map_err(|e| map_issue_not_found(e, &issue_key))?;
             let target = editmeta.fields.get(&field_id).ok_or_else(|| {
-                JrError::UserError(format!(
-                    "Field '{field_id}' is not on the Edit screen for issue {issue_key} \
-                     (or is not available)."
-                ))
+                JrError::UserError(field_not_on_edit_screen_msg(&field_id, &issue_key))
             })?;
 
             normalize_or_degrade(
@@ -470,12 +468,44 @@ async fn resolve_field_id(
 
     match search_field_list(&fresh, &query_lower, query)? {
         Some(found) => Ok(found),
-        None => Err(JrError::UserError(format!(
-            "Field '{query}' not found. Run `jr project fields --output json` to list \
-             available fields."
-        ))
-        .into()),
+        None => Err(JrError::UserError(field_not_found_msg(query)).into()),
     }
+}
+
+/// M2 "field not available" message. The resolved `field_id` can be a
+/// server-supplied id (name lookup), so it is sanitized once here — the
+/// `UserError` Display feeds both stderr and the JSON `"error"` field
+/// (SEC6-002, EC-X.14.004-10, CWE-150/CWE-116).
+fn field_not_available_for_type_msg(field_id: &str, type_name: &str, project_key: &str) -> String {
+    let field_id = crate::output::sanitize_terminal_line(field_id);
+    format!(
+        "Field '{field_id}' is not available for issue type '{type_name}' \
+         in project '{project_key}'."
+    )
+}
+
+/// M3 "field not available" message; `field_id` sanitized (SEC6-002).
+fn field_not_available_on_request_type_msg(field_id: &str, rt_query: &str) -> String {
+    let field_id = crate::output::sanitize_terminal_line(field_id);
+    format!("Field '{field_id}' is not available on request type '{rt_query}'.")
+}
+
+/// M1 "not on the Edit screen" message; `field_id` sanitized (SEC6-002).
+fn field_not_on_edit_screen_msg(field_id: &str, issue_key: &str) -> String {
+    let field_id = crate::output::sanitize_terminal_line(field_id);
+    format!(
+        "Field '{field_id}' is not on the Edit screen for issue {issue_key} \
+         (or is not available)."
+    )
+}
+
+/// Field-name not-found message; the echoed `query` is sanitized (CR6-002).
+fn field_not_found_msg(query: &str) -> String {
+    let query = crate::output::sanitize_terminal_line(query);
+    format!(
+        "Field '{query}' not found. Run `jr project fields --output json` to list \
+         available fields."
+    )
 }
 
 /// `customfield_NNNNN` literal-bypass predicate (mirrors
@@ -1138,6 +1168,56 @@ mod tests {
         assert_clean(&msg);
         assert!(msg.contains("Dup A FAKE (customfield_1)"), "{msg}");
         assert!(msg.contains("Dup B1m (customfield_2)"), "{msg}");
+    }
+
+    /// SEC6-002 / EC-X.14.004-10: the resolved `field_id` echoed by the three
+    /// "not available" UserErrors (M1/M2/M3) is run through
+    /// `sanitize_terminal_line`; templates stay intact.
+    #[test]
+    fn test_bc_x_14_004_field_id_echo_is_sanitized_in_not_available_errors() {
+        let hostile = "customfield_1\u{1b}[31m\nFAKE\u{7}\u{9b}1m";
+        let msgs = [
+            field_not_available_for_type_msg(hostile, "Bug", "PROJ"),
+            field_not_available_on_request_type_msg(hostile, "Get IT help"),
+            field_not_on_edit_screen_msg(hostile, "FOO-1"),
+        ];
+        for m in &msgs {
+            assert!(!m.contains('\u{1b}'), "ESC leaked: {m:?}");
+            assert!(!m.contains('\u{7}'), "BEL leaked: {m:?}");
+            assert!(!m.contains('\n'), "newline leaked: {m:?}");
+            assert!(
+                !m.chars().any(|c| ('\u{80}'..='\u{9f}').contains(&c)),
+                "C1 leaked: {m:?}"
+            );
+            assert!(m.contains("customfield_1 FAKE1m"), "{m:?}");
+        }
+        assert_eq!(
+            msgs[0],
+            "Field 'customfield_1 FAKE1m' is not available for issue type 'Bug' in project 'PROJ'."
+        );
+        assert_eq!(
+            msgs[1],
+            "Field 'customfield_1 FAKE1m' is not available on request type 'Get IT help'."
+        );
+        assert_eq!(
+            msgs[2],
+            "Field 'customfield_1 FAKE1m' is not on the Edit screen for issue FOO-1 (or is not available)."
+        );
+    }
+
+    /// SEC6-002 / CR6-002: the echoed `{query}` in the not-found error is
+    /// sanitized too.
+    #[test]
+    fn test_bc_x_14_004_not_found_query_echo_is_sanitized() {
+        let m = field_not_found_msg("Evil\u{1b}[31m\nName\u{7}");
+        assert!(
+            !m.contains('\u{1b}') && !m.contains('\u{7}') && !m.contains('\n'),
+            "{m:?}"
+        );
+        assert!(
+            m.starts_with("Field 'Evil Name' not found. Run `jr project fields"),
+            "{m:?}"
+        );
     }
 
     #[test]
