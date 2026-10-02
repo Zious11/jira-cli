@@ -80,13 +80,15 @@ impl StyledCell {
 /// is true (false under `--no-color`/`NO_COLOR`), and the resulting styling
 /// is additionally subject to `comfy_table`'s own TTY gate — color needs
 /// BOTH. Callers therefore need not gate their own `StyledCell::colored`.
+/// The gate itself lives in [`render_table_with_styles_inner`], which this
+/// function delegates to.
 pub fn render_table_with_styles(headers: &[&str], rows: &[Vec<StyledCell>]) -> String {
     render_table_with_styles_inner(headers, rows, false)
 }
 
-/// Test-only seam behind [`render_table_with_styles`] (BC-7.1.006, CR-2,
-/// D-396/FIX-P5-002): identical logic, with one additional parameter,
-/// `force_styling`. When `true`, `comfy_table`'s own
+/// Implementation behind [`render_table_with_styles`] (BC-7.1.006, CR-2,
+/// D-396/FIX-P5-002) and the home of its structural color gate. It adds one
+/// parameter, `force_styling`, that exists only as a test seam. When `true`, `comfy_table`'s own
 /// `Table::force_no_tty().enforce_styling()` is applied before rendering.
 /// A test can then deterministically observe whether a `StyledCell`'s `fg`
 /// reaches the rendered ANSI output, regardless of terminal state.
@@ -98,9 +100,8 @@ pub fn render_table_with_styles(headers: &[&str], rows: &[Vec<StyledCell>]) -> S
 /// for the same technique applied directly against `comfy_table`.
 ///
 /// `render_table_with_styles` itself always calls this with
-/// `force_styling = false`, so production behavior/output is byte-for-byte
-/// unchanged by this refactor. This is a pure test-observability seam, not
-/// a behavior change.
+/// `force_styling = false`, so production rendering never forces styling;
+/// the parameter is a pure test-observability seam.
 fn render_table_with_styles_inner(
     headers: &[&str],
     rows: &[Vec<StyledCell>],

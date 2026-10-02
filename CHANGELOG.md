@@ -72,7 +72,8 @@ All notable changes to jr will be documented here.
   BC-X.14.001/004, CR4-002): after the `customfield_NNNNN` literal bypass,
   `<FIELD>` is first matched as an exact, ASCII-case-insensitive field id
   against the same cached `(id, name)` list (e.g. `issuetype`, `priority`,
-  returning the list's canonical id; no extra HTTP), and only then by name.
+  returning the list's canonical id; no HTTP call beyond the one the name
+  lookup already makes), and only then by name.
   An ID match wins over a name collision; there is no substring matching on
   IDs. All three ambiguity messages now read "the field ID (e.g. customfield_NNNNN
   or a system id like issuetype)".
@@ -94,6 +95,17 @@ All notable changes to jr will be documented here.
   (`jr field options`), per D-378.
 
 ### Security
+
+- **`disambiguate_user` now sanitizes the echoed `name` argument (FIX-P5-009,
+  BC-7.1.006 EC-25, D-403, CWE-150/CWE-116):** on the `@Name` mention path
+  `name` can be a raw server-derived display name. The `Multiple users
+  named "..."`/`Multiple users match "..."` non-interactive messages and the
+  matching interactive picker prompts previously echoed it unsanitized; they
+  now echo a copy passed through `output::sanitize_terminal_line`. Matching
+  (`partial_match`, the exact-duplicate filter) still uses the raw `name`, so
+  classification is unchanged. Caller-built `empty_msg`/`none_msg_fn` text is
+  not touched by this change. Covered by
+  `helpers::tests::test_disambiguate_user_sanitizes_echoed_name`.
 
 - **`jr field options` now sanitizes the echoed field ID and field-name query
   in its "not available"/"not found" errors (FIX-P5-007, BC-X.14.004
@@ -144,7 +156,7 @@ All notable changes to jr will be documented here.
   since a server-supplied string can no longer carry its own ANSI styling
   through the sanitizer -- `--no-color`/`NO_COLOR` continue to suppress that
   coloring (originally via `active_cell`'s own `SHOULD_COLORIZE` check only;
-  as of FIX-P5-002 below, `render_table_with_styles` itself also enforces
+  as of FIX-P5-002 below, `render_table_with_styles` (via its inner helper) also enforces
   this, structurally, for every `StyledCell` caller).
 - **`jr issue comment view`'s human output now gets the same sanitization
   (SEC-003, extension of FIX-P5-001 under D-393, BC-7.1.006):** this handler
@@ -235,6 +247,7 @@ All notable changes to jr will be documented here.
     (`resolve_assignee`/`resolve_assignee_by_project`/`resolve_user`/
     `mentions::resolve_at_name_candidate`) are unchanged.
   - **CR-2 — structural color gate.** `output::render_table_with_styles`
+    (the gate lives in its inner helper `render_table_with_styles_inner`)
     now applies a `StyledCell`'s `fg` only when
     `colored::control::SHOULD_COLORIZE.should_colorize()` is `true` —
     making `--no-color`/`NO_COLOR` suppression a structural guarantee the
