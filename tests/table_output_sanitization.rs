@@ -39,7 +39,7 @@
 //! pin `output::sanitize_terminal_line` applied to stderr messages (success
 //! echoes and `JrError::UserError` text), while the assign `--output json`
 //! success test pins the raw, unsanitized stdout channel, like the other
-//! JSON tests in this file.
+//! JSON success-path tests in this file.
 
 #[allow(dead_code)]
 mod common;
@@ -1062,8 +1062,8 @@ async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_s
 
 /// JSON mode: the identical hostile fixture must round-trip lossless via
 /// the `assignee` key — `sanitize_table_cell`/`sanitize_terminal_line` must
-/// never run on the `--output json` path, mirroring every other JSON-mode
-/// test in this file.
+/// never run on the `--output json` path, mirroring every other JSON
+/// success-path test in this file.
 ///
 /// Expected GREEN today and after the fix: `handle_assign`'s `Json` success
 /// arm (`src/cli/issue/workflow.rs`) already passes

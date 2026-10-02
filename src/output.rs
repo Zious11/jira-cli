@@ -901,7 +901,8 @@ mod tests {
     //
     // `sanitize_table_cell` is implemented and wired into both
     // `render_table` and `render_table_with_styles` (FIX-P5-001). Every
-    // EC-pinned test below and both property-based tests exercise that
+    // EC-pinned test below and all three property-based tests in this
+    // section exercise that
     // production behavior directly. The `render_table`-level hostile-cell/
     // header tests and the multi-line test call PRODUCTION `render_table`
     // directly (not `sanitize_table_cell`), pinning the chokepoint-level
@@ -1091,9 +1092,8 @@ mod tests {
     /// depends on what a neighboring token happens to contain.
     ///
     /// No token here contains a lone/bare ESC byte, and no token's plain
-    /// text contains a literal `[` or `]`. This rules out the
-    /// cross-token composition hazard analyzed in
-    /// the core's behavior: it only starts
+    /// text contains a literal `[` or `]`. This rules out a cross-token
+    /// composition hazard: `sanitize_control_and_ansi_core` only starts
     /// consuming a CSI/OSC sequence when it sees a raw ESC char followed
     /// immediately by `[` or `]` (`chars.peek()`), so a lone ESC emitted
     /// by one token immediately followed by a `[`/`]` literal from the
@@ -1214,13 +1214,17 @@ mod tests {
             // applies either drops a character or replaces `\t` with a
             // single space — nothing ever substitutes a `\n` — so the
             // output's `\n` count can never exceed the input's. Exact
-            // preservation (`==`, not `<=`) is not guaranteed when the input
-            // contains an unterminated CSI/OSC sequence: EC-3's fail-closed
-            // rule consumes an unterminated sequence through end-of-string,
-            // discarding everything after it, including any `\n` that
-            // follows (EC-13 pins the minimal case:
-            // `sanitize_table_cell("\u{1b}[31;1;9\n")` == `""`). Exact `\n`
-            // preservation on inputs free of that hazard is covered by
+            // preservation (`==`, not `<=`) is not guaranteed for an arbitrary
+            // input, because a `\n` can be consumed by an escape sequence.
+            // Two cases: (1) an unterminated CSI/OSC — EC-3's fail-closed
+            // rule consumes it through end-of-string, discarding everything
+            // after it, including any `\n` that follows (EC-13 pins the
+            // minimal case: `sanitize_table_cell("\u{1b}[31;1;9\n")` ==
+            // `""`); (2) a `\n` embedded INSIDE a terminated CSI/OSC — the
+            // core consumes every character up to the terminator, so
+            // `"\u{1b}]a\nb\u{7}"` and `"\u{1b}[\n1m"` both sanitize to
+            // `""`. Exact `\n` preservation holds only when neither occurs;
+            // that is covered by
             // `prop_bc_7_1_006_sanitize_table_cell_newlines_preserved_without_unterminated_escape`
             // below.
             let input_newlines = input.chars().filter(|&c| c == '\n').count();
@@ -1244,13 +1248,16 @@ mod tests {
         }
 
         /// VP-SEC-001-001(a) part (ii): on an input containing no
-        /// unterminated CSI/OSC sequence, `sanitize_table_cell` preserves
-        /// the `\n` count EXACTLY — not merely `<=` as the whole-string
-        /// invariant above must allow for an arbitrary (possibly
-        /// unterminated-escape-containing) input. See
-        /// `hostile_no_unterminated_escape_strategy`'s doc comment for why
-        /// every input this generator produces is guaranteed free of an
-        /// unterminated CSI/OSC sequence.
+        /// unterminated CSI/OSC sequence AND no `\n` inside any escape
+        /// sequence, `sanitize_table_cell` preserves the `\n` count EXACTLY
+        /// — not merely `<=` as the whole-string invariant above must allow
+        /// for an arbitrary input (a terminated CSI/OSC also consumes an
+        /// embedded `\n`). This property holds because
+        /// `hostile_no_unterminated_escape_strategy` emits only
+        /// self-terminated escape tokens whose params/body never contain a
+        /// `\n` (CSI params are `[0-9;]`, OSC bodies are
+        /// `[a-zA-Z0-9 ,.:_!?-]`); see its doc comment for the
+        /// no-unterminated-sequence argument.
         #[test]
         fn prop_bc_7_1_006_sanitize_table_cell_newlines_preserved_without_unterminated_escape(
             input in hostile_no_unterminated_escape_strategy()
@@ -1539,7 +1546,7 @@ mod tests {
     /// Every OTHER character policy (CSI/OSC consumption, C1 strip, `\t`→
     /// space, `\r` strip, bidi/line-separator strip) must behave
     /// IDENTICALLY to `sanitize_table_cell` — `sanitize_terminal_line`
-    /// diverges ONLY on `\n`. The fixture (a CSI sequence, a C1 CSI
+    /// diverges ONLY on `\n`. The fixture (two CSI sequences, a C1 CSI
     /// introducer, `\t`, DEL and `\r`) has no `\n`, so the two functions'
     /// outputs must match exactly.
     #[test]

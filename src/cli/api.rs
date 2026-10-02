@@ -619,7 +619,7 @@ mod tests {
         /// `append_query_params`'s output query with
         /// `url::form_urlencoded::parse` reproduces `existing ++ new_pairs`
         /// (same length, flag order, no dedup, pre-existing pairs first).
-        /// The generator-constraint/anti-vacuity assertion
+        /// The generator round-trip assertion
         /// (`generated_existing_pairs == existing_pairs`) is asserted FIRST
         /// to confirm the hand-built existing query decodes back to the
         /// generated `existing` pairs (an empty `existing` is a valid
