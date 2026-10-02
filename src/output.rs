@@ -87,17 +87,19 @@ pub fn render_table_with_styles(headers: &[&str], rows: &[Vec<StyledCell>]) -> S
 /// Test-only seam behind [`render_table_with_styles`] (BC-7.1.006, CR-2,
 /// D-396/FIX-P5-002): identical logic, with one additional parameter,
 /// `force_styling`. When `true`, `comfy_table`'s own
-/// `Table::force_no_tty().enforce_styling()` is applied before rendering,
-/// so a test can deterministically observe whether a `StyledCell`'s `fg`
-/// reaches the rendered ANSI output regardless of the ambient (whether
-/// stdout is a TTY depends on how the test runner was launched, since
-/// libtest's capture does not redirect fd 1, and `comfy_table`'s own
-/// ANSI-styling gate would otherwise suppress color when it is not — see
+/// `Table::force_no_tty().enforce_styling()` is applied before rendering.
+/// A test can then deterministically observe whether a `StyledCell`'s `fg`
+/// reaches the rendered ANSI output, regardless of terminal state.
+///
+/// The ambient state matters because `comfy_table` suppresses ANSI styling
+/// when stdout is not a TTY, and whether fd 1 is a TTY depends on how the
+/// test runner was launched (libtest's capture does not redirect fd 1). See
 /// `src/cli/user.rs::test_bc_7_1_006_structural_cell_styling_technique_survives_rendering`
-/// for the same technique applied directly against `comfy_table`) terminal
-/// state. `render_table_with_styles` itself always calls this with
+/// for the same technique applied directly against `comfy_table`.
+///
+/// `render_table_with_styles` itself always calls this with
 /// `force_styling = false`, so production behavior/output is byte-for-byte
-/// unchanged by this refactor — this is a pure test-observability seam, not
+/// unchanged by this refactor. This is a pure test-observability seam, not
 /// a behavior change.
 fn render_table_with_styles_inner(
     headers: &[&str],
@@ -308,7 +310,7 @@ enum CharDisposition {
 /// only in what they do with an ordinary (non-ESC) character, which this
 /// function delegates to the caller-supplied `policy` closure via
 /// [`CharDisposition`]. The ANSI CSI/OSC recognition and fail-closed
-/// unterminated-sequence behavior is identical for both callers and lives
+/// unterminated-sequence behavior is identical for all callers and lives
 /// here exactly once.
 ///
 /// An ANSI CSI sequence (`ESC [ … <final byte 0x40-0x7E>`) is consumed
@@ -556,9 +558,9 @@ fn sanitize_control_and_ansi_core(
 /// channel optimizes for terminal safety and scannability, the machine
 /// channel must stay lossless for programmatic consumers.
 ///
-/// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006 (EC-1..EC-13)
-/// and its inline `VP-SEC-001-001` for the full edge-case/property
-/// contract this function satisfies.
+/// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006's edge-case table (EC-1 onward; EC-21..EC-24 cover the Cf
+/// format-character policy) and its inline `VP-SEC-001-001` for the full
+/// edge-case/property contract this function satisfies.
 pub(crate) fn sanitize_table_cell(value: &str) -> String {
     sanitize_control_and_ansi_core(value, |c| match c {
         '\n' => CharDisposition::Keep,
@@ -1851,7 +1853,11 @@ mod tests {
     // ── Unicode 17.0.0 General_Category=Cf policy (FIX-P5-005, D-399,
     // P4-003/CR4-001/SEC4-001; BC-7.1.006 EC-21/22/23, VP-SEC-001-003) ───
 
-    /// Independent oracle copy of the spec's Cf table (Unicode 17.0.0).
+    /// Hand-copied transcription of the spec's Cf table (Unicode 17.0.0
+    /// `DerivedGeneralCategory.txt`, General_Category=Cf, 170 code points in
+    /// total). This is a pin against accidental edits to `CF_RANGES`, NOT an
+    /// independent derivation: both tables were transcribed by hand from the
+    /// same source, so a shared transcription error would pass both.
     const SPEC_CF_RANGES: &[(u32, u32)] = &[
         (0x00AD, 0x00AD),
         (0x0600, 0x0605),
@@ -1938,6 +1944,23 @@ mod tests {
             prev_end = Some(end);
         }
         assert_eq!(CF_RANGES, SPEC_CF_RANGES);
+        let total: u32 = SPEC_CF_RANGES.iter().map(|&(a, b)| b - a + 1).sum();
+        assert_eq!(total, 170, "Unicode 17.0.0 Cf code-point count");
+    }
+
+    /// SEC5-001 / EC-24 (FIX-P5-006, D-400): KEEP pin. These blank-rendering
+    /// characters are NOT category Cf (Braille blank, Khmer inherent vowels,
+    /// object replacement, and Zs spaces) and are deliberately kept: the
+    /// policy is category-based (Cf + named extras). No behavior change.
+    #[test]
+    fn test_bc_7_1_006_sanitize_keeps_blank_rendering_non_cf_characters() {
+        for u in [0x2800u32, 0x17B4, 0x17B5, 0xFFFC, 0x00A0, 0x3000] {
+            let c = char::from_u32(u).unwrap();
+            let input = format!("a{c}b");
+            assert_eq!(sanitize_table_cell(&input), input, "U+{u:04X}");
+            assert_eq!(sanitize_terminal_text(&input), input, "U+{u:04X}");
+            assert_eq!(sanitize_terminal_line(&input), input, "U+{u:04X}");
+        }
     }
 
     #[test]

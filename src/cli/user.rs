@@ -440,14 +440,16 @@ mod tests {
     /// `comfy_table` behavior this BC's design depends on.
     ///
     /// `comfy_table::Table::should_style()` is gated on `is_tty()`
-    /// (`std::io::stdout().is_terminal()`), whose result depends on the
-    /// ambient fd 1 (libtest's output capture does not redirect fd 1, so it
-    /// is false only when the test runner's stdout is piped/redirected, as
-    /// in CI, and may be true in an interactive terminal) — `colored`'s own override mechanism
-    /// does NOT affect `comfy_table`'s independent TTY gate. Determinism
-    /// here comes from `Table::force_no_tty().enforce_styling()`, which
-    /// `comfy_table` documents as the supported way to force styled output
-    /// regardless of the ambient TTY/environment.
+    /// (`std::io::stdout().is_terminal()`). Its result depends on the
+    /// ambient fd 1, because libtest's output capture does not redirect
+    /// fd 1. It is false when the test runner's stdout is piped or
+    /// redirected, as in CI, and may be true in an interactive terminal.
+    /// `colored`'s own override mechanism does NOT affect `comfy_table`'s
+    /// independent TTY gate.
+    ///
+    /// Determinism here comes from `Table::force_no_tty().enforce_styling()`.
+    /// `comfy_table` documents it as the supported way to force styled
+    /// output regardless of the ambient TTY/environment.
     #[test]
     fn test_bc_7_1_006_structural_cell_styling_technique_survives_rendering() {
         use comfy_table::{Cell, Color, Table};
