@@ -438,7 +438,7 @@ fn sanitize_control_and_ansi_core(
 ///   generalized it to the full category rule, CWE-451), plus the combining
 ///   grapheme joiner `U+034F`, the Hangul fillers (`U+115F`, `U+1160`,
 ///   `U+3164`, `U+FFA0`) and the whole tag block `U+E0000`-`U+E007F`.
-///   See `classify_default_char` for the table and rationale. Variation
+///   See `CF_RANGES` and `classify_default_char` for the table and rationale. Variation
 ///   selectors (`U+FE00`-`U+FE0F`, `U+E0100`-`U+E01EF`) are deliberately
 ///   KEPT (EC-23). Accepted trade-offs: ZWJ emoji sequences lose their
 ///   joiner (EC-20); prepended Cf marks such as `U+0600`-`U+0605` and
@@ -476,8 +476,8 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
 /// the call site (there is no table involved) while the `\n`-preserving
 /// policy is still exactly what's needed.
 ///
-/// Use it only for genuinely multi-line content; every single-line sink
-/// uses [`sanitize_terminal_line`], which neutralizes an embedded `\n`
+/// Use it only for genuinely multi-line content; a single-line sink should
+/// use [`sanitize_terminal_line`], which neutralizes an embedded `\n`
 /// instead of preserving it (CR-1, EC-17 — a preserved `\n` in a
 /// single-line sink lets a hostile value fabricate an extra labeled field or
 /// picker item, CWE-116). Which call sites use which function: see BC-7.1.006
@@ -492,8 +492,8 @@ pub(crate) fn sanitize_terminal_text(value: &str) -> String {
 
 /// Unicode 17.0.0 `General_Category=Cf` (format characters), inclusive
 /// ranges, sorted and non-overlapping (FIX-P5-005, D-399, CWE-451).
-/// Source: `ucd/UnicodeData.txt` 17.0.0 cross-checked against
-/// `DerivedGeneralCategory.txt`; 170 code points in 21 ranges. Kept pure-Cf
+/// Source: Unicode 17.0.0 `DerivedGeneralCategory.txt`; 170 code points in
+/// 21 ranges (pinned by the table-conformance test). Kept pure-Cf
 /// so the conformance tests can compare it to the spec verbatim; the
 /// tag block as a whole is added separately in [`classify_default_char`].
 const CF_RANGES: &[(u32, u32)] = &[
@@ -1093,7 +1093,7 @@ mod tests {
     /// No token here contains a lone/bare ESC byte, and no token's plain
     /// text contains a literal `[` or `]`. This rules out the
     /// cross-token composition hazard analyzed in
-    /// `sanitize_control_and_ansi_core`'s rustdoc: the core only starts
+    /// the core's behavior: it only starts
     /// consuming a CSI/OSC sequence when it sees a raw ESC char followed
     /// immediately by `[` or `]` (`chars.peek()`), so a lone ESC emitted
     /// by one token immediately followed by a `[`/`]` literal from the
@@ -1214,8 +1214,8 @@ mod tests {
             // applies either drops a character or replaces `\t` with a
             // single space — nothing ever substitutes a `\n` — so the
             // output's `\n` count can never exceed the input's. Exact
-            // preservation (`==`, not `<=`) holds only when the input
-            // contains no unterminated CSI/OSC sequence: EC-3's fail-closed
+            // preservation (`==`, not `<=`) is not guaranteed when the input
+            // contains an unterminated CSI/OSC sequence: EC-3's fail-closed
             // rule consumes an unterminated sequence through end-of-string,
             // discarding everything after it, including any `\n` that
             // follows (EC-13 pins the minimal case:
@@ -1482,12 +1482,12 @@ mod tests {
     // ── sanitize_terminal_line (BC-7.1.006, CR-1, D-396/FIX-P5-002) ─────
     //
     // `sanitize_terminal_line` is implemented and wired into its call
-    // sites (`handle_comment_view`, `handle_assign`, `disambiguate_user`).
+    // sites (e.g. `handle_comment_view`, `handle_assign`, `disambiguate_user`).
     // These tests pin its behavior (identical to `sanitize_table_cell`,
     // except `\n` maps to a single space) and are expected to pass.
 
-    /// EC-17a: the exact `handle_comment_view` `Author`-field fixture from
-    /// BC-7.1.006's spec. A hostile value with an embedded `\n` and no
+    /// EC-17a: an `Author`-field-shaped fixture (modeled on
+    /// `handle_comment_view`'s labeled output). A hostile value with an embedded `\n` and no
     /// ANSI/control bytes must collapse to a SINGLE space at the `\n`
     /// boundary — not fabricate a second line. Traced: `E`,`v`,`e` Keep;
     /// `\n` is not preceded by `ESC` and is not inside any CSI/OSC scan
@@ -1539,10 +1539,9 @@ mod tests {
     /// Every OTHER character policy (CSI/OSC consumption, C1 strip, `\t`→
     /// space, `\r` strip, bidi/line-separator strip) must behave
     /// IDENTICALLY to `sanitize_table_cell` — `sanitize_terminal_line`
-    /// diverges ONLY on `\n`. Reuses the same hostile fixture already
-    /// pinned against `sanitize_table_cell` elsewhere in this module
-    /// (`HOSTILE` payloads in `tests/table_output_sanitization.rs`), with
-    /// no `\n` present so the two functions' outputs must match exactly.
+    /// diverges ONLY on `\n`. The fixture (a CSI sequence, a C1 CSI
+    /// introducer, `\t`, DEL and `\r`) has no `\n`, so the two functions'
+    /// outputs must match exactly.
     #[test]
     fn test_sanitize_terminal_line_matches_sanitize_table_cell_policy_except_newline() {
         let hostile = "\u{1b}[31mFAKE\u{1b}[0m\u{9b}pwned\t\u{7f}end\r";
@@ -1610,7 +1609,8 @@ mod tests {
     // ── invisible format characters (BC-7.1.006 EC-18/19/20, VP-SEC-001-002,
     // FIX-P5-004, D-398, CWE-451) ────────────────────────────────────────
 
-    /// Every code point the invisible-format policy must DROP.
+    /// A representative sample of code points the invisible-format policy
+    /// must DROP (not the full Cf set; see `SPEC_CF_RANGES` for that).
     fn invisible_format_chars() -> Vec<char> {
         let mut v: Vec<char> = Vec::new();
         for r in [
@@ -1628,8 +1628,9 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
 
-        /// VP-SEC-001-002 (a): all three wrappers strip every invisible
-        /// format character, wherever it is injected into clean text.
+        /// VP-SEC-001-002 (a): all three wrappers strip any character drawn
+        /// from `invisible_format_chars()` (or one of its range endpoints),
+        /// wherever it is injected into clean text.
         #[test]
         fn prop_bc_7_1_006_sanitizers_strip_invisible_format_characters(
             idx in 0usize..invisible_format_chars().len(),

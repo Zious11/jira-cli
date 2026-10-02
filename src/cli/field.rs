@@ -1012,9 +1012,8 @@ mod tests {
     #[test]
     fn test_bc_x_14_001_search_field_list_case_insensitive() {
         let list = vec![("customfield_10001".to_string(), "Story Points".to_string())];
-        // `query_lower` is the CALLER-lowercased form (resolve_field_id
-        // lowercases before calling); `query` retains the original casing
-        // for use in error messages only.
+        // The query's casing differs from the stored name; `search_field_list`
+        // lowercases internally.
         let result = search_field_list(&list, "STORY points").unwrap();
         assert_eq!(result, Some("customfield_10001".to_string()));
     }
@@ -1067,7 +1066,7 @@ mod tests {
     }
 
     proptest! {
-        /// FIX-P5-005 (CR4-002, VP-580-014): over any `(id, name)` list, an
+        /// FIX-P5-005 (CR4-002, VP-580-014): over generated `(id, name)` lists, an
         /// ASCII-case-insensitive exact ID match always wins over a name
         /// match, and returns the list's canonical id casing.
         #[test]
@@ -1955,7 +1954,7 @@ mod tests {
     /// the proptest can generate the `value: Some("")` combination this
     /// clause's own presence-based rule depends on). `children` nests to
     /// depth <= 3, mirroring `arb_field_option`'s `prop_recursive(3, 16, 4,
-    /// ...)` shape above.
+    /// ...)` shape (defined further below).
     fn arb_allowed_value() -> impl Strategy<Value = AllowedValue> {
         let field = proptest::option::of("[a-zA-Z0-9]{0,6}");
         let leaf = (field.clone(), field.clone(), field.clone()).prop_map(|(id, value, name)| {

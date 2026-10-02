@@ -1610,9 +1610,7 @@ async fn test_bc_x_14_001_field_name_ambiguous_exits_64() {
 /// succeeds end-to-end — the field-name-resolution happy path via
 /// `list_fields()` + `search_field_list`'s single-exact-match branch (the
 /// fixture's query `"Story Points"` matches exactly one of the two
-/// candidate names). All pre-existing tests use either the
-/// `customfield_NNNNN` bypass or the ambiguous-name error path; this is the
-/// first to exercise a successful human-name resolution.
+/// candidate names).
 #[tokio::test]
 async fn test_bc_x_14_001_field_name_single_exact_match_resolves_via_search_field_list() {
     let h = Harness::new().await;
@@ -2795,9 +2793,10 @@ async fn test_bc_x_14_003_zero_stderr_on_ordinary_enumeration_success() {
 /// `if query.is_empty()`): an empty `<field>` positional must exit 64 with
 /// the canonical "must not be empty" message, BEFORE any cache read or HTTP
 /// call — a mutant deleting this guard would fall through to
-/// `search_field_list(&fields, "", "")`, which matches every field's name
-/// (an empty substring is contained in every string) and would silently
-/// resolve to whichever field a real Jira instance happens to return first.
+/// `search_field_list(&fields, "")`, whose substring step matches every
+/// field's name (an empty substring is contained in every string), so the
+/// empty query would resolve (or report ambiguity) instead of exiting 64
+/// with the canonical message.
 #[tokio::test]
 async fn test_bc_x_14_001_empty_field_name_exits_64_zero_http() {
     let h = Harness::new().await;

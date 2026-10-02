@@ -511,7 +511,7 @@ async fn test_bc_x_16_001_zero_flags_preserves_existing_trailing_ampersand_query
 
 /// F-005(c): VP-API-QP-004(2)'s zero-flag identity holds for every HTTP
 /// method `jr api -X` supports (GET/POST/PUT/PATCH/DELETE, per
-/// `api::HttpMethod` in `src/cli/mod.rs`) — the query is never gated on
+/// `HttpMethod` in `src/cli/api.rs`) — the query is never gated on
 /// the method choice, including when no `-q` flags are present at all.
 #[tokio::test]
 async fn test_bc_x_16_001_zero_flags_no_query_across_all_methods() {

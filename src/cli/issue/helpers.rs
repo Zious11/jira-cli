@@ -943,7 +943,7 @@ mod tests {
 
     /// No `email_address` → the label falls back to `account_id`. Hostile
     /// `display_name` (C1-byte + OSC mix) and hostile `account_id`
-    /// (trailing C1 byte) must both sanitize, assembled into the existing
+    /// (embedded C1 byte) must both sanitize, assembled into the existing
     /// `"{name} ({account_id})"` label format.
     #[test]
     fn test_disambiguation_labels_sanitizes_hostile_display_name_and_account_id_without_email() {

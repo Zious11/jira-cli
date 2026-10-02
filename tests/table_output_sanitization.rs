@@ -16,8 +16,8 @@
 //!
 //! `output::sanitize_table_cell` is implemented and wired into
 //! `render_table` (and its styled sibling `render_table_with_styles`) —
-//! every table-mode assertion below exercises and pins that production
-//! behavior. The `--output json` assertions pin a pre-existing, unrelated
+//! the `field options`/`issue list`/`user list` table-mode assertions below
+//! exercise and pin that production behavior. The `--output json` assertions pin a pre-existing, unrelated
 //! guarantee (see each test's doc comment): the JSON path was already
 //! raw/lossless before this fix and must stay that way.
 //!
@@ -27,13 +27,16 @@
 //! isolated `JR_CACHE_DIR`/`JR_CONFIG_DIR`/cwd temp directories.
 //!
 //! The `jr issue comment view` tests below (SEC-003, FIX-P5-001 extension,
-//! D-393) are the one exception to the "through `render_table`" framing
+//! D-393) are an exception to the "through `render_table`" framing
 //! above: `handle_comment_view` bypasses both table chokepoints entirely
 //! and prints its labeled fields and ADF-derived body directly via
 //! `print!`/`println!`, sanitizing each at its own print site instead (the labeled fields via
 //! `output::sanitize_terminal_line`, the multi-line ADF body via
 //! `output::sanitize_terminal_text`). Those tests exercise that
-//! direct-print-site sanitization, not `render_table`.
+//! direct-print-site sanitization, not `render_table`. The `jr issue assign`
+//! and shared user-disambiguation tests further below likewise do not go
+//! through `render_table`: they pin `output::sanitize_terminal_line` applied
+//! to stderr messages (success echoes and `JrError::UserError` text).
 
 #[allow(dead_code)]
 mod common;
@@ -460,10 +463,11 @@ async fn test_bc_7_1_006_user_list_json_mode_preserves_hostile_display_name_raw(
 // `jr issue comment view` — SEC-003 (FIX-P5-001 extension, D-393)
 // ═══════════════════════════════════════════════════════════════════════
 //
-// `handle_comment_view`'s table-mode arm (`src/cli/issue/interactions.rs`
-// ~L657-689) prints the comment `id`, `author`, `created`, `updated`,
-// `visibility`-derived `restricted`, and ADF-rendered `body_text` via bare
-// `print!`/`println!` — NOT through `render_table`/`print_output`. SEC-003
+// `handle_comment_view`'s table-mode arm (`src/cli/issue/interactions.rs`)
+// prints the comment `id`, `author`, `created`, `updated`, the
+// `properties`-derived `jsm_internal` token, the `visibility`-derived
+// `restricted`, and ADF-rendered `body_text` via bare `print!`/`println!` —
+// NOT through `render_table`/`print_output`. SEC-003
 // extends BC-7.1.006's chokepoint guarantee to this handler's plain-text
 // fields: each one is sanitized at its own print site via
 // `output::sanitize_terminal_line` (labeled fields) or
@@ -544,9 +548,9 @@ fn comment_clean_body() -> Value {
 
 /// Mounts `GET /rest/api/3/issue/{key}/comment/{id}` returning a comment
 /// with a hostile response-body `id`, `author.displayName`, `created`,
-/// `updated`, `visibility.value`, and ADF `body` (W-2: every server-derived
-/// field `handle_comment_view` prints is hostile here, so a regression
-/// dropping any one of its `sanitize_terminal_line` call sites is caught).
+/// `updated`, `visibility.value`, and ADF `body` (W-2: every server-supplied
+/// text field `handle_comment_view` prints is hostile here, so a regression
+/// dropping any one of those fields' sanitize call sites is caught).
 /// The `id` function parameter still identifies the mock's URL path (and so
 /// must match the CLI's `--id` argument, which is charset-restricted) — the
 /// response body's own `"id"` field is independently hostile via
@@ -595,8 +599,8 @@ async fn mount_comment_view_clean_fixture(server: &MockServer, key: &str, id: &s
 /// field labels must still all be present (layout unchanged).
 ///
 /// Pins production behavior: `handle_comment_view`'s table-mode arm
-/// sanitizes `id`, `author`, `created`, `updated`, `restricted` (via
-/// `output::sanitize_terminal_line`) and `body_text` (via
+/// sanitizes `id`, `author`, `created`, `updated`, `jsm_internal`,
+/// `restricted` (via `output::sanitize_terminal_line`) and `body_text` (via
 /// `output::sanitize_terminal_text`, genuinely multi-line) at each of its own
 /// print sites before printing — the hostile ESC/C1/`\r` bytes must not
 /// survive, while the CSI/C1-stripped survivor text must still render.
@@ -777,8 +781,9 @@ async fn test_bc_7_1_006_comment_view_json_output_preserves_hostile_body_and_aut
 /// spacing, blank-line placement, trailing newline) is caught the same way
 /// a hostile-payload leak would be.
 ///
-/// Expected GREEN today and after the fix: `sanitize_table_cell` is a
-/// no-op on ASCII text containing no control characters, ANSI escapes, or
+/// Expected GREEN today and after the fix: `sanitize_terminal_line`/
+/// `sanitize_terminal_text` (the sanitizers `handle_comment_view` uses) are
+/// no-ops on ASCII text containing no control characters, ANSI escapes, or
 /// C1 code points — this fixture contains none, so wiring sanitization into
 /// `handle_comment_view` cannot change this specific output.
 #[tokio::test]
@@ -824,20 +829,20 @@ async fn test_bc_7_1_006_comment_view_human_output_clean_fixture_byte_identical(
 // `jr issue assign` — D-394 (FIX-P5-001 extension)
 // ═══════════════════════════════════════════════════════════════════════
 //
-// `handle_assign` (`src/cli/issue/workflow.rs` ~L1006-1109) echoes the
+// `handle_assign` (`src/cli/issue/workflow.rs`) echoes the
 // assignee's server-side Jira `displayName` into its human-output success
 // messages via `output::print_success`, which writes to STDERR (see
 // `output::print_success`'s `eprintln!` body), at two print sites, reached
 // via three resolution paths that all sanitize the `display_name` before
 // printing:
 //   - `--to`/`--account-id` newly-assigned success:
-//     `"Assigned {key} to {display_name}"` (~L1104).
+//     `"Assigned {key} to {display_name}"`.
 //   - The idempotent already-assigned exit-0 path:
-//     `"{key} is already assigned to {display_name}"` (~L1084).
+//     `"{key} is already assigned to {display_name}"`.
 //   - Self-assign (bare `jr issue assign <key>`, no `--to`/`--account-id`,
 //     which resolves `display_name` via `client.get_myself()`): shares the
 //     same "Assigned {key} to {display_name}" success format as the `--to`
-//     path above — same L1104 call site, not a fourth site.
+//     path above — the same call site, not a third site.
 // `--unassign`'s two human-output messages (`"Unassigned {key}"` /
 // `"{key} is already unassigned"`) echo only the CLI-supplied issue key,
 // never a server-derived display name, so they need no hostile-payload
@@ -940,7 +945,7 @@ async fn mount_assign_put_assignee(server: &MockServer, key: &str) {
 /// position within the unchanged "Assigned {key} to {name}" format.
 ///
 /// Pins production behavior: `handle_assign`'s `Table` success arm
-/// (`src/cli/issue/workflow.rs` ~L1104) sanitizes `display_name` via
+/// (`src/cli/issue/workflow.rs`) sanitizes `display_name` via
 /// `output::sanitize_terminal_line` before formatting it into
 /// `output::print_success(&format!("Assigned {} to {}", key, display_name))`
 /// — no raw ESC/BEL/CSI byte survives in stderr.
@@ -978,15 +983,15 @@ async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name()
 /// Table mode, idempotent already-assigned path: same hostile-payload
 /// guarantee as the newly-assigned case above, for the
 /// `"{key} is already assigned to {display_name}"` message
-/// (`src/cli/issue/workflow.rs` ~L1084). No PUT is mocked — the idempotent
+/// (`src/cli/issue/workflow.rs`). No PUT is mocked — the idempotent
 /// short-circuit must fire before any HTTP write, exactly as
 /// `test_handler_assign_idempotent` (`tests/cli_handler.rs`) already proves
 /// for the non-hostile case; a stray PUT call here would 404 against
 /// wiremock's unmocked-request default and fail the test via the exit-code
 /// assertion.
 ///
-/// Pins production behavior: same sanitized `print_success` call site,
-/// just the idempotent branch (~L1084) instead of the newly-assigned one.
+/// Pins production behavior: same sanitized `print_success` call pattern,
+/// just the idempotent branch instead of the newly-assigned one.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_idempotent() {
     let h = Harness::new().await;
@@ -1020,7 +1025,7 @@ async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_i
 /// `--account-id`): same hostile-payload guarantee, resolving
 /// `display_name` via `client.get_myself()` instead of the assignable-user
 /// search, but sharing the SAME "Assigned {key} to {name}" print-site
-/// (~L1104) as the `--to` test above.
+/// as the `--to` test above.
 ///
 /// Pins production behavior: same sanitized `print_success` call site,
 /// reached via the self-assign resolution branch instead of `--to`.
@@ -1057,7 +1062,7 @@ async fn test_bc_7_1_006_issue_assign_human_output_strips_hostile_display_name_s
 /// test in this file.
 ///
 /// Expected GREEN today and after the fix: `handle_assign`'s `Json` success
-/// arm (`src/cli/issue/workflow.rs` ~L1093-1101) already passes
+/// arm (`src/cli/issue/workflow.rs`) already passes
 /// `json_output::assign_changed_response`'s raw `display_name` straight
 /// through `output::render_json` (#526 invariant) — this pins a
 /// pre-existing guarantee, not new behavior, completing the table/JSON
@@ -1110,9 +1115,9 @@ async fn test_bc_7_1_006_issue_assign_json_output_preserves_hostile_display_name
 /// exact expected stderr so any accidental format change (wording, spacing,
 /// trailing newline) is caught the same way a hostile-payload leak would be.
 ///
-/// Expected GREEN today and after the fix: `sanitize_table_cell`/
-/// `sanitize_terminal_line` is a no-op on ASCII text containing no control
-/// characters, ANSI escapes, or C1 code points — "Jane Doe" contains none,
+/// Expected GREEN today and after the fix: `sanitize_terminal_line` is a
+/// no-op on ASCII text containing no control characters, ANSI escapes, or
+/// C1 code points — "Jane Doe" contains none,
 /// so wiring sanitization into `handle_assign` cannot change this specific
 /// output.
 #[tokio::test]
@@ -1143,10 +1148,10 @@ async fn test_bc_7_1_006_issue_assign_human_output_clean_fixture_byte_identical(
 // Shared user disambiguation — D-395 (FIX-P5-001 extension)
 // ═══════════════════════════════════════════════════════════════════════
 //
-// `src/cli/issue/helpers.rs::disambiguate_user` (~L276-400) is the SHARED
+// `src/cli/issue/helpers.rs::disambiguate_user` is the SHARED
 // disambiguation helper behind `resolve_user`, `resolve_assignee` (`jr
 // issue assign --to`), `resolve_assignee_by_project` (`jr issue create
-// --to`, its only call site), and `mentions::resolve_mentions`. Its THREE non-interactive
+// --to`), and `mentions::resolve_at_name_candidate`. Its THREE non-interactive
 // (`--no-input`/non-TTY) `JrError::UserError` branches echo server-supplied,
 // user-editable `display_name`/`email_address`/`account_id` — each routed
 // through `output::sanitize_terminal_line` (D-395) before it reaches the
@@ -1156,10 +1161,10 @@ async fn test_bc_7_1_006_issue_assign_human_output_clean_fixture_byte_identical(
 //     Specify the accountId directly or use a more specific name."`
 //     (`email` absent → `"  {display_name} (account: {account_id})"`).
 //   - `MatchResult::Ambiguous`: `"Multiple users match \"{name}\": {csv of
-//     raw display_name}. Use a more specific name."`.
+//     display_name}. Use a more specific name."`.
 //   - `MatchResult::None`: `resolve_assignee`'s `none_msg_fn` closure joins
-//     `all_names` — every assignable user on the issue, not only ones that
-//     matched the query — into its own `"… Found: {csv of raw
+//     `all_names` — every assignable user returned by the search, not only
+//     ones that matched the query — into its own `"… Found: {csv of
 //     display_name}"` message.
 // `name` (the CLI-supplied search string) is NOT itself server-derived, so
 // these tests deliberately keep the `--to`/`--assignee` argument ASCII-clean
@@ -1168,10 +1173,11 @@ async fn test_bc_7_1_006_issue_assign_human_output_clean_fixture_byte_identical(
 // `display_name` values are exercised only via the Ambiguous (substring)
 // branch below, where equality is not required.
 //
-// Driven through TWO different callers (`jr issue assign` and `jr issue
-// create --assignee`) to prove the fix, once applied to the shared
-// `disambiguate_user` function, covers every caller — not just one
-// command's call site.
+// Driven through several different callers (`jr issue assign`, `jr issue
+// create --to`, and — in the F-002 section below — `jr issue list
+// --assignee` and `@Name` mention resolution) to prove the fix, once
+// applied to the shared `disambiguate_user` function, covers each caller —
+// not just one command's call site.
 
 /// ExactMultiple hostile `account_id`/`email_address` fixtures. `display_name`
 /// is deliberately the CLEAN, ASCII string `"Mallory"` for both users (see
@@ -1340,7 +1346,7 @@ async fn test_bc_7_1_006_issue_assign_ambiguous_human_output_strips_hostile_disp
     );
 }
 
-/// `jr issue create --assignee` (via `--to`), Ambiguous branch, proving the
+/// `jr issue create --to`, Ambiguous branch, proving the
 /// fix (once applied to the SHARED `disambiguate_user` function) covers a
 /// second, different caller — `resolve_assignee_by_project`, not
 /// `resolve_assignee`. Same hostile `display_name` fixtures and expected
@@ -1411,9 +1417,9 @@ async fn test_bc_7_1_006_issue_create_assignee_ambiguous_human_output_strips_hos
 /// the JSON `"error"` field carries the SAME sanitized, CSI/`\r`/C1-stripped
 /// text as the table-mode stderr message (EC-16/VP-SEC-001-001(c)),
 /// covering a downstream script or CI log viewer that surfaces
-/// `--output json`'s `"error"` text to a terminal (e.g.
-/// `jr … --output json | jq -r .error`), which is exactly as exposed to
-/// CWE-150/CWE-116 as the human-mode path.
+/// `--output json`'s `"error"` text (written to STDERR, not stdout) to a
+/// terminal, which is exactly as exposed to CWE-150/CWE-116 as the
+/// human-mode path.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_exact_multiple_json_error_envelope_carries_sanitized_text() {
     let h = Harness::new().await;
@@ -1471,9 +1477,9 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_json_error_envelope_carries
 /// pinning the exact expected stderr so any accidental format change is
 /// caught the same way a hostile-payload leak would be.
 ///
-/// Expected GREEN today and after the fix: `sanitize_table_cell`/
-/// `sanitize_terminal_line` is a no-op on ASCII text containing no control
-/// characters, ANSI escapes, or C1 code points — none of this fixture's
+/// Expected GREEN today and after the fix: `sanitize_terminal_line` is a
+/// no-op on ASCII text containing no control characters, ANSI escapes, or
+/// C1 code points — none of this fixture's
 /// fields contain any, so wiring sanitization into `disambiguate_user`
 /// cannot change this specific output.
 #[tokio::test]
@@ -1519,12 +1525,12 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_clean_fixture_
 }
 
 /// `jr issue assign --to <no-match>`, `MatchResult::None` branch: the
-/// `all_names` candidate list — every assignable user on the issue, not
-/// only ones that matched the query — is joined by `resolve_assignee`'s
+/// `all_names` candidate list — every user the assignable-user search
+/// returned, not only ones that matched the query — is joined by `resolve_assignee`'s
 /// `none_msg_fn` closure into its own "… Found: …" message. This is a
 /// WIDER exposure surface than the `ExactMultiple`/`Ambiguous` branches
 /// above, since a hostile display name can leak here merely by being
-/// assignable on the same issue, without ever matching the query string
+/// returned by the search, without ever matching the query string
 /// (D-395, §10 spec-delta, PR #891 finding found during the amendment's
 /// own code trace — not explicitly named in the originating SEC-891-2
 /// finding).
@@ -1617,7 +1623,7 @@ async fn mount_comment_view_ec17a_fixture(server: &MockServer, key: &str, id: &s
 /// through `sanitize_terminal_line` once wired, must render the hostile
 /// embedded `\n` as a single space — `Author: Eve Restricted: None` on ONE
 /// line — never as a fabricated standalone `Restricted: None` line distinct
-/// from the real `Restricted: Admins` line three fields later.
+/// from the real `Restricted: Admins` line below it.
 ///
 /// Expected PASS: `handle_comment_view`'s `author` field is now sanitized
 /// via `sanitize_terminal_line`, so the hostile embedded `\n` collapses to
@@ -1773,15 +1779,15 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile
 
 // ═══════════════════════════════════════════════════════════════════════
 // F-002 missing coverage (D-396/FIX-P5-002) — five new test targets named
-// in BC-7.1.006's F-002 disposition. Some of these are expected GREEN
+// in BC-7.1.006's F-002 disposition. All five are expected GREEN
 // today ("GREEN-by-design"): the underlying `sanitize_terminal_line` call
 // already covers the hostile payload in question via a caller this suite
 // had not yet exercised — F-002 was a MISSING-TEST finding, not a bug.
 // ═══════════════════════════════════════════════════════════════════════
 
 /// (a) GREEN-by-design: `jr issue list --assignee <partial>`'s `Ambiguous`
-/// branch via `helpers::resolve_user` — the one `disambiguate_user` caller
-/// with no prior non-interactive-message test at all. Reuses the exact
+/// branch via `helpers::resolve_user` — a `disambiguate_user` caller
+/// with no prior non-interactive-message test. Reuses the exact
 /// `DISAMBIG_HOSTILE_NAME_1`/`_2` fixtures already proven against the
 /// `jr issue assign`/`jr issue create` callers above, proving the shared
 /// `disambiguate_user` fix covers this THIRD caller too.
@@ -1824,7 +1830,7 @@ async fn test_bc_7_1_006_issue_list_assignee_ambiguous_human_output_strips_hosti
 
 /// (b) GREEN-by-design: an `@Name` mention `Ambiguous` case via
 /// `mentions::resolve_at_name_candidate` (`jr issue comment add --markdown`)
-/// — the fourth `disambiguate_user` caller. Zero `POST .../comment` calls
+/// — another `disambiguate_user` caller. Zero `POST .../comment` calls
 /// (`expect(0)`) proves the all-or-nothing resolution failure happens
 /// strictly before any mutation.
 #[tokio::test]
@@ -1937,14 +1943,13 @@ async fn test_bc_7_1_006_issue_assign_ambiguous_json_error_envelope_carries_sani
     );
 }
 
-/// (d) GREEN-by-design, mutation-checked (see FIX-P5-002's report for the
-/// mutation-check procedure): an `ExactMultiple` case with a HOSTILE
+/// (d) GREEN-by-design: an `ExactMultiple` case with a HOSTILE
 /// **DISPLAY NAME** (CSI-wrapped, no embedded `\n`) — distinct from
 /// `test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile_fields`
 /// above, which hostiles only `email`/`account_id`, never `display_name`.
-/// Covers the `helpers.rs:~360` `display_name` sanitize call inside
-/// `disambiguate_user`'s `ExactMultiple` branch, which no prior fixture
-/// exercised.
+/// Covers the `display_name` sanitize call inside
+/// `disambiguate_user`'s `ExactMultiple` non-interactive branch, which no
+/// prior fixture exercised.
 ///
 /// Note: the `"name"` portion of the message (the CLI-supplied `--to`
 /// value, which must equal the raw hostile display name byte-for-byte to
@@ -1999,14 +2004,14 @@ async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile
     );
 }
 
-/// (e) GREEN-by-design: BC-7.1.006's EC-16b fixture, reproduced EXACTLY —
+/// (e) GREEN-by-design: BC-7.1.006's EC-16b fixture —
 /// two duplicate users sharing the raw hostile display name
 /// `"\u{1b}[31mAlice\u{1b}[0m"` (= `DISAMBIG_HOSTILE_NAME_1`), with hostile
 /// emails `"alice\u{1b}]0;pwned\u{7}@example.com"` (account `acc-3`) and
 /// `"bob\u{9b}@example.com"` (account `acc-4`) — through the full
 /// `disambiguate_user` `ExactMultiple` non-interactive message (not just
-/// the unit-level `disambiguation_labels` helper, which EC-16b's existing
-/// pinned tests already cover). Asserts the EXACT expected sanitized
+/// the unit-level `disambiguation_labels` helper, which has its own
+/// `test_disambiguation_labels_*` tests in `helpers.rs`). Asserts the EXACT expected sanitized
 /// output, traced per EC-16b: User C's email OSC-consumed to
 /// `"alice@example.com"`; User D's email C1-dropped to `"bob@example.com"`.
 #[tokio::test]

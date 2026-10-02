@@ -621,8 +621,9 @@ mod tests {
         /// (same length, flag order, no dedup, pre-existing pairs first).
         /// The generator-constraint/anti-vacuity assertion
         /// (`generated_existing_pairs == existing_pairs`) is asserted FIRST
-        /// so the generator cannot silently collapse to an empty
-        /// `existing` and pass vacuously.
+        /// to confirm the hand-built existing query decodes back to the
+        /// generated `existing` pairs (an empty `existing` is a valid
+        /// generated case).
         #[test]
         fn test_bc_x_16_001_append_query_params_repeated_names_oracle(
             (existing_pairs, new_pairs) in arb_existing_and_new_pairs()
@@ -882,9 +883,8 @@ mod tests {
 
     /// Well-formed `(NAME, rest)` pairs: NAME is non-empty and `=`-free
     /// (may be whitespace-only, EC-X.16.001-10 — a dedicated whitespace-only
-    /// branch below makes this case likely enough to be generated reliably,
-    /// rather than left to the ~0.2% chance an all-alphanumeric-or-space
-    /// character class would land on all-whitespace by luck); `rest` may
+    /// branch below generates this case deliberately rather than leaving
+    /// it to chance); `rest` may
     /// itself contain `=` and whitespace (EC-X.16.001-2, "split on the
     /// FIRST `=` only", plus F-001(a)'s no-trim guarantee) and may be empty
     /// (EC-X.16.001-1, empty VALUE is allowed).

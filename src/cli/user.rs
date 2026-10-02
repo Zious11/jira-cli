@@ -393,8 +393,9 @@ mod tests {
     }
 
     /// GREEN today, justified: the Active column glyph itself (✓/✗) is
-    /// already present in `print_user_list`'s rendered table output — this
-    /// is pre-existing correctness, unrelated to BC-7.1.006's sanitization
+    /// already present in the table `output::render_table` renders from
+    /// `format_user_row`'s plain rows (this test does not call
+    /// `print_user_list`) — this is pre-existing correctness, unrelated to BC-7.1.006's sanitization
     /// fix. Included as a defense-in-depth regression guard: once
     /// `format_active`'s styling moves to structural `Cell` attributes
     /// (the test above), the glyph itself must still reach the rendered

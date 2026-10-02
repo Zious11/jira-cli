@@ -11,7 +11,7 @@ use std::path::Path;
 /// except the names listed in `keep`.
 ///
 /// `Config::load_inner` (`src/config.rs` ~L262) merges
-/// `Env::prefixed("JR_")` directly onto `GlobalConfig`/`ProfileConfig` with
+/// `Env::prefixed("JR_")` directly onto `GlobalConfig` with
 /// no closed enumeration of recognized keys — ANY ambient `JR_*` variable
 /// that maps onto a config field (e.g. `JR_PROFILES`, `JR_DEFAULTS`,
 /// `JR_INSTANCE`, `JR_FIELDS`, or any future field) can leak a

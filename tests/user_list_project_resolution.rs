@@ -2,7 +2,8 @@
 //! `--project` resolution order, issue #862, cycle-014 STORY-A
 //! `S-cycle14-user-list-project-resolution`).
 //!
-//! Every test in this file follows the hermetic setup pinned by
+//! Every test in this file except the `--help` cell (which spawns `jr`
+//! with no hermetic setup) follows the hermetic setup pinned by
 //! `.factory/cycles/cycle-014/phase-f2-spec-evolution/verification-delta.md`
 //! §2: fresh per-test `JR_CONFIG_DIR`/`JR_CACHE_DIR`, a `cwd` with no
 //! ancestor `.jr.toml` (a case needing one writes it into its own temp

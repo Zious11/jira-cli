@@ -172,8 +172,7 @@ async fn user_list_requires_project_flag() {
     // --project or 'required'" (which a connection error to the unreachable
     // JR_BASE_URL could not satisfy, but a clap exit-2 usage error could).
     // Pin jr's own exit-64 UserError, a `--project` mention, and the absence
-    // of any connection-error text (proving the guard fired before HTTP).
-    // Retained rather than removed because spec artifacts cite it by name.
+    // of any connection-error text (a proxy for the guard firing before HTTP).
     assert_eq!(
         output.status.code(),
         Some(64),
