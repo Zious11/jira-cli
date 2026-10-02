@@ -261,8 +261,8 @@ pub(super) fn is_me_keyword(input: &str) -> bool {
 
 /// Builds the `dialoguer::Select` item labels for `disambiguate_user`'s
 /// `MatchResult::ExactMultiple` interactive branch — the duplicate-name
-/// picker shown when two or more users share the exact display name the
-/// caller searched for (D-395, FIX-P5-001).
+/// picker shown when two or more users share the same display name
+/// (case-insensitively) the caller searched for (D-395, FIX-P5-001).
 ///
 /// Matches the EXISTING inline label format exactly, unchanged by D-395:
 /// - `"{display_name} ({email})"` when the user has an `email_address`

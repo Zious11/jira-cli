@@ -72,7 +72,7 @@ All notable changes to jr will be documented here.
   BC-X.14.001/004, CR4-002): after the `customfield_NNNNN` literal bypass,
   `<FIELD>` is first matched as an exact, ASCII-case-insensitive field id
   against the same cached `(id, name)` list (e.g. `issuetype`, `priority`,
-  returning the list's canonical id; no HTTP call beyond the one the name
+  returning the list's canonical id; no HTTP call beyond any the name
   lookup already makes), and only then by name.
   An ID match wins over a name collision; there is no substring matching on
   IDs. All three ambiguity messages now read "the field ID (e.g. customfield_NNNNN
