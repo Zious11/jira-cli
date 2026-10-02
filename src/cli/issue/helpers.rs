@@ -937,7 +937,7 @@ mod tests {
     /// embedded newline between visible fragments; sanitizes to
     /// "Mallory Eve". Candidate display names equal this RAW string, so a
     /// regression that sanitized `name` BEFORE matching would not reach
-    /// `ExactMultiple` and would fail the first assertion below.
+    /// `ExactMultiple` and would fail the `Multiple users named "Mallory Eve" found:` assertion.
     const HOSTILE_NAME: &str = "Mal\u{1b}[31mlory\u{9b}\nEve";
 
     fn assert_no_control_bytes(msg: &str) {

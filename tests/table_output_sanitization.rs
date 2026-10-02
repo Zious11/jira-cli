@@ -1957,12 +1957,12 @@ async fn test_bc_7_1_006_issue_assign_ambiguous_json_error_envelope_carries_sani
 /// prior fixture exercised.
 ///
 /// Note: the `"name"` portion of the message (the CLI-supplied `--to`
-/// value, which must equal the raw hostile display name byte-for-byte to
-/// trigger `ExactMultiple` at all — `partial_match`'s raw-equality
-/// requirement) is NOT itself sanitized — by design, since it is
-/// CLI/user-supplied, not server-derived (see BC-7.1.006's `disambiguate_user`
-/// Behavior subsection). Only each DUPLICATE's own `display_name`/`email`/
-/// `account_id` fields (independently server-supplied) are sanitized.
+/// value) is sanitized for DISPLAY only (via `name_echo`, EC-25), so the
+/// header asserted below is the sanitized form. Matching still uses the
+/// RAW value, which must equal the raw hostile display name byte-for-byte
+/// to trigger `ExactMultiple` at all (`partial_match`'s raw-equality
+/// requirement). Each DUPLICATE's own `display_name`/`email`/`account_id`
+/// fields (independently server-supplied) are sanitized as well.
 #[tokio::test]
 async fn test_bc_7_1_006_issue_assign_exact_multiple_human_output_strips_hostile_display_name_field()
  {
