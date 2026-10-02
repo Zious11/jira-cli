@@ -352,8 +352,8 @@ pub(super) fn disambiguate_user(
     }
 
     // `name` may be server-derived on the `@Name` mention path, so every echo
-    // of it below uses `shown_name`; matching keeps using the raw `name`.
-    let shown_name = crate::output::sanitize_terminal_line(name);
+    // of it below uses `name_echo`; matching keeps using the raw `name`.
+    let name_echo = crate::output::sanitize_terminal_line(name);
     let display_names: Vec<String> = users.iter().map(|u| u.display_name.clone()).collect();
     match crate::partial_match::partial_match(name, &display_names) {
         crate::partial_match::MatchResult::Exact(matched_name) => {
@@ -390,7 +390,7 @@ pub(super) fn disambiguate_user(
                     .collect();
                 return Err(JrError::UserError(format!(
                     "Multiple users named \"{}\" found:\n{}\nSpecify the accountId directly or use a more specific name.",
-                    shown_name,
+                    name_echo,
                     lines.join("\n")
                 ))
                 .into());
@@ -398,7 +398,7 @@ pub(super) fn disambiguate_user(
 
             let labels: Vec<String> = disambiguation_labels(&duplicates);
             let selection = dialoguer::Select::new()
-                .with_prompt(format!("Multiple users named \"{shown_name}\""))
+                .with_prompt(format!("Multiple users named \"{name_echo}\""))
                 .items(&labels)
                 .interact()
                 .context("failed to prompt for user selection")?;
@@ -415,13 +415,13 @@ pub(super) fn disambiguate_user(
             if no_input {
                 return Err(JrError::UserError(format!(
                     "Multiple users match \"{}\": {}. Use a more specific name.",
-                    shown_name,
+                    name_echo,
                     sanitized_matches.join(", ")
                 ))
                 .into());
             }
             let selection = dialoguer::Select::new()
-                .with_prompt(format!("Multiple users match \"{shown_name}\""))
+                .with_prompt(format!("Multiple users match \"{name_echo}\""))
                 .items(&sanitized_matches)
                 .interact()
                 .context("failed to prompt for user selection")?;
@@ -933,9 +933,12 @@ mod tests {
     // non-interactive messages must be single-line sanitized. Matching still
     // uses the raw `name`.
 
-    /// Hostile name: ESC/CSI, an embedded newline, and a C1 control, around
-    /// visible text "Ev" and "il".
-    const HOSTILE_NAME: &str = "Ev\n\u{1b}[31m\u{85}il";
+    /// Hostile name (EC-25 fixture): ESC/CSI, a C1 control (`U+009B`) and an
+    /// embedded newline between visible fragments; sanitizes to
+    /// "Mallory Eve". Candidate display names equal this RAW string, so a
+    /// regression that sanitized `name` BEFORE matching would not reach
+    /// `ExactMultiple` and would fail the first assertion below.
+    const HOSTILE_NAME: &str = "Mal\u{1b}[31mlory\u{9b}\nEve";
 
     fn assert_no_control_bytes(msg: &str) {
         assert!(!msg.contains('\u{1b}'), "ESC survived: {msg:?}");
@@ -957,7 +960,7 @@ mod tests {
             .to_string();
         assert_no_control_bytes(&msg);
         assert!(
-            msg.contains("Multiple users named \"Ev il\" found:"),
+            msg.contains("Multiple users named \"Mallory Eve\" found:"),
             "{msg:?}"
         );
         // header + 2 candidate lines + trailer: the name echo adds no line.
@@ -974,7 +977,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert_no_control_bytes(&msg);
-        assert!(msg.contains("Multiple users match \"Ev il\":"), "{msg:?}");
+        assert!(msg.contains("Multiple users match \"Mallory Eve\":"), "{msg:?}");
         assert_eq!(msg.lines().count(), 1, "{msg:?}");
 
         // None: this function does not itself echo `name` here (the caller's
