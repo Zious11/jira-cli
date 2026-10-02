@@ -151,14 +151,13 @@ async fn handle_view(
     output::print_output_with_styles(output_format, &["Field", "Value"], &rows, &user)
 }
 
+/// Column headers of the `jr user list` table, in the same order as the
+/// cells [`format_user_row`] returns.
+const USER_LIST_HEADERS: [&str; 4] = ["Display Name", "Email", "Active", "Account ID"];
+
 fn print_user_list(users: &[User], output_format: &OutputFormat) -> Result<()> {
     let rows: Vec<Vec<output::StyledCell>> = users.iter().map(format_user_row_styled).collect();
-    output::print_output_with_styles(
-        output_format,
-        &["Display Name", "Email", "Active", "Account ID"],
-        &rows,
-        &users,
-    )
+    output::print_output_with_styles(output_format, &USER_LIST_HEADERS, &rows, &users)
 }
 
 /// Styled-cell sibling of [`format_user_row`] for `print_user_list`'s
@@ -168,13 +167,17 @@ fn print_user_list(users: &[User], output_format: &OutputFormat) -> Result<()> {
 /// text. Built on top of `format_user_row` itself so that function stays a
 /// live production call site, not test-only dead code.
 fn format_user_row_styled(user: &User) -> Vec<output::StyledCell> {
-    let plain = format_user_row(user);
-    vec![
-        output::StyledCell::plain(plain[0].clone()),
-        output::StyledCell::plain(plain[1].clone()),
-        active_cell(user.active),
-        output::StyledCell::plain(plain[3].clone()),
-    ]
+    format_user_row(user)
+        .into_iter()
+        .zip(USER_LIST_HEADERS)
+        .map(|(text, header)| {
+            if header == "Active" {
+                active_cell(user.active)
+            } else {
+                output::StyledCell::plain(text)
+            }
+        })
+        .collect()
 }
 
 fn format_user_row(user: &User) -> Vec<String> {
@@ -415,8 +418,7 @@ mod tests {
             .map(format_user_row)
             .collect();
 
-        let output =
-            output::render_table(&["Display Name", "Email", "Active", "Account ID"], &rows);
+        let output = output::render_table(&USER_LIST_HEADERS, &rows);
 
         assert!(
             output.contains('✓'),
@@ -428,16 +430,15 @@ mod tests {
         );
     }
 
-    /// This test validates the GENERAL TECHNIQUE BC-7.1.006 uses for
-    /// `format_active`'s structural styling — `comfy_table::Cell` styling
-    /// (`Cell::new(glyph).fg(Color::Green)`) survives even though the cell
-    /// TEXT itself (the bare glyph `format_active` returns) passes through
-    /// `sanitize_table_cell` unchanged. It exercises `comfy_table` directly
-    /// rather than `active_cell`/`render_table_with_styles` (whose actual
-    /// wiring is pinned by the `output::` unit tests and by
-    /// `active_cell`'s own tests below), so it does not pin jr's own code
-    /// — it's a documentation-style regression guard for the underlying
-    /// `comfy_table` behavior this BC's design depends on.
+    /// Pins third-party `comfy_table` behavior that jr's structural
+    /// styling (BC-7.1.006) relies on: a `Cell::new(glyph).fg(Color::..)`
+    /// emits ANSI styling bytes when the table is built with
+    /// `force_no_tty().enforce_styling()`, with the glyph text still
+    /// present. It calls `comfy_table` directly and never touches jr code
+    /// (no `active_cell`, `render_table_with_styles` or sanitizer), so it
+    /// would catch a `comfy_table` upgrade changing that behavior but says
+    /// nothing about jr's own wiring, which the `output::` unit tests and
+    /// `active_cell`'s own tests below pin.
     ///
     /// `comfy_table::Table::should_style()` is gated on `is_tty()`
     /// (`std::io::stdout().is_terminal()`). Its result depends on the
@@ -447,9 +448,9 @@ mod tests {
     /// `colored`'s own override mechanism does NOT affect `comfy_table`'s
     /// independent TTY gate.
     ///
-    /// Determinism here comes from `Table::force_no_tty().enforce_styling()`.
-    /// `comfy_table` documents it as the supported way to force styled
-    /// output regardless of the ambient TTY/environment.
+    /// Determinism here comes from `Table::force_no_tty().enforce_styling()`,
+    /// which `comfy_table`'s rustdoc presents as the way to apply cell
+    /// styling without a TTY.
     #[test]
     fn test_bc_7_1_006_structural_cell_styling_technique_survives_rendering() {
         use comfy_table::{Cell, Color, Table};
@@ -469,6 +470,39 @@ mod tests {
         );
         assert!(rendered.contains('✓'));
         assert!(rendered.contains('✗'));
+    }
+
+    /// CR7-002: the styled row built for `print_user_list` must stay
+    /// column-aligned with [`USER_LIST_HEADERS`] and with the plain row
+    /// [`format_user_row`] returns: same length as the headers, every
+    /// non-Active cell equal to the plain row's text, and the cell at the
+    /// header list's "Active" index equal to `active_cell(user.active)`.
+    #[test]
+    fn test_format_user_row_styled_stays_aligned_with_headers_and_plain_row() {
+        let _color = ForcedColorOverride::new(true);
+        for active in [Some(true), Some(false), None] {
+            let user = User {
+                account_id: "acc-1".into(),
+                display_name: "Ada".into(),
+                email_address: Some("ada@example.com".into()),
+                active,
+            };
+            let plain = format_user_row(&user);
+            let styled = format_user_row_styled(&user);
+            assert_eq!(plain.len(), USER_LIST_HEADERS.len());
+            assert_eq!(styled.len(), USER_LIST_HEADERS.len());
+            let active_idx = USER_LIST_HEADERS
+                .iter()
+                .position(|h| *h == "Active")
+                .expect("headers contain Active");
+            for (i, cell) in styled.iter().enumerate() {
+                if i == active_idx {
+                    assert_eq!(*cell, active_cell(user.active));
+                } else {
+                    assert_eq!(*cell, output::StyledCell::plain(plain[i].clone()));
+                }
+            }
+        }
     }
 
     /// BC-7.1.006: `--no-color`/`NO_COLOR` must still suppress the Active

@@ -453,10 +453,8 @@ async fn resolve_field_id(
         .into());
     }
 
-    let query_lower = query.to_lowercase();
-
     if let Some(fc) = cache::read_fields_cache(profile)?
-        && let Some(found) = search_field_list(&fc.fields, &query_lower, query)?
+        && let Some(found) = search_field_list(&fc.fields, query)?
     {
         return Ok(found);
     }
@@ -466,7 +464,7 @@ async fn resolve_field_id(
     let fresh: Vec<(String, String)> = raw.into_iter().map(|f| (f.id, f.name)).collect();
     cache::write_fields_cache(profile, &fresh)?;
 
-    match search_field_list(&fresh, &query_lower, query)? {
+    match search_field_list(&fresh, query)? {
         Some(found) => Ok(found),
         None => Err(JrError::UserError(field_not_found_msg(query)).into()),
     }
@@ -537,15 +535,13 @@ fn candidate_labels(matches: &[&(String, String)]) -> Vec<String> {
 /// then case-insensitive substring on names. `Ok(None)` means "not found in
 /// THIS list" (caller may still fall back to a fresh fetch); `Err` means a
 /// definitive ambiguity the caller must surface immediately.
-fn search_field_list(
-    list: &[(String, String)],
-    query_lower: &str,
-    query: &str,
-) -> Result<Option<String>> {
+fn search_field_list(list: &[(String, String)], query: &str) -> Result<Option<String>> {
+    let query_lower = query.to_lowercase();
     // SEC5-002 (FIX-P5-006, EC-X.14.004-9): the echoed query is user input,
-    // but is sanitized too — cheap, and it keeps stderr/JSON free of raw
-    // control bytes even for a pasted hostile string.
-    let q = crate::output::sanitize_terminal_line(query);
+    // but is sanitized too, so stderr/JSON stay free of raw control bytes
+    // even for a pasted hostile string. Sanitized lazily — only when an
+    // error message actually echoes it.
+    let echo = || crate::output::sanitize_terminal_line(query);
     // Step 3a (FIX-P5-005, CR4-002): exact ASCII-case-insensitive FIELD ID
     // match wins over any name match (system ids like `issuetype`). Exact
     // only — never a substring match on IDs. Returns the list's canonical id.
@@ -560,7 +556,8 @@ fn search_field_list(
     if !by_id.is_empty() {
         let candidates = candidate_labels(&by_id);
         return Err(JrError::UserError(format!(
-            "Field ID '{q}' matches multiple fields: {}. Use {FIELD_ID_HINT} to disambiguate.",
+            "Field ID '{}' matches multiple fields: {}. Use {FIELD_ID_HINT} to disambiguate.",
+            echo(),
             candidates.join(", ")
         ))
         .into());
@@ -577,8 +574,9 @@ fn search_field_list(
     if !exact.is_empty() {
         let candidates = candidate_labels(&exact);
         return Err(JrError::UserError(format!(
-            "Field name '{q}' matches multiple fields: {}. Use {FIELD_ID_HINT} to \
+            "Field name '{}' matches multiple fields: {}. Use {FIELD_ID_HINT} to \
              disambiguate.",
+            echo(),
             candidates.join(", ")
         ))
         .into());
@@ -586,7 +584,7 @@ fn search_field_list(
 
     let sub: Vec<&(String, String)> = list
         .iter()
-        .filter(|(_, n)| n.to_lowercase().contains(query_lower))
+        .filter(|(_, n)| n.to_lowercase().contains(&query_lower))
         .collect();
     if sub.len() == 1 {
         return Ok(Some(sub[0].0.clone()));
@@ -595,8 +593,9 @@ fn search_field_list(
     if !sub.is_empty() {
         let candidates = candidate_labels(&sub);
         return Err(JrError::UserError(format!(
-            "Field name '{q}' is ambiguous — matches: {}. Use a more specific name or \
+            "Field name '{}' is ambiguous — matches: {}. Use a more specific name or \
              {FIELD_ID_HINT}.",
+            echo(),
             candidates.join(", ")
         ))
         .into());
@@ -1004,7 +1003,7 @@ mod tests {
             ("customfield_10001".to_string(), "Story Points".to_string()),
             ("customfield_10002".to_string(), "Sprint".to_string()),
         ];
-        let result = search_field_list(&list, "story points", "Story Points").unwrap();
+        let result = search_field_list(&list, "Story Points").unwrap();
         assert_eq!(result, Some("customfield_10001".to_string()));
     }
 
@@ -1016,7 +1015,7 @@ mod tests {
         // `query_lower` is the CALLER-lowercased form (resolve_field_id
         // lowercases before calling); `query` retains the original casing
         // for use in error messages only.
-        let result = search_field_list(&list, "story points", "STORY points").unwrap();
+        let result = search_field_list(&list, "STORY points").unwrap();
         assert_eq!(result, Some("customfield_10001".to_string()));
     }
 
@@ -1028,7 +1027,7 @@ mod tests {
             ("customfield_10084".to_string(), "SOC Client".to_string()),
             ("customfield_10002".to_string(), "Sprint".to_string()),
         ];
-        let result = search_field_list(&list, "soc", "soc").unwrap();
+        let result = search_field_list(&list, "soc").unwrap();
         assert_eq!(result, Some("customfield_10084".to_string()));
     }
 
@@ -1037,7 +1036,7 @@ mod tests {
     #[test]
     fn test_bc_x_14_001_search_field_list_zero_match_returns_none() {
         let list = vec![("customfield_10002".to_string(), "Sprint".to_string())];
-        let result = search_field_list(&list, "nonexistent", "nonexistent").unwrap();
+        let result = search_field_list(&list, "nonexistent").unwrap();
         assert_eq!(result, None);
     }
 
@@ -1049,7 +1048,7 @@ mod tests {
             ("customfield_10084".to_string(), "SOC Client".to_string()),
             ("customfield_10085".to_string(), "soc client".to_string()),
         ];
-        let err = search_field_list(&list, "soc client", "soc client").unwrap_err();
+        let err = search_field_list(&list, "soc client").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("customfield_10084") && msg.contains("customfield_10085"));
     }
@@ -1062,7 +1061,7 @@ mod tests {
             ("customfield_10084".to_string(), "SOC Client A".to_string()),
             ("customfield_10085".to_string(), "SOC Client B".to_string()),
         ];
-        let err = search_field_list(&list, "soc client", "soc client").unwrap_err();
+        let err = search_field_list(&list, "soc client").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("customfield_10084") && msg.contains("customfield_10085"));
     }
@@ -1088,7 +1087,7 @@ mod tests {
             }
             list.push((sys_id.clone(), "Display Name Unrelated".to_string()));
             let query = if upper { sys_id.to_uppercase() } else { sys_id.clone() };
-            let found = search_field_list(&list, &query.to_lowercase(), &query)
+            let found = search_field_list(&list, &query)
                 .unwrap();
             prop_assert_eq!(found, Some(sys_id));
         }
@@ -1099,10 +1098,10 @@ mod tests {
         let list = vec![("issuetype".to_string(), "Issue Type".to_string())];
         // "issue" is a substring of the id and of the name; the NAME
         // substring rule applies (there is no ID substring rule).
-        let r = search_field_list(&list, "issue", "issue").unwrap();
+        let r = search_field_list(&list, "issue").unwrap();
         assert_eq!(r, Some("issuetype".to_string()), "via NAME substring");
         let list2 = vec![("issuetype".to_string(), "Kind".to_string())];
-        assert_eq!(search_field_list(&list2, "issuet", "issuet").unwrap(), None);
+        assert_eq!(search_field_list(&list2, "issuet").unwrap(), None);
     }
 
     /// SEC5-002 / EC-X.14.004-9: every server-supplied candidate name/id in
@@ -1126,10 +1125,7 @@ mod tests {
             ),
             ("IssueType".to_string(), "B\u{1b}]0;t\u{7}x".to_string()),
         ];
-        let msg = format!(
-            "{}",
-            search_field_list(&dup_id, "issuetype", "issuetype").unwrap_err()
-        );
+        let msg = format!("{}", search_field_list(&dup_id, "issuetype").unwrap_err());
         assert_clean(&msg);
         assert!(msg.contains("ARED"), "{msg}");
         assert!(msg.contains("Bx (IssueType)"), "{msg}");
@@ -1139,7 +1135,7 @@ mod tests {
             ("X\u{1b}[31mY".to_string(), "N2".to_string()),
         ];
         let hq = "x\u{1b}[31my";
-        let msg = format!("{}", search_field_list(&hostile_id, hq, hq).unwrap_err());
+        let msg = format!("{}", search_field_list(&hostile_id, hq).unwrap_err());
         assert_clean(&msg);
         assert!(msg.contains("N1 (xy)") && msg.contains("N2 (XY)"), "{msg}");
         // Branch 2: exact-name duplicates (identical under to_lowercase).
@@ -1148,7 +1144,7 @@ mod tests {
             ("customfield_2".to_string(), "dup\u{1b}[31m\nz".to_string()),
         ];
         let q = "dup\u{1b}[31m\nz";
-        let msg = format!("{}", search_field_list(&exact_hostile, q, q).unwrap_err());
+        let msg = format!("{}", search_field_list(&exact_hostile, q).unwrap_err());
         assert!(msg.contains("matches multiple fields"), "{msg}");
         assert!(msg.contains("Dup Z (customfield_1)"), "{msg}");
         assert!(msg.contains("dup z (customfield_2)"), "{msg}");
@@ -1164,7 +1160,7 @@ mod tests {
                 "Dup B\u{9b}1m\u{1b}]0;t\u{7}".to_string(),
             ),
         ];
-        let msg = format!("{}", search_field_list(&sub, "dup", "dup").unwrap_err());
+        let msg = format!("{}", search_field_list(&sub, "dup").unwrap_err());
         assert_clean(&msg);
         assert!(msg.contains("Dup A FAKE (customfield_1)"), "{msg}");
         assert!(msg.contains("Dup B1m (customfield_2)"), "{msg}");
@@ -1227,13 +1223,13 @@ mod tests {
             ("customfield_1".to_string(), "Dup".to_string()),
             ("customfield_2".to_string(), "dup".to_string()),
         ];
-        let msg = format!("{}", search_field_list(&exact, "dup", "dup").unwrap_err());
+        let msg = format!("{}", search_field_list(&exact, "dup").unwrap_err());
         assert!(msg.contains(HINT), "{msg}");
         let sub = vec![
             ("customfield_1".to_string(), "Dup A".to_string()),
             ("customfield_2".to_string(), "Dup B".to_string()),
         ];
-        let msg = format!("{}", search_field_list(&sub, "dup", "dup").unwrap_err());
+        let msg = format!("{}", search_field_list(&sub, "dup").unwrap_err());
         assert!(msg.contains(HINT), "{msg}");
     }
 
@@ -1244,7 +1240,7 @@ mod tests {
             ("issuetype".to_string(), "Issue Type".to_string()),
             ("IssueType".to_string(), "Issue Type Legacy".to_string()),
         ];
-        let err = search_field_list(&list, "issuetype", "issuetype").unwrap_err();
+        let err = search_field_list(&list, "issuetype").unwrap_err();
         let msg = format!("{err}");
         assert!(
             msg.contains("Field ID 'issuetype' matches multiple fields"),

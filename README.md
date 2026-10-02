@@ -329,7 +329,7 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | `jr assets schemas`             | List object schemas in the workspace           |
 | `jr assets types [--schema]`    | List object types (all or filtered by schema)  |
 | `jr assets schema <TYPE>`       | Show attributes for an object type (partial match) |
-| `jr api <PATH>` | API passthrough — make an authenticated request to any Jira REST endpoint (`-X`/`--method`, `-d`/`--data` body (inline, `@file`, `@-`), `-H`/`--header` repeatable, `-q`/`--query-param NAME=VALUE` repeatable; the raw response body is passed through unmodified and `--output` is ignored) |
+| `jr api <PATH>` | API passthrough — make an authenticated request to any Jira REST endpoint (`-X`/`--method`, `-d`/`--data` body (inline, `@file`, `@-`), `-H`/`--header` repeatable, `-q`/`--query-param NAME=VALUE` repeatable; the raw response body is passed through unmodified, so `--output` does not affect it; pre-flight errors such as a malformed `-q` still honor `--output json`) |
 | `jr team list` | List available teams (`--refresh` to force update) |
 | `jr user search <query>` | Search users by display name or email (`--limit`/`--all`) |
 | `jr user list [--project FOO]` | List users assignable to a project (falls back to the configured default project when omitted; `--limit`/`--all`) |

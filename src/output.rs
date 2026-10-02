@@ -423,7 +423,7 @@ fn sanitize_control_and_ansi_core(
 /// - C1 controls `U+0080`-`U+009F` are STRIPPED as a class, including the
 ///   single-byte CSI introducer `U+009B` and the single-byte OSC
 ///   introducer `U+009D` — new relative to `strip_control_and_ansi`
-///   (which has no C1 handling). This is a single-code-point removal, not
+///   (which handles only NEL, `U+0085`, among the C1 controls). This is a single-code-point removal, not
 ///   a second state machine: bytes that would otherwise have continued a
 ///   sequence started by a stripped C1 introducer are NOT consumed as
 ///   part of that sequence — they survive in the output as inert literal
