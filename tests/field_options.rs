@@ -19,6 +19,9 @@
 //! Traces: BC-X.14.001..004, ADR-0019, VP-580-001..012,
 //! `.factory/stories/S-580-1-field-options-command.md` AC-001..014.
 
+#[allow(dead_code)]
+mod common;
+
 use assert_cmd::Command;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path, query_param};
@@ -72,6 +75,16 @@ struct Harness {
     server: MockServer,
     cache_dir: tempfile::TempDir,
     config_dir: tempfile::TempDir,
+    /// Subprocess cwd: a fresh temp dir verified to have no ancestor
+    /// `.jr.toml` (P6-004), so a developer checkout's project config can
+    /// never leak into a resolution test.
+    cwd: tempfile::TempDir,
+}
+
+fn hermetic_cwd() -> tempfile::TempDir {
+    let cwd = tempfile::tempdir().unwrap();
+    common::hermetic::assert_no_ancestor_jr_toml(cwd.path());
+    cwd
 }
 
 impl Harness {
@@ -84,6 +97,7 @@ impl Harness {
             server,
             cache_dir,
             config_dir,
+            cwd: hermetic_cwd(),
         }
     }
 
@@ -96,20 +110,32 @@ impl Harness {
             server,
             cache_dir,
             config_dir,
+            cwd: hermetic_cwd(),
         }
     }
 
     fn cmd(&self, args: &[&str]) -> assert_cmd::assert::Assert {
-        Command::cargo_bin("jr")
-            .unwrap()
+        let mut cmd = Command::cargo_bin("jr").unwrap();
+        // Scrub ambient JR_* (figment merges Env::prefixed("JR_")); keep only
+        // the seams this harness sets itself below (P6-004).
+        common::hermetic::scrub_ambient_jr_env(
+            &mut cmd,
+            &[
+                "JR_BASE_URL",
+                "JR_AUTH_HEADER",
+                "JR_CACHE_DIR",
+                "JR_CONFIG_DIR",
+            ],
+        );
+        cmd.current_dir(self.cwd.path())
             .env("JR_BASE_URL", self.server.uri())
             .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
             .env("XDG_CACHE_HOME", self.cache_dir.path())
             .env("JR_CACHE_DIR", self.cache_dir.path().join("jr"))
             .env("XDG_CONFIG_HOME", self.config_dir.path())
             .env("JR_CONFIG_DIR", self.config_dir.path().join("jr"))
-            .args(args)
-            .assert()
+            .args(args);
+        cmd.assert()
     }
 }
 
