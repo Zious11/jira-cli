@@ -977,7 +977,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert_no_control_bytes(&msg);
-        assert!(msg.contains("Multiple users match \"Mallory Eve\":"), "{msg:?}");
+        assert!(
+            msg.contains("Multiple users match \"Mallory Eve\":"),
+            "{msg:?}"
+        );
         assert_eq!(msg.lines().count(), 1, "{msg:?}");
 
         // None: this function does not itself echo `name` here (the caller's
