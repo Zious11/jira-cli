@@ -74,7 +74,7 @@ All notable changes to jr will be documented here.
   against the same cached `(id, name)` list (e.g. `issuetype`, `priority`,
   returning the list's canonical id; no extra HTTP), and only then by name.
   An ID match wins over a name collision; there is no substring matching on
-  IDs. Both ambiguity hints now read "the field ID (e.g. customfield_NNNNN
+  IDs. All three ambiguity messages now read "the field ID (e.g. customfield_NNNNN
   or a system id like issuetype)".
 - **`jr field options <FIELD>` now resolves a real label for system-typed
   fields, not just custom select fields** (issue #861, BC-X.14.001,
@@ -282,8 +282,8 @@ All notable changes to jr will be documented here.
     known limitation and a follow-up enhancement (add `email`/`accountId`
     to the `Ambiguous` branch's labels/message, mirroring
     `ExactMultiple`), not fixed by this change.
-- **Table/human output now strips every Unicode format (Cf) character plus
-  blank-rendering fillers (FIX-P5-004, expanded by FIX-P5-005/D-399,
+- **The table/human sanitizer policy now strips every Unicode format (Cf)
+  character plus blank-rendering fillers (FIX-P5-004, expanded by FIX-P5-005/D-399,
   BC-7.1.006 EC-18..EC-23, CWE-451):** the shared per-character policy
   behind `sanitize_table_cell`, `sanitize_terminal_text` and
   `sanitize_terminal_line` (`classify_default_char`) now drops the full
@@ -300,8 +300,11 @@ All notable changes to jr will be documented here.
   sequences (and legitimate LRM/RLM/ZWNJ in RTL names) lose those
   characters in table/human output, and visible-ish prepended marks
   (`U+0600`-`U+0605`, `U+06DD`, `U+0890`-`U+0891`, `U+08E2`, `U+110BD`,
-  `U+110CD`) and soft hyphen are stripped. `--output json` is never
-  sanitized and is unaffected.
+  `U+110CD`) and soft hyphen are stripped. The policy applies to the
+  covered sinks (`render_table`/`render_table_with_styles` and the sinks
+  listed in BC-7.1.006's Canonical Sink Inventory); sinks not yet covered
+  there remain unsanitized. `--output json` is never sanitized and is
+  unaffected.
 
 ## [0.7.0] - 2026-09-23
 

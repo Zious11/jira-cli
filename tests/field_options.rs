@@ -1,16 +1,10 @@
 //! Integration tests for `jr field options <field>` (issue #580, S-580-1).
 //!
-//! Red Gate suite (Step 3, strict TDD). `src/cli/field.rs::handle` is a
-//! `todo!()` stub as of this pass — EVERY test below must currently FAIL by
-//! panicking on that `todo!()` (surfaced by the subprocess as a non-zero,
-//! non-64 exit code with a panic message on stderr), except
-//! `test_bc_x_14_001_get_createmeta_fields_paginates_all_pages`'s underlying
-//! HTTP-pagination mechanism (`JiraClient::get_createmeta_fields`), which is
-//! ALREADY fully implemented in the stub — that single test is still Red
-//! today (because `handle()` itself is `todo!()` and panics before ever
-//! reaching the pagination logic), but is flagged as a REGRESSION PIN: once
-//! `handle()` is implemented, this test's real job is to confirm the
-//! pre-existing pagination code, not to validate new implementer work.
+//! Covers the three field-context mechanisms (M1 editmeta via `--issue`, M2
+//! createmeta via `--type`, M3 JSM request-type fields via `--request-type`),
+//! the `--value` filter, the system-field-ID / name resolution order, the
+//! label fallback for system-typed fields, `get_createmeta_fields`
+//! pagination, and the exit-64 / sanitized-error paths (BC-X.14.004).
 //!
 //! Pattern mirrors `tests/requesttype_commands.rs`: subprocess (`assert_cmd`)
 //! + wiremock + `JR_BASE_URL`/`JR_AUTH_HEADER` env overrides + isolated
@@ -1208,7 +1202,19 @@ async fn test_bc_x_14_001_m1_stray_project_harmlessly_ignored() {
 /// via name lookup) echoed in the M1 "not on the Edit screen" error is
 /// sanitized on both stderr and the JSON `"error"` field.
 #[tokio::test]
-async fn test_bc_x_14_004_not_available_field_id_echo_is_sanitized_in_stderr_and_json() {
+async fn test_bc_x_14_004_not_available_field_id_echo_is_sanitized_in_stderr() {
+    assert_not_available_field_id_echo_is_sanitized(false).await;
+}
+
+/// JSON-mode twin of the table-mode test above. Each mode builds its own
+/// harness (fresh config dir), so neither depends on the other having already
+/// consumed the one-time legacy-config migration notice.
+#[tokio::test]
+async fn test_bc_x_14_004_not_available_field_id_echo_is_sanitized_in_json() {
+    assert_not_available_field_id_echo_is_sanitized(true).await;
+}
+
+async fn assert_not_available_field_id_echo_is_sanitized(json_mode: bool) {
     let h = Harness::new().await;
     mount_list_fields(
         &h.server,
@@ -1222,41 +1228,42 @@ async fn test_bc_x_14_004_not_available_field_id_echo_is_sanitized_in_stderr_and
     .await;
     mount_editmeta(&h.server, "FOO-1", json!({})).await;
 
-    for json_mode in [false, true] {
-        let mut args = vec!["field", "options", "Hostile Field", "--issue", "FOO-1"];
-        if json_mode {
-            args.extend(["--output", "json"]);
-        }
-        args.push("--no-input");
-        let assert = h.cmd(&args);
-        let output = assert.get_output();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        assert_eq!(output.status.code(), Some(64), "stderr: {stderr}");
-        let text = if json_mode {
-            let v: Value = serde_json::from_str(stderr.trim())
-                .or_else(|_| serde_json::from_str(stdout.trim()))
-                .unwrap_or_else(|e| {
-                    panic!("no JSON error ({e}); stderr={stderr:?} stdout={stdout:?}")
-                });
-            v["error"].as_str().expect("error string").to_string()
-        } else {
-            // Drop the one-time config-migration notice line; keep the error.
-            let at = stderr.find("Error:").expect("Error: line on stderr");
-            stderr[at..].to_string()
-        };
-        assert!(text.contains("is not on the Edit screen"), "{text:?}");
-        assert!(text.contains("Field 'customfield_1 FAKE'"), "{text:?}");
-        assert!(
-            !text.contains('\u{1b}') && !text.contains('\u{7}'),
-            "{text:?}"
-        );
-        assert_eq!(text.trim_end().lines().count(), 1, "multi-line: {text:?}");
-        assert!(
-            !stderr.contains('\u{1b}') && !stderr.contains('\u{7}'),
-            "{stderr:?}"
-        );
+    let mut args = vec!["field", "options", "Hostile Field", "--issue", "FOO-1"];
+    if json_mode {
+        args.extend(["--output", "json"]);
     }
+    args.push("--no-input");
+    let assert = h.cmd(&args);
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert_eq!(output.status.code(), Some(64), "stderr: {stderr}");
+    let text = if json_mode {
+        // A one-time config-migration notice may precede the JSON error on
+        // stderr; parse from the first '{' so the test does not depend on it.
+        let from_stderr = stderr
+            .find('{')
+            .and_then(|at| serde_json::from_str::<Value>(stderr[at..].trim()).ok());
+        let v: Value = from_stderr
+            .or_else(|| serde_json::from_str(stdout.trim()).ok())
+            .unwrap_or_else(|| panic!("no JSON error; stderr={stderr:?} stdout={stdout:?}"));
+        v["error"].as_str().expect("error string").to_string()
+    } else {
+        // Drop the one-time config-migration notice line; keep the error.
+        let at = stderr.find("Error:").expect("Error: line on stderr");
+        stderr[at..].to_string()
+    };
+    assert!(text.contains("is not on the Edit screen"), "{text:?}");
+    assert!(text.contains("Field 'customfield_1 FAKE'"), "{text:?}");
+    assert!(
+        !text.contains('\u{1b}') && !text.contains('\u{7}'),
+        "{text:?}"
+    );
+    assert_eq!(text.trim_end().lines().count(), 1, "multi-line: {text:?}");
+    assert!(
+        !stderr.contains('\u{1b}') && !stderr.contains('\u{7}'),
+        "{stderr:?}"
+    );
 }
 
 /// AC-007 / EC-3.4.015-7 parallel: `--issue <KEY>` not found (404) -> exit

@@ -343,7 +343,7 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | `jr component rename OLD NEW` | Rename a component (`--project` for single-project, or `--all-projects` fan-out; `--dry-run` to preview) |
 | `jr requesttype list` | List JSM request types for the project's service desk (7d cache) |
 | `jr requesttype fields <NAME\|ID>` | Show fields for a request type (partial name match or numeric ID) |
-| `jr field options <NAME>` | Enumerate a field's allowed options (custom or system fields) via one of `--type` (project+issue-type createmeta), `--request-type` (JSM request-type fields), or `--issue KEY` (issue editmeta) — exactly one required. `--project` is a companion flag (required-or-defaulted for `--type`, optional for `--request-type`, ignored for `--issue`). `--value` filters results by a case-insensitive substring |
+| `jr field options <NAME>` | Enumerate a field's allowed options (custom or system fields; `<NAME>` may be a field name, a `customfield_NNNNN` ID, or a system field ID such as `issuetype` or `priority`) via one of `--type` (project+issue-type createmeta), `--request-type` (JSM request-type fields), or `--issue KEY` (issue editmeta) — exactly one required. `--project` is a companion flag (required-or-defaulted for `--type`, optional for `--request-type`, ignored for `--issue`). `--value` filters results by a case-insensitive substring |
 | `jr completion bash\|zsh\|fish` | Generate shell completions |
 
 ## Global Flags

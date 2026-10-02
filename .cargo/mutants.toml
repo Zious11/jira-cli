@@ -59,9 +59,15 @@ examine_globs = [
     # context-mechanism resolution (`resolve_field_context`, `resolve_m2_project`), the
     # normalized `FieldOption` model builders (`normalize_from_allowed_values`,
     # `normalize_from_valid_values`), and the `--value` filter (`filter_options`).
+    # Cycle-014 F5 added security functions here: `search_field_list` (exact
+    # field-ID step + three ambiguity messages), `candidate_labels`, and the
+    # sanitizing builders `field_not_available_for_type_msg`,
+    # `field_not_available_on_request_type_msg`, `field_not_on_edit_screen_msg`,
+    # `field_not_found_msg`.
     # Previously absent from examine_globs — same class of gap as MAINT-MUTANTS-GLOBS-01's
     # sibling-candidates review, but this one was an outright omission, not a deferral.
-    # ~91 mutants. (added FIX-F6-MUTANTS-SCOPE)
+    # Mutant count is not tracked here (~91 when the file was added).
+    # (added FIX-F6-MUTANTS-SCOPE)
     "src/cli/field.rs",
     # HIGH-value: `resolve_edit_fields`/`dispatch_field_value` — the shared `--field`
     # resolution/dispatch hub for BOTH `issue edit --field` and `issue create --field`
@@ -77,7 +83,8 @@ examine_globs = [
     # class as attachments.rs::display_sanitize_filename. Cycle-014 F5 added
     # more security functions to this file: `sanitize_table_cell`,
     # `sanitize_terminal_line`, `classify_default_char`, `is_cf`,
-    # `sanitize_control_and_ansi_core`, `render_table_with_styles` (FIX-P5-006).
+    # `sanitize_control_and_ansi_core`, and `render_table_with_styles_inner` (home of
+    # the structural color gate; `render_table_with_styles` wraps it) (FIX-P5-006).
     # Whole-file scope brings render_table/render_json in too — accepted,
     # tracked, same as main.rs/queue.rs.
     "src/output.rs",
