@@ -95,6 +95,17 @@ All notable changes to jr will be documented here.
 
 ### Security
 
+- **`jr field options` now sanitizes the echoed field ID and field-name query
+  in its "not available"/"not found" errors (FIX-P5-007, BC-X.14.004
+  EC-X.14.004-10, SEC6-002/CR6-002, D-401, CWE-150/CWE-116):** the M1 "not on
+  the Edit screen", M2 "not available for issue type" and M3 "not available on
+  request type" messages route the resolved field ID, and the "Field '...' not
+  found" message routes the echoed query, through
+  `output::sanitize_terminal_line`, so a hostile server-supplied field ID can no
+  longer inject ANSI/OSC sequences, C1 controls, or a fabricated extra line into
+  stderr or the `--output json` `"error"` field. Message templates, exit code 64
+  and the JSON envelope are unchanged.
+
 - **`jr field options` field-ambiguity errors now sanitize server-supplied
   candidate names and IDs (FIX-P5-006, BC-X.14.004 EC-X.14.004-9, SEC5-002,
   D-400, CWE-150/CWE-116):** all three `search_field_list` ambiguity
