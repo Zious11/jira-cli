@@ -1940,8 +1940,9 @@ mod tests {
     ///
     /// Styling is forced ON via the `force_styling` test seam
     /// (`render_table_with_styles_inner`) so the assertion is meaningful
-    /// under `cargo test`'s captured (non-TTY) stdout — without it,
-    /// `comfy_table`'s own TTY gate would suppress ANSI regardless of `fg`,
+    /// regardless of whether the runner's stdout is a terminal (libtest's
+    /// capture does not redirect fd 1) — without it, when stdout is not a
+    /// TTY, `comfy_table`'s own TTY gate would suppress ANSI regardless of `fg`,
     /// making "no ANSI present" trivially true for the WRONG reason.
     ///
     /// `render_table_with_styles_inner` now gates `fg` application on

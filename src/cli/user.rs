@@ -354,11 +354,13 @@ mod tests {
     /// return the BARE glyph, no ANSI bytes embedded in the `String`,
     /// regardless of whether color is currently enabled.
     ///
-    /// Deterministic without a real TTY: `colored`'s own suppression when
-    /// stdout isn't a terminal (the default under `cargo test`, where
-    /// stdout is captured) would make this assertion trivially true for
-    /// the WRONG reason — not because `format_active` is structural, but
-    /// because `colored` isn't emitting ANSI at all in this process.
+    /// Deterministic regardless of terminal state: `colored` suppresses
+    /// color when stdout isn't a terminal, and whether fd 1 is a terminal
+    /// depends on how the test runner was launched (libtest's capture does
+    /// not redirect fd 1; it is piped in CI, for example). Left to that
+    /// ambient state, this assertion could be trivially true for the WRONG
+    /// reason — not because `format_active` is structural, but because
+    /// `colored` isn't emitting ANSI at all in this process.
     /// Forcing the override ON via `ForcedColorOverride` closes that gap:
     /// with color forced on, a non-structural `format_active` would embed
     /// ANSI bytes (`"\x1b[32m✓\x1b[0m"` / `"\x1b[31m✗\x1b[0m"`), so this
