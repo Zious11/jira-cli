@@ -491,6 +491,16 @@ fn is_customfield_literal(query: &str) -> bool {
 /// the system field-ID forms.
 const FIELD_ID_HINT: &str = "the field ID (e.g. customfield_NNNNN or a system id like issuetype)";
 
+/// Format ambiguity candidates as `name (id)`, sanitizing every
+/// server-supplied name and id (SEC5-002, CWE-150/CWE-116).
+fn candidate_labels(matches: &[&(String, String)]) -> Vec<String> {
+    use crate::output::sanitize_terminal_line as clean;
+    matches
+        .iter()
+        .map(|(id, n)| format!("{} ({})", clean(n), clean(id)))
+        .collect()
+}
+
 /// Search a resolved `(id, name)` field list for `query` — exact
 /// case-insensitive field-ID match first (system ids such as `issuetype`;
 /// wins on collision; exact only), then exact case-insensitive name match,
@@ -502,6 +512,10 @@ fn search_field_list(
     query_lower: &str,
     query: &str,
 ) -> Result<Option<String>> {
+    // SEC5-002 (FIX-P5-006, EC-X.14.004-9): the echoed query is user input,
+    // but is sanitized too — cheap, and it keeps stderr/JSON free of raw
+    // control bytes even for a pasted hostile string.
+    let q = crate::output::sanitize_terminal_line(query);
     // Step 3a (FIX-P5-005, CR4-002): exact ASCII-case-insensitive FIELD ID
     // match wins over any name match (system ids like `issuetype`). Exact
     // only — never a substring match on IDs. Returns the list's canonical id.
@@ -513,9 +527,9 @@ fn search_field_list(
         return Ok(Some(by_id[0].0.clone()));
     }
     if by_id.len() > 1 {
-        let candidates: Vec<String> = by_id.iter().map(|(id, n)| format!("{n} ({id})")).collect();
+        let candidates = candidate_labels(&by_id);
         return Err(JrError::UserError(format!(
-            "Field ID '{query}' matches multiple fields: {}. Use {FIELD_ID_HINT} to disambiguate.",
+            "Field ID '{q}' matches multiple fields: {}. Use {FIELD_ID_HINT} to disambiguate.",
             candidates.join(", ")
         ))
         .into());
@@ -529,9 +543,9 @@ fn search_field_list(
         return Ok(Some(exact[0].0.clone()));
     }
     if exact.len() > 1 {
-        let candidates: Vec<String> = exact.iter().map(|(id, n)| format!("{n} ({id})")).collect();
+        let candidates = candidate_labels(&exact);
         return Err(JrError::UserError(format!(
-            "Field name '{query}' matches multiple fields: {}. Use {FIELD_ID_HINT} to \
+            "Field name '{q}' matches multiple fields: {}. Use {FIELD_ID_HINT} to \
              disambiguate.",
             candidates.join(", ")
         ))
@@ -546,9 +560,9 @@ fn search_field_list(
         return Ok(Some(sub[0].0.clone()));
     }
     if sub.len() > 1 {
-        let candidates: Vec<String> = sub.iter().map(|(id, n)| format!("{n} ({id})")).collect();
+        let candidates = candidate_labels(&sub);
         return Err(JrError::UserError(format!(
-            "Field name '{query}' is ambiguous — matches: {}. Use a more specific name or \
+            "Field name '{q}' is ambiguous — matches: {}. Use a more specific name or \
              {FIELD_ID_HINT}.",
             candidates.join(", ")
         ))
@@ -1056,6 +1070,71 @@ mod tests {
         assert_eq!(r, Some("issuetype".to_string()), "via NAME substring");
         let list2 = vec![("issuetype".to_string(), "Kind".to_string())];
         assert_eq!(search_field_list(&list2, "issuet", "issuet").unwrap(), None);
+    }
+
+    /// SEC5-002 / EC-X.14.004-9: every server-supplied candidate name/id in
+    /// all three ambiguity branches is run through `sanitize_terminal_line`.
+    #[test]
+    fn test_bc_x_14_004_ambiguity_candidates_are_sanitized() {
+        fn assert_clean(msg: &str) {
+            assert!(!msg.contains('\u{1b}'), "ESC leaked: {msg:?}");
+            assert!(!msg.contains('\u{7}'), "BEL leaked: {msg:?}");
+            assert!(!msg.contains('\n'), "newline leaked: {msg:?}");
+            assert!(
+                !msg.chars().any(|c| ('\u{80}'..='\u{9f}').contains(&c)),
+                "C1 leaked: {msg:?}"
+            );
+        }
+        // Branch 1: duplicate IDs (case-insensitive).
+        let dup_id = vec![
+            (
+                "issuetype".to_string(),
+                "A\u{1b}[31mRED\u{1b}[0m".to_string(),
+            ),
+            ("IssueType".to_string(), "B\u{1b}]0;t\u{7}x".to_string()),
+        ];
+        let msg = format!(
+            "{}",
+            search_field_list(&dup_id, "issuetype", "issuetype").unwrap_err()
+        );
+        assert_clean(&msg);
+        assert!(msg.contains("ARED"), "{msg}");
+        assert!(msg.contains("Bx (IssueType)"), "{msg}");
+        // Hostile ids (and hostile echoed query) in the same branch.
+        let hostile_id = vec![
+            ("x\u{1b}[31my".to_string(), "N1".to_string()),
+            ("X\u{1b}[31mY".to_string(), "N2".to_string()),
+        ];
+        let hq = "x\u{1b}[31my";
+        let msg = format!("{}", search_field_list(&hostile_id, hq, hq).unwrap_err());
+        assert_clean(&msg);
+        assert!(msg.contains("N1 (xy)") && msg.contains("N2 (XY)"), "{msg}");
+        // Branch 2: exact-name duplicates (identical under to_lowercase).
+        let exact_hostile = vec![
+            ("customfield_1".to_string(), "Dup\u{1b}[31m\nZ".to_string()),
+            ("customfield_2".to_string(), "dup\u{1b}[31m\nz".to_string()),
+        ];
+        let q = "dup\u{1b}[31m\nz";
+        let msg = format!("{}", search_field_list(&exact_hostile, q, q).unwrap_err());
+        assert!(msg.contains("matches multiple fields"), "{msg}");
+        assert!(msg.contains("Dup Z (customfield_1)"), "{msg}");
+        assert!(msg.contains("dup z (customfield_2)"), "{msg}");
+        assert_clean(&msg);
+        // Branch 3: substring ambiguity.
+        let sub = vec![
+            (
+                "customfield_1".to_string(),
+                "Dup A\u{1b}[31m\nFAKE".to_string(),
+            ),
+            (
+                "customfield_2".to_string(),
+                "Dup B\u{9b}1m\u{1b}]0;t\u{7}".to_string(),
+            ),
+        ];
+        let msg = format!("{}", search_field_list(&sub, "dup", "dup").unwrap_err());
+        assert_clean(&msg);
+        assert!(msg.contains("Dup A FAKE (customfield_1)"), "{msg}");
+        assert!(msg.contains("Dup B1m (customfield_2)"), "{msg}");
     }
 
     #[test]
