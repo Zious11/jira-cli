@@ -55,20 +55,21 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// `src/output.rs`'s own EC-1/EC-5-flavored unit-test pin).
 const HOSTILE_PAYLOAD: &str = "\u{1b}[31mFAKE\u{1b}[0m\u{9b}pwned";
 
-/// Asserts `stdout` contains neither a raw ESC byte (`U+001B`) nor any
+/// Asserts `output` (stdout or stderr; the caller's `context` label names
+/// which) contains neither a raw ESC byte (`U+001B`) nor any
 /// character in the C1 control range `U+0080`-`U+009F` — the exact
-/// table-mode guarantee VP-SEC-001-001(c) requires. Decoding via
+/// human-output guarantee VP-SEC-001-001(c) requires. Decoding via
 /// `String::from_utf8_lossy` (not a raw byte scan) so a multi-byte UTF-8
 /// encoding of a C1 code point is caught via its decoded `char`, not missed
 /// by a byte-level substring search.
-fn assert_no_esc_or_c1(stdout: &str, context: &str) {
+fn assert_no_esc_or_c1(output: &str, context: &str) {
     assert!(
-        !stdout.contains('\u{1b}'),
-        "{context}: raw ESC byte must not survive in --output table stdout: {stdout:?}"
+        !output.contains('\u{1b}'),
+        "{context}: raw ESC byte must not survive in the output: {output:?}"
     );
     assert!(
-        !stdout.chars().any(|c| (0x80..=0x9F).contains(&(c as u32))),
-        "{context}: raw C1 code point must not survive in --output table stdout: {stdout:?}"
+        !output.chars().any(|c| (0x80..=0x9F).contains(&(c as u32))),
+        "{context}: raw C1 code point must not survive in the output: {output:?}"
     );
 }
 
