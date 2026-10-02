@@ -526,7 +526,8 @@ fn search_field_list(
     if by_id.len() == 1 {
         return Ok(Some(by_id[0].0.clone()));
     }
-    if by_id.len() > 1 {
+    // len == 1 was handled above, so non-empty here means 2+ matches.
+    if !by_id.is_empty() {
         let candidates = candidate_labels(&by_id);
         return Err(JrError::UserError(format!(
             "Field ID '{q}' matches multiple fields: {}. Use {FIELD_ID_HINT} to disambiguate.",
@@ -542,7 +543,8 @@ fn search_field_list(
     if exact.len() == 1 {
         return Ok(Some(exact[0].0.clone()));
     }
-    if exact.len() > 1 {
+    // len == 1 was handled above, so non-empty here means 2+ matches.
+    if !exact.is_empty() {
         let candidates = candidate_labels(&exact);
         return Err(JrError::UserError(format!(
             "Field name '{q}' matches multiple fields: {}. Use {FIELD_ID_HINT} to \
@@ -559,7 +561,8 @@ fn search_field_list(
     if sub.len() == 1 {
         return Ok(Some(sub[0].0.clone()));
     }
-    if sub.len() > 1 {
+    // len == 1 was handled above, so non-empty here means 2+ matches.
+    if !sub.is_empty() {
         let candidates = candidate_labels(&sub);
         return Err(JrError::UserError(format!(
             "Field name '{q}' is ambiguous — matches: {}. Use a more specific name or \
