@@ -373,11 +373,9 @@ fn sanitize_control_and_ansi_core(
 ///
 /// `render_table` and its styled sibling [`render_table_with_styles`] are
 /// the two table-mode rendering chokepoints — `render_table` is called
-/// both directly (9 production call sites: `issue/attachments.rs` x4,
-/// `assets/view.rs` x2, `assets/schemas.rs`, `auth/list.rs`,
-/// `issue/view.rs`) and indirectly via `print_output` (~30 call sites);
+/// both directly and indirectly via `print_output`;
 /// `render_table_with_styles` is called via `print_output_with_styles`,
-/// used only by `jr user list`/`jr user view` (`src/cli/user.rs`). This
+/// used by `jr user list`/`jr user view` (`src/cli/user.rs`). This
 /// function is the single chokepoint-level place a server-supplied string
 /// (an issue summary, a field option label, a comment body fragment, a
 /// display name, ...) gets made safe for a terminal that interprets raw
@@ -386,129 +384,20 @@ fn sanitize_control_and_ansi_core(
 /// or `render_table_with_styles` is required to sanitize its own inputs
 /// before passing them in.
 ///
-/// **Coverage claim, precisely stated (SEC-003/D-394/D-395/D-396, FIX-P5-001,
-/// FIX-P5-002):** this sanitization family covers all of `render_table`/
-/// `render_table_with_styles` output, PLUS three non-table human (non-JSON)
-/// print/error-message sites that sanitize server-supplied text directly at
-/// their own construction sites instead of going through either table
-/// chokepoint. Which sibling each uses matters (CR-1, D-396): a sink that
-/// renders EXACTLY ONE line uses [`sanitize_terminal_line`] (embedded `\n`
-/// becomes a space, so a hostile value cannot fabricate an extra line or
-/// field); only genuinely multi-line content uses [`sanitize_terminal_text`]
-/// (this function's `\n`-preserving alias):
-/// - `jr issue comment view`'s human output
-///   (`src/cli/issue/interactions.rs::handle_comment_view`), which prints
-///   its fields and ADF-derived body directly via `print!`/`println!`. Its
-///   six labeled fields (`ID`/`Author`/`Created`/`Updated`/`JSM internal`/
-///   `Restricted`) use [`sanitize_terminal_line`]; ONLY its ADF-derived
-///   body block uses [`sanitize_terminal_text`].
-/// - `jr issue assign`'s human-output success messages
-///   (`src/cli/issue/workflow.rs::handle_assign`), which echo the
-///   server-derived assignee `display_name` at both the idempotent
-///   already-assigned site (`"{key} is already assigned to {name}"`) and
-///   the newly-assigned/self-assign site (`"Assigned {key} to {name}"`),
-///   via `output::print_success` and [`sanitize_terminal_line`].
-/// - `disambiguate_user`'s shared user-resolution disambiguation output
-///   (`src/cli/issue/helpers.rs::disambiguate_user`), reached by
-///   `resolve_assignee` (`jr issue assign --to`), `resolve_assignee_by_project`
-///   (`jr issue create --to`, its only call site; `issue edit` has no
-///   assignee flag), `resolve_user`
-///   (`jr issue list --assignee`/`--reporter`), and
-///   `mentions::resolve_at_name_candidate` (`@Name` mention resolution): its
-///   `MatchResult::ExactMultiple` and `MatchResult::Ambiguous`
-///   non-interactive `JrError::UserError` messages, its interactive
-///   `dialoguer::Select` labels/items (the `ExactMultiple` labels via the
-///   factored-out `disambiguation_labels` helper,
-///   `src/cli/issue/helpers.rs`), and the `MatchResult::None` branch's
-///   `all_names` candidate list — all via [`sanitize_terminal_line`],
-///   sanitized once, before it is handed to the caller-supplied
-///   `none_msg_fn` closure, covering all four callers uniformly. Unlike the
-///   two sinks above, `disambiguate_user`'s `--output json` error envelope
-///   is NOT a separate lossless channel: `src/main.rs`'s single
-///   error-formatting site builds both the human-text and JSON `"error"`
-///   field from the same already-sanitized `JrError::UserError` `Display`
-///   string, so both channels render identically sanitized text.
+/// **Which sinks are covered or residual:** see BC-7.1.006 "Canonical Sink
+/// Inventory" (`.factory/specs/prd/bc-7-output-render.md`) — that list is
+/// the single source of truth and is deliberately NOT restated here. The
+/// absence of a site from it is NOT evidence the site is sanitized.
 ///
-/// This is NOT "every table-mode command" and was never meant to be read
-/// that broadly — a number of other human-text call sites print
-/// server-supplied strings without routing through this function at all.
-/// Those are tracked as the **NONTABLE-SERVER-TEXT-SANITIZE** residual — a
-/// KNOWN, NON-EXHAUSTIVE inventory for anyone auditing sanitization
-/// coverage rather than re-discovering them one at a time. Every entry
-/// below has been verified against the code as of the cited fix, but the
-/// absence of a site from this list is NOT evidence it's sanitized — only
-/// entries present have been checked:
-/// - `src/cli/project.rs` — `jr project fields`'s issue-type/priority/status/
-///   CMDB-field name lists (`println!` loops over server-supplied names).
-/// - `src/cli/issue/workflow.rs`:
-///   - `jr issue transitions`'s and `jr issue move`'s interactive/listing
-///     transition-name prompts (`eprintln!`/`dialoguer::Select` item text).
-///   - `handle_move`/`handle_move_bulk`'s status-name echoes on a
-///     successful move (`output::print_success`, e.g. `Moved {key} to
-///     "{status}"`, `{key} is already in status "{status}"`).
-///   - `handle_move_bulk`'s per-key bulk-transition error line
-///     (`eprintln!("error: {key}: {err_msg}")`), where `err_msg` is
-///     `BulkActionError::summary()` — raw Jira bulk-API error text.
-///   - (`handle_assign` is NOT in this residual list — see above, it is a
-///     covered non-table sink as of D-394.)
-/// - `src/cli/issue/create.rs::handle_create` — the table-mode field-echo
-///   loop (`create_echo`), which prints the raw, unsanitized `--to`-resolved
-///   assignee `displayName` and resolved team name (same exposure class as
-///   the now-covered `handle_assign` sink; found during D-396).
-/// - `src/cli/issue/helpers.rs::resolve_asset` — the Assets `--asset`
-///   disambiguation flow, which puts raw `label`/`object_key` into both its
-///   `JrError` messages and its interactive picker items.
-/// - `src/cli/issue/links.rs` — `handle_link`'s link-creation confirmation
-///   echo of the server-resolved link-type name (`resolved_name`, drawn
-///   from `list_link_types()`'s response via `partial_match`;
-///   `output::print_success`).
-/// - `src/cli/sprint.rs` — `jr sprint current`'s summary-line hint
-///   (`eprintln!`).
-/// - `src/cli/component.rs`:
-///   - `jr component delete`'s confirmation/result echo of the component
-///     name (`eprintln!`).
-///   - `jr component list --counts`'s per-component fetch-failure warning,
-///     which echoes the component's `name` alongside the raw server error
-///     (`eprintln!`).
-///   - `jr component create`/`edit`'s confirmation echo of the server
-///     response's `name`/`project` fields (`eprintln!`).
-///   - `jr component rename`'s `--dry-run` preview and `--all-projects`
-///     live fan-out summary, which echo the server-supplied project key
-///     (`t.project`) for each target (`eprintln!`).
-/// - `src/cli/field.rs` — `jr field options`:
-///   - `resolve_request_type_id`'s `ExactMultiple`/`Ambiguous`
-///     `JrError::UserError` arms, which echo raw server request-type names
-///     (stderr and the JSON `"error"` field).
-///   - the `"Issue type '…' not found"` `UserError` in the `--type` path,
-///     which lists raw server issue-type names.
-///   - the graceful-degrade hint (`degrade_hint_for_schema`, `eprintln!`),
-///     which echoes the field `display_name` and `autoCompleteUrl`.
+/// **Which sibling to use:** a sink that renders EXACTLY ONE line uses
+/// [`sanitize_terminal_line`] (embedded `\n` becomes a space, so a hostile
+/// value cannot fabricate an extra line or field, CR-1); only genuinely
+/// multi-line content uses [`sanitize_terminal_text`] (this function's
+/// `\n`-preserving alias). Using [`sanitize_terminal_text`] for a
+/// single-line sink would reopen CR-1.
 ///
-///   `search_field_list`'s ambiguity errors are covered as of FIX-P5-006.
-/// - `src/cli/board.rs` — the single-board auto-discovery notice, which
-///   echoes the server's board `name`/`board_type` (`eprintln!`).
-/// - `src/cli/init.rs` — the interactive board-selection prompt's item
-///   text, built from the server's board `name`/`board_type`
-///   (`dialoguer::Select`).
-/// - `JrError` variants that echo a raw server-supplied error body/message
-///   string into their `Display` output, which callers then print to
-///   stderr. This includes `jr issue comment view`'s own 404/403 error
-///   branch (`handle_comment_view` returns early with the raw body before
-///   any of its sanitized print sites below run). **Excludes**
-///   `disambiguate_user`'s `ExactMultiple`/`Ambiguous`/`None`-branch
-///   `JrError::UserError` messages, covered above as of D-395 — other
-///   `JrError` bodies throughout the codebase remain residual.
-///
-/// None of these residuals are closed by this function, SEC-003, D-394, or
-/// D-395; SEC-003's scope is `jr issue comment view`'s successful-fetch
-/// human output, D-394's scope is `jr issue assign`'s human-output success
-/// messages, and D-395's scope is `disambiguate_user`'s shared
-/// disambiguation output, all covered above. A future fix closing any
-/// NONTABLE-SERVER-TEXT-SANITIZE site should route it through
-/// [`sanitize_terminal_line`] if the sink renders exactly one line (the
-/// common case), or [`sanitize_terminal_text`] only for genuinely multi-line
-/// content, and remove it from this list. Using [`sanitize_terminal_text`] for
-/// a single-line sink would reopen CR-1.
+/// `jr api`'s raw response-body passthrough is a deliberate, documented
+/// exception (`gh api` parity) and is never sanitized.
 ///
 /// Per-character policy, applied left to right over the whole string
 /// (BC-7.1.006):
@@ -587,22 +476,15 @@ pub(crate) fn sanitize_table_cell(value: &str) -> String {
 /// the call site (there is no table involved) while the `\n`-preserving
 /// policy is still exactly what's needed.
 ///
-/// **As of D-396/FIX-P5-002, this function has exactly ONE caller left:**
-/// `jr issue comment view`'s ADF-derived body block
-/// (`src/cli/issue/interactions.rs::handle_comment_view`, SEC-003) — the
-/// unlabeled, free-form comment-prose field that is the one genuinely
-/// multi-line non-table sink this BC covers. Every other sink that used to
-/// route through this alias (`handle_comment_view`'s six labeled fields,
-/// `handle_assign`'s two success messages, and `disambiguate_user`'s
-/// non-interactive messages/interactive picker labels — all of which render
-/// exactly ONE line of text) was rewired to the single-line sibling
-/// [`sanitize_terminal_line`] by D-396/FIX-P5-002, which neutralizes an
-/// embedded `\n` instead of preserving it (CR-1, EC-17) — preserving `\n`
-/// in a single-line sink let a hostile value fabricate what looks like an
-/// extra labeled field or picker item (CWE-116). Only the CSI/OSC
-/// state-machine engine (`sanitize_control_and_ansi_core`) and the default
-/// per-character policy (`classify_default_char`) are shared with
-/// [`sanitize_terminal_line`]; this function is a pure alias of
+/// Use it only for genuinely multi-line content; every single-line sink
+/// uses [`sanitize_terminal_line`], which neutralizes an embedded `\n`
+/// instead of preserving it (CR-1, EC-17 — a preserved `\n` in a
+/// single-line sink lets a hostile value fabricate an extra labeled field or
+/// picker item, CWE-116). Which call sites use which function: see BC-7.1.006
+/// "Canonical Sink Inventory" (`.factory/specs/prd/bc-7-output-render.md`).
+/// Only the CSI/OSC state-machine engine (`sanitize_control_and_ansi_core`)
+/// and the default per-character policy (`classify_default_char`) are shared
+/// with [`sanitize_terminal_line`]; this function is a pure alias of
 /// [`sanitize_table_cell`] and does not fork the policy.
 pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     sanitize_table_cell(value)
@@ -711,28 +593,17 @@ fn classify_default_char(c: char) -> CharDisposition {
 /// [`sanitize_table_cell`]/[`sanitize_terminal_text`]:** those two
 /// functions deliberately PRESERVE `\n`, which is correct for a
 /// genuinely multi-line sink (`render_table`/`render_table_with_styles`
-/// cells, `handle_comment_view`'s ADF-derived body block) — it's the only
-/// mechanism by which a multi-line cell renders at all. But a sink that is
-/// supposed to render EXACTLY ONE line of text has no such excuse: a
-/// hostile value with an embedded `\n` routed through the `\n`-preserving
-/// sanitizer can fabricate what LOOKS like an extra labeled field or picker
-/// item on its own line — a CWE-116 line-fabrication/field-spoofing hazard.
-/// `sanitize_terminal_line` is the fix for exactly that class of sink:
-/// - `disambiguate_user`'s non-interactive `JrError::UserError` messages and
-///   interactive `dialoguer::Select` picker labels/items
-///   (`src/cli/issue/helpers.rs`, including the `disambiguation_labels`
-///   helper).
-/// - `handle_comment_view`'s six labeled fields (`ID`/`Author`/`Created`/
-///   `Updated`/`JSM internal`/`Restricted`) (`src/cli/issue/interactions.rs`)
-///   — but NOT its ADF-derived body block, which stays on
-///   `sanitize_terminal_text` (genuinely multi-line).
-/// - `handle_assign`'s two human-output success messages
-///   (`src/cli/issue/workflow.rs`).
-///
-/// All three sink groups above are wired to this function (FIX-P5-002) —
-/// see BC-7.1.006's EC-17 for the verified-hostile fixture and the contrast
-/// case against the `\n`-preserving `sanitize_terminal_text` this function
-/// closes.
+/// cells, a free-form multi-line body block) — it's the only mechanism by
+/// which a multi-line cell renders at all. But a sink that is supposed to
+/// render EXACTLY ONE line of text has no such excuse: a hostile value with
+/// an embedded `\n` routed through the `\n`-preserving sanitizer can
+/// fabricate what LOOKS like an extra labeled field or picker item on its
+/// own line — a CWE-116 line-fabrication/field-spoofing hazard. This
+/// function is the fix for exactly that class of sink. Which sinks use it:
+/// see BC-7.1.006 "Canonical Sink Inventory"
+/// (`.factory/specs/prd/bc-7-output-render.md`); EC-17 holds the
+/// verified-hostile fixture and the contrast case against the
+/// `\n`-preserving `sanitize_terminal_text`.
 ///
 /// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006 (EC-17) and its
 /// inline `VP-SEC-001-001` for the full contract.
