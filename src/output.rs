@@ -475,8 +475,16 @@ fn sanitize_control_and_ansi_core(
 ///   - `jr component rename`'s `--dry-run` preview and `--all-projects`
 ///     live fan-out summary, which echo the server-supplied project key
 ///     (`t.project`) for each target (`eprintln!`).
-/// - `src/cli/field.rs` — `jr field options`'s graceful-degrade hint
-///   (`degrade_hint_for_schema`, `eprintln!`).
+/// - `src/cli/field.rs` — `jr field options`:
+///   - `resolve_request_type_id`'s `ExactMultiple`/`Ambiguous`
+///     `JrError::UserError` arms, which echo raw server request-type names
+///     (stderr and the JSON `"error"` field).
+///   - the `"Issue type '…' not found"` `UserError` in the `--type` path,
+///     which lists raw server issue-type names.
+///   - the graceful-degrade hint (`degrade_hint_for_schema`, `eprintln!`),
+///     which echoes the field `display_name` and `autoCompleteUrl`.
+///
+///   `search_field_list`'s ambiguity errors are covered as of FIX-P5-006.
 /// - `src/cli/board.rs` — the single-board auto-discovery notice, which
 ///   echoes the server's board `name`/`board_type` (`eprintln!`).
 /// - `src/cli/init.rs` — the interactive board-selection prompt's item
@@ -558,9 +566,10 @@ fn sanitize_control_and_ansi_core(
 /// channel optimizes for terminal safety and scannability, the machine
 /// channel must stay lossless for programmatic consumers.
 ///
-/// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006's edge-case table (EC-1 onward; EC-21..EC-24 cover the Cf
-/// format-character policy) and its inline `VP-SEC-001-001` for the full
-/// edge-case/property contract this function satisfies.
+/// See `.factory/specs/prd/bc-7-output-render.md` BC-7.1.006's edge-case
+/// table (EC-1 onward; EC-21..EC-24 cover the Cf format-character policy)
+/// and its inline `VP-SEC-001-001` for the full edge-case/property contract
+/// this function satisfies.
 pub(crate) fn sanitize_table_cell(value: &str) -> String {
     sanitize_control_and_ansi_core(value, |c| match c {
         '\n' => CharDisposition::Keep,

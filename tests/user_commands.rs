@@ -122,6 +122,13 @@ async fn user_search_limit_truncates_results() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_list_requires_project_flag() {
+    // Asserts: `jr user list` with no resolvable project exits 64 (jr's own
+    // JrError::UserError, not clap's exit 2), stderr mentions `--project`,
+    // and stderr carries no connection-error text. The no-HTTP check is a
+    // PROXY: with the unreachable JR_BASE_URL, an attempted request would
+    // surface connection-error text, but its absence does not strictly prove
+    // zero requests (the sibling wiremock `.expect(0)` test does).
+    //
     // Hermetic per BC-X.7.002 Preconditions / verification-delta.md §2
     // (cycle-014 STORY-A, issue #862): once BC-X.7.002 landed, this test
     // became CONFIG-SENSITIVE — a real developer/CI environment with a
@@ -132,14 +139,11 @@ async fn user_list_requires_project_flag() {
     // scrubbed. The unreachable JR_BASE_URL=http://127.0.0.1:1 is
     // intentionally kept, with no mock server: a stray request fails with a
     // connection error rather than a mock response, which this test's
-    // --project/required stderr assertion rejects — so it still proves zero
-    // successful HTTP calls without needing a live mock server.
+    // no-connection-text assertion rejects.
     //
     // The failure this test pins is never clap's own "required argument"
-    // error — it is jr's own JrError::UserError exit-64 message, which
-    // also contains the literal substring "--project", satisfying the same
-    // loose assertion (BC-X.7.002 Invariants: this test's assertion
-    // continues to accurately describe what it checks — no rename).
+    // error (exit 2) — it is jr's own JrError::UserError exit-64 message
+    // (BC-X.7.002 Invariants: the name is retained, no rename).
     let cache = TempDir::new().unwrap();
     let config = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
