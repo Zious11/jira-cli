@@ -164,11 +164,25 @@ async fn user_list_requires_project_flag() {
 
     let output = cmd.output().unwrap();
 
-    assert!(!output.status.success(), "missing --project should fail");
+    // FIX-P5-006 (P5-005): strengthened from "any failure mentioning
+    // --project or 'required'" (which a connection error to the unreachable
+    // JR_BASE_URL could not satisfy, but a clap exit-2 usage error could).
+    // Pin jr's own exit-64 UserError, a `--project` mention, and the absence
+    // of any connection-error text (proving the guard fired before HTTP).
+    // Retained rather than removed because spec artifacts cite it by name.
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "missing --project must exit 64 (UserError), not clap's exit 2"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("--project") || stderr.contains("required"),
+        stderr.contains("--project"),
         "expected error mentions missing --project, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("127.0.0.1:1") && !stderr.to_lowercase().contains("connection"),
+        "guard must fire before any HTTP attempt, got: {stderr}"
     );
 }
 

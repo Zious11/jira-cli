@@ -3067,3 +3067,84 @@ async fn test_bc_x_14_004_ambiguous_field_name_hint_names_system_id_form() {
         "{stderr}"
     );
 }
+
+/// P5-001 / EC-X.14.001-22: `jr field options --help` documents that
+/// `<FIELD>` accepts a system field ID, not just `customfield_NNNNN` or a
+/// name. clap wraps help text at terminal width, so the assertion runs on
+/// WHITESPACE-NORMALIZED output (every run of whitespace collapsed to one
+/// space) rather than relying on the substring surviving a line wrap.
+#[test]
+fn test_bc_x_14_001_field_options_help_mentions_system_field_ids() {
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .args(["field", "options", "--help"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let normalized = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    for needle in ["customfield_NNNNN", "issuetype", "case-insensitive"] {
+        assert!(
+            normalized.contains(needle),
+            "missing {needle}: {normalized}"
+        );
+    }
+    assert!(
+        normalized.contains(
+            "a customfield_NNNNN literal, a field ID such as issuetype or priority (exact, \
+             case-insensitive), or a field name"
+        ),
+        "{normalized}"
+    );
+    assert!(
+        !normalized.contains("search_field_list") && !normalized.contains("list_fields"),
+        "internal function names must not leak into help: {normalized}"
+    );
+}
+
+/// SEC5-002 / EC-X.14.004-9: server-supplied candidate names in the
+/// field-name ambiguity error are terminal-sanitized on BOTH the stderr
+/// (human) channel and the `--output json` `"error"` field (same
+/// `JrError::UserError` Display feeds both).
+#[tokio::test]
+async fn test_bc_x_14_004_ambiguity_candidates_are_sanitized_in_stderr_and_json() {
+    let h = Harness::new().await;
+    mount_list_fields(
+        &h.server,
+        vec![
+            json!({"id": "customfield_10084", "name": "Dup\u{1b}[31mRED\u{1b}[0m A\nFAKE: line", "custom": true, "schema": null}),
+            json!({"id": "customfield_10085", "name": "Dup\u{1b}]0;title\u{7}B", "custom": true, "schema": null}),
+        ],
+    )
+    .await;
+
+    for json_mode in [false, true] {
+        let mut args = vec!["field", "options", "Dup", "--issue", "FOO-1", "--no-input"];
+        if json_mode {
+            args.extend(["--output", "json"]);
+        }
+        let assert = h.cmd(&args);
+        let output = assert.get_output();
+        assert_eq!(output.status.code(), Some(64));
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let combined = format!("{stderr}{stdout}");
+        assert!(!combined.contains('\u{1b}'), "raw ESC leaked: {combined:?}");
+        assert!(!combined.contains('\u{7}'), "raw BEL leaked: {combined:?}");
+        assert!(
+            combined.contains("DupRED A FAKE: line"),
+            "visible text must survive, newline collapsed to a space: {combined:?}"
+        );
+        assert!(combined.contains("customfield_10085"), "{combined:?}");
+        if json_mode {
+            let text = if stdout.trim_start().starts_with('{') {
+                stdout.clone()
+            } else {
+                stderr.clone()
+            };
+            let v: Value = serde_json::from_str(text.trim()).expect("json error envelope");
+            let err = v["error"].as_str().expect("error string");
+            assert!(!err.contains('\u{1b}') && !err.contains('\n'), "{err:?}");
+        }
+    }
+}
