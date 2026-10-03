@@ -474,6 +474,7 @@ async fn resolve_field_id(
 /// server-supplied id (name lookup), so it is sanitized once here — the
 /// `UserError` Display feeds both stderr and the JSON `"error"` field
 /// (SEC6-002, EC-X.14.004-10, CWE-150/CWE-116).
+/// Only `field_id` is sanitized here; the other interpolated values (`type_name`, `project_key`) are unsanitized user/config echoes, documented residuals (BC-7.1.006 Canonical Sink Inventory).
 fn field_not_available_for_type_msg(field_id: &str, type_name: &str, project_key: &str) -> String {
     let field_id = crate::output::sanitize_terminal_line(field_id);
     format!(
@@ -483,12 +484,14 @@ fn field_not_available_for_type_msg(field_id: &str, type_name: &str, project_key
 }
 
 /// M3 "field not available" message; `field_id` sanitized (SEC6-002).
+/// Only `field_id` is sanitized here; the other interpolated values (`rt_query`) are unsanitized user/config echoes, documented residuals (BC-7.1.006 Canonical Sink Inventory).
 fn field_not_available_on_request_type_msg(field_id: &str, rt_query: &str) -> String {
     let field_id = crate::output::sanitize_terminal_line(field_id);
     format!("Field '{field_id}' is not available on request type '{rt_query}'.")
 }
 
 /// M1 "not on the Edit screen" message; `field_id` sanitized (SEC6-002).
+/// Only `field_id` is sanitized here; the other interpolated values (`issue_key`) are unsanitized user/config echoes, documented residuals (BC-7.1.006 Canonical Sink Inventory).
 fn field_not_on_edit_screen_msg(field_id: &str, issue_key: &str) -> String {
     let field_id = crate::output::sanitize_terminal_line(field_id);
     format!(

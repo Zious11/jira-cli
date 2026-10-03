@@ -296,8 +296,9 @@ All notable changes to jr will be documented here.
     to the `Ambiguous` branch's labels/message, mirroring
     `ExactMultiple`), not fixed by this change.
 - **The table/human sanitizer policy now strips every Unicode format (Cf)
-  character plus blank-rendering fillers (FIX-P5-004, expanded by FIX-P5-005/D-399,
-  BC-7.1.006 EC-18..EC-23, CWE-451):** the shared per-character policy
+  character plus a named set of invisible extras (`U+034F`, the Hangul fillers,
+  and the full tag block) (FIX-P5-004, expanded by
+  FIX-P5-005/D-399, BC-7.1.006 EC-18..EC-24, CWE-451):** the shared per-character policy
   behind `sanitize_table_cell`, `sanitize_terminal_text` and
   `sanitize_terminal_line` (`classify_default_char`) now drops the full
   Unicode 17.0.0 `General_Category=Cf` set (a sorted 21-range table: soft
@@ -309,7 +310,14 @@ All notable changes to jr will be documented here.
   `U+E0000`-`U+E007F`, which could otherwise make two different display
   names render identically. Deliberately KEPT: variation selectors
   (`U+FE00`-`U+FE0F`, `U+E0100`-`U+E01EF`; emoji VS16 must survive,
-  smuggling residual accepted, EC-23). Accepted trade-offs: ZWJ emoji
+  smuggling residual accepted, EC-23). Also deliberately KEPT, as an
+  accepted residual (EC-24, human decision D-400/D-401): blank-rendering
+  characters outside the `Cf`/named-extras policy — `U+2800` (Braille
+  blank), `U+17B4`/`U+17B5` (Khmer inherent vowels), `U+FFFC` (object
+  replacement character), the `Zs` space characters such as `U+00A0` and
+  `U+3000` (legitimate text, e.g. CJK names), and the unassigned code point
+  `U+2065`. The policy is category-based, not an open-ended list of every
+  glyph that renders blank. Accepted trade-offs: ZWJ emoji
   sequences (and legitimate LRM/RLM/ZWNJ in RTL names) lose those
   characters in table/human output, and visible-ish prepended marks
   (`U+0600`-`U+0605`, `U+06DD`, `U+0890`-`U+0891`, `U+08E2`, `U+110BD`,
