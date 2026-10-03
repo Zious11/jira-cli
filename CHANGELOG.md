@@ -296,7 +296,8 @@ All notable changes to jr will be documented here.
     to the `Ambiguous` branch's labels/message, mirroring
     `ExactMultiple`), not fixed by this change.
 - **The table/human sanitizer policy now strips every Unicode format (Cf)
-  character plus a named set of blank-rendering fillers (FIX-P5-004, expanded by
+  character plus a named set of invisible extras (`U+034F`, the Hangul fillers,
+  and the full tag block) (FIX-P5-004, expanded by
   FIX-P5-005/D-399, BC-7.1.006 EC-18..EC-24, CWE-451):** the shared per-character policy
   behind `sanitize_table_cell`, `sanitize_terminal_text` and
   `sanitize_terminal_line` (`classify_default_char`) now drops the full
