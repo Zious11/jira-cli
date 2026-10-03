@@ -26,7 +26,7 @@ src/
 │   │   ├── helpers.rs       # team/points resolution, user resolution, prompts
 │   │   ├── assets.rs        # linked assets (issue→asset lookup)
 │   │   ├── changelog.rs     # issue changelog handler (`jr issue changelog`)
-│   │   ├── field_resolve.rs # field resolution helpers for `issue edit --field`
+│   │   ├── field_resolve.rs # field resolution helpers shared by `issue edit --field` and `issue create --field`
 │   │   ├── attachments.rs   # attachment list handler + display_sanitize_filename (CWE-116, S-576-1)
 │   │   ├── mentions.rs      # effectful mention resolution (@Name / [~accountid:X] → real Jira users) for create/edit/comment write paths, ADR-0023 §1
 │   │   └── json_output.rs   # JSON output helpers for issue commands
@@ -47,15 +47,15 @@ src/
 │   │   ├── status.rs        # auth status: human text + --output json (BC-1.6.050)
 │   │   ├── switch.rs        # auth switch
 │   │   └── tests/           # inline integration tests + insta snapshots
-│   ├── api.rs           # API passthrough command (`jr api`)
+│   ├── api.rs           # API passthrough command (`jr api`): method override, body, headers, `-q`/`--query-param`
 │   ├── board.rs         # board list/view
 │   ├── sprint.rs        # sprint list/current/add/remove (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list
 │   ├── team.rs          # team list (with cache + lazy org discovery)
-│   ├── user.rs          # user search/list/view (thin wrapper over api/jira/users.rs)
+│   ├── user.rs          # user search/list/view; `list` resolves its project via `Config::project_key`, Active column rendered via `StyledCell`
 │   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
 │   ├── project.rs       # project fields (types, priorities, statuses, CMDB fields)
-│   ├── component.rs     # jr component list/create/edit/delete (~1066 LOC; see Known Size Deviations)
+│   ├── component.rs     # jr component list/create/edit/delete/rename (~1,800 LOC; see Known Size Deviations)
 │   ├── queue.rs         # queue list/view (JSM service desks)
 │   ├── requesttype.rs   # requesttype list/fields (JSM request-type discovery + 7d cache)
 │   └── field.rs         # `jr field options <NAME>` — enumerate a field's allowed options (custom or system fields) via createmeta/JSM requesttype-fields/editmeta (BC-X.14.001..004, ADR-0019 §1)
@@ -122,7 +122,7 @@ src/
 ├── cache.rs             # Per-profile XDG cache (~/.cache/jr/v1/<profile>/) — team list, project meta, workspace ID, CMDB fields, object-type attrs, resolutions (all 7-day TTL). Versioned root (`v1/`) lets a future schema bump orphan stale files cleanly. Also holds `{read,write,invalidate}_components_cache` — ADR-0018 §2 foundation for `jr component rename` (S-608-1), not yet wired into any read/resolve path this cycle (see the rustdoc on those functions).
 ├── config.rs            # Global (~/.config/jr/config.toml) [profiles.<name>] + default_profile + per-project (.jr.toml), figment layering. Auto-migrates legacy [instance]/[fields] shape on first load. Active profile resolved at load via Config::load_with(cli_profile) (cli flag threaded through as a parameter, NOT an env-var seam) > JR_PROFILE env > default_profile field > "default".
 ├── profile.rs           # Profile(String) newtype — type-level hard fence over profile-scoped cache/credential functions (ADR-0011, D-317); infallible From<String>/From<&str>, no existence validation
-├── output.rs            # Table (comfy-table) and JSON formatting
+├── output.rs            # Table (comfy-table) and JSON formatting, `StyledCell` color gate, BC-7.1.006 terminal-text sanitizers
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
 ├── duration.rs          # Worklog duration parser (2h, 1h30m, 1d, 1w)
 ├── observability.rs     # --verbose / --verbose-bodies flag helpers, eprintln! wrappers (~39 LOC)
