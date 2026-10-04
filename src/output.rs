@@ -211,7 +211,8 @@ pub fn print_error(msg: &str) {
 ///
 /// Strips ASCII control characters (`0x00`-`0x1F`, `0x7F`), the Unicode
 /// terminal-injection controls `display_sanitize_filename` also handles "in
-/// class" (bidi overrides `U+202A..=U+202E`/`U+2066..=U+2069`, LINE/
+/// class" (bidi embeddings/overrides `U+202A..=U+202E` and bidi isolates
+/// `U+2066..=U+2069`, LINE/
 /// PARAGRAPH SEPARATOR `U+2028`/`U+2029`, NEL `U+0085`), and ANSI CSI/OSC
 /// escape sequences outright (not replaced with a placeholder — distinct
 /// in behavior from `cli::issue::attachments::display_sanitize_filename`,
@@ -253,7 +254,8 @@ pub(crate) fn sanitize_env_display(value: &str) -> String {
 /// Strips ASCII control characters (`0x00`-`0x1F`, `0x7F`), the Unicode
 /// terminal-injection controls also handled "in class" by
 /// `cli::issue::attachments::display_sanitize_filename` (BC-6.1.015 EC-4) —
-/// bidi overrides `U+202A..=U+202E` and `U+2066..=U+2069`, LINE SEPARATOR
+/// bidi embeddings/overrides `U+202A..=U+202E` and bidi isolates
+/// `U+2066..=U+2069`, LINE SEPARATOR
 /// `U+2028`, PARAGRAPH SEPARATOR `U+2029`, and NEL `U+0085` — and ANSI
 /// CSI/OSC escape sequences from `value`, dropping them outright (no
 /// placeholder substitution; `display_sanitize_filename` substitutes `?`,
@@ -429,7 +431,8 @@ fn sanitize_control_and_ansi_core(
 ///   sequence started by a stripped C1 introducer are NOT consumed as
 ///   part of that sequence — they survive in the output as inert literal
 ///   text.
-/// - Bidi override characters `U+202A`-`U+202E` and `U+2066`-`U+2069`,
+/// - Bidi embedding/override characters `U+202A`-`U+202E` and bidi isolates
+///   `U+2066`-`U+2069`,
 ///   plus `U+2028` (LINE SEPARATOR), `U+2029` (PARAGRAPH SEPARATOR), and
 ///   `U+0085` (NEL) are STRIPPED — the same Unicode terminal-injection
 ///   code-point set `strip_control_and_ansi` already strips for
@@ -546,8 +549,9 @@ fn is_cf(code: u32) -> bool {
 ///   line/paragraph separator, or NEL; or
 /// - any Unicode 17.0.0 `General_Category=Cf` format character
 ///   ([`CF_RANGES`]: soft hyphen, Arabic prepended marks, ZWSP/ZWNJ/ZWJ/
-///   LRM/RLM, word joiner and invisible operators, all bidi controls
-///   `U+2066..=U+206F`, BOM, interlinear annotation, Egyptian/Kaithi/
+///   LRM/RLM, word joiner and invisible operators, the bidi isolates
+///   `U+2066..=U+2069` and the deprecated format controls
+///   `U+206A..=U+206F`, BOM, interlinear annotation, Egyptian/Kaithi/
 ///   musical format controls, `U+E0001`, `U+E0020..=U+E007F`); or
 /// - the combining grapheme joiner `U+034F` or a blank-rendering Hangul
 ///   filler (`U+115F`, `U+1160`, `U+3164`, `U+FFA0`); or
@@ -783,7 +787,8 @@ mod tests {
         assert_eq!(got, format!("{}\u{2026}", "x".repeat(40)));
     }
 
-    /// Unicode bidi-override controls (U+202A-U+202E, U+2066-U+2069) must
+    /// Unicode bidi embedding/override controls (U+202A-U+202E) and bidi
+    /// isolates (U+2066-U+2069) must
     /// be stripped outright — same code-point set
     /// `cli::issue::attachments::display_sanitize_filename` treats "in
     /// class" (BC-6.1.015 EC-4), mirrored here for the ENV display
