@@ -174,7 +174,8 @@ All notable changes to jr will be documented here.
   sites that still print server-supplied text unsanitized are tracked as
   the NONTABLE-SERVER-TEXT-SANITIZE residual -- a known, non-exhaustive
   inventory (for example project issue-type/priority/status name lists,
-  transition-name prompts, and component-name echoes) -- and are out of
+  transition-name listings before the transition prompt, resolution-name
+  pickers, and component-name echoes) -- and are out of
   scope for this fix.
 - **`jr issue assign`'s human-output success messages now get the same
   sanitization (D-394, extension of FIX-P5-001, BC-7.1.006):**
@@ -215,8 +216,9 @@ All notable changes to jr will be documented here.
   asymmetry or `handle_assign`'s separate `assignee` JSON field. This is
   PR #891's final scope-expansion amendment; further residual
   non-table/non-JSON sinks remain tracked as NONTABLE-SERVER-TEXT-SANITIZE
-  (for example project field-name lists, transition-name prompts, and
-  component-name echoes).
+  (for example project issue-type/priority/status/CMDB-field name lists,
+  transition-name listings before the transition prompt, resolution-name
+  pickers, and component-name echoes).
 - **Single-line sinks now neutralize an embedded `\n` instead of
   fabricating an extra line/field/picker item, and a `StyledCell`'s color
   is now structurally gated on `--no-color`/`NO_COLOR` inside the
