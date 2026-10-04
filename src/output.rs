@@ -37,8 +37,10 @@ pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
 /// This is the general mechanism any future jr-authored styled cell content
 /// must use going forward: a server-supplied string can now never itself
 /// produce a colored cell (it is always sanitized), so jr's own styling
-/// must be expressed structurally. Today the only caller is `jr user
-/// list`/`jr user view`'s Active column (`src/cli/user.rs`); every other
+/// must be expressed structurally. Today the only callers are the
+/// `src/cli/user.rs` user tables (`jr user list`/`jr user search` via
+/// `print_user_list`, `jr user view` via `handle_view`), for their Active
+/// column; every other
 /// `render_table` call site keeps the plain `&[Vec<String>]` API above.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StyledCell {
@@ -169,7 +171,9 @@ pub fn print_output<T: Serialize>(
 /// (falling back to the same "No results found." hint when `rows` is
 /// empty), `OutputFormat::Json` serializes `json_data` via [`render_json`]
 /// exactly as before, completely unaffected by any cell styling. Used only
-/// by `jr user list`/`jr user view`; every other call site keeps
+/// by the `src/cli/user.rs` user tables (`jr user list`/`jr user search`
+/// via `print_user_list`, `jr user view` via `handle_view`); every other
+/// call site keeps
 /// [`print_output`].
 pub fn print_output_with_styles<T: Serialize>(
     format: &OutputFormat,
@@ -378,7 +382,8 @@ fn sanitize_control_and_ansi_core(
 /// the two table-mode rendering chokepoints — `render_table` is called
 /// both directly and indirectly via `print_output`;
 /// `render_table_with_styles` is called via `print_output_with_styles`,
-/// used by `jr user list`/`jr user view` (`src/cli/user.rs`). This
+/// used by the `src/cli/user.rs` user tables (`jr user list`/`jr user
+/// search` via `print_user_list`, `jr user view` via `handle_view`). This
 /// function is the single chokepoint-level place a server-supplied string
 /// (an issue summary, a field option label, a comment body fragment, a
 /// display name, ...) gets made safe for a terminal that interprets raw
@@ -1362,8 +1367,9 @@ mod tests {
     // tests (BC-7.1.006, FIX-P5-001 pr-review cycle-1 finding B-1) ──────
     //
     // `render_table_with_styles` is the ONLY production table-mode
-    // rendering path for `jr user list`/`jr user view` (`src/cli/user.rs`)
-    // — both commands render server-supplied display names and emails
+    // rendering path for the `src/cli/user.rs` user tables (`jr user
+    // list`/`jr user search` via `print_user_list`, `jr user view` via
+    // `handle_view`) — all three commands render server-supplied display names and emails
     // through `StyledCell`s. These tests call `render_table_with_styles`
     // directly: a regression that dropped the `sanitize_table_cell(&c.text)`
     // call inside it (e.g. reverting to `Cell::new(&c.text)`) would reopen

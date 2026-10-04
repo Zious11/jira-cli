@@ -149,8 +149,8 @@ All notable changes to jr will be documented here.
   cap. **`--output json` is unaffected -- it remains raw and lossless**,
   mirroring the existing `sanitize_env_display`/issue #398 description-echo
   asymmetry: the human channel optimizes for terminal safety, the machine
-  channel stays lossless for programmatic consumers. `jr user list`/`jr user
-  view`'s Active column (`✓`/`✗`) coloring moved from ANSI bytes embedded in
+  channel stays lossless for programmatic consumers. The Active column (`✓`/`✗`) coloring of the `src/cli/user.rs` user tables
+  (`jr user list`/`jr user search`/`jr user view`) moved from ANSI bytes embedded in
   the cell string to a structural `comfy_table::Cell` foreground-color
   attribute (via a new `output::StyledCell`/`render_table_with_styles` API),
   since a server-supplied string can no longer carry its own ANSI styling
@@ -254,7 +254,7 @@ All notable changes to jr will be documented here.
     `colored::control::SHOULD_COLORIZE.should_colorize()` is `true` —
     making `--no-color`/`NO_COLOR` suppression a structural guarantee the
     renderer itself provides to every `StyledCell` caller, present
-    (`active_cell`, the `jr user list`/`jr user view` Active column) and
+    (`active_cell`, the Active column of `jr user list`/`jr user search`/`jr user view`) and
     future, rather than a per-caller responsibility the renderer played no
     part in. `active_cell` keeps its own existing `SHOULD_COLORIZE` check
     unchanged (now redundant for this one caller, but harmless).
@@ -264,7 +264,7 @@ All notable changes to jr will be documented here.
     only caller today, is unchanged by this gate — see the corrected
     `CLICOLOR_FORCE` note below.
   - **Corrected `CLICOLOR_FORCE` note (FIX-P5-004, P3-001):** color for the
-    `jr user list`/`jr user view` Active column requires BOTH a TTY and
+    `jr user list`/`jr user search`/`jr user view` Active column requires BOTH a TTY and
     `colored::control::SHOULD_COLORIZE.should_colorize()`; `--no-color`/
     `NO_COLOR` suppress it. `CLICOLOR_FORCE` with piped (non-TTY) stdout
     still does NOT color it, because `comfy_table`'s own TTY gate is

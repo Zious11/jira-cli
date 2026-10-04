@@ -1231,8 +1231,8 @@ pub enum FieldCommand {
     ///
     /// Exactly one of `--type`, `--request-type`, `--issue` selects the
     /// enumeration mode; `--project` is a companion flag whose role
-    /// (required-or-defaulted / optional / ignored) depends on the selected
-    /// mode. See ADR-0019 §1 / BC-X.14.001.
+    /// (required-or-defaulted for `--type` and `--request-type`, ignored for
+    /// `--issue`) depends on the selected mode. See ADR-0019 §1 / BC-X.14.001.
     Options {
         /// The field to enumerate: a customfield_NNNNN literal, a field ID
         /// such as issuetype or priority (exact, case-insensitive), or a
@@ -1244,8 +1244,9 @@ pub enum FieldCommand {
         #[arg(long = "type")]
         r#type: Option<String>,
 
-        /// M3: enumerate via JSM request-type fields. `--project` is an
-        /// optional companion naming the service-desk project explicitly.
+        /// M3: enumerate via JSM request-type fields. `--project` (or a
+        /// configured default project) must supply the service-desk project,
+        /// as for `--type`; exits 64 otherwise.
         #[arg(long = "request-type")]
         request_type: Option<String>,
 
@@ -1254,8 +1255,9 @@ pub enum FieldCommand {
         #[arg(long)]
         issue: Option<String>,
 
-        /// Companion project override — required-or-defaulted for `--type`,
-        /// optional for `--request-type`, ignored for `--issue`.
+        /// Companion project override — required-or-defaulted (flag or
+        /// configured default) for `--type` and `--request-type`, ignored for
+        /// `--issue`.
         #[arg(long)]
         project: Option<String>,
 
