@@ -545,7 +545,8 @@ fn is_cf(code: u32) -> bool {
 /// D-399, CWE-451). Every character other than the three whitespace
 /// controls (`\n`, `\r`, `\t`, which each function classifies itself) is
 /// DROPPED if it is:
-/// - a C0 control, DEL, a C1 control, a bidi override/isolate, a Unicode
+/// - a C0 control, DEL, a C1 control, a bidi embedding/override
+///   (`U+202A..=U+202E`) or isolate (`U+2066..=U+2069`), a Unicode
 ///   line/paragraph separator, or NEL; or
 /// - any Unicode 17.0.0 `General_Category=Cf` format character
 ///   ([`CF_RANGES`]: soft hyphen, Arabic prepended marks, ZWSP/ZWNJ/ZWJ/

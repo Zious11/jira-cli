@@ -692,11 +692,18 @@ pub(crate) fn resolve_field_context(
 /// M3 (`--request-type`, [`Mode::RequestType`]) arms; the function name is
 /// historical.
 ///
-/// Resolves the project to use for `get_createmeta_fields` as: the explicit
-/// `--project` flag value, OR the active profile/config default — the same
-/// source BC-3.3.010's create-path project resolution and M3's optional
-/// `--project` companion fallback already read. `None` means neither is
-/// available (caller maps this to the incomplete-M2 exit-64 error).
+/// Resolves the project key as: the explicit `--project` flag value, OR the
+/// active profile/config default — the same source BC-3.3.010's create-path
+/// project resolution already reads. Each mode uses the result differently:
+/// M2 (`--type`) uses it for the createmeta lookups
+/// (`get_issue_types_for_project` / `get_createmeta_fields`), M3
+/// (`--request-type`) uses it for `require_service_desk` and request-type
+/// resolution. `None` means neither source supplied a project; each caller
+/// then raises its own mode-specific exit-64 `UserError`: M2's
+/// `--type needs a resolvable project …` or M3's
+/// `--request-type needs a resolvable project …` (both followed by
+/// "pass --project <P> or configure a default."). M1 (`--issue`) does not
+/// call this function.
 ///
 /// Sibling pure function to [`resolve_field_context`], not a widened Step 1
 /// — reads only already-loaded in-process `Config` state, no HTTP
@@ -1397,7 +1404,7 @@ mod tests {
         let resolved = resolve_m2_project(None, &config);
         assert_eq!(
             resolved, None,
-            "neither an explicit flag nor a profile default -> None (caller maps to incomplete-M2 error)"
+            "neither an explicit flag nor a profile default -> None (each caller maps this to its mode-specific exit-64 error)"
         );
     }
 
@@ -1622,8 +1629,8 @@ mod tests {
         assert_eq!(
             result[0].children.len(),
             2,
-            "M1/M2 cascading children must round-trip into FieldOption.children — \
-             requires AllowedValue to gain a `children` field (see KNOWN GAP doc comment above)"
+            "M1/M2 cascading children must round-trip into FieldOption.children \
+             (AllowedValue deserializes `children`)"
         );
     }
 
