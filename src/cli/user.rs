@@ -397,14 +397,13 @@ mod tests {
         );
     }
 
-    /// GREEN today, justified: the Active column glyph itself (✓/✗) is
-    /// already present in the table `output::render_table` renders from
-    /// `format_user_row`'s plain rows (this test does not call
-    /// `print_user_list`) — this is pre-existing correctness, unrelated to BC-7.1.006's sanitization
-    /// fix. Included as a defense-in-depth regression guard: once
-    /// `format_active`'s styling moves to structural `Cell` attributes
-    /// (the test above), the glyph itself must still reach the rendered
-    /// table — only its coloring mechanism changes, not its visibility.
+    /// Pins that the Active column glyph (✓/✗) reaches the rendered table
+    /// through the production composition `print_user_list` uses:
+    /// `format_user_row_styled` rows rendered by
+    /// `output::render_table_with_styles` under `USER_LIST_HEADERS`.
+    /// Styling is structural (a `Cell` attribute), so it must never cost
+    /// the glyph its visibility. Color is forced off so the assertion
+    /// reads plain text regardless of the process-global color state.
     #[test]
     fn test_bc_7_1_006_rendered_table_still_shows_active_glyph_for_active_and_inactive_users() {
         let active_user = User {
@@ -419,20 +418,31 @@ mod tests {
             email_address: Some("inactive@acme.io".into()),
             active: Some(false),
         };
-        let rows: Vec<Vec<String>> = vec![&active_user, &inactive_user]
+        let _color = ForcedColorOverride::new(false);
+        let rows: Vec<Vec<output::StyledCell>> = vec![&active_user, &inactive_user]
             .into_iter()
-            .map(format_user_row)
+            .map(format_user_row_styled)
             .collect();
 
-        let output = output::render_table(&USER_LIST_HEADERS, &rows);
+        let output = output::render_table_with_styles(&USER_LIST_HEADERS, &rows);
 
+        // Check each user's own row (located by account id) so a dropped
+        // or swapped glyph is caught, not just the glyphs' presence somewhere.
+        let row_of = |account_id: &str| -> &str {
+            output
+                .lines()
+                .find(|l| l.contains(account_id))
+                .unwrap_or_else(|| panic!("no row for {account_id}: {output:?}"))
+        };
+        let active_row = row_of("acc-1");
+        let inactive_row = row_of("acc-2");
         assert!(
-            output.contains('✓'),
-            "active user's glyph must still be visible in the rendered table: {output:?}"
+            active_row.contains('✓') && !active_row.contains('✗'),
+            "active user's row must show only the active glyph: {active_row:?}"
         );
         assert!(
-            output.contains('✗'),
-            "inactive user's glyph must still be visible in the rendered table: {output:?}"
+            inactive_row.contains('✗') && !inactive_row.contains('✓'),
+            "inactive user's row must show only the inactive glyph: {inactive_row:?}"
         );
     }
 

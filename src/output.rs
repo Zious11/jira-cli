@@ -228,16 +228,16 @@ pub fn print_error(msg: &str) {
 /// asymmetry). Ordinary strings with no control chars/ANSI escapes and
 /// under the length cap pass through unchanged.
 ///
-/// **Pinned cap + marker (Red Gate step 2, S-cycle3-env-tag — neither is
-/// BC-pinned; these are the test-writer's chosen concrete values, matching
+/// **Pinned cap + marker (S-cycle3-env-tag — neither is BC-pinned; these
+/// are concrete values chosen to match
 /// the existing `src/cli/queue.rs::collapse_and_truncate`/`MAX_CAUSE_LEN`
 /// truncation convention in this codebase):**
 /// `MAX_ENV_DISPLAY_LEN = 40` (chars, post-strip). When the stripped value's
 /// char count exceeds 40, take the first 40 chars and append the single
 /// truncation marker `\u{2026}` (`…`) — total rendered length 41 chars. A
 /// stripped value of exactly 40 chars or fewer is NOT truncated (no marker
-/// appended). The implementer must match these exact values — see
-/// `output::tests::test_sanitize_env_display_*` for the pinned assertions.
+/// appended). These exact values are pinned by
+/// `output::tests::test_sanitize_env_display_*`.
 pub(crate) fn sanitize_env_display(value: &str) -> String {
     const MAX_ENV_DISPLAY_LEN: usize = 40;
 
@@ -1363,13 +1363,11 @@ mod tests {
     // `render_table_with_styles` is the ONLY production table-mode
     // rendering path for `jr user list`/`jr user view` (`src/cli/user.rs`)
     // — both commands render server-supplied display names and emails
-    // through `StyledCell`s. Before this test group, nothing called
-    // `render_table_with_styles` directly: a regression that dropped the
-    // `sanitize_table_cell(&c.text)` call inside it (e.g. reverting to
-    // `Cell::new(&c.text)`) would silently reopen SEC-001 for every user
-    // command while the whole rest of the suite kept passing, since the
-    // plain-`String` `render_table` chokepoint tests above don't exercise
-    // this sibling function at all.
+    // through `StyledCell`s. These tests call `render_table_with_styles`
+    // directly: a regression that dropped the `sanitize_table_cell(&c.text)`
+    // call inside it (e.g. reverting to `Cell::new(&c.text)`) would reopen
+    // SEC-001 for every user command, and the plain-`String` `render_table`
+    // chokepoint tests above do not exercise this sibling function.
 
     /// A hostile `StyledCell::plain` cell's TEXT must be sanitized
     /// identically to `render_table`'s plain `String` cells — no raw ESC
@@ -1494,10 +1492,10 @@ mod tests {
 
     // ── sanitize_terminal_line (BC-7.1.006, CR-1, D-396/FIX-P5-002) ─────
     //
-    // `sanitize_terminal_line` is implemented and wired into its call
-    // sites (e.g. `handle_comment_view`, `handle_assign`, `disambiguate_user`).
-    // These tests pin its behavior (identical to `sanitize_table_cell`,
-    // except `\n` maps to a single space) and are expected to pass.
+    // `sanitize_terminal_line` is wired into its call sites (e.g.
+    // `handle_comment_view`, `handle_assign`, `disambiguate_user`). These
+    // tests pin its behavior: identical to `sanitize_table_cell`, except
+    // `\n` maps to a single space.
 
     /// EC-17a: an `Author`-field-shaped fixture (modeled on
     /// `handle_comment_view`'s labeled output). A hostile value with an embedded `\n` and no
