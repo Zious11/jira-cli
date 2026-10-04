@@ -100,12 +100,18 @@ pub(crate) struct FieldOption {
 /// Top-level dispatch for `jr field options <field>`.
 ///
 /// Mirrors `requesttype::handle`'s signature shape. Effectful shell:
-/// - HTTP in every mode (M1 `get_editmeta`, M2 issue-type/createmeta calls,
-///   M3 request-type calls), plus `GET /field` (`list_fields`) when the
-///   per-profile fields cache is cold or stale for a non-literal `<field>`.
-/// - Per-profile `fields.json` cache read (and best-effort write on a
-///   refresh) in every mode, via `resolve_field_id`, which runs before mode
-///   dispatch; a `customfield_NNNNN` literal skips this step entirely.
+/// - Mode HTTP in every mode that gets past field resolution (M1
+///   `get_editmeta`, M2 issue-type/createmeta calls, M3 request-type
+///   calls).
+/// - Field resolution (`resolve_field_id`) runs before mode dispatch. A
+///   `customfield_NNNNN` literal skips it entirely (no cache, no HTTP); an
+///   empty `<field>` is rejected with exit 64 before any cache read or
+///   HTTP. Every other `<field>` reads the per-profile `fields.json` cache
+///   and issues `GET /field` (`list_fields`) when the cache is missing or
+///   unreadable, stale (older than the cache TTL), or fresh but has no
+///   match for the query. An ambiguity error from the cached list returns
+///   at once, with no refetch. The refetch is written back best-effort
+///   (a failed write only warns on stderr).
 /// - Project-meta cache read/write in the M3 path only, via
 ///   `require_service_desk`/`get_or_fetch_project_meta`.
 /// - stdout/stderr rendering.
