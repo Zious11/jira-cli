@@ -627,7 +627,8 @@ pub(super) fn jsm_adf_empty_omit_guard_applies(kind: Option<FieldValueKind>) -> 
 /// TTL, keyed on `(profile, service_desk_id, request_type_id)`); emits a
 /// single global stderr `warning:` line on fail-open (AC-008(a)).
 ///
-/// Only invoked by [`handle_jsm_create`] when `>=1` extra-field pair is bare
+/// Invoked in production only by [`handle_jsm_create`] (its inline tests also
+/// call it directly), and only when `>=1` extra-field pair is bare
 /// (`kind.is_none()`) — the "GET fires IFF >=1 bare pair" contract
 /// (AC-015(a)) is enforced at the call site, not inside this function.
 ///

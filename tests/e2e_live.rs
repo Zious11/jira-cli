@@ -9798,8 +9798,9 @@ fn discover_component(h: &E2eHarness, proj: &str, context: &str) -> Option<Strin
 /// so a caller can choose "clean-skip on empty" vs. "panic if results stay
 /// short of a minimum". This function has no such mode parameter: on budget
 /// exhaustion (empty OR non-matching results through all attempts) it simply
-/// returns `false`, and its sole caller treats that as a hard `assert!`
-/// failure (AC-011), never a clean skip. That is intentional here — AC-014
+/// returns `false`, and every caller (three call sites, all inside
+/// `test_e2e_issue_list_component_filter_grammar`) treats that as a hard
+/// `assert!` failure (AC-011/AC-012/AC-013), never a clean skip. That is intentional here — AC-014
 /// documents this suite as a release gate, not a best-effort probe — but it
 /// means the two functions are NOT interchangeable and a caller expecting
 /// `poll_jql`-style skip semantics from this function will get a panic

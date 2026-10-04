@@ -664,7 +664,7 @@ async fn resolve_request_type_id(
 /// Pure arity check over the three MODE-SELECTOR booleans ONLY.
 ///
 /// `has_project` is deliberately NOT a parameter (ADR-0019 §Amendment D1) —
-/// project resolvability is a separate, post-arity, M2-only step handled by
+/// project resolvability is a separate, post-arity, M2/M3 step handled by
 /// [`resolve_m2_project`]. Exactly one of the three booleans present →
 /// `Ok(Mode)`; zero or two-or-more present → `Err(ArityError)`.
 ///
@@ -686,7 +686,11 @@ pub(crate) fn resolve_field_context(
     }
 }
 
-/// Post-arity, M2-only project resolution step (ADR-0019 §Amendment D1).
+/// Post-arity, M2/M3 project resolution step (ADR-0019 §Amendment D1).
+///
+/// Called by `handle` from both the M2 (`--type`, [`Mode::Createmeta`]) and
+/// M3 (`--request-type`, [`Mode::RequestType`]) arms; the function name is
+/// historical.
 ///
 /// Resolves the project to use for `get_createmeta_fields` as: the explicit
 /// `--project` flag value, OR the active profile/config default — the same

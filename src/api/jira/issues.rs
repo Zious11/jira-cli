@@ -1064,11 +1064,16 @@ impl JiraClient {
     /// of every pass independent of the termination heuristic above.
     ///
     /// # Usage
-    /// - No cache — one or more HTTP calls per `--type` bulk invocation.
-    ///   Most projects have ≤50 types (one page at `maxResults=200`); pagination
-    ///   is a correctness guard for large enterprise type schemes.
+    /// - No cache — each call makes one or more paginated HTTP requests
+    ///   (bounded by [`MAX_CREATEMETA_PAGES`]). Most projects have ≤50 types
+    ///   (one page at `maxResults=200`); pagination is a correctness guard for
+    ///   large enterprise type schemes.
     /// - Project-scoped: the same type name can have different IDs in different projects.
-    /// - Call site: `handle_edit_bulk_fields` in `src/cli/issue/edit.rs` only.
+    /// - Call sites (three): `handle` in `src/cli/field.rs` (`jr field options
+    ///   --type`), `resolve_against_createmeta` in
+    ///   `src/cli/issue/field_resolve.rs` (`jr issue create --field`), and
+    ///   `handle_edit_bulk_fields` in `src/cli/issue/edit.rs` (bulk
+    ///   `jr issue edit --type`).
     pub(crate) async fn get_issue_types_for_project(
         &self,
         project_key: &str,
