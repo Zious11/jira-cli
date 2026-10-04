@@ -880,7 +880,7 @@ async fn test_bc_x_14_001_m3_non_jsm_project_exits_64_require_service_desk() {
 /// AC-006 / EC-X.14.004-5: `--request-type` with NO `--project` companion
 /// and no profile/config default -> exit 64 before `require_service_desk`
 /// (or any request-type-fields HTTP) is ever reached — the field.rs-local
-/// "needs a resolvable project" guard fires first (mirrors the M2 M1
+/// "needs a resolvable project" guard fires first (mirrors the M2
 /// incomplete-project taxonomy row, but on the M3 dispatch arm).
 #[tokio::test]
 async fn test_bc_x_14_004_m3_no_resolvable_project_exits_64() {
