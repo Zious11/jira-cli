@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.8.0-dev.2] - 2026-10-05
+
 ### Breaking Changes
 
 - **Breaking: `jr user list` with no project resolvable now exits 64, not clap's
