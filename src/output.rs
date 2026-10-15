@@ -10,7 +10,7 @@ use serde::Serialize;
 pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     let mut table = Table::new();
     table
-        .load_preset(UTF8_FULL_CONDENSED)
+        .load_style(UTF8_FULL_CONDENSED)
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(
             headers
@@ -114,7 +114,7 @@ fn render_table_with_styles_inner(
         table.force_no_tty().enforce_styling();
     }
     table
-        .load_preset(UTF8_FULL_CONDENSED)
+        .load_style(UTF8_FULL_CONDENSED)
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(
             headers
