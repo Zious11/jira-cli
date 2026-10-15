@@ -25,14 +25,13 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "3"
-# Pinned to 7.2.2 (exact, not a caret range): 7.2.2 uses let-chains (edition
-# 2024, requires Rust ≥1.88) and deleted the rust-version manifest field, so a
-# caret range resolves to whatever's newest without any MSRV enforcement from
-# cargo. Now that this crate's own rust-version (above) is 1.88, 7.2.2's
-# let-chain usage compiles cleanly — the exact pin here is retained (not
-# relaxed to a caret) purely to keep future comfy-table bumps going through a
-# reviewed Cargo.toml diff rather than a silent `cargo update`, mirroring the
-# saphyr-parser convention below.
+# Pinned exactly (not a caret range): comfy-table 8.0.0 declares edition 2024
+# (let-chains, requires Rust >=1.88) and no rust-version manifest field, so a
+# caret range would resolve to whatever is newest without any MSRV enforcement
+# from cargo. This crate's own rust-version (above) is 1.88, which covers it.
+# The exact pin is retained purely to keep future comfy-table bumps going
+# through a reviewed Cargo.toml diff rather than a silent `cargo update`,
+# mirroring the saphyr-parser convention below.
 # See: issue #626, ADR-0025.
 comfy-table = "=8.0.0"
 dialoguer = "0.12"

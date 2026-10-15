@@ -4,14 +4,6 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
-### Changed
-
-- **Table output now renders with comfy-table 8.0.0** (Dependabot #855; internal
-  preset-loading API migrated to its renamed equivalent): when a column is
-  truncated to fit a narrow terminal (dynamic content arrangement), the
-  truncation indicator is now the single-character ellipsis `…` instead of three
-  periods `...`. Border style, colors, and `--output json` are unchanged.
-
 ## [0.8.0-dev.2] - 2026-10-05
 
 ### Breaking Changes
