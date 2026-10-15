@@ -526,7 +526,7 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
 
       - name: Download shared diff file
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
           name: mutants-diff-file
           path: ${{ runner.temp }}/diff
@@ -652,7 +652,7 @@ jobs:
         # reachable case (push no-op / escalated / genuinely missing
         # shards), not this step.
         if: always()
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
           pattern: mutants-shard-status-*
           path: ${{ runner.temp }}/shard-status
@@ -666,7 +666,7 @@ jobs:
         # Notes) — completeness is decided from the status sentinels above,
         # not from this artifact's presence/absence.
         if: always()
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
           pattern: mutants-shard-outcomes-*
           path: ${{ runner.temp }}/shards
