@@ -533,9 +533,9 @@ Test-suite quality is enforced two ways:
   [`docs/specs/cargo-mutants-policy.md`](docs/specs/cargo-mutants-policy.md).
 - **Weekly (advisory, full-scope):**
   [`mutants-nightly.yml`](.github/workflows/mutants-nightly.yml) runs a full-scope mutation
-  sweep across the whole codebase (not just PR diffs) weekly (Mondays 06:00 UTC). Its pooled kill rate is
-  published to that workflow run's **Actions job summary** — it never gates a merge and is
-  not a required check.
+  sweep across the whole codebase (not just PR diffs) weekly (Mondays 06:00 UTC). Its pooled
+  kill rate is published to that workflow run's **Actions job summary** — it never gates a
+  merge and is not a required check.
 
 ## License
 

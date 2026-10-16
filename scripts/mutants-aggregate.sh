@@ -148,7 +148,7 @@ evaluate_mutants_aggregate() {
     echo "     docs/specs/cargo-mutants-policy.md §F-2)."
     echo ""
     echo "A full, non-diff-scoped run will also occur in the next scheduled"
-    echo "nightly full-mutation run regardless of how this PR is merged."
+    echo "weekly full-mutation run regardless of how this PR is merged."
     return 1
   fi
 
