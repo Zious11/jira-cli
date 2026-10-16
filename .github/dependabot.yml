@@ -2,12 +2,16 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
-    # Check daily so that a version finishing its cooldown surfaces within
-    # 24h of becoming eligible, rather than waiting up to a week for the
-    # next weekly check. The cooldown block below is the actual gate;
-    # daily just removes the slack a weekly schedule would add on top.
+    # Check weekly (Tuesday 09:00 UTC) to cut PR churn and the full CI run
+    # each Dependabot PR triggers. Tuesday keeps the batch clear of the
+    # Monday 06:00 UTC weekly full mutation run. The cooldown below still
+    # sets the minimum soak, so an update may wait up to ~7 days past
+    # eligibility. Security updates ignore both the schedule and the cooldown.
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "Etc/UTC"
     open-pull-requests-limit: 5
     # Supply-chain hardening: wait for the upstream release to "soak" before
     # opening an update PR, so that yanked/compromised releases (e.g.
@@ -16,10 +20,11 @@ updates:
     # those immediately, which is the desired behavior.
     cooldown:
       default-days: 7
-      # Majors (in Rust, also pre-1.0 minor bumps) almost always involve API
-      # breakage. Hold them a full month so the ecosystem can shake out
-      # release-day regressions before we look at the diff. Matches the
-      # risk-tiered split GitHub uses in its own canonical example.
+      # semver-major-days covers true majors: hold them a full month so the
+      # ecosystem can shake out release-day regressions. Dependabot likely
+      # classifies pre-1.0 minor bumps (0.x -> 0.y) as minor (dependabot-core
+      # #7795), so they get semver-minor-days (7); the project's 30-day soak
+      # for pre-1.0 minors is enforced at PR review time.
       semver-major-days: 30
       # Minor + patch stay at the policy floor of 7 days. Patches do NOT
       # drop below this — "patch" labels don't make a release immune to
@@ -29,9 +34,12 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
-    # Same daily cadence + cooldown rationale as the cargo block above.
+    # Same weekly cadence + cooldown rationale as the cargo block above.
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "Etc/UTC"
     open-pull-requests-limit: 5
     # GitHub Actions doesn't follow strict semver, so only default-days is
     # honored here per the Dependabot options reference.
