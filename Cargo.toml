@@ -25,15 +25,16 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "3"
-# Pinned exactly (not a caret range): comfy-table 8.0.0 declares edition 2024
-# (let-chains, requires Rust >=1.88) and no rust-version manifest field, so a
-# caret range would resolve to whatever is newest without any MSRV enforcement
-# from cargo. This crate's own rust-version (above) is 1.88, which covers it.
-# The exact pin is retained purely to keep future comfy-table bumps going
-# through a reviewed Cargo.toml diff rather than a silent `cargo update`,
-# mirroring the saphyr-parser convention below.
+# Pinned exactly (not a caret range): comfy-table 8.0.1 declares edition 2024
+# (let-chains) and rust-version = "1.88", so an older toolchain gets cargo's
+# clear "requires rustc 1.88" error, not an opaque compile failure. That equals
+# this crate's own rust-version (above), leaving zero
+# headroom: a future comfy-table bump raising its MSRV needs an MSRV bump here.
+# The exact pin is retained to keep comfy-table bumps going through a reviewed
+# Cargo.toml diff rather than a silent `cargo update`, mirroring the
+# saphyr-parser convention below.
 # See: issue #626, ADR-0025.
-comfy-table = "=8.0.0"
+comfy-table = "=8.0.1"
 dialoguer = "0.12"
 dirs = "6"
 figment = { version = "0.10", features = ["toml", "env"] }
