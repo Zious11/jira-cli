@@ -36,7 +36,7 @@ colored = "3"
 # See: issue #626, ADR-0025.
 comfy-table = "=8.0.1"
 dialoguer = "0.12"
-dirs = "6"
+dirs = "7"
 figment = { version = "0.10", features = ["toml", "env"] }
 keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }
 open = "5"
