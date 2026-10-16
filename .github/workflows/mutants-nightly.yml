@@ -9,11 +9,11 @@ name: Mutants Weekly (Full Scope)
 
 on:
   schedule:
-    - cron: "0 6 * * 1"  # WEEKLY: Monday 06:00 UTC (= Sunday ~01:00 CDT / 00:00 CST,
-                          # late Sunday night US Central). Offset from e2e.yml's 04:00
-                          # nightly cron to avoid runner-queue contention. Cadence moved
-                          # from nightly to weekly so the 24-shard full run stops
-                          # crowding daytime PR CI.
+    - cron: "0 6 * * 1"  # WEEKLY: Monday 06:00 UTC (= Mon 01:00 CDT / 00:00 CST,
+                          # the Sunday-night-into-Monday boundary, US Central). Offset from
+                          # e2e.yml's 04:00 nightly cron to avoid runner-queue contention.
+                          # Cadence moved from nightly to weekly so the 24-shard full run
+                          # stops crowding daytime PR CI.
   workflow_dispatch: {}   # manual trigger for on-demand full runs
 
 jobs:
