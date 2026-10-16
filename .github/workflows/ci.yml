@@ -474,7 +474,7 @@ jobs:
           echo "overall_diff_lines=${OVERALL_DIFF_LINES}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload diff file (shared across all shards — INV-AGG sub-invariant "identical diff")
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: mutants-diff-file
           path: ${{ runner.temp }}/pr-${{ github.run_id }}.diff
@@ -570,7 +570,7 @@ jobs:
 
       - name: Upload shard status sentinel
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: mutants-shard-status-${{ matrix.shard }}
           path: ${{ runner.temp }}/shard-status-${{ matrix.shard }}.json
@@ -595,7 +595,7 @@ jobs:
         # remains purely a DATA artifact, interpreted per the status
         # sentinel's has_outcomes/run_outcome fields.
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: mutants-shard-outcomes-${{ matrix.shard }}
           path: mutants.out/outcomes.json
