@@ -4,6 +4,14 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **CI: scheduled-workflow cadence rebalanced** to reduce runner-queue contention with
+  daytime PR CI. The advisory full-scope mutation run (`mutants-nightly.yml`) moved from
+  nightly 08:00 UTC to weekly, Mondays 06:00 UTC (late Sunday night US Central); forks that
+  set `MUTANTS_NIGHTLY_ENABLED` now get a weekly run, and the variable name is unchanged.
+  The live-Jira E2E nightly moved 06:00 → 04:00 UTC and the orphan sweeper 07:00 → 05:00 UTC.
+
 ## [0.8.0-dev.2] - 2026-10-05
 
 ### Breaking Changes
