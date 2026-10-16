@@ -720,12 +720,13 @@ short-circuits to an ordinary, actionable CI FAILURE — never a silent skip or 
 pass — naming two ways forward: split the PR into smaller changes, or (if genuinely large
 and reviewed) a repo admin merges via GitHub's branch-protection "Require approvals"
 bypass, explicitly acknowledging the unverified mutation coverage in the PR description.
-An advisory nightly full-scope workflow (`.github/workflows/mutants-nightly.yml`, N=24,
-`timeout-minutes: 300` per shard, non-blocking) still exercises the full mutation surface
-regardless of how an escalated PR is merged. Maintainers checking the current full-scope
-pooled kill rate should read the **Actions job summary** of the latest
-`Mutants Nightly (Full Scope)` workflow run (the `mutants-nightly-report` job's summary
-write) rather than scraping logs — this is advisory visibility only, not a status check.
+An advisory weekly (Monday 06:00 UTC) full-scope workflow
+(`.github/workflows/mutants-nightly.yml`, N=24, `timeout-minutes: 300` per shard,
+non-blocking) still exercises the full mutation surface regardless of how an escalated PR
+is merged. Maintainers checking the current full-scope pooled kill rate should read the
+**Actions job summary** of the latest `Mutants Weekly (Full Scope)` workflow run (the
+`mutants-nightly-report` job's summary write) rather than scraping logs — this is advisory
+visibility only, not a status check.
 That summary also carries a completeness guard (added `ci/mutants-nightly-rebalance`,
 investigated run 34478602590): each shard writes a completion sentinel only when its
 `cargo mutants` invocation exits 0, and `mutants-nightly-report` counts them and reports

@@ -1,4 +1,4 @@
-name: Mutants Nightly (Full Scope)
+name: Mutants Weekly (Full Scope)
 
 # cycle-006 mutants-ci-sharding — advisory, non-diff-scoped full mutation
 # run. Matches .factory/phase-f2-spec-evolution/cycle-006/ci-yml-design.md
@@ -9,9 +9,11 @@ name: Mutants Nightly (Full Scope)
 
 on:
   schedule:
-    - cron: "0 8 * * *"  # 08:00 UTC nightly — offset from e2e.yml's 06:00
-                          # cron to avoid runner-queue contention between
-                          # the two scheduled jobs.
+    - cron: "0 6 * * 1"  # WEEKLY: Monday 06:00 UTC (= Mon 01:00 CDT / 00:00 CST,
+                          # the Sunday-night-into-Monday boundary, US Central). Offset from
+                          # e2e.yml's 04:00 nightly cron to avoid runner-queue contention.
+                          # Cadence moved from nightly to weekly so the 24-shard full run
+                          # stops crowding daytime PR CI.
   workflow_dispatch: {}   # manual trigger for on-demand full runs
 
 jobs:
@@ -23,7 +25,7 @@ jobs:
     # even if `on:` is later edited).
     #
     # Opt-in, default off (same fail-safe pattern as JR_E2E_ENABLED and
-    # SIGNING_ENABLED): the advisory nightly runs only where the repository
+    # SIGNING_ENABLED): the advisory weekly run executes only where the repository
     # variable MUTANTS_NIGHTLY_ENABLED is set, so a publishing fork does not
     # burn runner-minutes on a full mutation run it did not ask for. The
     # canonical repo sets it to 'true' to keep running (see
@@ -127,7 +129,7 @@ jobs:
           path: mutants.out/outcomes.json
           if-no-files-found: warn
           retention-days: 7  # longer retention than the per-PR shards —
-                              # useful for trend analysis across nightly runs.
+                              # useful for trend analysis across runs.
 
   mutants-nightly-report:
     name: Mutation Testing (Full, Report)
@@ -240,11 +242,11 @@ jobs:
           done
 
           total_scored=$((caught_total + missed_total + timeout_total + unviable_total))
-          echo "Nightly pooled summary: ${caught_total} caught / ${missed_total} missed / ${timeout_total} timeout / ${unviable_total} unviable (${total_scored} total)"
+          echo "Full-scope pooled summary: ${caught_total} caught / ${missed_total} missed / ${timeout_total} timeout / ${unviable_total} unviable (${total_scored} total)"
 
           killable=$((caught_total + missed_total + timeout_total))
           if [ "${killable}" -eq 0 ]; then
-            echo "NOTE: 0 killable mutants scored across all nightly shards."
+            echo "NOTE: 0 killable mutants scored across all full-scope shards."
             kill_rate_display="N/A (0 killable mutants scored)"
           else
             kill_rate=$(( (caught_total * 100) / killable ))
@@ -256,11 +258,11 @@ jobs:
               # (it necessarily undercounts total_scored, and whichever
               # shards didn't finish are excluded from both the numerator
               # and denominator, not merely "missing data").
-              echo "Nightly pooled kill rate: ${kill_rate}% — PARTIAL RUN (${completed_shards}/${EXPECTED_SHARDS} shards completed). This figure is advisory-incomplete and is NOT compared against the 90% target."
+              echo "Full-scope pooled kill rate: ${kill_rate}% — PARTIAL RUN (${completed_shards}/${EXPECTED_SHARDS} shards completed). This figure is advisory-incomplete and is NOT compared against the 90% target."
             else
-              echo "Nightly pooled kill rate: ${kill_rate}% (target >= 90%, advisory only — never blocks a merge)"
+              echo "Full-scope pooled kill rate: ${kill_rate}% (target >= 90%, advisory only — never blocks a merge)"
               if [ "${kill_rate}" -lt 90 ]; then
-                echo "::warning::Nightly full-scope pooled kill rate ${kill_rate}% is below the 90% target — advisory only, does not fail this workflow."
+                echo "::warning::Full-scope pooled kill rate ${kill_rate}% is below the 90% target — advisory only, does not fail this workflow."
               fi
             fi
           fi
@@ -274,7 +276,7 @@ jobs:
           # create a GitHub status check, so this can never become a required
           # check or gate a merge.
           {
-            echo "## Nightly full-scope mutation testing"
+            echo "## Full-scope mutation testing (weekly)"
             echo ""
             if [ "${is_partial}" = true ]; then
               echo "**Status:** :warning: PARTIAL RUN — ${completed_shards}/${EXPECTED_SHARDS} shards completed"
@@ -293,7 +295,7 @@ jobs:
             echo "|---|---|---|---|---|"
             echo "| ${caught_total} | ${missed_total} | ${timeout_total} | ${unviable_total} | ${total_scored} |"
             echo ""
-            echo "_Advisory only — this nightly full-scope run does not gate merges. The required per-PR check is the diff-scoped mutation gate in \`ci.yml\` (\`mutants\` / \`mutants-aggregate\`)._"
+            echo "_Advisory only — this weekly full-scope run does not gate merges. The required per-PR check is the diff-scoped mutation gate in \`ci.yml\` (\`mutants\` / \`mutants-aggregate\`)._"
           } >> "${GITHUB_STEP_SUMMARY}"
 
           exit 0
