@@ -3772,7 +3772,8 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
             "FAIL (S-626-1): The `msrv` job does not pin `toolchain: \"1.88.0\"` \
              on its `dtolnay/rust-toolchain` step (found {other:?} instead of \
              a scalar `with.toolchain`).\n\
-             Required: at the pinned SHA (`6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772`), \
+             Required: at the currently pinned `dtolnay/rust-toolchain` SHA (see the \
+             `msrv` job in ci.yml), \
              `toolchain` is a required input with no default — omitting the `with:` \
              block does not fall back to `rust-toolchain.toml` or a default; the \
              action exits 1 with `'toolchain' is a required input`, failing the job \
