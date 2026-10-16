@@ -26,8 +26,9 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "3"
 # Pinned exactly (not a caret range): comfy-table 8.0.1 declares edition 2024
-# (let-chains) and rust-version = "1.88", so cargo's MSRV-aware resolution now
-# applies. That equals this crate's own rust-version (above), leaving zero
+# (let-chains) and rust-version = "1.88", so an older toolchain gets cargo's
+# clear "requires rustc 1.88" error, not an opaque compile failure. That equals
+# this crate's own rust-version (above), leaving zero
 # headroom: a future comfy-table bump raising its MSRV needs an MSRV bump here.
 # The exact pin is retained to keep comfy-table bumps going through a reviewed
 # Cargo.toml diff rather than a silent `cargo update`, mirroring the
