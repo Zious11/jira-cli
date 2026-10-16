@@ -6,12 +6,14 @@ updates:
     # each Dependabot PR triggers. Tuesday keeps the batch clear of the
     # Monday 06:00 UTC weekly full mutation run. The cooldown below still
     # sets the minimum soak, so an update may wait up to ~7 days past
-    # eligibility. Security updates ignore both the schedule and the cooldown.
+    # eligibility. Weekly checks plus the 7-day cooldown give an effective
+    # latency of roughly 7-14 days from release. Security updates ignore both
+    # the schedule and the cooldown.
     schedule:
       interval: "weekly"
       day: "tuesday"
       time: "09:00"
-      timezone: "Etc/UTC"
+      timezone: "UTC"
     open-pull-requests-limit: 5
     # Supply-chain hardening: wait for the upstream release to "soak" before
     # opening an update PR, so that yanked/compromised releases (e.g.
@@ -22,9 +24,9 @@ updates:
       default-days: 7
       # semver-major-days covers true majors: hold them a full month so the
       # ecosystem can shake out release-day regressions. Dependabot likely
-      # classifies pre-1.0 minor bumps (0.x -> 0.y) as minor (dependabot-core
-      # #7795), so they get semver-minor-days (7); the project's 30-day soak
-      # for pre-1.0 minors is enforced at PR review time.
+      # classifies pre-1.0 minor bumps (0.x -> 0.y) as minor (per discussion
+      # in dependabot-core#7795), so they get semver-minor-days (7); the
+      # project's 30-day soak for pre-1.0 minors is enforced at PR review time.
       semver-major-days: 30
       # Minor + patch stay at the policy floor of 7 days. Patches do NOT
       # drop below this — "patch" labels don't make a release immune to
@@ -39,7 +41,7 @@ updates:
       interval: "weekly"
       day: "tuesday"
       time: "09:00"
-      timezone: "Etc/UTC"
+      timezone: "UTC"
     open-pull-requests-limit: 5
     # GitHub Actions doesn't follow strict semver, so only default-days is
     # honored here per the Dependabot options reference.
