@@ -30,7 +30,7 @@ in both repos, so syncs are conflict-free.
 | `.github/workflows/backfill-release.yml` | Build + release an existing tag that has no GitHub Release (manual dispatch); optionally sign/publish | always manual; sign job needs `SIGNING_ENABLED`, homebrew job needs `HOMEBREW_TAP_REPO` |
 | `.github/workflows/release-gap-fill.yml` | Daily tag-vs-release reconciliation; dispatches backfill for missing releases | `vars.RELEASE_GAP_FILL_ENABLED == 'true'` (manual dispatch always works) |
 | `.github/workflows/sync-upstream.yml` | Scheduled fork→upstream merge with protected-file auto-resolution | `vars.SYNC_UPSTREAM_REPO` set |
-| `.github/workflows/mutants-nightly.yml` | Advisory full (non-diff-scoped) cargo-mutants run, 08:00 UTC nightly; never gates a merge | `vars.MUTANTS_NIGHTLY_ENABLED == 'true'` |
+| `.github/workflows/mutants-nightly.yml` | Advisory full (non-diff-scoped) cargo-mutants run, weekly (Monday 06:00 UTC); never gates a merge | `vars.MUTANTS_NIGHTLY_ENABLED == 'true'` |
 | `.github/local-workflows.txt` | Registry of fork-local files that survive a sync ("ours" on conflict) | n/a (empty template here) |
 | `Formula/*.rb` | Homebrew formula templates (placeholders sed'd at publish time) | only read by the jobs above |
 | `packaging/Info.plist`, `scripts/create-{app,dmg,pkg}.sh` | macOS .app/.dmg/.pkg packaging helpers | only invoked by sign jobs |
@@ -45,7 +45,7 @@ in both repos, so syncs are conflict-free.
 | `SYNC_UPSTREAM_REPO` | `owner/repo` to merge from on a schedule (forks only) | unset |
 | `ATTESTATIONS_ENABLED` | `'true'` enables the `attest` job in `release.yml` (GitHub Artifact Attestation / SLSA build provenance for the release archives; publishes the workflow's commit SHA to the public Rekor transparency log). Requires `id-token: write`; unavailable on GHES and on private forks without GitHub Enterprise Cloud | unset |
 | `GITLEAKS_DISABLED` | `'true'` disables the gitleaks secret-scan job in `ci.yml`; for forks that cannot obtain a gitleaks org/commercial license or prefer an alternative scanner | unset |
-| `MUTANTS_NIGHTLY_ENABLED` | `'true'` runs the advisory `mutants-nightly.yml` full mutation nightly; unset skips it cleanly | `'true'` (the canonical repo sets it to keep the nightly it has always run; forks leave it unset) |
+| `MUTANTS_NIGHTLY_ENABLED` | `'true'` runs the advisory `mutants-nightly.yml` full mutation weekly; unset skips it cleanly | `'true'` (the canonical repo sets it to keep the scheduled full run; forks leave it unset) |
 | `SCORECARD_ENABLED` | `'true'` enables the OpenSSF Scorecard analysis job in `scorecards.yml` (weekly schedule, push to `develop`, branch-protection changes); unset skips it, so forks do not publish scorecard results for a copy of the repo | `'true'` (the job is skipped otherwise, so the canonical repo sets it) |
 
 This is the same fail-safe pattern as `vars.JR_E2E_ENABLED`

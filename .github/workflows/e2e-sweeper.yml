@@ -3,8 +3,8 @@
 # Purpose: closes open E2E issues left by hard-cancelled runs where the
 # `e2e.yml` `if: always()` teardown step was skipped (GitHub may skip even
 # `if: always()` steps when a workflow run is force-cancelled or the runner
-# is lost). This sweeper runs daily at 07:00 UTC (offset from the main
-# `e2e.yml` nightly at 06:00 UTC) and transitions any matching open issues
+# is lost). This sweeper runs daily at 05:00 UTC (offset from the main
+# `e2e.yml` nightly at 04:00 UTC) and transitions any matching open issues
 # to Done. Close-only — no deletes.
 #
 # JQL predicate: `summary ~ "e2e"` is a tokenized full-text match that catches
@@ -23,7 +23,7 @@ name: E2E Orphan Sweeper
 
 on:
   schedule:
-    - cron: "0 7 * * *"  # 07:00 UTC daily (offset from e2e.yml at 06:00)
+    - cron: "0 5 * * *"  # 05:00 UTC daily (offset from e2e.yml at 04:00)
   workflow_dispatch:
 
 # Shared serialization group with e2e.yml — never interleaves with the main run.

@@ -531,9 +531,9 @@ Test-suite quality is enforced two ways:
   against lines changed in the PR, sharded across parallel jobs, and reconciled by
   `mutants-aggregate` as a required `CI Gate` check. See
   [`docs/specs/cargo-mutants-policy.md`](docs/specs/cargo-mutants-policy.md).
-- **Nightly (advisory, full-scope):**
+- **Weekly (advisory, full-scope):**
   [`mutants-nightly.yml`](.github/workflows/mutants-nightly.yml) runs a full-scope mutation
-  sweep across the whole codebase (not just PR diffs) on a schedule. Its pooled kill rate is
+  sweep across the whole codebase (not just PR diffs) weekly (Mondays 06:00 UTC). Its pooled kill rate is
   published to that workflow run's **Actions job summary** — it never gates a merge and is
   not a required check.
 

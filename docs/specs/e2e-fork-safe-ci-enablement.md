@@ -12,7 +12,7 @@
 ## 1. Problem and Context
 
 The existing `e2e.yml` CI workflow runs on `push` to `develop`/`main`, nightly `cron`
-(`0 6 * * *` UTC), and `workflow_dispatch`. It already guards against PR-triggered runs
+(`0 4 * * *` UTC), and `workflow_dispatch`. It already guards against PR-triggered runs
 via `if: github.event_name != 'pull_request'` at the job level.
 
 However the workflow still fires on **forks** when:

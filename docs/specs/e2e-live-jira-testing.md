@@ -225,7 +225,7 @@ No new env vars required beyond the standard E2E set.
 ```yaml
 on:
   push:           { branches: [develop, main] }
-  schedule:       [ { cron: "0 6 * * *" } ]   # 06:00 UTC nightly; also keeps the site warm
+  schedule:       [ { cron: "0 4 * * *" } ]   # 04:00 UTC nightly; also keeps the site warm
   workflow_dispatch:
 
 concurrency: { group: jira-e2e, cancel-in-progress: false }   # serialize on shared site
