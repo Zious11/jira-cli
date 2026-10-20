@@ -12,6 +12,14 @@ All notable changes to jr will be documented here.
   Sunday-night-into-Monday boundary in US Central); forks that set `MUTANTS_NIGHTLY_ENABLED`
   now get a weekly run, and the variable name is unchanged. The live-Jira E2E nightly moved
   06:00 → 04:00 UTC and the orphan sweeper 07:00 → 05:00 UTC.
+- Dependency bumps (MAINT-20261020-02; one combined bump superseding Dependabot #854 and #842,
+  which each failed `cargo deny` bans on a base64 0.22/0.23 duplicate when taken alone):
+  - `base64` 0.22 → 0.23
+  - `reqwest` 0.13.4 → 0.13.5 (includes an upstream fix for sending the wrong proxy credentials
+    when multiple proxies intercept a given URL)
+  - `hyper` 1.8.1 → 1.12.0
+  - `hyper-util` 0.1.20 → 0.1.21
+  - `want` 0.3.1 → 0.3.2
 
 ## [0.8.0-dev.2] - 2026-10-05
 
