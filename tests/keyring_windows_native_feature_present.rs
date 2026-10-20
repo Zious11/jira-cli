@@ -1,12 +1,11 @@
 //! Red-Gate tests for S-WIN-3: keyring `windows-native` feature and deny.toml compatibility.
 //!
-//! These are source-text assertion tests (manifest grepping) that pin three acceptance criteria:
+//! These are manifest assertion tests (structural TOML parsing) that pin these acceptance criteria:
 //!
 //! - AC-001: `Cargo.toml` lists `windows-native` in the keyring features array.
 //! - AC-002: `deny.toml` contains `[[bans.skip]]` blocks for `windows-sys` 0.60,
 //!   `windows-targets` 0.53, and at least one `windows_*` arch crate at 0.53.
 //!
-//! Pattern mirrors `tests/base_url_release_gate.rs` (source-text assertions).
 //! Neither test executes Credential Manager code — they assert manifest content only.
 //!
 //! # Why these tests exist
@@ -18,21 +17,21 @@
 //! AND the transitive 0.53 skips, `cargo deny check` fails. All manifest changes MUST land
 //! in the same commit.
 //!
-//! # How AC-002 assertions work (F-104)
+//! # How the assertions work
 //!
-//! Each skip assertion parses `deny.toml` into discrete `[[bans.skip]]` blocks and requires
-//! that the target name and version co-appear **within the same block**. This avoids a
-//! false-positive that a 5-line sliding-window approach could produce when two adjacent,
-//! unrelated `[[bans.skip]]` blocks happen to straddle a window boundary.
+//! Every test parses `Cargo.toml` / `deny.toml` with the `toml` crate and inspects the
+//! real declarations (the keyring dependency's `features` array, the `[[bans.skip]]`
+//! array-of-tables entries by exact `name` + `version`). Comments can never satisfy or
+//! break them.
 //!
 //! # Test inventory
 //!
 //! | Test | AC | What it pins |
 //! |------|----|--------------|
-//! | `test_keyring_has_windows_native_feature` | AC-001 | `"windows-native"` present in keyring features in `Cargo.toml` |
-//! | `test_deny_toml_has_windows_sys_0_60_skip` | AC-002 | `[[bans.skip]]` block for `windows-sys` version `"0.60"` in `deny.toml` |
-//! | `test_deny_toml_has_windows_targets_0_53_skip` | AC-002 | `[[bans.skip]]` block for `windows-targets` version `"0.53"` in `deny.toml` |
-//! | `test_deny_toml_has_windows_arch_0_53_skip` | AC-002 | at least one `[[bans.skip]]` block for a `windows_*` arch crate at version `"0.53"` in `deny.toml` |
+//! | `test_keyring_has_windows_native_feature` | AC-001 | `"windows-native"` in the parsed keyring `features` array in `Cargo.toml` |
+//! | `test_deny_toml_has_windows_sys_0_60_skip` | AC-002 | `[[bans.skip]]` entry `windows-sys` `"0.60"` in `deny.toml` |
+//! | `test_deny_toml_has_windows_targets_0_53_skip` | AC-002 | `[[bans.skip]]` entry `windows-targets` `"0.53"` in `deny.toml` |
+//! | `test_deny_toml_has_windows_arch_0_53_skip` | AC-002 | `[[bans.skip]]` entry `windows_x86_64_msvc` `"0.53"` in `deny.toml` |
 //!
 //! # S-cycle4-dpapi-storage-fix additions (AC-020), retargeted to 0.61 by #838
 //!
@@ -50,216 +49,81 @@
 //!
 //! Manifest-text pins only; no `cargo tree` invocation.
 
-/// Parse `deny.toml` text into a `Vec` of individual `[[bans.skip]]` block texts.
-///
-/// Each element in the returned `Vec` is the raw text of one `[[bans.skip]]` block,
-/// spanning from (and including) the `[[bans.skip]]` header line up to (but not
-/// including) the next `[[bans.skip]]` header or end-of-file. Comment lines inside
-/// a block are included as-is so that callers can search the full block text.
-fn parse_bans_skip_blocks(deny_toml: &str) -> Vec<String> {
-    let mut blocks: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
-
-    for line in deny_toml.lines() {
-        if line.trim() == "[[bans.skip]]" {
-            // Flush any previous block.
-            if let Some(block) = current.take() {
-                blocks.push(block);
-            }
-            current = Some(String::from("[[bans.skip]]\n"));
-        } else if let Some(ref mut block) = current {
-            block.push_str(line);
-            block.push('\n');
-        }
-    }
-    // Flush the last block.
-    if let Some(block) = current {
-        blocks.push(block);
-    }
-    blocks
-}
-
-/// Return `true` if any `[[bans.skip]]` block in `blocks` contains BOTH `name_needle`
-/// and `version_needle` (both matched as substrings within the same block).
-fn block_contains_name_and_version(
-    blocks: &[String],
-    name_needle: &str,
-    version_needle: &str,
-) -> bool {
-    blocks
-        .iter()
-        .any(|block| block.contains(name_needle) && block.contains(version_needle))
-}
-
-/// AC-001 — `Cargo.toml` lists `windows-native` in the keyring features array.
-///
-/// Confirms the keyring dependency declaration includes `"windows-native"` alongside
-/// the existing `"apple-native"` and `"linux-native"` features (ADR-0016 §Decision 5b).
-///
-/// Strategy: load `Cargo.toml` at compile time via `include_str!`, locate the keyring
-/// dependency line, and verify `"windows-native"` appears in it.
-#[test]
-fn test_keyring_has_windows_native_feature() {
-    let cargo_toml = include_str!("../Cargo.toml");
-
-    // Find the keyring dependency line(s). It may be a multi-line table entry but the
-    // feature list is on a single line (inline array). We look for the line that declares
-    // the keyring dep and contains the features key.
-    let keyring_line = cargo_toml
-        .lines()
-        .find(|l| l.contains("keyring") && l.contains("features"))
-        .expect(
-            "Could not locate a `keyring` dependency line with `features` in Cargo.toml. \
-             Has the keyring dep been restructured? Update this test if the format changed.",
-        );
-
-    assert!(
-        keyring_line.contains("\"windows-native\""),
-        "S-WIN-3 AC-001 VIOLATION: `\"windows-native\"` not found in the keyring features \
-         declaration in Cargo.toml.\n\
-         Expected: `keyring = {{ version = \"3\", features = [..., \"windows-native\"] }}`\n\
-         Found line: {keyring_line}\n\
-         The `windows-native` feature enables Windows Credential Manager backend via keyring v3.6.3 \
-         (ADR-0016 §Decision 5b). All three platform features — apple-native, linux-native, \
-         windows-native — must be listed so the Windows release build links correctly.",
-    );
-}
-
-/// AC-002 (windows-sys 0.60) — `deny.toml` has a `[[bans.skip]]` block for `windows-sys` 0.60.
-///
-/// Confirms the required skip entry is present alongside the existing 0.45 and 0.61 skips.
-/// Without this skip, adding `windows-native` to keyring features causes `cargo deny check`
-/// to fail: keyring v3.6.3 pulls `windows-sys 0.60`, which is semver-incompatible with
-/// the existing 0.45 (jni) and 0.61 (clap/tokio/reqwest) under 0.x semantics
-/// (C-V2(b) BLOCKER finding, `.factory/research/windows-build-f4-preflight-verification.md`).
-///
-/// Strategy: parse `deny.toml` into discrete `[[bans.skip]]` blocks and require that
-/// `name = "windows-sys"` and `version = "0.60"` co-appear **within the same block**.
-/// This prevents a false-positive across adjacent unrelated blocks (F-104).
-#[test]
-fn test_deny_toml_has_windows_sys_0_60_skip() {
-    let deny_toml = include_str!("../deny.toml");
-    let blocks = parse_bans_skip_blocks(deny_toml);
-
-    let found =
-        block_contains_name_and_version(&blocks, r#"name = "windows-sys""#, r#"version = "0.60""#);
-
-    assert!(
-        found,
-        "S-WIN-3 AC-002 VIOLATION: No `[[bans.skip]]` block for `windows-sys` version `\"0.60\"` \
-         found in deny.toml.\n\
-         \n\
-         This skip is REQUIRED because keyring v3.6.3 with the `windows-native` feature pulls \
-         `windows-sys = \"0.60\"` as a transitive dep (C-V2(b) BLOCKER, research verification \
-         file: .factory/research/windows-build-f4-preflight-verification.md).\n\
-         \n\
-         With `bans.multiple-versions = \"deny\"` active and three semver-incompatible 0.x \
-         versions in the graph (0.45 from jni, 0.60 from keyring windows-native, 0.61 from \
-         clap/tokio/reqwest), `cargo deny check` will fail until this skip entry is added.\n\
-         \n\
-         The required entry (add alongside existing 0.45 and 0.61 skips):\n\
-         \n\
-         [[bans.skip]]\n\
-         name = \"windows-sys\"\n\
-         version = \"0.60\"\n\
-         reason = \"...\"\n\
-         \n\
-         This change MUST be committed in the same commit as the `windows-native` feature \
-         addition to Cargo.toml (S-WIN-3 File Structure Requirements).",
-    );
-}
-
-/// AC-002 (windows-targets 0.53) — `deny.toml` has a `[[bans.skip]]` block for
-/// `windows-targets` version `"0.53"`.
-///
-/// `windows-sys 0.60` (via keyring windows-native) transitively pulls `windows-targets 0.53.5`.
-/// Without this skip, `cargo deny check` fails because `windows-targets` appears at three
-/// semver-incompatible versions (0.42 from jni, 0.52 from ring, 0.53 from keyring windows-native).
-/// cargo-deny requires N-1 versions skipped; 0.42 and 0.53 are skipped, leaving 0.52.6 as
-/// the single canonical un-skipped version.
-///
-/// If this skip is dropped, `cargo deny check` fails but AC-002's windows-sys assertion
-/// remains green — this test closes that gap (F-103).
-///
-/// Strategy: same block-boundary parsing as `test_deny_toml_has_windows_sys_0_60_skip` (F-104).
-#[test]
-fn test_deny_toml_has_windows_targets_0_53_skip() {
-    let deny_toml = include_str!("../deny.toml");
-    let blocks = parse_bans_skip_blocks(deny_toml);
-
-    let found = block_contains_name_and_version(
-        &blocks,
-        r#"name = "windows-targets""#,
-        r#"version = "0.53""#,
-    );
-
-    assert!(
-        found,
-        "S-WIN-3 AC-002 VIOLATION: No `[[bans.skip]]` block for `windows-targets` \
-         version `\"0.53\"` found in deny.toml.\n\
-         \n\
-         `windows-sys 0.60` (via keyring v3.6.3 windows-native) transitively pulls \
-         `windows-targets 0.53.5`. With three versions in Cargo.lock (0.42 from jni, \
-         0.52 from ring, 0.53 from keyring), the 0.42 and 0.53 skips are load-bearing: \
-         they leave 0.52.6 as the single canonical un-skipped version. Removing the 0.53 \
-         skip causes `cargo deny check` to fail (two un-skipped versions remain: 0.52 + 0.53).\n\
-         \n\
-         Required entry:\n\
-         \n\
-         [[bans.skip]]\n\
-         name = \"windows-targets\"\n\
-         version = \"0.53\"\n\
-         reason = \"...\"",
-    );
-}
-
-/// AC-002 (windows_* arch crates 0.53) — `deny.toml` has at least one `[[bans.skip]]`
-/// block for a `windows_*` arch crate at version `"0.53"` (e.g. `windows_x86_64_msvc`).
-///
-/// `windows-targets 0.53.5` (via keyring windows-native) pulls per-arch stub crates such as
-/// `windows_x86_64_msvc 0.53.1`, `windows_aarch64_msvc 0.53.1`, etc. Without these skips,
-/// `cargo deny check` fails for each arch crate individually. This test asserts the
-/// most commonly-built arch crate (`windows_x86_64_msvc`) is covered, which is sufficient
-/// to confirm the 0.53 arch-crate skip pattern is in place.
-///
-/// Strategy: same block-boundary parsing as the other AC-002 tests (F-104).
-#[test]
-fn test_deny_toml_has_windows_arch_0_53_skip() {
-    let deny_toml = include_str!("../deny.toml");
-    let blocks = parse_bans_skip_blocks(deny_toml);
-
-    // Check that windows_x86_64_msvc 0.53 (the canonical x64 MSVC arch crate) is skipped.
-    // If the 0.53 arch-crate skip pattern is present, this representative crate will be covered.
-    let found = block_contains_name_and_version(
-        &blocks,
-        r#"name = "windows_x86_64_msvc""#,
-        r#"version = "0.53""#,
-    );
-
-    assert!(
-        found,
-        "S-WIN-3 AC-002 VIOLATION: No `[[bans.skip]]` block for `windows_x86_64_msvc` \
-         version `\"0.53\"` found in deny.toml.\n\
-         \n\
-         `windows-targets 0.53.5` (via keyring v3.6.3 windows-native) pulls per-arch stub \
-         crates including `windows_x86_64_msvc 0.53.1`. Each arch crate appears at three \
-         versions (0.42 from jni, 0.52 from ring, 0.53 from keyring); the 0.42 and 0.53 \
-         skips are load-bearing. Removing them causes `cargo deny check` to fail for each \
-         arch crate individually.\n\
-         \n\
-         Required entry (representative — all arch crates need equivalent skips):\n\
-         \n\
-         [[bans.skip]]\n\
-         name = \"windows_x86_64_msvc\"\n\
-         version = \"0.53\"\n\
-         reason = \"...\"",
-    );
-}
-
 /// Parse a repo manifest embedded at compile time into a TOML table.
 fn parse_manifest(name: &str, text: &str) -> toml::Table {
     text.parse::<toml::Table>()
         .unwrap_or_else(|e| panic!("{name} must parse as TOML: {e}"))
+}
+
+/// Return `true` if `deny.toml` has a `[[bans.skip]]` entry with exactly this `name` and `version`.
+fn deny_has_skip(name: &str, version: &str) -> bool {
+    let deny = parse_manifest("deny.toml", include_str!("../deny.toml"));
+    deny.get("bans")
+        .and_then(|b| b.get("skip"))
+        .and_then(|s| s.as_array())
+        .expect("deny.toml must have [[bans.skip]] entries")
+        .iter()
+        .any(|s| {
+            s.get("name").and_then(|n| n.as_str()) == Some(name)
+                && s.get("version").and_then(|v| v.as_str()) == Some(version)
+        })
+}
+
+/// AC-001 -- the `keyring` dependency's parsed `features` array in `Cargo.toml` contains
+/// `"windows-native"` (Windows Credential Manager backend, ADR-0016 Decision 5b), alongside
+/// the apple/linux backends.
+#[test]
+fn test_keyring_has_windows_native_feature() {
+    let manifest = parse_manifest("Cargo.toml", include_str!("../Cargo.toml"));
+    let features: Vec<&str> = manifest
+        .get("dependencies")
+        .and_then(|d| d.get("keyring"))
+        .and_then(|k| k.get("features"))
+        .and_then(|f| f.as_array())
+        .expect("Cargo.toml must declare keyring under [dependencies] with a `features` array")
+        .iter()
+        .filter_map(|f| f.as_str())
+        .collect();
+    assert!(
+        features.contains(&"windows-native"),
+        "keyring features must include \"windows-native\" so the Windows release build links; got {features:?}"
+    );
+}
+
+/// AC-002 -- `deny.toml` skips `windows-sys` 0.60 (keyring `windows-native` pulls it; it is
+/// semver-incompatible with 0.45 from jni and 0.61 from the broad graph, and
+/// `bans.multiple-versions = "deny"` would otherwise fail `cargo deny check`).
+#[test]
+fn test_deny_toml_has_windows_sys_0_60_skip() {
+    assert!(
+        deny_has_skip("windows-sys", "0.60"),
+        "deny.toml must have a [[bans.skip]] entry for windows-sys version \"0.60\""
+    );
+}
+
+/// AC-002 -- `deny.toml` skips `windows-targets` 0.53. windows-sys 0.60 (keyring) pulls
+/// windows-targets 0.53.5 while windows-sys 0.45 (jni) pulls 0.42.2; those two are the
+/// in-graph versions (0.52.6 is Cargo.lock-only and filtered out of cargo-deny's graph), so
+/// the 0.53 skip is needed alongside the 0.42 skip. Dropping it fails `cargo deny check`
+/// even though the windows-sys skip assertion would stay green.
+#[test]
+fn test_deny_toml_has_windows_targets_0_53_skip() {
+    assert!(
+        deny_has_skip("windows-targets", "0.53"),
+        "deny.toml must have a [[bans.skip]] entry for windows-targets version \"0.53\""
+    );
+}
+
+/// AC-002 -- `deny.toml` skips the representative arch crate `windows_x86_64_msvc` at 0.53
+/// (windows-targets 0.53.5 pulls the per-arch crates at 0.53.1; windows-targets 0.42.2 via
+/// jni pulls them at 0.42.2). All arch crates need equivalent skips; this one stands in
+/// for the pattern.
+#[test]
+fn test_deny_toml_has_windows_arch_0_53_skip() {
+    assert!(
+        deny_has_skip("windows_x86_64_msvc", "0.53"),
+        "deny.toml must have a [[bans.skip]] entry for windows_x86_64_msvc version \"0.53\""
+    );
 }
 
 /// The direct `windows-sys` dependency (promoted by ADR-0021 / #759, bumped to 0.61 by
@@ -328,19 +192,8 @@ fn test_cargo_lock_contains_direct_windows_sys_version_already_in_graph() {
 /// intentionally not asserted.
 #[test]
 fn test_deny_toml_has_windows_sys_0_61_skip() {
-    let deny = parse_manifest("deny.toml", include_str!("../deny.toml"));
-    let skips = deny
-        .get("bans")
-        .and_then(|b| b.get("skip"))
-        .and_then(|s| s.as_array())
-        .expect("deny.toml must have [[bans.skip]] entries");
-
-    let found = skips.iter().any(|s| {
-        s.get("name").and_then(|n| n.as_str()) == Some("windows-sys")
-            && s.get("version").and_then(|v| v.as_str()) == Some("0.61")
-    });
     assert!(
-        found,
+        deny_has_skip("windows-sys", "0.61"),
         "deny.toml must have a [[bans.skip]] entry for windows-sys version \"0.61\""
     );
 }
