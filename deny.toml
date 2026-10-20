@@ -16,59 +16,59 @@ confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "deny"
-# "deny" is safe: Cargo.toml has no wildcard version deps (verified 2026-05-07)
+# "deny" is safe: Cargo.toml has no wildcard version deps (verified 2026-10-20)
 wildcards = "deny"
 
-# Unavoidable duplicate crate versions as of 2026-05-07.
+# Unavoidable duplicate crate versions as of 2026-10-20.
 # Each entry documents the root cause and the blocking dependency that prevents unification.
 
 [[bans.skip]]
 name = "core-foundation"
 version = "0.9"
-reason = "keyring v3.6.3 requires core-foundation 0.9; reqwest/rustls-platform-verifier requires 0.10. Two separate macOS keychain client crates are on different major versions; neither can be bumped without a keyring or reqwest major release."
+reason = "keyring v3.6.3 (via security-framework 2.11.1) requires core-foundation 0.9.4; rustls-platform-verifier (via reqwest) and security-framework 3.7.0 require 0.10.1. Two separate macOS keychain client crates are on different major versions; neither can be bumped without a keyring or reqwest major release."
 
 [[bans.skip]]
 name = "getrandom"
 version = "0.2"
-reason = "redox_users v0.5.2 (via dirs v6) requires getrandom 0.2; getrandom 0.3 and 0.4 are pulled by rand_core 0.9 and tempfile respectively. Three semver-incompatible majors required by independent transitive deps; unification blocked upstream."
+reason = "redox_users v0.5.2 (via dirs-sys 0.5.0 / dirs v7) requires getrandom 0.2 (resolved 0.2.17). ring 0.17.14 also declares getrandom 0.2 but is a Cargo.lock-only entry that cargo-deny filters out of the graph (rustls uses aws-lc-rs). getrandom 0.3 and 0.4 are pulled by jobserver/rand_core 0.9 and by rand 0.10/tempfile respectively. Three semver-incompatible majors required by independent transitive deps; unification blocked upstream."
 
 [[bans.skip]]
 name = "getrandom"
 version = "0.3"
-reason = "rand_core 0.9 / jobserver (via cc/aws-lc-sys build dep) requires getrandom 0.3; other deps require 0.2 and 0.4. Three semver-incompatible majors; unification blocked upstream."
+reason = "jobserver 0.1.34 (via cc, a build dependency of aws-lc-sys) and rand_core 0.9.5 (via proptest dev-dependency: rand 0.9.4, rand_chacha 0.9.0, rand_xorshift 0.4.0) require getrandom 0.3 (resolved 0.3.4); other deps require 0.2 and 0.4. quinn-proto 0.11.15 (via reqwest) also declares getrandom 0.3 but is a Cargo.lock-only entry filtered out of the graph. Three semver-incompatible majors; unification blocked upstream."
 
 [[bans.skip]]
 name = "getrandom"
 version = "0.4"
-reason = "tempfile v3.27.0 (via dialoguer, insta, proptest) requires getrandom 0.4; other deps require 0.2 and 0.3. Three semver-incompatible majors; unification blocked upstream."
+reason = "rand 0.10.3 (jr direct dependency) and tempfile v3.27.0 (via dialoguer, insta, proptest, rusty-fork) require getrandom 0.4 (resolved 0.4.2); other deps require 0.2 and 0.3. Three semver-incompatible majors; unification blocked upstream."
 
 [[bans.skip]]
 name = "r-efi"
 version = "5"
-reason = "getrandom 0.3 (via rand_core/cc/aws-lc-sys) pulls r-efi 5; getrandom 0.4 (via tempfile) pulls r-efi 6. Duplicate is a transitive side-effect of the getrandom split; cannot be resolved without upstream unification."
+reason = "getrandom 0.3 (via jobserver/rand_core 0.9) pulls r-efi 5.3.0; getrandom 0.4 (via rand 0.10/tempfile) pulls r-efi 6.0.0. Duplicate is a transitive side-effect of the getrandom split; cannot be resolved without upstream unification."
 
 [[bans.skip]]
 name = "r-efi"
 version = "6"
-reason = "getrandom 0.4 (via tempfile/dialoguer/insta/proptest) pulls r-efi 6; getrandom 0.3 pulls r-efi 5. Transitive side-effect of getrandom version split; unification blocked upstream."
+reason = "getrandom 0.4 (via rand 0.10/tempfile) pulls r-efi 6.0.0; getrandom 0.3 pulls r-efi 5.3.0. Transitive side-effect of getrandom version split; unification blocked upstream."
 
 # Note: rand 0.9 + rand 0.10 (and rand_core 0.9 + 0.10) both appear in
-# Cargo.lock post-#327 but cargo-deny correctly does NOT flag them as
-# multiple-versions violations. The active dependency graph contains only
-# rand 0.10 (jr direct dep); rand 0.9.4 is a Cargo cross-platform/feature
-# placeholder for proptest's transitive needs that never enters the actual
-# build. Verified empirically (2026-05-26): adding `[[bans.skip]]` entries
-# for rand/rand_core triggers `warning[unmatched-skip]` (rand 0.9 "not
-# encountered") and `warning[unnecessary-skip]` (rand 0.10 "only one
-# version") in cargo-deny 0.19.6. Intentionally NOT skipped here. If a
-# future cargo-deny upgrade starts flagging these, add the paired skips
-# at that point with the actual root-cause reason text. See PR #327 F5
-# adversarial review (`.factory/phase-f2-spec-evolution/adversarial-327-pass-1.md`).
+# Cargo.lock post-#327, and `cargo tree --target=all` shows rand 0.9.4 /
+# rand_core 0.9.5 in the dev graph only (via proptest's rand, rand_chacha and
+# rand_xorshift); the non-test build uses rand 0.10 (jr direct dep) alone.
+# cargo-deny nonetheless does NOT flag them as multiple-versions violations:
+# adding `[[bans.skip]]` entries for rand/rand_core 0.9 triggers
+# `warning[unmatched-skip]` ("was not encountered"). Verified empirically
+# 2026-05-26 and re-verified 2026-10-20 with cargo-deny 0.19.6. Intentionally
+# NOT skipped here. If a future cargo-deny upgrade starts flagging these, add
+# the paired skips at that point with the actual root-cause reason text. See
+# PR #327 F5 adversarial review
+# (`.factory/phase-f2-spec-evolution/adversarial-327-pass-1.md`).
 
 [[bans.skip]]
 name = "security-framework"
 version = "2"
-reason = "keyring v3.6.3 requires security-framework 2.x; rustls-platform-verifier/rustls-native-certs require security-framework 3.x. Blocked by keyring not yet releasing support for security-framework 3."
+reason = "keyring v3.6.3 pulls both security-framework 2.x (2.11.1, its macOS backend, which brings core-foundation 0.9.4) and security-framework 3.x (3.7.0, shared with rustls-platform-verifier/rustls-native-certs). The 2.x copy persists while keyring v3.6.3 depends on it; no keyring release bump is available to unify them."
 
 [[bans.skip]]
 name = "serde_spanned"
@@ -83,22 +83,22 @@ reason = "jr directly depends on toml 1.x (serde_spanned 1.x); figment 0.10.19 p
 [[bans.skip]]
 name = "syn"
 version = "2"
-reason = "syn 3.0.0 shipped 2026-07-18; as of 2026-09-16 three syn-2 holdouts remain with no released syn-3 version: pear_codegen 0.2.9 + proc-macro2-diagnostics 0.10.1 (both last released 2023/2024, reached via figment's optional `pear` feature -- figment is a direct jr dependency for config.rs; figment 0.10.19 is already its ceiling release and still requires pear ^0.2) and tracing-attributes 0.1.31 (reached via tracing, a direct jr dependency already on its latest 0.1.44 release, which requires tracing-attributes ^0.1.31 -- the newest tracing-attributes release, 2025-11-26 -- tracing is actively maintained but has not yet migrated to syn 3). Unavoidable dual version alongside syn 3.x (see skip below) until all three holdouts ship a syn-3-compatible release. REMOVAL TRIGGER: once `cargo tree -i syn` (after `cargo update`) shows only one syn version, delete this skip and the syn-3 skip below together, then confirm `cargo deny check bans` passes with no unmatched-skip/unnecessary-skip warnings before landing the removal."
+reason = "syn 3.0.0 shipped 2026-07-18; as of 2026-10-20 (crates.io API + `cargo tree --target=all -i syn@2`) 15 proc-macro/helper crates in Cargo.lock still resolve syn 2.x. Holdouts whose LATEST crates.io release is still syn-2 (no syn-3 release exists): tracing-attributes 0.1.31 (via tracing 0.1.44, a direct jr dependency, also latest), jni-sys-macros 0.4.1 (via jni-sys, jni 0.21.1), thiserror-impl 1.0.69 (1.x line frozen, via jni), windows-implement 0.60.2 / windows-interface 0.59.3 (via windows-core 0.62.2, iana-time-zone, chrono; latest 0.100.0 still syn ^2), and zerocopy-derive 0.8.47 (via zerocopy, ppv-lite86, rand_chacha 0.9; latest 0.8.63 still syn ^2). Holdouts where a syn-3 release EXISTS but the lock has not picked it up (no dependency bump done here): displaydoc 0.2.5 (0.2.7), synstructure 0.13.2 (0.14.0), tokio-macros 2.7.0 (2.7.2), wasm-bindgen-macro-support 0.2.114 (0.2.129), yoke-derive 0.8.1 (0.8.4), zerofrom-derive 0.1.6 (0.1.8), zerovec-derive 0.11.2 (0.11.6), and pear_codegen 0.2.9 / proc-macro2-diagnostics 0.10.1 (pear_codegen 0.3.0 and proc-macro2-diagnostics 0.11.0 released 2026-09-26 use syn 3, but figment 0.10.19, its latest release (2024-05-17), requires pear ^0.2 via its optional `pear` feature). figment is a direct jr dependency for config.rs. Unavoidable dual version alongside syn 3.x (see skip below) while any holdout above remains on syn 2. REMOVAL TRIGGER: once `cargo tree -i syn` (after `cargo update`) shows only one syn version, delete this skip and the syn-3 skip below together, then confirm `cargo deny check bans` passes with no unmatched-skip/unnecessary-skip warnings before landing the removal."
 
 [[bans.skip]]
 name = "syn"
 version = "3"
-reason = "clap_derive >=4.6.4, futures-macro >=0.3.34, serde_derive >=1.0.229, and thiserror-impl >=2.0.19 have migrated to syn 3.x (the versions pulled in by Dependabot PRs #727/#730/#688/#729, 2026-09). Dual version with syn 2.x (see skip above) is unavoidable until every syn-2 holdout (pear_codegen/proc-macro2-diagnostics via figment's pear feature, tracing-attributes via tracing) ships a syn-3 release. REMOVAL TRIGGER: same as the syn 2 skip above -- remove both entries together once the tree resolves to a single syn version."
+reason = "clap_derive 4.6.7, futures-macro 0.3.34, serde_derive 1.0.229, and thiserror-impl 2.0.21 (the versions resolved in Cargo.lock as of 2026-10-20) have migrated to syn 3.x (originally via Dependabot PRs #727/#730/#688/#729, 2026-09). Dual version with syn 2.x (see skip above) is unavoidable until every syn-2 holdout listed in the syn 2 skip above (notably tracing-attributes via tracing, jni-sys-macros/thiserror-impl 1.x via jni, windows-implement/windows-interface via windows-core, zerocopy-derive, and pear_codegen/proc-macro2-diagnostics via figment) moves to syn 3. REMOVAL TRIGGER: same as the syn 2 skip above -- remove both entries together once the tree resolves to a single syn version."
 
 [[bans.skip]]
 name = "thiserror"
 version = "1"
-reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires thiserror 1.x; jr and redox_users use thiserror 2.x. Blocked by jni not yet releasing thiserror 2.x support."
+reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires thiserror 1.0.69; jr, redox_users (via dirs-sys) and saphyr-parser (dev-dependency) use thiserror 2.0.21. Blocked by jni not yet releasing thiserror 2.x support."
 
 [[bans.skip]]
 name = "thiserror"
 version = "2"
-reason = "jr and redox_users (via dirs) require thiserror 2.x; jni 0.21.1 (via rustls-platform-verifier) requires thiserror 1.x. Dual version unavoidable until jni releases with thiserror 2.x."
+reason = "jr, redox_users (via dirs-sys) and saphyr-parser (dev-dependency) require thiserror 2.0.21; jni 0.21.1 (via rustls-platform-verifier) requires thiserror 1.x. Dual version unavoidable until jni releases with thiserror 2.x."
 
 [[bans.skip]]
 name = "thiserror-impl"
@@ -108,7 +108,7 @@ reason = "proc-macro companion to thiserror 1.x, pulled by jni v0.21.1 via rustl
 [[bans.skip]]
 name = "thiserror-impl"
 version = "2"
-reason = "proc-macro companion to thiserror 2.x, used by jr directly and redox_users. Unavoidable as long as thiserror 2.x is present alongside thiserror 1.x (see thiserror skip above)."
+reason = "proc-macro companion to thiserror 2.x, used by jr directly, redox_users and saphyr-parser (dev-dependency). Unavoidable as long as thiserror 2.x is present alongside thiserror 1.x (see thiserror skip above)."
 
 [[bans.skip]]
 name = "toml"
@@ -130,90 +130,94 @@ name = "toml_datetime"
 version = "1"
 reason = "toml 1.x (direct dep) requires toml_datetime 1.x; toml 0.8 (via figment) requires 0.6. Unavoidable until figment upgrades to toml 1.x."
 
-# windows-sys: FOUR versions in Cargo.lock as of S-WIN-3.
+# windows-sys: FOUR versions in Cargo.lock (verified 2026-10-20), THREE in cargo-deny's graph:
 #   0.45.0 — jni v0.21.1 (via rustls-platform-verifier/reqwest)
-#   0.52.0 — ring (cryptography dep of rustls)
+#   0.52.0 — ring 0.17.14 (Cargo.lock-only: cargo-deny logs "filtered windows-sys 0.52.0"
+#            and `cargo tree --target=all -i windows-sys@0.52.0` prints nothing, because
+#            rustls uses aws-lc-rs; NOT in the graph this check evaluates)
 #   0.60.2 — keyring v3.6.3 windows-native feature (Win32_Security_Credentials)
-#   0.61.2 — clap, tokio, reqwest and the broad dependency graph
+#   0.61.2 — clap/anstyle, tokio, colored, console, dirs-sys, errno and the broad graph;
+#            also jr's own direct cfg(windows) dependency (ADR-0021 DPAPI wrapper)
 #
-# THREE are skipped (0.45, 0.60, 0.61); the single canonical UN-skipped version
-# is windows-sys 0.52.0 (via ring). N-1: 4 versions − 3 skips = 1 remaining,
-# which satisfies cargo-deny's "single remaining version" requirement.
+# All THREE in-graph versions (0.45, 0.60, 0.61) are skipped. cargo-deny does not flag
+# a skip as unnecessary while 2+ versions of the crate remain in the graph, so this
+# passes cleanly; strictly, two of the three would suffice (N-1 skips for 3 in-graph
+# versions; removing any one skip passes, removing two fails with error[duplicate]),
+# but all are kept. If ring ever re-enters the graph, windows-sys 0.52.0 becomes
+# the single un-skipped version.
+# Do NOT add a 0.52 skip: it would be an unmatched-skip while ring is filtered out.
 #
-# Adding a 0.52 skip would leave ZERO un-skipped versions (unnecessary-skip
-# error). Do NOT add a 0.52 skip — 0.52.0 is the canonical un-skipped version
-# by design, parallel to windows-targets 0.52.6 documented below.
-#
-# Maintenance caveat (F-WIN3-RC-103): if ring later bumps its windows-sys minor
-# off 0.52 (or if jni drops 0.45, or a new lineage is added), the canonical
-# un-skipped version changes. The guard is `cargo deny check` in CI; a future
-# dep bump may require adding or removing skip entries here.
+# Maintenance caveat (F-WIN3-RC-103): if a new windows-sys lineage is added or one of
+# jni/keyring drops its version, the skip set may need adjusting. The guard is
+# `cargo deny check` in CI; a future dep bump may require adding or removing skip
+# entries here.
 
 [[bans.skip]]
 name = "windows-sys"
 version = "0.45"
-reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires windows-sys 0.45; ring requires 0.52, keyring windows-native requires 0.60, and the broad graph (clap/tokio/reqwest) requires 0.61. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version."
+reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires windows-sys 0.45; keyring windows-native (and quinn-udp, Cargo.lock-only) require 0.60, and the broad graph (clap/tokio/reqwest) requires 0.61; ring (0.52) is Cargo.lock-only and filtered out of the graph. Three in-graph semver-incompatible 0.x versions (0.45/0.60/0.61), all skipped."
 
 [[bans.skip]]
 name = "windows-sys"
 version = "0.60"
-reason = "keyring v3.6.3 windows-native feature requires windows-sys 0.60 (Win32_Security_Credentials); jni requires 0.45, ring requires 0.52, and the broad graph (clap/tokio/reqwest) requires 0.61. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version. Unification blocked upstream until keyring bumps windows-sys. ALSO (ADR-0021, S-cycle4-dpapi-storage-fix): promoted to a direct [target.'cfg(windows)'.dependencies] entry at this same 0.60 version for src/api/auth_windows_store.rs's DPAPI (CryptProtectData/CryptUnprotectData, Win32_Security_Cryptography) FFI wrapper — this adds zero new dependency-graph nodes, since it is the same version keyring's windows-native feature already pulls transitively. Do NOT conclude removing keyring's windows-native feature would make this skip removable — jr's own DPAPI usage now also requires it."
+reason = "keyring v3.6.3 windows-native feature requires windows-sys 0.60 (Win32_Security_Credentials); quinn-udp 0.5.14 also depends on windows-sys 0.60 but is a Cargo.lock-only entry filtered out of the graph. jni requires 0.45 and the broad graph (clap/tokio/reqwest) requires 0.61; ring (0.52) is Cargo.lock-only and filtered out. Three in-graph semver-incompatible 0.x versions (0.45/0.60/0.61), all skipped. Unification blocked upstream until keyring bumps windows-sys. Needed for keyring's windows-native feature only."
 
 [[bans.skip]]
 name = "windows-sys"
 version = "0.61"
-reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45, ring requires 0.52, and keyring windows-native requires 0.60. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version. Unification blocked until jni and keyring upgrade."
+reason = "clap/anstyle, tokio, colored, console, dirs-sys, errno and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45 and keyring windows-native requires 0.60; ring (0.52) is Cargo.lock-only and filtered out of the graph. Three in-graph semver-incompatible 0.x versions (0.45/0.60/0.61), all skipped. Unification blocked until jni and keyring upgrade. Also jr's direct cfg(windows) dependency for the DPAPI wrapper (src/api/auth_windows_store.rs, ADR-0021; bumped from 0.60 in #838); this skip would be needed even without that module, since the broad graph pulls 0.61."
 
 # windows-targets and windows_* arch crates: transitive sub-deps of windows-sys.
-# S-WIN-3 adds 17 entries total (1 windows-sys 0.60 + 2 windows-targets + 14 = 7 arch crates × 2 tiers):
+# Historical (S-WIN-3): the original skip set was 17 entries (1 windows-sys 0.60 +
+# 2 windows-targets + 14 = 7 arch crates x 2 tiers). Current state (verified
+# 2026-10-20): 2 windows-targets + 14 arch-crate skips = 16 windows-targets/arch
+# entries (plus the 3 windows-sys skips above).
 #   windows-sys 0.45 (via jni) pulls windows-targets 0.42.2 and windows_* 0.42.2;
-#   windows-sys 0.52 (via ring) pulls windows-targets 0.52.6 and windows_* 0.52.6;
 #   windows-sys 0.60 (via keyring v3.6.3 windows-native) pulls windows-targets 0.53.5
-#   and windows_* 0.53.1. These are unavoidable until jni and keyring converge on the
-#   same windows-sys version. (S-WIN-3, C-V2(b) research finding)
+#   and windows_* 0.53.1;
+#   windows-sys 0.52 (via ring, Cargo.lock-only, filtered out of cargo-deny's graph)
+#   would pull windows-targets 0.52.6 and windows_* 0.52.6.
+# The 0.42/0.53 duplicates are unavoidable until jni and keyring converge on the
+# same windows-sys version. (S-WIN-3, C-V2(b) research finding)
 #
-# 8 arch crates are now skipped total: windows_aarch64_gnullvm, windows_aarch64_msvc,
-# windows_i686_gnu, windows_i686_gnullvm, windows_i686_msvc, windows_x86_64_gnu,
+# 7 arch crates are skipped (both 0.42 and 0.53): windows_aarch64_gnullvm,
+# windows_aarch64_msvc, windows_i686_gnu, windows_i686_msvc, windows_x86_64_gnu,
 # windows_x86_64_gnullvm, windows_x86_64_msvc.
 #
-# windows_i686_gnullvm was ORIGINALLY left unskipped: it has no 0.42 lineage, and prior
-# to the clap 4.6.6 bump (PR #727) only one of its two Cargo.lock-listed versions (0.52.6
-# vs 0.53.1) was concurrently reachable in cargo-deny's resolved graph, so no skip was
-# needed and the "absent from the resolved graph on non-Windows CI" reasoning held. The
-# clap 4.6.6 bump added a second concurrently-reachable path to 0.53.1 (clap_builder ->
-# anstream -> anstyle-query's windows-sys resolution shifting from 0.61 to 0.60,
-# alongside keyring's pre-existing windows-sys 0.60 path) -- verified via `cargo deny
-# check bans`, which now flags it as a duplicate on macOS/Linux CI. A skip entry (below)
-# is required as of this bump; if a future dependency shift removes the second path,
-# this skip becomes an unnecessary-skip and should be removed (see its reason text for
-# the exact re-check command).
+# windows_i686_gnullvm is deliberately NOT skipped. It has no 0.42 lineage, and
+# Cargo.lock lists two versions (0.52.6 and 0.53.1) but only 0.53.1 is in
+# cargo-deny's graph (`cargo tree --target=all -i windows_i686_gnullvm@0.53.1` ->
+# windows-targets 0.53.5 -> windows-sys 0.60.2 -> keyring; the 0.52.6 version is
+# Cargo.lock-only and filtered out), so there is no duplicate to skip. A skip for
+# it was briefly added after the clap 4.6.6 bump (PR #727) but was removed in #849
+# (d85a8136, 2026-09-20) as unnecessary. If a future dependency shift makes a second
+# version concurrently reachable and `cargo deny check bans` flags it as a duplicate
+# on macOS/Linux CI, re-add the skip; re-check with
+# `cargo tree --target=all -i windows_i686_gnullvm@0.53.1` (and
+# `-i windows_i686_gnullvm@0.52.6`) to see which paths reach each version.
 #
 # Why no `[[bans.skip]]` for windows-targets/windows_* version "0.52"?
 #
-# cargo-deny's multiple-versions = "deny" fires when 2+ UN-SKIPPED versions of the
-# same crate remain in the dependency graph. With three versions in Cargo.lock
-# (0.42 from jni, 0.52 from ring, 0.53 from keyring windows-native), we only need
-# to skip N-1 = 2 of them. The two skips below (0.42 and 0.53) leave exactly ONE
-# un-skipped canonical version — 0.52.6 (pulled by ring via windows-sys 0.52) —
-# which satisfies cargo-deny's "single remaining version" requirement.
+# windows-targets/windows_* 0.52.6 are Cargo.lock-only (they hang off windows-sys
+# 0.52 via ring, which cargo-deny filters out), so a 0.52 skip would be an
+# `unmatched-skip` warning. Do NOT add one.
 #
-# Adding a 0.52 skip would leave ZERO un-skipped versions, which is unnecessary.
-# A future reviewer should NOT add a 0.52 skip; doing so would produce an
-# `unnecessary-skip` warning and is semantically wrong — 0.52.6 is the canonical
-# un-skipped version by design.
+# Observation (not acted on): with 0.52.6 out of the graph, the 0.42 and 0.53 tiers
+# are each skipped, so only one of the two would strictly be needed for
+# `multiple-versions = "deny"` to pass (cargo-deny does not warn about this). Both
+# are kept; whether to prune one is a human decision.
 #
 # Maintenance caveat (F-WIN3-RC-103): this skip set is correct for the CURRENT
 # dependency topology. A future dep bump that changes the windows-sys/windows-targets
-# version set (e.g. ring updating its windows-sys minor, or jni dropping 0.45, or a
-# new lineage being added) could leave zero canonical un-skipped versions
-# (→ unnecessary-skip warnings) or introduce a new un-skipped duplicate
-# (→ multiple-versions error). The guard is `cargo deny check` in CI; there is no
-# separate canonical-version invariant test (process-gap tracked by orchestrator).
+# version set could introduce a new un-skipped duplicate (-> multiple-versions
+# error) or an unmatched/unnecessary skip warning. The guard is `cargo deny check`
+# in CI; there is no separate canonical-version invariant test (process-gap tracked
+# by orchestrator).
 
 [[bans.skip]]
 name = "windows-targets"
 version = "0.42"
-reason = "transitive sub-dep of windows-sys 0.45 (via jni/rustls-platform-verifier); windows-sys 0.60 (via keyring windows-native) pulls windows-targets 0.53.5. Unavoidable until jni and keyring converge on the same windows-sys version."
+reason = "transitive sub-dep of windows-sys 0.45 (via jni/rustls-platform-verifier); windows-sys 0.60 (via keyring windows-native) pulls windows-targets 0.53.5 (0.52.6 is Cargo.lock-only, filtered out). Unavoidable until jni and keyring converge on the same windows-sys version."
 
 [[bans.skip]]
 name = "windows-targets"
@@ -303,14 +307,14 @@ reason = "toml 1.x (direct dep) requires winnow 1.x; toml 0.8 (via figment) requ
 [[bans.skip]]
 name = "wit-bindgen"
 version = "0.46"
-reason = "wasip2 v1.0.1 (via getrandom 0.3 WASI backend) requires wit-bindgen 0.46; wasip3 (via getrandom 0.4) requires wit-bindgen 0.51. Transitive side-effect of the getrandom version split across WASI backends."
+reason = "wasip2 v1.0.1 (a WASI backend dependency of both getrandom 0.3 and getrandom 0.4) requires wit-bindgen 0.46; wasip3 v0.4.0 (getrandom 0.4 only) requires wit-bindgen 0.51. Transitive side-effect of the getrandom version split across WASI backends."
 
 [[bans.skip]]
 name = "wit-bindgen"
 version = "0.51"
-reason = "wasip3 v0.4.0 (via getrandom 0.4 WASI backend) requires wit-bindgen 0.51; wasip2 (via getrandom 0.3) requires wit-bindgen 0.46. Transitive side-effect of the getrandom version split across WASI backends."
+reason = "wasip3 v0.4.0 (via getrandom 0.4 WASI backend) requires wit-bindgen 0.51; wasip2 (via getrandom 0.3 and 0.4) requires wit-bindgen 0.46. Transitive side-effect of the getrandom version split across WASI backends."
 
 [sources]
-# No non-crates.io registries or git deps in Cargo.toml (verified 2026-05-07)
+# No non-crates.io registries or git deps in Cargo.toml (verified 2026-10-20)
 unknown-registry = "deny"
 unknown-git = "deny"
