@@ -135,14 +135,15 @@ reason = "toml 1.x (direct dep) requires toml_datetime 1.x; toml 0.8 (via figmen
 #   0.52.0 — ring 0.17.14 (Cargo.lock-only: cargo-deny logs "filtered windows-sys 0.52.0"
 #            and `cargo tree --target=all -i windows-sys@0.52.0` prints nothing, because
 #            rustls uses aws-lc-rs; NOT in the graph this check evaluates)
-#   0.60.2 — keyring v3.6.3 windows-native feature (Win32_Security_Credentials); also
-#            jr's own direct cfg(windows) dependency (ADR-0021 DPAPI wrapper)
-#   0.61.2 — clap/anstyle, tokio, colored, console, dirs-sys, errno and the broad graph
+#   0.60.2 — keyring v3.6.3 windows-native feature (Win32_Security_Credentials)
+#   0.61.2 — clap/anstyle, tokio, colored, console, dirs-sys, errno and the broad graph;
+#            also jr's own direct cfg(windows) dependency (ADR-0021 DPAPI wrapper)
 #
 # All THREE in-graph versions (0.45, 0.60, 0.61) are skipped. cargo-deny does not flag
 # a skip as unnecessary while 2+ versions of the crate remain in the graph, so this
-# passes cleanly; strictly, one of the three would suffice (the same N-1 logic noted
-# below for windows-targets), but they are all kept as documented here. If ring ever
+# passes cleanly; strictly, two of the three would suffice (N-1 skips for 3 in-graph
+# versions; removing any one skip passes, removing two fails with error[duplicate]),
+# but they are all kept as documented here. If ring ever
 # re-enters the graph, windows-sys 0.52.0 becomes the single un-skipped version.
 # Do NOT add a 0.52 skip: it would be an unmatched-skip while ring is filtered out.
 #
@@ -159,12 +160,12 @@ reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires windows-sy
 [[bans.skip]]
 name = "windows-sys"
 version = "0.60"
-reason = "keyring v3.6.3 windows-native feature requires windows-sys 0.60 (Win32_Security_Credentials); quinn-udp 0.5.14 also depends on windows-sys 0.60 but is a Cargo.lock-only entry filtered out of the graph. jni requires 0.45 and the broad graph (clap/tokio/reqwest) requires 0.61; ring (0.52) is Cargo.lock-only and filtered out. Three in-graph semver-incompatible 0.x versions (0.45/0.60/0.61), all skipped. Unification blocked upstream until keyring bumps windows-sys. ALSO (ADR-0021, S-cycle4-dpapi-storage-fix): promoted to a direct [target.'cfg(windows)'.dependencies] entry at this same 0.60 version for src/api/auth_windows_store.rs's DPAPI (CryptProtectData/CryptUnprotectData, Win32_Security_Cryptography) FFI wrapper — this adds zero new dependency-graph nodes, since it is the same version keyring's windows-native feature already pulls transitively. Do NOT conclude removing keyring's windows-native feature would make this skip removable — jr's own DPAPI usage now also requires it."
+reason = "keyring v3.6.3 windows-native feature requires windows-sys 0.60 (Win32_Security_Credentials); quinn-udp 0.5.14 also depends on windows-sys 0.60 but is a Cargo.lock-only entry filtered out of the graph. jni requires 0.45 and the broad graph (clap/tokio/reqwest) requires 0.61; ring (0.52) is Cargo.lock-only and filtered out. Three in-graph semver-incompatible 0.x versions (0.45/0.60/0.61), all skipped. Unification blocked upstream until keyring bumps windows-sys. This skip is justified by keyring's windows-native feature alone: jr's own DPAPI wrapper (src/api/auth_windows_store.rs, ADR-0021) was originally declared at windows-sys 0.60 but now declares 0.61 (#838), so see the 0.61 skip below for the DPAPI note."
 
 [[bans.skip]]
 name = "windows-sys"
 version = "0.61"
-reason = "clap/anstyle, tokio, colored, console, dirs-sys, errno and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45 and keyring windows-native requires 0.60; ring (0.52) is Cargo.lock-only and filtered out of the graph. Three in-graph semver-incompatible 0.x versions (0.45/0.60/0.61), all skipped. Unification blocked until jni and keyring upgrade."
+reason = "clap/anstyle, tokio, colored, console, dirs-sys, errno and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45 and keyring windows-native requires 0.60; ring (0.52) is Cargo.lock-only and filtered out of the graph. Three in-graph semver-incompatible 0.x versions (0.45/0.60/0.61), all skipped. Unification blocked until jni and keyring upgrade. ALSO (ADR-0021, S-cycle4-dpapi-storage-fix): jr declares windows-sys as a direct [target.'cfg(windows)'.dependencies] entry at this 0.61 version (originally 0.60.2 in #759, bumped to 0.61.2 in #838) for src/api/auth_windows_store.rs's DPAPI (CryptProtectData/CryptUnprotectData, Win32_Security_Cryptography) FFI wrapper -- zero new dependency-graph nodes, since 0.61 is already in the graph via the broad dependency set."
 
 # windows-targets and windows_* arch crates: transitive sub-deps of windows-sys.
 # Historical (S-WIN-3): the original skip set was 17 entries (1 windows-sys 0.60 +
