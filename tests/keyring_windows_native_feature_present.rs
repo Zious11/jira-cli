@@ -34,24 +34,21 @@
 //! | `test_deny_toml_has_windows_targets_0_53_skip` | AC-002 | `[[bans.skip]]` block for `windows-targets` version `"0.53"` in `deny.toml` |
 //! | `test_deny_toml_has_windows_arch_0_53_skip` | AC-002 | at least one `[[bans.skip]]` block for a `windows_*` arch crate at version `"0.53"` in `deny.toml` |
 //!
-//! # S-cycle4-dpapi-storage-fix additions (AC-020, F3 re-review Finding #2)
+//! # S-cycle4-dpapi-storage-fix additions (AC-020), retargeted to 0.61 by #838
 //!
-//! Two additional manifest source-text assertions, added in the SAME commit
-//! as `Cargo.toml`'s new `[target.'cfg(windows)'.dependencies]` section and
-//! `deny.toml`'s updated `windows-sys` `"0.60"` `[[bans.skip]]` `reason`
-//! field, mirroring this file's existing `parse_bans_skip_blocks`/
-//! `block_contains_name_and_version` pattern rather than inventing a second
-//! one:
+//! jr's own DPAPI wrapper (`src/api/auth_windows_store.rs`, ADR-0021) declares
+//! `windows-sys` as a direct `[target.'cfg(windows)'.dependencies]` entry. It was
+//! declared at `"0.60"` in #759 and deliberately bumped to `"0.61"` in #838. These
+//! tests parse the manifests structurally (the `toml` crate), so comments can never
+//! satisfy or break them:
 //!
-//! | Test | AC | What it pins |
-//! |------|----|--------------|
-//! | `test_cargo_toml_direct_windows_sys_dependency_pins_same_0_60_version` | AC-020 | the new direct `windows-sys` entry under `[target.'cfg(windows)'.dependencies]` declares version `"0.60"` — the SAME line already present transitively via keyring's `windows-native` feature, never a version bump introduced alongside the promotion (BC-1.4.037 Invariant 3) |
-//! | `test_deny_toml_windows_sys_0_60_reason_mentions_dpapi_module` | AC-020 | the existing `windows-sys` `"0.60"` `[[bans.skip]]` block's `reason` field names this module (`auth_windows_store` or "DPAPI"), never left stale naming only the pre-cycle-004 justification |
+//! | Test | What it pins |
+//! |------|--------------|
+//! | `test_cargo_toml_direct_windows_sys_declares_0_61_with_dpapi_features` | the real `windows-sys` key in the windows-target dependency table requires `"0.61"` and enables `Win32_Security_Cryptography` |
+//! | `test_cargo_lock_contains_direct_windows_sys_version_already_in_graph` | `Cargo.lock` already holds a `windows-sys` 0.61.x package (the "zero new graph nodes" claim) |
+//! | `test_deny_toml_has_windows_sys_0_61_skip` | `deny.toml` has a `[[bans.skip]]` entry for `windows-sys` `"0.61"` |
 //!
-//! This test does not itself run `cargo tree` (no such invocation exists
-//! elsewhere in this test suite's pattern) — it is a manifest-text pin
-//! consistent with this file's established convention, not a build-graph
-//! diff.
+//! Manifest-text pins only; no `cargo tree` invocation.
 
 /// Parse `deny.toml` text into a `Vec` of individual `[[bans.skip]]` block texts.
 ///
@@ -259,113 +256,91 @@ fn test_deny_toml_has_windows_arch_0_53_skip() {
     );
 }
 
-/// AC-020 (F3 re-review Finding #2) — the new direct `windows-sys` entry
-/// under `[target.'cfg(windows)'.dependencies]` in `Cargo.toml` declares the
-/// SAME `"0.60"` version line already present transitively via keyring's
-/// `windows-native` feature — never a version bump introduced alongside the
-/// promotion (BC-1.4.037 Invariant 3: "zero new dependency-graph nodes").
-/// Promoting an already-present transitive dependency to direct, at the
-/// SAME version, adds no new crate/version pair to the resolved dependency
-/// graph; a different version here would.
-///
-/// Strategy: locate the `[target.'cfg(windows)'.dependencies]` section
-/// header, then the `windows-sys` dependency line within a bounded window
-/// after it, and assert that line pins version `"0.60"` (matching the
-/// existing `deny.toml` `windows-sys` `"0.60"` `[[bans.skip]]` entry's
-/// version, asserted by `test_deny_toml_has_windows_sys_0_60_skip` above).
-///
-/// **Not RED as of this Red Gate commit — a documented exception, not a
-/// gap.** `Cargo.toml`'s `[target.'cfg(windows)'.dependencies]` section
-/// (Task 18) was already landed in the S-cycle4-dpapi-storage-fix stub
-/// commit (51255e2a), before this test file existed — there is no runtime
-/// code body for a pure manifest-text assertion to "turn green" at the TDD
-/// Green step. This test PASSES today; it exists as durable regression
-/// protection against a future accidental version bump on this line, per
-/// AC-020's own text ("a manifest source-text assertion test... pins...
-/// the declared windows-sys version... is the SAME 0.60.x line").
+/// Parse a repo manifest embedded at compile time into a TOML table.
+fn parse_manifest(name: &str, text: &str) -> toml::Table {
+    text.parse::<toml::Table>()
+        .unwrap_or_else(|e| panic!("{name} must parse as TOML: {e}"))
+}
+
+/// The direct `windows-sys` dependency (promoted by ADR-0021 / #759, bumped to 0.61 by
+/// #838) must require `"0.61"` and enable the DPAPI feature
+/// (`Win32_Security_Cryptography`, for `CryptProtectData`/`CryptUnprotectData`).
+/// Asserted against the parsed `[target.'cfg(windows)'.dependencies]` table, so comments
+/// cannot satisfy it.
 #[test]
-fn test_cargo_toml_direct_windows_sys_dependency_pins_same_0_60_version() {
-    let cargo_toml = include_str!("../Cargo.toml");
+fn test_cargo_toml_direct_windows_sys_declares_0_61_with_dpapi_features() {
+    let manifest = parse_manifest("Cargo.toml", include_str!("../Cargo.toml"));
 
-    let section_start = cargo_toml
-        .find("[target.'cfg(windows)'.dependencies]")
-        .expect(
-            "S-cycle4-dpapi-storage-fix AC-020 VIOLATION: Cargo.toml has no \
-             `[target.'cfg(windows)'.dependencies]` section. This section must promote \
-             `windows-sys` to a direct dependency at the same 0.60.x version already pulled \
-             transitively via keyring's `windows-native` feature (ADR-0021 §5, BC-1.4.037 \
-             Invariant 3).",
-        );
+    let dep = manifest
+        .get("target")
+        .and_then(|t| t.get("cfg(windows)"))
+        .and_then(|t| t.get("dependencies"))
+        .and_then(|t| t.get("windows-sys"))
+        .expect("Cargo.toml must declare windows-sys under [target.'cfg(windows)'.dependencies]");
 
-    // Bound the search to the lines immediately following the section
-    // header so a later, unrelated `windows-sys` reference elsewhere in the
-    // file (there is none today, but this keeps the assertion anchored)
-    // cannot satisfy it.
-    let window_end = (section_start + 800).min(cargo_toml.len());
-    let section_window = &cargo_toml[section_start..window_end];
+    let version = dep
+        .get("version")
+        .and_then(|v| v.as_str())
+        .expect("windows-sys direct dependency must have a string `version`");
+    assert_eq!(
+        version, "0.61",
+        "direct windows-sys requirement must be \"0.61\" (bumped from 0.60 in #838)"
+    );
 
-    let windows_sys_line = section_window
-        .lines()
-        .find(|l| l.contains("windows-sys"))
-        .expect(
-            "S-cycle4-dpapi-storage-fix AC-020 VIOLATION: no `windows-sys` dependency line \
-             found within the `[target.'cfg(windows)'.dependencies]` section of Cargo.toml.",
-        );
-
+    let features: Vec<&str> = dep
+        .get("features")
+        .and_then(|f| f.as_array())
+        .expect("windows-sys direct dependency must list `features`")
+        .iter()
+        .filter_map(|f| f.as_str())
+        .collect();
     assert!(
-        windows_sys_line.contains("\"0.60\""),
-        "S-cycle4-dpapi-storage-fix AC-020 VIOLATION (BC-1.4.037 Invariant 3, \"zero new \
-         dependency-graph nodes\"): the direct `windows-sys` entry under \
-         `[target.'cfg(windows)'.dependencies]` must pin version \"0.60\" — the SAME version \
-         already pulled transitively via keyring's `windows-native` feature (see the \
-         `deny.toml` `windows-sys` \"0.60\" `[[bans.skip]]` entry). A different version here \
-         would introduce a NEW dependency-graph node, contradicting the promotion's own \
-         zero-new-nodes justification.\n\
-         Found line: {windows_sys_line}",
+        features.contains(&"Win32_Security_Cryptography"),
+        "windows-sys must enable Win32_Security_Cryptography for the DPAPI wrapper; got {features:?}"
     );
 }
 
-/// AC-020 (F3 re-review Finding #2) — `deny.toml`'s existing `windows-sys`
-/// `"0.60"` `[[bans.skip]]` block's `reason` field, re-read after the
-/// `auth_windows_store` DPAPI change, contains a reference to this module
-/// (`auth_windows_store` or "DPAPI") alongside its existing `keyring`/
-/// `windows-native` wording — never left stale, naming only the
-/// pre-cycle-004 justification.
-///
-/// Strategy: same block-boundary parsing as the other tests in this file
-/// (`parse_bans_skip_blocks`/`block_contains_name_and_version`-style
-/// pattern) — locate the `windows-sys` `"0.60"` block specifically, then
-/// assert its text contains either `"auth_windows_store"` or `"DPAPI"`.
-///
-/// **Not RED as of this Red Gate commit — a documented exception, not a
-/// gap** (same rationale as the Cargo.toml test above): `deny.toml`'s
-/// `windows-sys` `"0.60"` `reason` field (Task 18) was already updated in
-/// the stub commit to name this module's DPAPI usage. This test PASSES
-/// today; it exists as durable regression protection against a future edit
-/// silently reverting the reason field to its pre-cycle-004 wording.
+/// The direct `windows-sys` 0.61 requirement must resolve to a package already in the
+/// lockfile graph, keeping the "zero new dependency-graph nodes" claim (ADR-0021 §5) true.
 #[test]
-fn test_deny_toml_windows_sys_0_60_reason_mentions_dpapi_module() {
-    let deny_toml = include_str!("../deny.toml");
-    let blocks = parse_bans_skip_blocks(deny_toml);
+fn test_cargo_lock_contains_direct_windows_sys_version_already_in_graph() {
+    let lock = parse_manifest("Cargo.lock", include_str!("../Cargo.lock"));
+    let packages = lock
+        .get("package")
+        .and_then(|p| p.as_array())
+        .expect("Cargo.lock must have [[package]] entries");
 
-    let target_block = blocks
-        .iter()
-        .find(|b| b.contains(r#"name = "windows-sys""#) && b.contains(r#"version = "0.60""#))
-        .expect(
-            "S-cycle4-dpapi-storage-fix AC-020 VIOLATION: could not locate the `windows-sys` \
-             \"0.60\" [[bans.skip]] block in deny.toml (asserted present by \
-             test_deny_toml_has_windows_sys_0_60_skip above).",
-        );
-
-    let mentions_dpapi_module =
-        target_block.contains("auth_windows_store") || target_block.contains("DPAPI");
-
+    let has_0_61 = packages.iter().any(|p| {
+        p.get("name").and_then(|n| n.as_str()) == Some("windows-sys")
+            && p.get("version")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v.starts_with("0.61."))
+    });
     assert!(
-        mentions_dpapi_module,
-        "S-cycle4-dpapi-storage-fix AC-020 VIOLATION (BC-1.4.037 Invariant 3): the `windows-sys` \
-         \"0.60\" [[bans.skip]] block's `reason` field must name this module's DPAPI usage \
-         (`auth_windows_store` or \"DPAPI\") alongside its existing keyring/windows-native \
-         wording — it must never be left stale, naming only the pre-cycle-004 justification.\n\
-         Block text:\n{target_block}",
+        has_0_61,
+        "Cargo.lock must contain a windows-sys 0.61.x package"
+    );
+}
+
+/// `deny.toml` must keep a `[[bans.skip]]` entry for `windows-sys` `"0.61"` (the version the
+/// broad graph and jr's direct DPAPI dependency use); with `multiple-versions = "deny"`,
+/// dropping it fails `cargo deny check`. Structural check only; the `reason` prose is
+/// intentionally not asserted.
+#[test]
+fn test_deny_toml_has_windows_sys_0_61_skip() {
+    let deny = parse_manifest("deny.toml", include_str!("../deny.toml"));
+    let skips = deny
+        .get("bans")
+        .and_then(|b| b.get("skip"))
+        .and_then(|s| s.as_array())
+        .expect("deny.toml must have [[bans.skip]] entries");
+
+    let found = skips.iter().any(|s| {
+        s.get("name").and_then(|n| n.as_str()) == Some("windows-sys")
+            && s.get("version").and_then(|v| v.as_str()) == Some("0.61")
+    });
+    assert!(
+        found,
+        "deny.toml must have a [[bans.skip]] entry for windows-sys version \"0.61\""
     );
 }
