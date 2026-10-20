@@ -85,7 +85,7 @@ sha1 = { version = "^0.11" }
 # `--all-targets` `cargo check` scope.) See CLAUDE.md ci-gate bullet / AC-006.
 saphyr-parser = "=0.0.12"
 # libc: already a resolved transitive dependency (pulled in by tokio/reqwest on
-# Unix; 0.2.183 in Cargo.lock) but Rust requires an explicit Cargo.toml edge
+# Unix; 0.2.190 in Cargo.lock) but Rust requires an explicit Cargo.toml edge
 # before `use libc::...` compiles from test code. Adds ZERO new crates to the
 # dependency graph — see tests/interrupt_signal.rs (VP-MUTANTS-SCOPE-1-001).
 libc = "0.2"
