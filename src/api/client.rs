@@ -3679,3 +3679,31 @@ mod proptests_ac_009_assets_base_url_gating {
         }
     }
 }
+
+/// Pins the base64 encoding used to build the API-token `Authorization: Basic`
+/// header (guards against base64 crate bumps changing engine/padding behavior).
+///
+/// NOTE: the header is built inside `JiraClient::load_auth_from_keychain`,
+/// which reads credentials from the system keychain and has no test seam
+/// without a production change. These tests therefore exercise the identical
+/// expression (`STANDARD.encode(format!("{email}:{token}"))`) inline.
+/// Expected values were computed independently with `printf '%s' '<in>' | base64`.
+#[cfg(test)]
+mod basic_auth_encoding_pin {
+    use base64::Engine;
+
+    fn basic_header(email: &str, token: &str) -> String {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{email}:{token}"));
+        format!("Basic {encoded}")
+    }
+
+    #[test]
+    fn test_encode_basic_auth_header_matches_known_vectors() {
+        // No padding (9 bytes).
+        assert_eq!(basic_header("test", "test"), "Basic dGVzdDp0ZXN0");
+        // One '=' pad (5 bytes: "ab:cd").
+        assert_eq!(basic_header("ab", "cd"), "Basic YWI6Y2Q=");
+        // Two '=' pads (4 bytes: "ab:c").
+        assert_eq!(basic_header("ab", "c"), "Basic YWI6Yw==");
+    }
+}
