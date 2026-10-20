@@ -12,14 +12,10 @@ name = "jr"
 path = "src/main.rs"
 
 [target.'cfg(windows)'.dependencies]
-# windows-sys: originally declared at "0.60" (matching keyring's `windows-native`
-# line), bumped to "0.61" in #838. 0.61 is already present transitively via the
-# broad dependency graph (clap, tokio, etc.; see deny.toml's windows-sys "0.61"
-# [[bans.skip]] entry), so declaring it as a direct dependency here adds ZERO
-# new dependency-graph nodes (ADR-0021 §5, AC-020, S-cycle4-dpapi-storage-fix).
-# Used by
-# `src/api/auth_windows_store.rs`'s `#[cfg(windows)] mod dpapi` for the
-# CryptProtectData/CryptUnprotectData FFI wrapper.
+# jr's DPAPI wrapper (`src/api/auth_windows_store.rs`, ADR-0021) needs
+# windows-sys with Win32_Security_Cryptography / Win32_Foundation for
+# CryptProtectData/CryptUnprotectData. Declared at 0.61 (bumped from 0.60 in
+# #838), which is already in the dependency graph, so it adds no new nodes.
 windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 
 [dependencies]
